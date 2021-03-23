@@ -936,6 +936,13 @@ class OptRewrite(Optimization):
     optimize_SAME_AS_R = optimize_SAME_AS_I
     optimize_SAME_AS_F = optimize_SAME_AS_I
 
+    def optimize_GETFIELD_GC_I(self, op):
+        fieldname = op.getdescr().get_fieldname()
+        if fieldname.startswith('traverse_') or fieldname.startswith('tsp'):
+            return None
+        else:
+            return self.emit(op)
+
     def serialize_optrewrite(self, available_boxes):
         res = []
         for i, box in self.loop_invariant_results.iteritems():

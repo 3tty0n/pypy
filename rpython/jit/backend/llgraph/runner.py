@@ -169,6 +169,9 @@ class FieldDescr(AbstractDescr):
     def get_index(self):
         return self.index
 
+    def get_fieldname(self):
+        return self.fieldname
+
     def __repr__(self):
         return 'FieldDescr(%r, %r)' % (self.S, self.fieldname)
 

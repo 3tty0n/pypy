@@ -6436,3 +6436,15 @@ class TestOptimizeBasic(BaseTestBasic):
         guard_true(i3) []
         """
         self.optimize_loop(ops, expected)
+
+    def test_remove_tstack(self):
+        ops = """
+        [p0, p1]
+        i2 = getfield_gc_i(p0, descr=traversestackdescr)
+        jump(p0, p1)
+        """
+        expected = """
+        [p0, p1]
+        jump(p0, p1)
+        """
+        self.optimize_loop(ops, expected)

@@ -113,9 +113,10 @@ class LLtypeMixin(object):
                                         ('floatval', lltype.Float),
                                         ('charval', lltype.Char),
                                         ('nexttuple', lltype.Ptr(S)),
-                                        ('next', lltype.Ptr(NODE))))
+                                        ('next', lltype.Ptr(NODE)),
+                                        ('traverse_stack', lltype.Ptr(NODE))))
     S.become(lltype.GcStruct('TUPLE', ('a', lltype.Signed), ('abis', lltype.Signed),
-                        ('b', lltype.Ptr(NODE))))
+                             ('b', lltype.Ptr(NODE))))
     NODE2 = lltype.GcStruct('NODE2', ('parent', NODE),
                                      ('other', lltype.Ptr(NODE)))
 
@@ -175,6 +176,8 @@ class LLtypeMixin(object):
     nextdescr3 = cpu.fielddescrof(NODE3, 'next')
     assert valuedescr3.is_always_pure()
     assert nextdescr3.is_always_pure()
+
+    traversestackdescr = cpu.fielddescrof(NODE, 'traverse_stack')
 
     accessor = FieldListAccessor()
     accessor.initialize(None, {'inst_field': IR_QUASIIMMUTABLE})
