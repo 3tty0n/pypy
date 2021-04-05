@@ -159,16 +159,43 @@ class TestOpencoder(object):
     def test_cut_trace_from(self):
         i0, i1, i2 = IntFrontendOp(0), IntFrontendOp(0), IntFrontendOp(0)
         t = Trace([i0, i1, i2], metainterp_sd)
+        # [i0, i1, i2]
         add1 = FakeOp(t.record_op(rop.INT_ADD, [i0, i1]))
         cut_point = t.cut_point()
+        # [i0, i1, i2]
+        # V1 = int_add(i0, i1) <- cut point
         add2 = FakeOp(t.record_op(rop.INT_ADD, [add1, i1]))
+        # [i0, i1, i2]
+        # V1 = int_add(i0, i1) <- cut point
+        # V2 = int_add(i1, V1)
         t.record_op(rop.GUARD_TRUE, [add2])
+        # [i0, i1, i2]
+        # V1 = int_add(i0, i1) <- cut point
+        # V2 = int_add(i1, V1)
+        # guard_true(V2)
         resume.capture_resumedata([FakeFrame(3, JitCode(4), [add2, add1, i1])],
             None, [], t)
         t.record_op(rop.INT_SUB, [add2, add1])
+        # [i0, i1, i2]
+        # V1 = int_add(i0, i1) <- cut point
+        # V2 = int_add(i1, V1)
+        # guard_true(V2)
+        # i5 = int_sub(V1, V2)
         t2 = t.cut_trace_from(cut_point, [add1, i1])
         (i0, i1), l, iter = self.unpack(t2)
         assert len(l) == 3
+        assert l[0].getarglist() == [i0, i1]
+
+    def test_cut_at(self):
+        i0, i1, i2 = IntFrontendOp(0), IntFrontendOp(0), IntFrontendOp(0)
+        t = Trace([i0, i1, i2], metainterp_sd)
+        add1 = FakeOp(t.record_op(rop.INT_ADD, [i0, i1]))
+        add2 = FakeOp(t.record_op(rop.INT_ADD, [add1, i1]))
+        cut_point = t.cut_point()
+        guard1 = FakeOp(t.record_op(rop.GUARD_TRUE, [add2]))
+        t.cut_at(list(cut_point))
+        (i0, i1, i2), l, iter = self.unpack(t)
+        assert len(l) == 2
         assert l[0].getarglist() == [i0, i1]
 
     def test_virtualizable_virtualref(self):
