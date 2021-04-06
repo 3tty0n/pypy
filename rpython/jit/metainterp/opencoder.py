@@ -123,6 +123,9 @@ class TraceIterator(BaseTrace):
         self.start_index = start
         self.end = end
 
+    def cut_point(self):
+        return self.pos, self._count, self._index
+
     def get_dead_ranges(self):
         return self.trace.get_dead_ranges()
 
