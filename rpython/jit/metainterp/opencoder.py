@@ -123,8 +123,14 @@ class TraceIterator(BaseTrace):
         self.start_index = start
         self.end = end
 
-    def cut_point(self):
-        return self.pos, self._count, self._index
+
+    def cut_point(self, opname):
+        """raise IndexError when there is no op which has a name equaled to op"""
+        while True:
+            op = self.next()
+            name = type(op).__name__
+            if name == opname:
+                return self.pos, self._count, self._index
 
     def get_dead_ranges(self):
         return self.trace.get_dead_ranges()

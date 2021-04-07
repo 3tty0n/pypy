@@ -198,18 +198,15 @@ class TestOpencoder(object):
         assert len(l) == 2
         assert l[0].getarglist() == [i0, i1]
 
-    def test_trace_iterator(self):
+    def test_trace_iterator_cut_pont(self):
         i0, i1, i2 = IntFrontendOp(0), IntFrontendOp(0), IntFrontendOp(0)
         t = Trace([i0, i1, i2], metainterp_sd)
         add1 = FakeOp(t.record_op(rop.INT_ADD, [i0, i1]))
-        add2 = FakeOp(t.record_op(rop.INT_ADD, [add1, i1]))
-        (i0, i1, i2), l, iter = self.unpack(t)
-        try:
-            while True:
-                op = iter.next()
-                assert (type(op).__name__ == "INT_ADD_OP")
-        except IndexError:
-            pass
+        cut_point1 = t.cut_point()
+        sub1 = FakeOp(t.record_op(rop.INT_SUB, [add1, i1]))
+        cut_point2 = t.cut_point()
+        assert t.get_iter().cut_point("INT_ADD_OP") == cut_point1
+        assert t.get_iter().cut_point("INT_SUB_OP") == cut_point2
 
     def test_virtualizable_virtualref(self):
         i0, i1, i2 = IntFrontendOp(0), IntFrontendOp(0), IntFrontendOp(0)
