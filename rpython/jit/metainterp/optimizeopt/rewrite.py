@@ -937,6 +937,11 @@ class OptRewrite(Optimization):
     optimize_SAME_AS_F = optimize_SAME_AS_I
 
     def optimize_GETFIELD_GC_I(self, op):
+        descr = op.getdescr()
+        fieldname = descr.sort_key()
+        if fieldname is not None and isinstance(fieldname, str):
+            if fieldname.startswith('traverse_'):
+                return None
         return self.emit(op)
 
     def serialize_optrewrite(self, available_boxes):
