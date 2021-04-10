@@ -123,23 +123,28 @@ class TraceIterator(BaseTrace):
         self.start_index = start
         self.end = end
 
+    def __repr__(self):
+        return "TraceIterator(pos: %d, count: %d, index: %d)" % \
+            (self.pos, self._count, self._index)
 
     def cut_point(self, op, fname):
         """raise IndexError when there is no op which is equaled to op"""
-        try:
-            while True:
-                resop = self.next()
-                if resop.getopnum() == op:
-                    arg = resop.getarg(0)
-                    if isinstance(arg, ConstInt):
-                        name = self.metainterp_sd.get_name_from_address(arg.getvalue())
-                    elif isinstance(arg, ConstPtr):
-                        name = self.metainterp_sd.get_name_from_address(arg.getvalue())
+        metainterp = self.metainterp_sd
+        while True:
+            resop = self.next()
+            if resop.getopnum() == op:
+                arg = resop.getarg(0)
+                if arg is None:
+                    raise IndexError
 
-                    if name == fname:
-                        return self.pos, self._count, self._index
-        except IndexError:
-            raise IndexError
+                if isinstance(arg, ConstInt) or isinstance(arg, ConstPtr):
+                    value = arg.getvalue()
+                    name = metainterp.get_name_from_address(value)
+                else:
+                    assert False
+
+                if name == fname:
+                    return self.pos, self._count, self._index
 
     def get_dead_ranges(self):
         return self.trace.get_dead_ranges()
@@ -243,6 +248,10 @@ class CutTrace(BaseTrace):
         self.count = count
         self.index = index
 
+    def __repr__(self):
+        return "CutTrace(start: %d, count: %d, index: %d)" % \
+            (self.start, self.count, self.index)
+
     def cut_at(self, cut):
         assert cut[1] > self.count
         self.trace.cut_at(cut)
@@ -306,6 +315,10 @@ class Trace(BaseTrace):
         self._pos = self._start
         self.inputargs = inputargs
         self.tag_overflow = False
+
+    def __repr__(self):
+        return "Trace(pos: %d, count: %d, index: %d)" % \
+            (self._pos, self._count, self._index)
 
     def append(self, v):
         model = get_model(self)
