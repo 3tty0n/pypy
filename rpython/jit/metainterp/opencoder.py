@@ -124,13 +124,22 @@ class TraceIterator(BaseTrace):
         self.end = end
 
 
-    def cut_point(self, opname):
-        """raise IndexError when there is no op which has a name equaled to op"""
-        while True:
-            op = self.next()
-            name = type(op).__name__
-            if name == opname:
-                return self.pos, self._count, self._index
+    def cut_point(self, op, fname):
+        """raise IndexError when there is no op which is equaled to op"""
+        try:
+            while True:
+                resop = self.next()
+                if resop.getopnum() == op:
+                    arg = resop.getarg(0)
+                    if isinstance(arg, ConstInt):
+                        name = self.metainterp_sd.get_name_from_address(arg.getvalue())
+                    elif isinstance(arg, ConstPtr):
+                        name = self.metainterp_sd.get_name_from_address(arg.getvalue())
+
+                    if name == fname:
+                        return self.pos, self._count, self._index
+        except IndexError:
+            raise IndexError
 
     def get_dead_ranges(self):
         return self.trace.get_dead_ranges()

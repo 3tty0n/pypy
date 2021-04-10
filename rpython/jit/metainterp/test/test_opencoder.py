@@ -1,7 +1,8 @@
 import py
+from rpython.jit.metainterp import pyjitpl
 from rpython.jit.metainterp.opencoder import Trace, untag, TAGINT, TAGBOX
-from rpython.jit.metainterp.resoperation import rop, AbstractResOp
-from rpython.jit.metainterp.history import ConstInt, IntFrontendOp
+from rpython.jit.metainterp.resoperation import rop, AbstractResOp, InputArgInt
+from rpython.jit.metainterp.history import ConstInt, IntFrontendOp, ConstPtr
 from rpython.jit.metainterp.optimizeopt.optimizer import Optimizer
 from rpython.jit.metainterp import resume
 from rpython.jit.metainterp.test.strategies import lists_of_operations
@@ -19,6 +20,14 @@ class SomeDescr(AbstractDescr):
 
 class metainterp_sd(object):
     all_descrs = []
+
+class FakeMetaInterpSd(pyjitpl.MetaInterpStaticData):
+    cpu = None
+    all_descrs = []
+    warmrunnerdesc = None
+
+    def __init__(self):
+        pass
 
 class FakeOp(AbstractResOp):
     def __init__(self, pos):
@@ -199,14 +208,18 @@ class TestOpencoder(object):
         assert l[0].getarglist() == [i0, i1]
 
     def test_trace_iterator_cut_pont(self):
+        metainterp_sd = FakeMetaInterpSd()
+        metainterp_sd.setup_list_of_addr2name([(123, 'cut_here'), (456, 'b')])
+
         i0, i1, i2 = IntFrontendOp(0), IntFrontendOp(0), IntFrontendOp(0)
         t = Trace([i0, i1, i2], metainterp_sd)
         add1 = FakeOp(t.record_op(rop.INT_ADD, [i0, i1]))
-        cut_point1 = t.cut_point()
         sub1 = FakeOp(t.record_op(rop.INT_SUB, [add1, i1]))
-        cut_point2 = t.cut_point()
-        assert t.get_iter().cut_point("INT_ADD_OP") == cut_point1
-        assert t.get_iter().cut_point("INT_SUB_OP") == cut_point2
+        funcbox = ConstInt(123)
+        call1 = FakeOp(t.record_op(rop.CALL_I, [funcbox]))
+        cut_point1 = t.cut_point()
+        add2 = FakeOp(t.record_op(rop.INT_ADD, [sub1, i0]))
+        assert t.get_iter().cut_point(rop.CALL_I, 'cut_here') == cut_point1
 
     def test_virtualizable_virtualref(self):
         i0, i1, i2 = IntFrontendOp(0), IntFrontendOp(0), IntFrontendOp(0)
