@@ -127,12 +127,12 @@ class TraceIterator(BaseTrace):
         return "TraceIterator(pos: %d, count: %d, index: %d)" % \
             (self.pos, self._count, self._index)
 
-    def cut_point_by_op(self, op, fname):
+    def cut_point_by_fname(self, fname):
         """raise IndexError when there is no op which is equaled to op"""
         metainterp = self.metainterp_sd
         while True:
             resop = self.next()
-            if resop.getopnum() == op:
+            if resop.getopnum() == rop.CALL_I:
                 arg = resop.getarg(0)
                 if arg is None:
                     raise IndexError
@@ -351,9 +351,9 @@ class Trace(BaseTrace):
     def cut_point(self):
         return self._pos, self._count, self._index
 
-    def cut_point_by_op(self, op, fname):
+    def cut_point_by_fname(self, fname):
         iter = self.get_iter()
-        return iter.cut_point_by_op(op, fname)
+        return iter.cut_point_by_op(rop.CALL_I, fname)
 
     def cut_at(self, end):
         self._pos = end[0]

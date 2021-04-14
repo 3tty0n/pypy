@@ -204,7 +204,7 @@ class TestOpencoder(object):
         call1 = FakeOp(t.record_op(rop.CALL_I, [funcbox]))
         cut_point1 = t.cut_point()
         add2 = FakeOp(t.record_op(rop.INT_ADD, [sub1, i0]))
-        assert t.get_iter().cut_point_by_op(rop.CALL_I, 'cut_here') == cut_point1
+        assert t.get_iter().cut_point_by_fname('cut_here') == cut_point1
 
     def test_virtualizable_virtualref(self):
         i0, i1, i2 = IntFrontendOp(0), IntFrontendOp(0), IntFrontendOp(0)
