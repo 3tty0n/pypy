@@ -127,7 +127,7 @@ class TraceIterator(BaseTrace):
         return "TraceIterator(pos: %d, count: %d, index: %d)" % \
             (self.pos, self._count, self._index)
 
-    def cut_point(self, op, fname):
+    def cut_point_by_op(self, op, fname):
         """raise IndexError when there is no op which is equaled to op"""
         metainterp = self.metainterp_sd
         while True:
@@ -137,11 +137,9 @@ class TraceIterator(BaseTrace):
                 if arg is None:
                     raise IndexError
 
-                if isinstance(arg, ConstInt) or isinstance(arg, ConstPtr):
-                    value = arg.getvalue()
-                    name = metainterp.get_name_from_address(value)
-                else:
-                    assert False
+                value = arg.getvalue()
+                name = metainterp.get_name_from_address(value)
+                assert (name is not None)
 
                 if name == fname:
                     return self.pos, self._count, self._index
@@ -352,6 +350,10 @@ class Trace(BaseTrace):
 
     def cut_point(self):
         return self._pos, self._count, self._index
+
+    def cut_point_by_op(self, op, fname):
+        iter = self.get_iter()
+        return iter.cut_point_by_op(op, fname)
 
     def cut_at(self, end):
         self._pos = end[0]
