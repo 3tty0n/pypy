@@ -1,4 +1,5 @@
 from rpython.config.translationoption import get_combined_translation_config
+from rpython.jit.codewriter.effectinfo import EffectInfo
 from rpython.jit.metainterp.history import ConstInt, History, Stats
 from rpython.jit.metainterp.history import INT
 from rpython.jit.metainterp.compile import compile_loop
@@ -9,6 +10,8 @@ from rpython.jit.metainterp import jitprof, compile
 from rpython.jit.metainterp.optimizeopt.test.test_util import LLtypeMixin
 from rpython.jit.tool.oparser import parse, convert_loop_to_trace
 from rpython.jit.metainterp.optimizeopt import ALL_OPTS_DICT
+from rpython.rtyper.annlowlevel import llhelper
+from rpython.rtyper.lltypesystem import lltype
 
 class FakeCPU(object):
     supports_guard_gc_type = True
@@ -21,6 +24,10 @@ class FakeCPU(object):
 
     def __init__(self):
         self.seen = []
+
+    def calldescrof(self, FUNC, ARGS, RESULT, effect_info):
+        from rpython.jit.backend.llgraph.runner import CallDescr
+        return CallDescr(RESULT, ARGS, effect_info)
 
     def compile_loop(self, inputargs, operations, token, jd_id=0,
                      unique_id=0, log=True, name='',
@@ -170,3 +177,63 @@ def test_compile_tmp_callback():
         assert lltype.cast_opaque_ptr(lltype.Ptr(EXC), e.value) == llexc
     else:
         assert 0, "should have raised"
+
+
+class TestTraceCompileAndSplit(object):
+    from rpython.jit.metainterp import pyjitpl
+    Ptr = lltype.Ptr
+    FuncType = lltype.FuncType
+
+    def merge(self, dic1, dic2):
+        new_dic = dic1.copy()
+        new_dic.update(dic2)
+        return new_dic
+
+    class FakeMetaInterpStaticData(pyjitpl.MetaInterpStaticData):
+        def __init__(self):
+            pass
+
+    def test_compile_simple_loop_and_split(self):
+        from rpython.jit.metainterp import support
+
+        def cut_here(c):
+            return c
+
+        cpu = FakeCPU()
+
+        FPTR = self.Ptr(self.FuncType([lltype.Char], lltype.Char))
+        func_ptr = llhelper(FPTR, cut_here)
+        calldescr = cpu.calldescrof(FPTR.TO, (lltype.Char,), lltype.Char,
+                                           EffectInfo.MOST_GENERAL)
+
+        staticdata = self.FakeMetaInterpStaticData()
+        staticdata.all_descrs = LLtypeMixin.cpu.setup_descrs()
+        staticdata.cpu = cpu
+        staticdata.jitlog = jl.JitLogger(cpu)
+        staticdata.jitlog.trace_id = 1
+        staticdata.setup_list_of_addr2name([(support.ptr2int(func_ptr), 'cut_here')])
+
+        metainterp = FakeMetaInterp()
+        metainterp.staticdata = staticdata
+        metainterp.cpu = cpu
+        metainterp.history = History()
+
+        loop = parse('''
+        [p1]
+        i1 = getfield_gc_i(p1, descr=valuedescr)
+        i2 = int_add(i1, 1)
+        i3 = call_i(ConstClass(func_ptr), descr=calldescr)
+        i4 = getfield_gc_i(p1, descr=valuedescr)
+        i5 = int_add(i4, 2)
+        p2 = new_with_vtable(descr=nodesize)
+        setfield_gc(p2, i5, descr=valuedescr)
+        jump(p2)
+        ''', namespace=self.merge(LLtypeMixin.__dict__.copy(), locals().copy()))
+
+        t = convert_loop_to_trace(loop, staticdata)
+        inputargs = t.inputargs
+        cut_point = t.cut_point_by_fname('cut_here')
+        after_cut_here = t.cut_trace_from(cut_point, inputargs)
+        t.cut_at(list(cut_point))
+        print t, after_cut_here
+        pass
