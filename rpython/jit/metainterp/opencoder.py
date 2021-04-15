@@ -353,7 +353,10 @@ class Trace(BaseTrace):
 
     def cut_point_by_fname(self, fname):
         iter = self.get_iter()
-        return iter.cut_point_by_op(rop.CALL_I, fname)
+        try:
+            return iter.cut_point_by_fname(fname)
+        except IndexError:
+            return None
 
     def cut_at(self, end):
         self._pos = end[0]
