@@ -1,8 +1,9 @@
 from rpython.config.translationoption import get_combined_translation_config
 from rpython.jit.codewriter.effectinfo import EffectInfo
+from rpython.jit.metainterp.optimizeopt.util import equaloplists
 from rpython.jit.metainterp.history import ConstInt, History, Stats
 from rpython.jit.metainterp.history import INT
-from rpython.jit.metainterp.compile import compile_loop
+from rpython.jit.metainterp.compile import compile_loop, compile_simple_loop_and_split
 from rpython.jit.metainterp.compile import compile_tmp_callback
 from rpython.jit.metainterp import jitexc
 from rpython.rlib.rjitlog import rjitlog as jl
@@ -82,6 +83,16 @@ class FakeMetaInterp:
         warmstate = FakeState()
         virtualizable_info = None
         vec = False
+
+def unpack(ct):
+    iter = ct.get_iter()
+    ops = []
+    try:
+        while True:
+            ops.append(iter.next())
+    except IndexError:
+        pass
+    return iter.inputargs, ops
 
 def test_compile_loop():
     cpu = FakeCPU()
@@ -179,61 +190,117 @@ def test_compile_tmp_callback():
         assert 0, "should have raised"
 
 
-class TestTraceCompileAndSplit(object):
-    from rpython.jit.metainterp import pyjitpl
-    Ptr = lltype.Ptr
-    FuncType = lltype.FuncType
+def test_compile_simple_loop_and_split():
+    from rpython.jit.metainterp.support import ptr2int
+    from rpython.jit.metainterp.pyjitpl import MetaInterpStaticData
+    from rpython.rtyper.annlowlevel import llhelper
+    from rpython.rtyper.lltypesystem import lltype, llmemory
 
-    def merge(self, dic1, dic2):
+    cpu = FakeCPU()
+
+    class FakeMetaInterpStaticData(MetaInterpStaticData):
+        all_descrs = []
+        logger_noopt = FakeLogger()
+        logger_ops = FakeLogger()
+        config = get_combined_translation_config(translating=True)
+        jitlog = jl.JitLogger()
+
+        stats = Stats(None)
+        profiler = jitprof.EmptyProfiler()
+        warmrunnerdesc = None
+        def log(self, msg, event_kind=None):
+            pass
+
+        def __init__(self):
+            pass
+
+    def merge(dic1, dic2):
         new_dic = dic1.copy()
         new_dic.update(dic2)
         return new_dic
 
-    class FakeMetaInterpStaticData(pyjitpl.MetaInterpStaticData):
-        def __init__(self):
-            pass
+    Ptr = lltype.Ptr
+    FuncType = lltype.FuncType
+    FPTR = Ptr(FuncType([lltype.Char], lltype.Char))
+    def cut_here(c):
+        return c
+    func_ptr = llhelper(FPTR, cut_here)
+    calldescr = cpu.calldescrof(FPTR.TO, (lltype.Char,), lltype.Char,
+                                       EffectInfo.MOST_GENERAL)
 
-    def test_compile_simple_loop_and_split(self):
-        from rpython.jit.metainterp import support
+    staticdata = FakeMetaInterpStaticData()
+    staticdata.all_descrs = LLtypeMixin.cpu.setup_descrs()
+    staticdata.cpu = cpu
+    staticdata.jitlog = jl.JitLogger(cpu)
+    staticdata.jitlog.trace_id = 2
+    staticdata.setup_list_of_addr2name([(ptr2int(func_ptr), 'cut_here')])
 
-        def cut_here(c):
-            return c
+    metainterp = FakeMetaInterp()
+    metainterp.staticdata = staticdata
+    metainterp.cpu = cpu
+    metainterp.history = History()
 
-        cpu = FakeCPU()
+    namespace = merge(LLtypeMixin.__dict__.copy(), locals().copy())
 
-        FPTR = self.Ptr(self.FuncType([lltype.Char], lltype.Char))
-        func_ptr = llhelper(FPTR, cut_here)
-        calldescr = cpu.calldescrof(FPTR.TO, (lltype.Char,), lltype.Char,
-                                           EffectInfo.MOST_GENERAL)
+    loop = parse('''
+    [p1]
+    i1 = getfield_gc_i(p1, descr=valuedescr)
+    i2 = int_add(i1, 1)
+    i3 = call_i(ConstClass(func_ptr), descr=calldescr)
+    i4 = getfield_gc_i(p1, descr=valuedescr)
+    i5 = int_add(i4, 2)
+    p2 = new_with_vtable(descr=nodesize)
+    setfield_gc(p2, i5, descr=valuedescr)
+    jump(p2)
+    ''', namespace=namespace)
 
-        staticdata = self.FakeMetaInterpStaticData()
-        staticdata.all_descrs = LLtypeMixin.cpu.setup_descrs()
-        staticdata.cpu = cpu
-        staticdata.jitlog = jl.JitLogger(cpu)
-        staticdata.jitlog.trace_id = 1
-        staticdata.setup_list_of_addr2name([(support.ptr2int(func_ptr), 'cut_here')])
+    loop_before = parse('''
+    [p1]
+    i1 = getfield_gc_i(p1, descr=valuedescr)
+    i2 = int_add(i1, 1)
+    i3 = call_i(ConstClass(func_ptr), descr=calldescr)
+    ''', namespace=namespace)
 
-        metainterp = FakeMetaInterp()
-        metainterp.staticdata = staticdata
-        metainterp.cpu = cpu
-        metainterp.history = History()
+    loop_after = parse('''
+    [p1]
+    i4 = getfield_gc_i(p1, descr=valuedescr)
+    i5 = int_add(i4, 2)
+    p2 = new_with_vtable(descr=nodesize)
+    setfield_gc(p2, i5, descr=valuedescr)
+    jump(p2)
+    ''', namespace=namespace)
 
-        loop = parse('''
-        [p1]
-        i1 = getfield_gc_i(p1, descr=valuedescr)
-        i2 = int_add(i1, 1)
-        i3 = call_i(ConstClass(func_ptr), descr=calldescr)
-        i4 = getfield_gc_i(p1, descr=valuedescr)
-        i5 = int_add(i4, 2)
-        p2 = new_with_vtable(descr=nodesize)
-        setfield_gc(p2, i5, descr=valuedescr)
-        jump(p2)
-        ''', namespace=self.merge(LLtypeMixin.__dict__.copy(), locals().copy()))
+    t = convert_loop_to_trace(loop, staticdata)
 
-        t = convert_loop_to_trace(loop, staticdata)
-        inputargs = t.inputargs
-        cut_point = t.cut_point_by_fname('cut_here')
-        after_cut_here = t.cut_trace_from(cut_point, inputargs)
-        t.cut_at(list(cut_point))
-        print t, after_cut_here
-        pass
+    inputargs = t.inputargs
+    metainterp.history.trace = t
+    metainterp.history.inputargs = inputargs
+
+    raiseme = None
+    greenkey = 'faked'
+    # target_token = compile_simple_loop_and_split(
+    #     metainterp, greenkey, t,
+    #     [t._mapping[x] for x in  loop.operations[-1].getarglist()],
+    #     enable_opts=metainterp.jitdriver_sd.warmstate.enable_opts,
+    #     cut_at=(0, 0, 0))
+
+    # jitcell_token = target_token.targeting_jitcell_token
+    # assert jitcell_token == target_token.original_jitcell_token
+    # assert jitcell_token.target_tokens == [target_token]
+    # assert jitcell_token.number == 2
+
+    (c_start, c_count, c_index) = t.cut_point_by_fname('cut_here')
+
+    c_after_point = c_start, t._count - c_count + 1, c_index # important hack
+    t_after_cutted = t.cut_trace_from(c_after_point, inputargs)
+    t_after = convert_loop_to_trace(loop_after, staticdata)
+    i0, ops = t_after.unpack()
+    i0_c, ops_c = unpack(t_after_cutted)
+    assert t_after._count == t_after_cutted.count
+    assert t_after._index == t_after_cutted.index
+    assert len(i0) == len(i0_c)
+    assert len(ops) == len(ops_c)
+
+    t_before = convert_loop_to_trace(loop_before, staticdata)
+    t.cut_at([c_start, c_count, c_index])
+    assert t_before.cut_point() == t.cut_point()
