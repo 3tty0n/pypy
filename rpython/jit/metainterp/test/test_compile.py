@@ -3,7 +3,7 @@ from rpython.jit.codewriter.effectinfo import EffectInfo
 from rpython.jit.metainterp.optimizeopt.util import equaloplists
 from rpython.jit.metainterp.history import ConstInt, History, Stats
 from rpython.jit.metainterp.history import INT
-from rpython.jit.metainterp.compile import compile_loop, compile_simple_loop_and_split
+from rpython.jit.metainterp.compile import compile_loop
 from rpython.jit.metainterp.compile import compile_tmp_callback
 from rpython.jit.metainterp import jitexc
 from rpython.rlib.rjitlog import rjitlog as jl
@@ -289,7 +289,8 @@ def test_compile_simple_loop_and_split():
     # assert jitcell_token.target_tokens == [target_token]
     # assert jitcell_token.number == 2
 
-    (c_start, c_count, c_index) = t.cut_point_by_fname('cut_here')
+    cut_point = t.cut_point_by_fname('cut_here')
+    (c_start, c_count, c_index) = cut_point
 
     c_after_point = c_start, t._count - c_count + 1, c_index # important hack
     t_after_cutted = t.cut_trace_from(c_after_point, inputargs)
@@ -302,5 +303,5 @@ def test_compile_simple_loop_and_split():
     assert len(ops) == len(ops_c)
 
     t_before = convert_loop_to_trace(loop_before, staticdata)
-    t.cut_at([c_start, c_count, c_index])
+    t.cut_at(cut_point)
     assert t_before.cut_point() == t.cut_point()
