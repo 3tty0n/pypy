@@ -1,10 +1,11 @@
 from rpython.config.translationoption import get_combined_translation_config
 from rpython.jit.codewriter.effectinfo import EffectInfo
+from rpython.jit.metainterp.resoperation import rop
 from rpython.jit.metainterp.optimizeopt.util import equaloplists
 from rpython.jit.metainterp.history import ConstInt, History, Stats
 from rpython.jit.metainterp.history import INT
-from rpython.jit.metainterp.compile import compile_loop
-from rpython.jit.metainterp.compile import compile_tmp_callback
+from rpython.jit.metainterp.compile import (
+    compile_loop, compile_simple_and_split, compile_tmp_callback, make_jitcell_token)
 from rpython.jit.metainterp import jitexc
 from rpython.rlib.rjitlog import rjitlog as jl
 from rpython.jit.metainterp import jitprof, compile
@@ -271,37 +272,28 @@ def test_compile_simple_loop_and_split():
     ''', namespace=namespace)
 
     t = convert_loop_to_trace(loop, staticdata)
-
-    inputargs = t.inputargs
     metainterp.history.trace = t
-    metainterp.history.inputargs = inputargs
+    metainterp.history.inputargs = t.inputargs
 
     raiseme = None
     greenkey = 'faked'
-    # target_token = compile_simple_loop_and_split(
-    #     metainterp, greenkey, t,
-    #     [t._mapping[x] for x in  loop.operations[-1].getarglist()],
-    #     enable_opts=metainterp.jitdriver_sd.warmstate.enable_opts,
-    #     cut_at=(0, 0, 0))
+    t_after_cutted, t_before_cutted = compile_simple_and_split(
+        metainterp, greenkey, t, t.inputargs,
+        metainterp.jitdriver_sd.warmstate.enable_opts,
+        (0, 0, 0))
 
-    # jitcell_token = target_token.targeting_jitcell_token
-    # assert jitcell_token == target_token.original_jitcell_token
-    # assert jitcell_token.target_tokens == [target_token]
-    # assert jitcell_token.number == 2
-
-    cut_point = t.cut_point_by_fname('cut_here')
-    (c_start, c_count, c_index) = cut_point
-
-    c_after_point = c_start, t._count - c_count + 1, c_index # important hack
-    t_after_cutted = t.cut_trace_from(c_after_point, inputargs)
     t_after = convert_loop_to_trace(loop_after, staticdata)
     i0, ops = t_after.unpack()
     i0_c, ops_c = unpack(t_after_cutted)
     assert t_after._count == t_after_cutted.count
     assert t_after._index == t_after_cutted.index
+    assert ops_c != []
     assert len(i0) == len(i0_c)
     assert len(ops) == len(ops_c)
 
     t_before = convert_loop_to_trace(loop_before, staticdata)
-    t.cut_at(cut_point)
-    assert t_before.cut_point() == t.cut_point()
+    i1, ops = t_before.unpack()
+    i1_c, ops_c = t_before_cutted.unpack()
+    assert ops_c != []
+    assert len(i1) == len(i1_c)
+    assert len(ops) == len(ops_c)
