@@ -247,11 +247,12 @@ def test_compile_simple_loop_and_split():
     [p1]
     i1 = getfield_gc_i(p1, descr=valuedescr)
     i2 = int_add(i1, 1)
-    i3 = call_i(ConstClass(func_ptr), descr=calldescr)
-    i4 = getfield_gc_i(p1, descr=valuedescr)
-    i5 = int_add(i4, 2)
+    i3 = int_gt(i2, 0)
+    i4 = call_i(ConstClass(func_ptr), descr=calldescr)
+    i5 = getfield_gc_i(p1, descr=valuedescr)
+    i6 = int_add(i5, 2)
     p2 = new_with_vtable(descr=nodesize)
-    setfield_gc(p2, i5, descr=valuedescr)
+    setfield_gc(p2, i6, descr=valuedescr)
     jump(p2)
     ''', namespace=namespace)
 
@@ -259,15 +260,16 @@ def test_compile_simple_loop_and_split():
     [p1]
     i1 = getfield_gc_i(p1, descr=valuedescr)
     i2 = int_add(i1, 1)
-    i3 = call_i(ConstClass(func_ptr), descr=calldescr)
+    i3 = int_gt(i2, 0)
+    i4 = call_i(ConstClass(func_ptr), descr=calldescr)
     ''', namespace=namespace)
 
     loop_after = parse('''
     [p1]
-    i4 = getfield_gc_i(p1, descr=valuedescr)
-    i5 = int_add(i4, 2)
+    i5 = getfield_gc_i(p1, descr=valuedescr)
+    i6 = int_add(i5, 2)
     p2 = new_with_vtable(descr=nodesize)
-    setfield_gc(p2, i5, descr=valuedescr)
+    setfield_gc(p2, i6, descr=valuedescr)
     jump(p2)
     ''', namespace=namespace)
 
@@ -285,8 +287,6 @@ def test_compile_simple_loop_and_split():
     t_after = convert_loop_to_trace(loop_after, staticdata)
     i0, ops = t_after.unpack()
     i0_c, ops_c = unpack(t_after_cutted)
-    assert t_after._count == t_after_cutted.count
-    assert t_after._index == t_after_cutted.index
     assert ops_c != []
     assert len(i0) == len(i0_c)
     assert len(ops) == len(ops_c)
