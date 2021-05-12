@@ -257,7 +257,12 @@ def compile_simple_and_split(metainterp, greenkey, trace, runtime_args, enable_o
     jitcell_token = make_jitcell_token(jitdriver_sd)
     call_pure_results = metainterp.call_pure_results
 
+    # t_after: bridge
+    # t_before: original loop,
     t_after_cutted, t_before_cutted = split_trace_at(trace, "cut_here")
+
+    # TODO: Try to judge which jump or finish should be added to the end of t_before
+
     return t_after_cutted, t_before_cutted
 
 def compile_loop(metainterp, greenkey, start, inputargs, jumpargs,
