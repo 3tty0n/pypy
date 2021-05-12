@@ -192,6 +192,20 @@ class TestOpencoder(object):
         assert len(l) == 2
         assert l[0].getarglist() == [i0, i1]
 
+    def test_trace_cut_point_by_name(self):
+        metainterp_sd = FakeMetaInterpSd()
+        metainterp_sd.setup_list_of_addr2name([(123, 'cut_here'), (456, 'b')])
+        i0, i1, i2 = IntFrontendOp(0), IntFrontendOp(0), IntFrontendOp(0)
+        t = Trace([i0, i1, i2], metainterp_sd)
+        add1 = FakeOp(t.record_op(rop.INT_ADD, [i0, i1]))
+        sub1 = FakeOp(t.record_op(rop.INT_SUB, [add1, i1]))
+        funcbox = ConstInt(123)
+        call1 = FakeOp(t.record_op(rop.CALL_I, [funcbox]))
+        cut_point1 = t.cut_point()
+        add2 = FakeOp(t.record_op(rop.INT_ADD, [sub1, i0]))
+        print t.cut_point_by_fname('cut_here')
+        pass
+
     def test_trace_iterator_cut_pont(self):
         metainterp_sd = FakeMetaInterpSd()
         metainterp_sd.setup_list_of_addr2name([(123, 'cut_here'), (456, 'b')])
