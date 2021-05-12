@@ -128,7 +128,10 @@ class TraceIterator(BaseTrace):
             (self.pos, self._count, self._index)
 
     def cut_point_by_fname(self, fname):
-        """raise IndexError when there is no op which is equaled to op"""
+        """
+        Calculates `cut_point' of op which name is equaled to fname.
+        Raises IndexError when there is no op which is equaled to op.
+        """
         metainterp = self.metainterp_sd
         while True:
             resop = self.next()
@@ -139,7 +142,8 @@ class TraceIterator(BaseTrace):
 
                 value = arg.getvalue()
                 name = metainterp.get_name_from_address(value)
-                assert (name is not None)
+                if name is None:
+                    raise IndexError
 
                 if name == fname:
                     return self.pos, self._count, self._index
