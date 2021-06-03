@@ -248,12 +248,10 @@ def test_compile_simple_loop_and_split():
     i1 = getfield_gc_i(p1, descr=valuedescr)
     i2 = int_add(i1, 1)
     i3 = int_gt(i2, 0)
-    i4 = call_i(ConstClass(func_ptr), descr=calldescr)
+    i4 = call_i(ConstClass(func_ptr), descr=calldescr) # calling cut_here pseudo function
     i5 = getfield_gc_i(p1, descr=valuedescr)
     i6 = int_add(i5, 2)
-    p2 = new_with_vtable(descr=nodesize)
-    setfield_gc(p2, i6, descr=valuedescr)
-    jump(p2)
+    jump(i6)
     ''', namespace=namespace)
 
     loop_before = parse('''
@@ -262,15 +260,14 @@ def test_compile_simple_loop_and_split():
     i2 = int_add(i1, 1)
     i3 = int_gt(i2, 0)
     i4 = call_i(ConstClass(func_ptr), descr=calldescr)
+    # TODO: jump instruction here
     ''', namespace=namespace)
 
     loop_after = parse('''
     [p1]
     i5 = getfield_gc_i(p1, descr=valuedescr)
     i6 = int_add(i5, 2)
-    p2 = new_with_vtable(descr=nodesize)
-    setfield_gc(p2, i6, descr=valuedescr)
-    jump(p2)
+    jump(i6)
     ''', namespace=namespace)
 
     t = convert_loop_to_trace(loop, staticdata)
