@@ -2840,6 +2840,9 @@ class MetaInterp(object):
             self.history.cut(cut_at)  # pop the jump
         self.raise_if_successful(live_arg_boxes, target_token)
 
+    def compile_threaded_code(self, live_arg_boxes, ptoken):
+        pass
+
     def compile_done_with_this_frame(self, exitbox):
         self.store_token_in_vable()
         sd = self.staticdata
