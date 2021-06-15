@@ -225,8 +225,9 @@ def test_compile_simple_loop_and_split():
     FPTR = Ptr(FuncType([lltype.Char], lltype.Char))
     def cut_here(c):
         return c
+
     func_ptr = llhelper(FPTR, cut_here)
-    calldescr = cpu.calldescrof(FPTR.TO, (lltype.Char,), lltype.Char,
+    cutheredescr = cpu.calldescrof(FPTR.TO, (lltype.Char,), lltype.Char,
                                        EffectInfo.MOST_GENERAL)
 
     staticdata = FakeMetaInterpStaticData()
@@ -248,7 +249,7 @@ def test_compile_simple_loop_and_split():
     i1 = getfield_gc_i(p1, descr=valuedescr)
     i2 = int_add(i1, 1)
     i3 = int_gt(i2, 0)
-    i4 = call_i(ConstClass(func_ptr), descr=calldescr) # calling cut_here pseudo function
+    i4 = call_i(ConstClass(func_ptr), descr=cutheredescr) # calling cut_here pseudo function
     i5 = getfield_gc_i(p1, descr=valuedescr)
     i6 = int_add(i5, 2)
     jump(i6)
@@ -259,7 +260,7 @@ def test_compile_simple_loop_and_split():
     i1 = getfield_gc_i(p1, descr=valuedescr)
     i2 = int_add(i1, 1)
     i3 = int_gt(i2, 0)
-    i4 = call_i(ConstClass(func_ptr), descr=calldescr)
+    i4 = call_i(ConstClass(func_ptr), descr=cutheredescr)
     # TODO: jump instruction here
     ''', namespace=namespace)
 
@@ -294,3 +295,108 @@ def test_compile_simple_loop_and_split():
     assert ops_c != []
     assert len(i1) == len(i1_c)
     assert len(ops) == len(ops_c)
+
+
+def test_compile_simple_loop_and_split2():
+    from rpython.jit.metainterp.history import BasicFailDescr
+    from rpython.jit.metainterp.support import ptr2int
+    from rpython.jit.metainterp.pyjitpl import MetaInterpStaticData
+    from rpython.rtyper.annlowlevel import llhelper
+    from rpython.rtyper.lltypesystem import lltype, llmemory
+
+    cpu = FakeCPU()
+
+    class FakeMetaInterpStaticData(MetaInterpStaticData):
+        all_descrs = []
+        logger_noopt = FakeLogger()
+        logger_ops = FakeLogger()
+        config = get_combined_translation_config(translating=True)
+        jitlog = jl.JitLogger()
+
+        stats = Stats(None)
+        profiler = jitprof.EmptyProfiler()
+        warmrunnerdesc = None
+        def log(self, msg, event_kind=None):
+            pass
+
+        def __init__(self):
+            pass
+
+    def merge(dic1, dic2):
+        new_dic = dic1.copy()
+        new_dic.update(dic2)
+        return new_dic
+
+    Ptr = lltype.Ptr
+    FuncType = lltype.FuncType
+    FPTR = Ptr(FuncType([lltype.Char], lltype.Char))
+    def cut_here(c):
+        return c
+    cuthere_ptr = llhelper(FPTR, cut_here)
+    cuthereescr = cpu.calldescrof(FPTR.TO, (lltype.Char,), lltype.Char,
+                                  EffectInfo.MOST_GENERAL)
+    def func(x):
+        return x
+    func_ptr = llhelper(FPTR, func)
+    calldescr = cpu.calldescrof(FPTR.TO, (lltype.Number,), lltype.Number,
+                                EffectInfo.MOST_GENERAL)
+
+    faildescr = BasicFailDescr(1)
+    faildescr2 = BasicFailDescr(2)
+    faildescr3 = BasicFailDescr(3)
+
+    staticdata = FakeMetaInterpStaticData()
+    staticdata.all_descrs = LLtypeMixin.cpu.setup_descrs()
+    staticdata.cpu = cpu
+    staticdata.jitlog = jl.JitLogger(cpu)
+    staticdata.jitlog.trace_id = 2
+    staticdata.setup_list_of_addr2name([(ptr2int(cuthere_ptr), 'cut_here')])
+
+    metainterp = FakeMetaInterp()
+    metainterp.staticdata = staticdata
+    metainterp.cpu = cpu
+    metainterp.history = History()
+
+    namespace = merge(LLtypeMixin.__dict__.copy(), locals().copy())
+
+    # simplified version without guard
+    trace = parse("""
+    [p0]
+    debug_merge_point(0, 0, '0: DUP ')
+    p1 = getfield_gc_i(p0, descr=valuedescr)
+    i3 = strgetitem(p1, 0)
+    i7 = call_i(ConstClass(func_ptr), p0, 1, descr=calldescr)
+    debug_merge_point(0, 0, '1: CONST_INT 1')
+    i12 = call_i(ConstClass(func_ptr), p0, 2, descr=calldescr)
+    debug_merge_point(0, 0, '3: LT ')
+    i16 = call_i(ConstClass(func_ptr), p0, 4, descr=calldescr)
+    # debug_merge_point(0, 0, '4: JUMP_IF 8')
+    i18 = getfield_gc_i(p0, descr=valuedescr)
+    i20 = int_sub(i18, 1)
+    p21 = getfield_gc_i(p0, descr=valuedescr)
+    p22 = getarrayitem_gc_i(p21, i20, descr=arraydescr)
+    setarrayitem_gc(p21, i20, ConstPtr(nullptr), descr=arraydescr)
+    i25 = call_i(ConstClass(func_ptr), p0, p22, descr=calldescr)
+    setfield_gc(p0, i20, descr=valuedescr)
+    debug_merge_point(0, 0, '6: JUMP 13')
+    i28 = call_i(ConstClass(cuthere_ptr), 6, descr=cuthereescr)
+    debug_merge_point(0, 0, '6: JUMP 13')
+    debug_merge_point(0, 0, '13: EXIT ')
+    i31 = int_sub(i20, 1)
+    p32 = getarrayitem_gc_i(p21, i31, descr=arraydescr)
+    setarrayitem_gc(p21, i31, ConstPtr(nullptr), descr=valuedescr)
+    leave_portal_frame(0)
+    setfield_gc(p0, i31, descr=valuedescr)
+    finish(p32)
+    """, namespace=namespace)
+
+    t = convert_loop_to_trace(trace, staticdata)
+    metainterp.history.trace = t
+    metainterp.history.inputargs = t.inputargs
+
+    raiseme = None
+    greenkey = 'faked'
+    t_after_cutted, t_before_cutted = compile_simple_and_split(
+        metainterp, greenkey, t, t.inputargs,
+        metainterp.jitdriver_sd.warmstate.enable_opts,
+        (0, 0, 0))
