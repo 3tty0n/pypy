@@ -220,6 +220,19 @@ class TestOpencoder(object):
         add2 = FakeOp(t.record_op(rop.INT_ADD, [sub1, i0]))
         assert t.get_iter().cut_point_by_fname('cut_here') == cut_point1
 
+    def test_get_with_index(self):
+        metainterp_sd = FakeMetaInterpSd()
+        i0, i1, i2 = IntFrontendOp(0), IntFrontendOp(0), IntFrontendOp(0)
+        t = Trace([i0, i1, i2], metainterp_sd)
+        add1 = FakeOp(t.record_op(rop.INT_ADD, [i0, i1]))
+        sub1 = FakeOp(t.record_op(rop.INT_SUB, [add1, i1]))
+        op, args = t.get_iter().get(3)
+        assert op == rop.INT_ADD
+        assert len(args) == len([i0, i1])
+        op, args = t.get_iter().get(6)
+        assert op == rop.INT_SUB
+        assert len(args) == len([add1, i1])
+
     def test_virtualizable_virtualref(self):
         i0, i1, i2 = IntFrontendOp(0), IntFrontendOp(0), IntFrontendOp(0)
         t = Trace([i0, i1, i2], metainterp_sd)

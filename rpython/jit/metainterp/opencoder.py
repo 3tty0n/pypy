@@ -242,6 +242,20 @@ class TraceIterator(BaseTrace):
         self._count += 1
         return res
 
+    def get(self, i):
+        if i >= self.end:
+            raise IndexError
+        res = rffi.cast(lltype.Signed, self.trace._ops[i])
+        expected_arity = oparity[res]
+        if expected_arity == -1:
+            argnum = self.trace._ops[i + 1]
+        else:
+            argnum = oparity[res]
+        args = []
+        for j in range(argnum):
+            args.append(self.trace._ops[i + j + 1])
+        return res, args
+
 class CutTrace(BaseTrace):
     def __init__(self, trace, start, count, index, inputargs):
         self.trace = trace
