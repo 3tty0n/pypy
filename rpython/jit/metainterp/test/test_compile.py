@@ -10,10 +10,16 @@ from rpython.jit.metainterp import jitexc
 from rpython.rlib.rjitlog import rjitlog as jl
 from rpython.jit.metainterp import jitprof, compile
 from rpython.jit.metainterp.optimizeopt.test.test_util import LLtypeMixin
-from rpython.jit.tool.oparser import parse, convert_loop_to_trace
+from rpython.jit.tool.oparser import op_parser, parse, parse_with_vars, convert_loop_to_trace
 from rpython.jit.metainterp.optimizeopt import ALL_OPTS_DICT
 from rpython.rtyper.annlowlevel import llhelper
 from rpython.rtyper.lltypesystem import lltype
+
+from pprint import pprint
+
+class JitCode(object):
+    def __init__(self, index):
+        self.index = index
 
 class FakeCPU(object):
     supports_guard_gc_type = True
@@ -85,15 +91,44 @@ class FakeMetaInterp:
         virtualizable_info = None
         vec = False
 
-def unpack(ct):
-    iter = ct.get_iter()
-    ops = []
+class FakeFrame(object):
+    parent_snapshot = None
+
+    def __init__(self, pc, jitcode, boxes):
+        self.pc = pc
+        self.jitcode = jitcode
+        self.boxes = boxes
+
+    def get_list_of_active_boxes(self, flag, new_array, encode):
+        a = new_array(len(self.boxes))
+        for i, box in enumerate(self.boxes):
+            a[i] = encode(box)
+        return a
+
+def unpack_snapshot(t, op, pos):
+    op.framestack = []
+    si = t.get_snapshot_iter(op.rd_resume_position)
+    virtualizables = si.unpack_array(si.vable_array)
+    vref_boxes = si.unpack_array(si.vref_array)
+    for snapshot in si.framestack:
+        jitcode, pc = si.unpack_jitcode_pc(snapshot)
+        boxes = si.unpack_array(snapshot.box_array)
+        op.framestack.append(FakeFrame(JitCode(jitcode), pc, boxes))
+    op.virtualizables = virtualizables
+    op.vref_boxes = vref_boxes
+
+def unpack(t):
+    iter = t.get_iter()
+    l = []
     try:
-        while True:
-            ops.append(iter.next())
-    except IndexError:
+        while not iter.done():
+            op = iter.next()
+            if op.is_guard():
+                unpack_snapshot(iter, op, op.rd_resume_position)
+            l.append(op)
+    except Exception:
         pass
-    return iter.inputargs, ops
+    return iter.inputargs, l
 
 def test_compile_loop():
     cpu = FakeCPU()
@@ -360,7 +395,7 @@ def test_compile_simple_loop_and_split2():
     namespace = merge(LLtypeMixin.__dict__.copy(), locals().copy())
 
     # simplified version without guard
-    trace = parse("""
+    trace_str = """
     [p0]
     debug_merge_point(0, 0, '0: DUP ')
     p1 = getfield_gc_i(p0, descr=valuedescr)
@@ -370,7 +405,37 @@ def test_compile_simple_loop_and_split2():
     i12 = call_i(ConstClass(func_ptr), p0, 2, descr=calldescr)
     debug_merge_point(0, 0, '3: LT ')
     i16 = call_i(ConstClass(func_ptr), p0, 4, descr=calldescr)
-    # debug_merge_point(0, 0, '4: JUMP_IF 8')
+    debug_merge_point(0, 0, '4: JUMP_IF 8')
+    i18 = getfield_gc_i(p0, descr=valuedescr)
+    i20 = int_sub(i18, 1)
+    p21 = getfield_gc_i(p0, descr=valuedescr)
+    p22 = getarrayitem_gc_i(p21, i20, descr=arraydescr)
+    setarrayitem_gc(p21, i20, ConstPtr(nullptr), descr=arraydescr)
+    i25 = call_i(ConstClass(func_ptr), p0, p22, descr=calldescr)
+    setfield_gc(p0, i20, descr=valuedescr)
+    debug_merge_point(0, 0, '6: JUMP 13')
+    i28 = call_i(ConstClass(cuthere_ptr), 6, descr=cuthereescr) # splitting point
+    debug_merge_point(0, 0, '6: JUMP 13')
+    debug_merge_point(0, 0, '13: EXIT ')
+    i31 = int_sub(i20, 1)
+    p32 = getarrayitem_gc_i(p21, i31, descr=arraydescr)
+    setarrayitem_gc(p21, i31, ConstPtr(nullptr), descr=valuedescr)
+    leave_portal_frame(0)
+    setfield_gc(p0, i31, descr=valuedescr)
+    finish(p32)
+    """
+
+    trace_before = parse("""
+    [p0]
+    debug_merge_point(0, 0, '0: DUP ')
+    p1 = getfield_gc_i(p0, descr=valuedescr)
+    i3 = strgetitem(p1, 0)
+    i7 = call_i(ConstClass(func_ptr), p0, 1, descr=calldescr)
+    debug_merge_point(0, 0, '1: CONST_INT 1')
+    i12 = call_i(ConstClass(func_ptr), p0, 2, descr=calldescr)
+    debug_merge_point(0, 0, '3: LT ')
+    i16 = call_i(ConstClass(func_ptr), p0, 4, descr=calldescr)
+    debug_merge_point(0, 0, '4: JUMP_IF 8')
     i18 = getfield_gc_i(p0, descr=valuedescr)
     i20 = int_sub(i18, 1)
     p21 = getfield_gc_i(p0, descr=valuedescr)
@@ -380,6 +445,10 @@ def test_compile_simple_loop_and_split2():
     setfield_gc(p0, i20, descr=valuedescr)
     debug_merge_point(0, 0, '6: JUMP 13')
     i28 = call_i(ConstClass(cuthere_ptr), 6, descr=cuthereescr)
+    """, namespace=namespace)
+
+    trace_after = parse("""
+    [p0, p21, i20]
     debug_merge_point(0, 0, '6: JUMP 13')
     debug_merge_point(0, 0, '13: EXIT ')
     i31 = int_sub(i20, 1)
@@ -390,9 +459,30 @@ def test_compile_simple_loop_and_split2():
     finish(p32)
     """, namespace=namespace)
 
+    trace = parse(trace_str, namespace=namespace)
+
     t = convert_loop_to_trace(trace, staticdata)
     metainterp.history.trace = t
     metainterp.history.inputargs = t.inputargs
+
+    # test version of copying ops from then branch
+    total_count = t._count
+    pos, count, index = t.cut_point_by_fname("cut_here")
+    i_t, ops_t = unpack(t)
+
+    t_ops_before = ops_t[:count - 1]
+    t_ops_after = ops_t[count - 1:]
+    l = []
+    for i in range(count, total_count):
+        op = ops_t[i - 1]
+        args = op.getarglist()
+        for arg in args:
+            if arg in t_ops_before:
+                if arg not in l:
+                    l.append(arg)
+    t_ops_after = l + t_ops_after
+    pprint(t_ops_after)
+
 
     raiseme = None
     greenkey = 'faked'
@@ -400,3 +490,10 @@ def test_compile_simple_loop_and_split2():
         metainterp, greenkey, t, t.inputargs,
         metainterp.jitdriver_sd.warmstate.enable_opts,
         (0, 0, 0))
+
+    t_before = convert_loop_to_trace(trace_before, staticdata)
+    i0, ops = t_before.unpack()
+    i0_c, ops_c = unpack(t_before_cutted)
+    assert ops_c != []
+    assert len(i0) == len(i0_c)
+    assert len(ops) == len(ops_c)
