@@ -263,6 +263,8 @@ def compile_simple_and_split(metainterp, greenkey, start, inputargs, jumpargs,
 
     # t_after: bridge,  t_before: original loop
     t_after_cutted, t_before_cutted = split_trace_at(trace, "cut_here")
+    assert t_after_cutted is not None
+    assert t_before_cutted is not None
     return t_after_cutted, t_before_cutted
 
 def compile_and_split(metainterp, greenkey, start, inputargs, jumpargs,
@@ -300,6 +302,7 @@ def compile_and_split(metainterp, greenkey, start, inputargs, jumpargs,
     jitdriver_sd = metainterp.jitdriver_sd
     start_descr = TargetToken(t_before_jitcell_token,
                               original_jitcell_token=t_before_jitcell_token)
+    jitcell_token = make_jitcell_token()
     jitcell_token.target_tokens = [start_descr]
 
     t_before_data = SimpleCompileData(t_before_cutted,
@@ -1134,7 +1137,6 @@ def compile_trace(metainterp, resumekey, runtime_boxes, ends_with_jump=False):
     #
     # Attempt to use optimize_bridge().  This may return None in case
     # it does not work -- i.e. none of the existing old_loop_tokens match.
-    # import pdb; pdb.set_trace()
     metainterp_sd = metainterp.staticdata
     jitdriver_sd = metainterp.jitdriver_sd
     if isinstance(resumekey, ResumeAtPositionDescr):
@@ -1266,3 +1268,62 @@ def split_trace_at(trace, at_fname):
     t.cut_at(list(cut_point))
 
     return t_after_cutted, t
+
+class ResSplitTrace:
+    def __init__(self, prev, latter, inputs):
+        self.prev = prev
+        self.latter = latter
+        self.inputs = inputs
+
+    def __repr__(self):
+        return "ResSplitTrace(%s, %s, %s)" % \
+            (self.prev, self.latter, self.inputs)
+
+
+def split_trace(trace, at_fname):
+    assert at_fname is not None
+
+    cut_point = trace.cut_point_by_fname("cut_here")
+    iter = trace.get_iter()
+    prev, undef, latter = iter.split_at(cut_point)
+    return ResSplitTrace(prev, undef + latter, trace.inputargs)
+
+
+def split_ops(metainterp_sd, inputargs, ops, fname):
+    cut_point = 0
+    for op in ops:
+        if op.getopnum() == rop.CALL_I:
+            arg = op.getarg(0)
+            if arg is None:
+                raise IndexError
+            v = arg.getvalue()
+            name = metainterp_sd.get_name_from_address(v)
+            if name is None:
+                raise IndexError
+
+            if name == fname:
+                break
+        cut_point += 1
+
+    prev = ops[:cut_point-1]
+    latter = ops[cut_point+1:]
+    if len(latter) == 0:
+        return None
+
+    undefined = []
+    def get_undefined_ops_from_args(args):
+        l = []
+        for arg in args:
+            for op in prev:
+                if op == arg:
+                    if op not in undefined:
+                        l.insert(0, op)
+                    args = op.getarglist()
+                    get_undefined_ops_from_args(args)
+        undefined.extend(l)
+
+    for op in latter:
+        args = op.getarglist()
+        get_undefined_ops_from_args(args)
+
+    return ResSplitTrace(prev, undefined + latter, inputargs)

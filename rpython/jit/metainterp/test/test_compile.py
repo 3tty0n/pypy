@@ -4,6 +4,7 @@ from rpython.jit.metainterp.resoperation import rop
 from rpython.jit.metainterp.optimizeopt.util import equaloplists
 from rpython.jit.metainterp.history import ConstInt, History, Stats
 from rpython.jit.metainterp.history import INT
+from rpython.jit.metainterp import compile
 from rpython.jit.metainterp.compile import (
     compile_loop, compile_simple_and_split, compile_tmp_callback, make_jitcell_token)
 from rpython.jit.metainterp import jitexc
@@ -129,6 +130,11 @@ def unpack(t):
     except Exception:
         pass
     return iter.inputargs, l
+
+
+def assert_ops(lhs, rhs):
+    for l, r in zip(lhs, rhs):
+        assert l.getopnum() == r.getopnum()
 
 def test_compile_loop():
     cpu = FakeCPU()
@@ -395,10 +401,10 @@ def test_compile_simple_loop_and_split2():
     namespace = merge(LLtypeMixin.__dict__.copy(), locals().copy())
 
     # simplified version without guard
-    trace_str = """
+    trace = parse("""
     [p0]
     debug_merge_point(0, 0, '0: DUP ')
-    p1 = getfield_gc_i(p0, descr=valuedescr)
+    p1 = getfield_gc_r(p0, descr=valuedescr)
     i3 = strgetitem(p1, 0)
     i7 = call_i(ConstClass(func_ptr), p0, 1, descr=calldescr)
     debug_merge_point(0, 0, '1: CONST_INT 1')
@@ -423,12 +429,12 @@ def test_compile_simple_loop_and_split2():
     leave_portal_frame(0)
     setfield_gc(p0, i31, descr=valuedescr)
     finish(p32)
-    """
+    """, namespace=namespace)
 
     trace_before = parse("""
     [p0]
     debug_merge_point(0, 0, '0: DUP ')
-    p1 = getfield_gc_i(p0, descr=valuedescr)
+    p1 = getfield_gc_r(p0, descr=valuedescr)
     i3 = strgetitem(p1, 0)
     i7 = call_i(ConstClass(func_ptr), p0, 1, descr=calldescr)
     debug_merge_point(0, 0, '1: CONST_INT 1')
@@ -448,7 +454,10 @@ def test_compile_simple_loop_and_split2():
     """, namespace=namespace)
 
     trace_after = parse("""
-    [p0, p21, i20]
+    [p0]
+    i18 = getfield_gc_i(p0, descr=valuedescr)
+    i20 = int_sub(i18, 1)
+    p21 = getfield_gc_i(p0, descr=valuedescr)
     debug_merge_point(0, 0, '6: JUMP 13')
     debug_merge_point(0, 0, '13: EXIT ')
     i31 = int_sub(i20, 1)
@@ -459,41 +468,21 @@ def test_compile_simple_loop_and_split2():
     finish(p32)
     """, namespace=namespace)
 
-    trace = parse(trace_str, namespace=namespace)
-
     t = convert_loop_to_trace(trace, staticdata)
     metainterp.history.trace = t
     metainterp.history.inputargs = t.inputargs
 
-    # test version of copying ops from then branch
-    total_count = t._count
-    pos, count, index = t.cut_point_by_fname("cut_here")
-    i_t, ops_t = unpack(t)
+    inputs, ops = unpack(t)
+    res1 = compile.split_ops(metainterp.staticdata, inputs, ops, "cut_here")
+    res2 = compile.split_trace(t, "cut_here")
 
-    t_ops_before = ops_t[:count - 1]
-    t_ops_after = ops_t[count - 1:]
-    l = []
-    for i in range(count, total_count):
-        op = ops_t[i - 1]
-        args = op.getarglist()
-        for arg in args:
-            if arg in t_ops_before:
-                if arg not in l:
-                    l.append(arg)
-    t_ops_after = l + t_ops_after
-    pprint(t_ops_after)
-
-
-    raiseme = None
-    greenkey = 'faked'
-    t_after_cutted, t_before_cutted = compile_simple_and_split(
-        metainterp, greenkey, t, t.inputargs,
-        metainterp.jitdriver_sd.warmstate.enable_opts,
-        (0, 0, 0))
+    assert_ops(res1.prev, res2.prev)
+    assert_ops(res1.latter, res2.latter)
 
     t_before = convert_loop_to_trace(trace_before, staticdata)
-    i0, ops = t_before.unpack()
-    i0_c, ops_c = unpack(t_before_cutted)
-    assert ops_c != []
-    assert len(i0) == len(i0_c)
-    assert len(ops) == len(ops_c)
+    t_before_i, t_before_ops = t_before.unpack()
+    assert_ops(res2.prev, t_before_ops)
+
+    t_after = convert_loop_to_trace(trace_after, staticdata)
+    t_after_i, t_after_ops = t_after.unpack()
+    assert_ops(res2.latter, t_after_ops)
