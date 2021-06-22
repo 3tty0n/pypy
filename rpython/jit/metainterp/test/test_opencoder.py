@@ -203,8 +203,7 @@ class TestOpencoder(object):
         call1 = FakeOp(t.record_op(rop.CALL_I, [funcbox]))
         cut_point1 = t.cut_point()
         add2 = FakeOp(t.record_op(rop.INT_ADD, [sub1, i0]))
-        print t.cut_point_by_fname('cut_here')
-        pass
+        assert t.cut_point_by_fname('cut_here') == (13, 6, 6)
 
     def test_trace_iterator_cut_pont(self):
         metainterp_sd = FakeMetaInterpSd()
