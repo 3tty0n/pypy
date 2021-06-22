@@ -124,8 +124,8 @@ class TraceIterator(BaseTrace):
         self.end = end
 
     def __repr__(self):
-        return "TraceIterator(pos: %d, count: %d, index: %d)" % \
-            (self.pos, self._count, self._index)
+        return "TraceIterator(pos: %d, count: %d, index: %d, end: %d)" % \
+            (self.pos, self._count, self._index, self.end)
 
     def cut_point_by_fname(self, fname):
         """
@@ -255,6 +255,43 @@ class TraceIterator(BaseTrace):
         for j in range(argnum):
             args.append(self.trace._ops[i + j + 1])
         return res, args
+
+    def get_iter(self):
+        return self
+
+    def split_at(self, cut_at):
+        c_pos, c_count, c_index = cut_at
+        old_pos = self.pos
+
+        prev_op = []
+        while self.pos < c_pos:
+            op = self.next()
+            prev_op.append(op)
+
+        old_pos = self.pos
+
+        undefined_op = []
+        def get_undefined_ops_from_args(args):
+            l = []
+            for arg in args:
+                for op in prev_op:
+                    if op == arg:
+                        if op not in undefined_op:
+                            l.insert(0, op)
+                        args = op.getarglist()
+                        get_undefined_ops_from_args(args)
+            undefined_op.extend(l)
+
+        latter_op = []
+        while not self.done():
+            op = self.next()
+            args = op.getarglist()
+            get_undefined_ops_from_args(args)
+            latter_op.append(op)
+
+        self.pos = old_pos
+        return prev_op, undefined_op, latter_op
+
 
 class CutTrace(BaseTrace):
     def __init__(self, trace, start, count, index, inputargs):
