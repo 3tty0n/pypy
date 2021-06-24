@@ -12,18 +12,19 @@ from rpython.jit.backend.llgraph import runner
 from rpython.jit.metainterp import pyjitpl
 from rpython.jit.metainterp.jitprof import EmptyProfiler
 from rpython.jit.metainterp.optimize import InvalidLoop
-from rpython.jit.metainterp.optimizeopt.test.test_util import (
-    BaseTest, convert_old_style_to_targets)
 from rpython.jit.metainterp.history import (
     JitCellToken, ConstInt, get_const_ptr_for_string)
 from rpython.jit.metainterp import executor, compile
 from rpython.jit.metainterp.resoperation import (
     rop, ResOperation, InputArgInt, OpHelpers, InputArgRef)
 from rpython.jit.metainterp.support import ptr2int
+from rpython.jit.metainterp.optimizeopt import split
 from rpython.jit.metainterp.optimizeopt.intdiv import magic_numbers
 from rpython.jit.metainterp.test.test_resume import (
     ResumeDataFakeReader, MyMetaInterp)
-from rpython.jit.metainterp.optimizeopt.test import test_util
+from rpython.jit.metainterp.optimizeopt.test import test_util, test_dependency
+from rpython.jit.metainterp.optimizeopt.test.test_util import (
+    BaseTest, convert_old_style_to_targets)
 from rpython.jit.tool.oparser import parse, convert_loop_to_trace
 
 class FakeCPU(object):
@@ -62,14 +63,14 @@ def merge_dicts(*dict_args):
     return result
 
 
-class FakeMetaInterpStaticData(pyjitpl.MetaInterpStaticData):
+class FakeMetaInterpStaticData(object):
     all_descrs = []
 
     def __init__(self, cpu):
         self.cpu = cpu
         self.profiler = EmptyProfiler()
         self.options = test_util.Fake()
-        self.globaldata =test_util.Fake()
+        self.globaldata = test_util.Fake()
         self.config = test_util.get_combined_translation_config(translating=True)
         self.jitlog = jl.JitLogger()
         self.callinfocollection = test_util.FakeCallInfoCollection()
@@ -92,33 +93,67 @@ class FakeMetaInterpStaticData(pyjitpl.MetaInterpStaticData):
             max_retrace_guards = 15
         jitcounter = test_util.DeterministicJitCounter()
 
-    def get_name_from_address(self, ptr):
-        try:
-            return repr(ptr)
-        except AttributeError:
-            return ""
+class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
 
-class BaseTestTraceSplit(BaseTest):
+    enable_opts = "intbounds:rewrite:string:earlyforce:pure"
 
-    enable_opts = "intbounds:rewrite:virtualize:string:earlyforce:pure:heap:tracesplit"
+    cpu = runner.LLGraphCPU(None)
+    Ptr = lltype.Ptr
+    FuncType = lltype.FuncType
+    FPTR = Ptr(FuncType([lltype.Char], lltype.Char))
 
-    def optimize_loop(self, ops, optops, call_pure_results=None):
-        cpu = runner.LLGraphCPU(None)
-        Ptr = lltype.Ptr
-        FuncType = lltype.FuncType
-        FPTR = Ptr(FuncType([lltype.Char], lltype.Char))
+    def cut_here(c):
+        return c
 
-        def cut_here(c):
-            return c
-
-        func_ptr = llhelper(FPTR, cut_here)
-        calldescr = cpu.calldescrof(FPTR.TO, (lltype.Char,), lltype.Char,
+    func_ptr = llhelper(FPTR, cut_here)
+    calldescr = cpu.calldescrof(FPTR.TO, (lltype.Char,), lltype.Char,
                                 EffectInfo.MOST_GENERAL)
 
-        namespace = merge_dicts(test_util.LLtypeMixin.__dict__.copy(), locals().copy())
-        self.namespace = namespace
-        self.metainterp_sd = FakeMetaInterpStaticData(cpu)
+    def emit_jump(x, y):
+        return x
+    FPTR2 = Ptr(FuncType([lltype.Signed, lltype.Signed], lltype.Signed))
+    emit_jump_if_ptr = llhelper(FPTR2, emit_jump)
+    emit_jump_if_descr = cpu.calldescrof(FPTR2.TO, (lltype.Signed, lltype.Signed), lltype.Signed,
+                                         EffectInfo.MOST_GENERAL)
 
+    def emit_jump_if(x, y):
+        return x
+    FPTR3 = Ptr(FuncType([lltype.Signed, lltype.Signed], lltype.Signed))
+    emit_jump_ptr = llhelper(FPTR3, emit_jump_if)
+    emit_jump_descr = cpu.calldescrof(FPTR2.TO, (lltype.Signed, lltype.Signed), lltype.Signed,
+                                      EffectInfo.MOST_GENERAL)
+
+    def func(x):
+        return x
+    FPTR = Ptr(FuncType([lltype.Signed], lltype.Signed))
+    func_ptr = llhelper(FPTR, func)
+    calldescr = cpu.calldescrof(FPTR.TO, (lltype.Signed,), lltype.Signed,
+                                EffectInfo.MOST_GENERAL)
+
+    namespace = merge_dicts(test_util.LLtypeMixin.__dict__.copy(), locals().copy())
+    metainterp_sd = FakeMetaInterpStaticData(cpu)
+
+    def optimize(self, ops, call_pure_results=None):
+        loop = self.parse(ops)
+        token = JitCellToken()
+        if loop.operations[-1].getopnum() == rop.JUMP:
+            loop.operations[-1].setdescr(token)
+        call_pure_results = self._convert_call_pure_results(call_pure_results)
+        trace = convert_loop_to_trace(loop, self.metainterp_sd)
+        compile_data = compile.SimpleCompileData(
+            trace, call_pure_results=call_pure_results,
+            enable_opts=self.enable_opts)
+        info, ops = compile_data.optimize_trace(self.metainterp_sd, None, {})
+        return info, ops, token
+
+    def optimize_and_split(self, ops, split_at=None, call_pure_results=None):
+        info, ops, token = self.optimize(ops, call_pure_results)
+        if split_at is None:
+            split_at = "emit_jump"
+        res = split.split_ops(self.metainterp_sd, info.inputargs, ops, split_at, token)
+        return res
+
+    def optimize_loop(self, ops, optops, call_pure_results=None):
         loop = self.parse(ops)
         token = JitCellToken()
         if loop.operations[-1].getopnum() == rop.JUMP:
@@ -139,14 +174,16 @@ class BaseTestTraceSplit(BaseTest):
 
 class TestOptTraceSplit(BaseTestTraceSplit):
 
-    def test_trace_split(self):
+    def test_trace_split1(self):
         ops ="""
         [p0]
         i1 = getfield_gc_i(p0, descr=valuedescr)
         i2 = call_i(ConstClass(func_ptr), descr=calldescr)
         i3 = int_add(i1, 1)
-        i4 = call_i(p0, descr=plaincalldescr)
-        jump(i3)
+        i4 = int_lt(i3, 0)
+        guard_true(i4) [p0, i4]
+        i5 = call_i(p0, descr=plaincalldescr)
+        jump(i5)
         """
         expected ="""
         [p0]
@@ -155,4 +192,48 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         i4 = call_i(p0, descr=plaincalldescr)
         jump(i3)
         """
-        self.optimize_loop(ops, expected)
+        loop = self.parse_loop(ops)
+        print loop
+
+    def test_trace_split_real_trace(self):
+        from pprint import pprint
+        ops = """
+        [p0]
+        debug_merge_point(0, 0, '0: DUP ')
+        p1 = getfield_gc_r(p0, descr=valuedescr)
+        i3 = strgetitem(p1, 0)
+        i7 = call_i(ConstClass(func_ptr), p0, 1, descr=calldescr)
+        debug_merge_point(0, 0, '1: CONST_INT 1')
+        i12 = call_i(ConstClass(func_ptr), p0, 2, descr=calldescr)
+        debug_merge_point(0, 0, '3: LT ')
+        i16 = call_i(ConstClass(func_ptr), p0, 4, descr=calldescr)
+        debug_merge_point(0, 0, '4: JUMP_IF 8')
+        i18 = getfield_gc_i(p0, descr=valuedescr)
+        i20 = int_sub(i18, 1)
+        p21 = getfield_gc_r(p0, descr=valuedescr)
+        p22 = getarrayitem_gc_r(p21, i20, descr=arraydescr)
+        setarrayitem_gc(p21, i20, ConstPtr(nullptr), descr=arraydescr)
+        i25 = call_i(ConstClass(func_ptr), p0, p22, descr=calldescr)
+        setfield_gc(p0, i20, descr=arraydescr)
+        guard_true(i25) [i25, p0]
+        i29 = call_i(ConstClass(emit_jump_if_ptr), 8, 8, descr=emit_jump_if_descr)
+        debug_merge_point(0, 0, '8: CONST_INT 1')
+        i33 = call_i(ConstClass(func_ptr), p0, 9, descr=calldescr)
+        debug_merge_point(0, 0, '10: SUB ')
+        i37 = call_i(ConstClass(func_ptr), p0, 11, descr=calldescr)
+        debug_merge_point(0, 0, '11: JUMP 0')
+        i42 = call_i(ConstClass(emit_jump_ptr), 6, 0, descr=emit_jump_descr)
+        debug_merge_point(0, 0, '6: JUMP 13')
+        debug_merge_point(0, 0, '13: EXIT ')
+        i44 = getfield_gc_i(p0, descr=valuedescr)
+        i46 = int_sub(i44, 1)
+        p47 = getarrayitem_gc_r(p21, i46, descr=arraydescr)
+        setarrayitem_gc(p21, i46, ConstPtr(nullptr), descr=arraydescr)
+        leave_portal_frame(0)
+        setfield_gc(p0, i46, descr=valuedescr)
+        finish(p47)
+        """
+
+        res = self.optimize_and_split(ops, split_at="emit_jump")
+        print res.prev
+        print res.latter
