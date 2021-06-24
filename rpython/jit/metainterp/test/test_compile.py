@@ -2,7 +2,7 @@ from rpython.config.translationoption import get_combined_translation_config
 from rpython.jit.codewriter.effectinfo import EffectInfo
 from rpython.jit.metainterp.resoperation import rop
 from rpython.jit.metainterp.optimizeopt.util import equaloplists
-from rpython.jit.metainterp.history import ConstInt, History, Stats
+from rpython.jit.metainterp.history import ConstInt, History, Stats, AbstractValue
 from rpython.jit.metainterp.history import INT
 from rpython.jit.metainterp import compile
 from rpython.jit.metainterp.compile import (
@@ -11,7 +11,7 @@ from rpython.jit.metainterp import jitexc
 from rpython.rlib.rjitlog import rjitlog as jl
 from rpython.jit.metainterp import jitprof, compile
 from rpython.jit.metainterp.optimizeopt.test.test_util import LLtypeMixin
-from rpython.jit.tool.oparser import op_parser, parse, parse_with_vars, convert_loop_to_trace
+from rpython.jit.tool.oparser import parse, convert_loop_to_trace
 from rpython.jit.metainterp.optimizeopt import ALL_OPTS_DICT
 from rpython.rtyper.annlowlevel import llhelper
 from rpython.rtyper.lltypesystem import lltype
@@ -106,6 +106,15 @@ class FakeFrame(object):
             a[i] = encode(box)
         return a
 
+def parse(s, cpu=None, boxkinds=None, want_fail_descr=True, postprocess=None, namespace=None):
+    from rpython.jit.tool.oparser import OpParser
+    if namespace is None:
+        namespace = {}
+    AbstractValue._repr_memo.counter = 0
+    oparse = OpParser(s, cpu, namespace, boxkinds,
+                      None, False, postprocess)
+    return oparse.parse()
+
 def unpack_snapshot(t, op, pos):
     op.framestack = []
     si = t.get_snapshot_iter(op.rd_resume_position)
@@ -134,7 +143,6 @@ def unpack(t):
 def assert_ops(lhs, rhs):
     for l, r in zip(lhs, rhs):
         assert l.getopnum() == r.getopnum()
-
 
 def merge_dict(dic1, dic2):
     new_dic = dic1.copy()
@@ -336,148 +344,3 @@ def test_compile_simple_loop_and_split():
     assert ops_c != []
     assert len(i1) == len(i1_c)
     assert len(ops) == len(ops_c)
-
-
-def test_compile_simple_loop_and_split2():
-    from rpython.jit.metainterp.history import BasicFailDescr
-    from rpython.jit.metainterp.support import ptr2int
-    from rpython.jit.metainterp.pyjitpl import MetaInterpStaticData
-    from rpython.rtyper.annlowlevel import llhelper
-    from rpython.rtyper.lltypesystem import lltype, llmemory
-
-    cpu = FakeCPU()
-
-    class FakeMetaInterpStaticData(MetaInterpStaticData):
-        all_descrs = []
-        logger_noopt = FakeLogger()
-        logger_ops = FakeLogger()
-        config = get_combined_translation_config(translating=True)
-        jitlog = jl.JitLogger()
-
-        stats = Stats(None)
-        profiler = jitprof.EmptyProfiler()
-        warmrunnerdesc = None
-        def log(self, msg, event_kind=None):
-            pass
-
-        def __init__(self):
-            pass
-
-    Ptr = lltype.Ptr
-    FuncType = lltype.FuncType
-    FPTR = Ptr(FuncType([lltype.Char], lltype.Char))
-    def cut_here(c):
-        return c
-    cuthere_ptr = llhelper(FPTR, cut_here)
-    cuthereescr = cpu.calldescrof(FPTR.TO, (lltype.Char,), lltype.Char,
-                                  EffectInfo.MOST_GENERAL)
-    def func(x):
-        return x
-    func_ptr = llhelper(FPTR, func)
-    calldescr = cpu.calldescrof(FPTR.TO, (lltype.Number,), lltype.Number,
-                                EffectInfo.MOST_GENERAL)
-
-    faildescr = BasicFailDescr(1)
-    faildescr2 = BasicFailDescr(2)
-    faildescr3 = BasicFailDescr(3)
-
-    staticdata = FakeMetaInterpStaticData()
-    staticdata.all_descrs = LLtypeMixin.cpu.setup_descrs()
-    staticdata.cpu = cpu
-    staticdata.jitlog = jl.JitLogger(cpu)
-    staticdata.jitlog.trace_id = 2
-    staticdata.setup_list_of_addr2name([(ptr2int(cuthere_ptr), 'cut_here')])
-
-    metainterp = FakeMetaInterp()
-    metainterp.staticdata = staticdata
-    metainterp.cpu = cpu
-    metainterp.history = History()
-
-    namespace = merge_dict(LLtypeMixin.__dict__.copy(), locals().copy())
-
-    # simplified version without guard
-    trace = parse("""
-    [p0]
-    debug_merge_point(0, 0, '0: DUP ')
-    p1 = getfield_gc_r(p0, descr=valuedescr)
-    i3 = strgetitem(p1, 0)
-    i7 = call_i(ConstClass(func_ptr), p0, 1, descr=calldescr)
-    debug_merge_point(0, 0, '1: CONST_INT 1')
-    i12 = call_i(ConstClass(func_ptr), p0, 2, descr=calldescr)
-    debug_merge_point(0, 0, '3: LT ')
-    i16 = call_i(ConstClass(func_ptr), p0, 4, descr=calldescr)
-    debug_merge_point(0, 0, '4: JUMP_IF 8')
-    i18 = getfield_gc_i(p0, descr=valuedescr)
-    i20 = int_sub(i18, 1)
-    p21 = getfield_gc_i(p0, descr=valuedescr)
-    p22 = getarrayitem_gc_i(p21, i20, descr=arraydescr)
-    setarrayitem_gc(p21, i20, ConstPtr(nullptr), descr=arraydescr)
-    i25 = call_i(ConstClass(func_ptr), p0, p22, descr=calldescr)
-    setfield_gc(p0, i20, descr=valuedescr)
-    debug_merge_point(0, 0, '6: JUMP 13')
-    i28 = call_i(ConstClass(cuthere_ptr), 6, descr=cuthereescr) # splitting point
-    debug_merge_point(0, 0, '6: JUMP 13')
-    debug_merge_point(0, 0, '13: EXIT ')
-    i31 = int_sub(i20, 1)
-    p32 = getarrayitem_gc_i(p21, i31, descr=arraydescr)
-    setarrayitem_gc(p21, i31, ConstPtr(nullptr), descr=valuedescr)
-    leave_portal_frame(0)
-    setfield_gc(p0, i31, descr=valuedescr)
-    finish(p32)
-    """, namespace=namespace)
-
-    trace_before = parse("""
-    [p0]
-    debug_merge_point(0, 0, '0: DUP ')
-    p1 = getfield_gc_r(p0, descr=valuedescr)
-    i3 = strgetitem(p1, 0)
-    i7 = call_i(ConstClass(func_ptr), p0, 1, descr=calldescr)
-    debug_merge_point(0, 0, '1: CONST_INT 1')
-    i12 = call_i(ConstClass(func_ptr), p0, 2, descr=calldescr)
-    debug_merge_point(0, 0, '3: LT ')
-    i16 = call_i(ConstClass(func_ptr), p0, 4, descr=calldescr)
-    debug_merge_point(0, 0, '4: JUMP_IF 8')
-    i18 = getfield_gc_i(p0, descr=valuedescr)
-    i20 = int_sub(i18, 1)
-    p21 = getfield_gc_i(p0, descr=valuedescr)
-    p22 = getarrayitem_gc_i(p21, i20, descr=arraydescr)
-    setarrayitem_gc(p21, i20, ConstPtr(nullptr), descr=arraydescr)
-    i25 = call_i(ConstClass(func_ptr), p0, p22, descr=calldescr)
-    setfield_gc(p0, i20, descr=valuedescr)
-    debug_merge_point(0, 0, '6: JUMP 13')
-    i28 = call_i(ConstClass(cuthere_ptr), 6, descr=cuthereescr)
-    """, namespace=namespace)
-
-    trace_after = parse("""
-    [p0]
-    i18 = getfield_gc_i(p0, descr=valuedescr)
-    i20 = int_sub(i18, 1)
-    p21 = getfield_gc_i(p0, descr=valuedescr)
-    debug_merge_point(0, 0, '6: JUMP 13')
-    debug_merge_point(0, 0, '13: EXIT ')
-    i31 = int_sub(i20, 1)
-    p32 = getarrayitem_gc_i(p21, i31, descr=arraydescr)
-    setarrayitem_gc(p21, i31, ConstPtr(nullptr), descr=valuedescr)
-    leave_portal_frame(0)
-    setfield_gc(p0, i31, descr=valuedescr)
-    finish(p32)
-    """, namespace=namespace)
-
-    t = convert_loop_to_trace(trace, staticdata)
-    metainterp.history.trace = t
-    metainterp.history.inputargs = t.inputargs
-
-    inputs, ops = unpack(t)
-    res1 = compile.split_ops(metainterp.staticdata, inputs, ops, "cut_here")
-    res2 = compile.split_trace(t, "cut_here")
-
-    assert_ops(res1.prev, res2.prev)
-    assert_ops(res1.latter, res2.latter)
-
-    t_before = convert_loop_to_trace(trace_before, staticdata)
-    t_before_i, t_before_ops = t_before.unpack()
-    assert_ops(res2.prev, t_before_ops)
-
-    t_after = convert_loop_to_trace(trace_after, staticdata)
-    t_after_i, t_after_ops = t_after.unpack()
-    assert_ops(res2.latter, t_after_ops)
