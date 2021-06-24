@@ -405,17 +405,6 @@ class OpParser(object):
         inpargs = self.parse_header_line(line[1:-1])
         return base_indent, inpargs, lines
 
-
-def op_parser(input, cpu=None, namespace=None,
-              boxkinds=None, invent_fail_descr=default_fail_descr,
-              no_namespace=False, nonstrict=False, OpParser=OpParser,
-              postprocess=None):
-    if namespace is None and not no_namespace:
-        namespace = {}
-    return OpParser(input, cpu, namespace, boxkinds,
-                    invent_fail_descr, nonstrict, postprocess)
-
-
 def parse(input, cpu=None, namespace=None,
           boxkinds=None, invent_fail_descr=default_fail_descr,
           no_namespace=False, nonstrict=False, OpParser=OpParser,
@@ -424,18 +413,6 @@ def parse(input, cpu=None, namespace=None,
         namespace = {}
     return OpParser(input, cpu, namespace, boxkinds,
                     invent_fail_descr, nonstrict, postprocess).parse()
-
-
-def parse_with_vars(input, cpu=None, namespace=None,
-                    boxkinds=None, invent_fail_descr=default_fail_descr,
-                    no_namespace=False, nonstrict=False, OpParser=OpParser,
-                    postprocess=None):
-    if namespace is None and not no_namespace:
-        namespace = {}
-    op_parser = OpParser(input, cpu, namespace, boxkinds,
-                         invent_fail_descr, nonstrict, postprocess)
-    res = op_parser.parse()
-    return res, op_parser.vars
 
 def pick_cls(inp):
     from rpython.jit.metainterp import history
