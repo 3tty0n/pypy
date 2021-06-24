@@ -282,88 +282,26 @@ def compile_and_split(metainterp, greenkey, start, inputargs, jumpargs,
                                          faildescr=None, entry_bridge=False)
 
     enable_opts = jitdriver_sd.warmstate.enable_opts
+    jitcell_token = make_jitcell_token(jitdriver_sd)
     cut_at = history.get_trace_position()
-
-    # t_after: bridge,  t_before: original loop
-    t_after_cutted, t_before_cutted = split_trace_at(trace, "cut_here")
-
-    # TODO:
-    # Try to judge which jump or finish should be added to the end of
-    # t_before
-    # - insert JUMP at the bottom of t_before_cutted
-    # - compile t_after_cutted as a bridge
-    t_before_cutted.record_op(rop.JUMP, jumpargs, descr=XXX)
-
-    t_before_jitcell_token = make_jitcell_token(jitdriver_sd)
-
     call_pure_results = metainterp.call_pure_results
-
-    metainterp_sd = metainterp.staticdata
-    jitdriver_sd = metainterp.jitdriver_sd
-    start_descr = TargetToken(t_before_jitcell_token,
-                              original_jitcell_token=t_before_jitcell_token)
-    jitcell_token = make_jitcell_token()
-    jitcell_token.target_tokens = [start_descr]
-
-    t_before_data = SimpleCompileData(t_before_cutted,
-                                      call_pure_results=call_pure_results,
-                                      enable_opts=enable_opts)
+    data = SimpleCompileData(trace, call_pure_results=call_pure_results,
+                             enable_opts=enable_opts)
 
     try:
-        t_before_loop_info, t_before_ops = t_before_data.optimize_trace(
+        loop_info, ops = data.optimize_trace(
             metainterp_sd, jitdriver_sd, metainterp.box_names_memo)
     except InvalidLoop:
         metainterp_sd.jitlog.trace_aborted()
-        history.cut(cut_at)
+        trace.cut_at(cut_at)
         return None
 
-    # TODO: need to refine
-    t_before_loop = create_empty_loop(metainterp)
-    t_before_loop.original_jitcell_token = t_before_jitcell_token
-    t_before_loop.inputargs = inputargs
-    jump_op = t_before_ops[-1]
-    t_before_target_token = TargetToken(t_before_jitcell_token)
-    label = ResOperation(rop.LABEL, t_before_loop_info.inputargs[:],
-                         descr=t_before_target_token)
-    jump_op.set_descr(t_before_target_token)
-    t_before_loop.operations = [label] + t_before_ops
-    if not we_are_translated():
-        t_before_loop.check_consistency()
-    t_before_jitcell_token.target_tokens = [t_before_target_token]
-    send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, t_before_loop, "loop",
-                         jumpargs, metainterp.box_names_memo)
-    record_loop_or_bridge(metainterp_sd, t_before_loop)
+    inputargs = loop_info.inputargs
+    splitted = split_ops(metainterp_sd, inputargs, ops, fname="cut_here")
+    loop_t, bridge_t = splitted.prev, splitted.latter
 
-    # compile t_after_cutted as a bridge
-    # find a descr from the guard operation to attach
-    resumestorage = resumekey.get_resumestorage()
-    t_after_data = BridgeCompileData(t_after_cutted, inputargs, resumestorage,
-                                     call_pure_results=call_pure_results,
-                                     enable_opts=enable_opts,
-                                     inline_short_preamble=False)
-    trace.tracing_done()
-    metainterp_sd.jitlog.start_new_trace(metainterp_sd,
-                                         faildescr=resumekey, entry_bridge=False,
-                                         jd_name=jitdriver_sd.jitdriver.name)
-    try:
-        t_after_info, t_after_opts = t_after_data.optimize_trace(
-            metainterp_sd, jitdriver_sd, metainterp.box_names_memo)
-    except InvalidLoop:
-        metainterp_sd.jitlog.trace_aborted()
-        debug_print('InvalidLoop in compile_simple_and_split')
-        return None
-
-    new_trace = create_empty_loop(metainterp)
-    new_trace.operations = t_after_opts
-    if t_after_info.final():
-        new_trace.inputargs = t_after_info.inputargs
-        t_after_target_token = new_trace.operations[-1].getdescr()
-        resumekey.compile_and_attach(metainterp, new_trace, inputargs)
-        # return t_after_target_token
-
-
-        return t_before_target_token, t_after_target_token
-    # return t_after_cutted, t_before_cutted
+    # TODO: add exit, return, or jump to loop_t
+    return loop_t, bridge_t
 
 def compile_loop(metainterp, greenkey, start, inputargs, jumpargs,
                  use_unroll=True):

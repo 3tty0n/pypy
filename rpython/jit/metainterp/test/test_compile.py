@@ -131,10 +131,15 @@ def unpack(t):
         pass
     return iter.inputargs, l
 
-
 def assert_ops(lhs, rhs):
     for l, r in zip(lhs, rhs):
         assert l.getopnum() == r.getopnum()
+
+
+def merge_dict(dic1, dic2):
+    new_dic = dic1.copy()
+    new_dic.update(dic2)
+    return new_dic
 
 def test_compile_loop():
     cpu = FakeCPU()
@@ -256,11 +261,6 @@ def test_compile_simple_loop_and_split():
         def __init__(self):
             pass
 
-    def merge(dic1, dic2):
-        new_dic = dic1.copy()
-        new_dic.update(dic2)
-        return new_dic
-
     Ptr = lltype.Ptr
     FuncType = lltype.FuncType
     FPTR = Ptr(FuncType([lltype.Char], lltype.Char))
@@ -283,7 +283,7 @@ def test_compile_simple_loop_and_split():
     metainterp.cpu = cpu
     metainterp.history = History()
 
-    namespace = merge(LLtypeMixin.__dict__.copy(), locals().copy())
+    namespace = merge_dict(LLtypeMixin.__dict__.copy(), locals().copy())
 
     loop = parse('''
     [p1]
@@ -363,11 +363,6 @@ def test_compile_simple_loop_and_split2():
         def __init__(self):
             pass
 
-    def merge(dic1, dic2):
-        new_dic = dic1.copy()
-        new_dic.update(dic2)
-        return new_dic
-
     Ptr = lltype.Ptr
     FuncType = lltype.FuncType
     FPTR = Ptr(FuncType([lltype.Char], lltype.Char))
@@ -398,7 +393,7 @@ def test_compile_simple_loop_and_split2():
     metainterp.cpu = cpu
     metainterp.history = History()
 
-    namespace = merge(LLtypeMixin.__dict__.copy(), locals().copy())
+    namespace = merge_dict(LLtypeMixin.__dict__.copy(), locals().copy())
 
     # simplified version without guard
     trace = parse("""
