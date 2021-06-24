@@ -510,7 +510,10 @@ class FakeMetaInterpStaticData(object):
     def get_name_from_address(self, addr):
         # hack
         try:
-            return "".join(addr.ptr.name.chars)
+            if isinstance(addr, llmemory.AddressAsInt):
+                return repr(addr)
+            else:
+                return "".join(addr.ptr.name.chars)
         except AttributeError:
             return ""
 
