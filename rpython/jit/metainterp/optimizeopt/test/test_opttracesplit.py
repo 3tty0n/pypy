@@ -198,27 +198,6 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
 
 class TestOptTraceSplit(BaseTestTraceSplit):
 
-    def test_trace_split1(self):
-        ops ="""
-        [p0]
-        i1 = getfield_gc_i(p0, descr=valuedescr)
-        i2 = call_i(ConstClass(func_ptr), descr=calldescr)
-        i3 = int_add(i1, 1)
-        i4 = int_lt(i3, 0)
-        guard_true(i4) [p0, i4]
-        i5 = call_i(p0, descr=plaincalldescr)
-        jump(i5)
-        """
-        expected ="""
-        [p0]
-        i1 = getfield_gc_i(p0, descr=valuedescr)
-        i3 = int_add(i1, 1)
-        i4 = call_i(p0, descr=plaincalldescr)
-        jump(i3)
-        """
-        loop = self.parse_loop(ops)
-        pass
-
     def test_trace_split_real_trace(self):
         from pprint import pprint
         ops = """
