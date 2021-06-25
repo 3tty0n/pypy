@@ -17,7 +17,7 @@ from rpython.jit.metainterp import compile, executor, pyjitpl
 from rpython.jit.metainterp.resoperation import (
     rop, ResOperation, InputArgInt, OpHelpers, InputArgRef)
 from rpython.jit.metainterp.support import ptr2int
-from rpython.jit.metainterp.optimizeopt import split
+from rpython.jit.metainterp.optimizeopt import tracesplit as ts
 from rpython.jit.metainterp.optimizeopt.intdiv import magic_numbers
 from rpython.jit.metainterp.test.test_resume import (
     ResumeDataFakeReader, MyMetaInterp)
@@ -155,7 +155,7 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
     def optimize_and_split(self, ops, split_at, call_pure_results=None):
         info, ops, token = self.optimize(ops, call_pure_results)
         assert split_at is not None
-        res = split.split_ops(self.metainterp_sd, info.inputargs, ops, split_at, token)
+        res = ts.split_ops(self.metainterp_sd, info.inputargs, ops, split_at, token)
         # TODO: add label to body_loop and bridge_loop
         label_op = ResOperation(rop.LABEL, info.inputargs)
         body_loop = compile.create_empty_loop(self.metainterp)
