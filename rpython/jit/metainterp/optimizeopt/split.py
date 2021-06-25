@@ -74,20 +74,22 @@ def split_ops(metainterp_sd, inputargs, ops, fname, target_token):
         args = op.getarglist()
         get_undefined_ops_from_args(args)
 
-    prev = _fillup_jump(metainterp_sd, prev, target_token)
+    prev = _fillup_jump(metainterp_sd, prev, fname, target_token)
     return SplittedTrace(prev, undefined + latter, inputargs)
 
-def _fillup_jump(metainterp_sd, ops, target_token):
+def _fillup_jump(metainterp_sd, ops, fname, target_token):
     last_op = ops[-1]
     jump_op = None
     if last_op.getopnum() == rop.CALL_I:
         arg = last_op.getarg(0)
         v = arg.getvalue()
         name = metainterp_sd.get_name_from_address(v)
-        if name.find("emit_jump") != -1:
+        if name.find(fname) != -1:
             target = last_op.getarg(2)
             jump_op = ResOperation(rop.JUMP, [target], descr=target_token)
 
     if jump_op is None:
         return None
-    return ops + [jump_op]
+
+    ops[-1] = jump_op
+    return ops
