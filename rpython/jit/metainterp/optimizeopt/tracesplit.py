@@ -1,7 +1,8 @@
 from rpython.rtyper.lltypesystem.llmemory import AddressAsInt
 from rpython.rlib.rjitlog import rjitlog as jl
 from rpython.jit.metainterp.history import ConstInt
-from rpython.jit.metainterp.optimizeopt.optimizer import Optimization
+from rpython.jit.metainterp.optimizeopt.optimizer import Optimization, \
+    Optimization, BasicLoopInfo
 from rpython.jit.metainterp.optimizeopt.util import make_dispatcher_method
 from rpython.jit.metainterp.opencoder import Trace, TraceIterator
 from rpython.jit.metainterp.resoperation import rop, OpHelpers, ResOperation
@@ -43,67 +44,82 @@ def split_trace(trace, at_fname):
     prev, undef, latter = iter.split_at(cut_point)
     return SplittedTrace(prev, undef + latter, trace.inputargs)
 
+class TraceSplitInfo(BasicLoopInfo):
+    """ A state after splitting the trace, containing the following:
 
-def split_ops(metainterp_sd, inputargs, ops, fname, target_token):
-    cut_point = 0
-    for op in ops:
-        if op.getopnum() == rop.CALL_I:
-            arg = op.getarg(0)
-            if arg is None:
-                raise IndexError
-            v = arg.getvalue()
-            name = metainterp_sd.get_name_from_address(v)
-            if name is None:
-                raise IndexError
+    * target_token - generated target token for a bridge ("false" branch)
+    * label_op - label operations
+    """
+    def __init__(self, target_token, label_op, inputargs,
+                 quasi_immutable_deps):
+        self.target_token = target_token
+        self.label_op = label_op
+        self.inputargs = inputargs
+        self.quasi_immutable_deps = quasi_immutable_deps
 
-            if name.find(fname) != -1:
-                break
-        cut_point += 1
-
-    prev = ops[:cut_point+1]
-    latter = ops[cut_point+1:]
-    if len(latter) == 0:
-        return None
-
-    undefined = []
-
-    def get_undefined_ops_from_args(args):
-        l = []
-        for arg in args:
-            for op in prev:
-                if op == arg:
-                    if op not in undefined:
-                        l.insert(0, op)
-                    args = op.getarglist()
-                    get_undefined_ops_from_args(args)
-        undefined.extend(l)
-
-    for op in latter:
-        args = op.getarglist()
-        get_undefined_ops_from_args(args)
-
-    prev = _fillup_jump(metainterp_sd, prev, fname, target_token)
-    return SplittedTrace(prev, undefined + latter, inputargs)
-
-
-def _fillup_jump(metainterp_sd, ops, fname, target_token):
-    last_op = ops[-1]
-    jump_op = None
-    if last_op.getopnum() == rop.CALL_I:
-        arg = last_op.getarg(0)
-        v = arg.getvalue()
-        name = metainterp_sd.get_name_from_address(v)
-        if name.find(fname) != -1:
-            target = last_op.getarg(2)
-            jump_op = ResOperation(rop.JUMP, [target], descr=target_token)
-
-    if jump_op is None:
-        return None
-
-    ops[-1] = jump_op
-    return ops
+    def final(self):
+        return True
 
 class OptTraceSplit(Optimization):
+    def split_ops(self, metainterp_sd, inputargs, ops, fname, target_token):
+        cut_point = 0
+        for op in ops:
+            if op.getopnum() == rop.CALL_I:
+                arg = op.getarg(0)
+                if arg is None:
+                    raise IndexError
+                v = arg.getvalue()
+                name = metainterp_sd.get_name_from_address(v)
+                if name is None:
+                    raise IndexError
+
+                if name.find(fname) != -1:
+                    break
+            cut_point += 1
+
+        prev = ops[:cut_point+1]
+        latter = ops[cut_point+1:]
+        if len(latter) == 0:
+            return None
+
+        undefined = []
+
+        def get_undefined_ops_from_args(args):
+            l = []
+            for arg in args:
+                for op in prev:
+                    if op == arg:
+                        if op not in undefined:
+                            l.insert(0, op)
+                        args = op.getarglist()
+                        get_undefined_ops_from_args(args)
+            undefined.extend(l)
+
+        for op in latter:
+            args = op.getarglist()
+            get_undefined_ops_from_args(args)
+
+        prev = _fillup_jump(metainterp_sd, prev, fname, target_token)
+        return SplittedTrace(prev, undefined + latter, inputargs)
+
+
+    def _fillup_jump(self, metainterp_sd, ops, fname, target_token):
+        last_op = ops[-1]
+        jump_op = None
+        if last_op.getopnum() == rop.CALL_I:
+            arg = last_op.getarg(0)
+            v = arg.getvalue()
+            name = metainterp_sd.get_name_from_address(v)
+            if name.find(fname) != -1:
+                target = last_op.getarg(2)
+                jump_op = ResOperation(rop.JUMP, [target], descr=target_token)
+
+        if jump_op is None:
+            return None
+
+        ops[-1] = jump_op
+        return ops
+
     def emit(self, op):
         return Optimization.emit(self, op)
 
@@ -120,6 +136,6 @@ class OptTraceSplit(Optimization):
         return self.emit(op)
 
 
-dispatch_opt = make_dispatcher_method(OptTraceSplit, 'optimize_',
-                                      default=OptTraceSplit.emit)
-OptTraceSplit.propagate_forward = dispatch_opt
+# dispatch_opt = make_dispatcher_method(OptTraceSplit, 'optimize_',
+#                                       default=OptTraceSplit.emit)
+# OptTraceSplit.propagate_forward = dispatch_opt
