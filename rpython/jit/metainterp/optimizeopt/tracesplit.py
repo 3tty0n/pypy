@@ -1,7 +1,7 @@
 from rpython.rtyper.lltypesystem.llmemory import AddressAsInt
 from rpython.rlib.rjitlog import rjitlog as jl
 from rpython.jit.metainterp.history import ConstInt
-from rpython.jit.metainterp.optimizeopt.optimizer import Optimization, \
+from rpython.jit.metainterp.optimizeopt.optimizer import Optimizer, \
     Optimization, BasicLoopInfo
 from rpython.jit.metainterp.optimizeopt.util import make_dispatcher_method
 from rpython.jit.metainterp.opencoder import Trace, TraceIterator
@@ -60,8 +60,8 @@ class TraceSplitInfo(BasicLoopInfo):
     def final(self):
         return True
 
-class OptTraceSplit(Optimization):
-    def split_ops(self, metainterp_sd, inputargs, ops, fname, target_token):
+class TraceSplitOpt(Optimizer):
+    def split_ops(self, inputargs, ops, fname, target_token):
         cut_point = 0
         for op in ops:
             if op.getopnum() == rop.CALL_I:
@@ -69,7 +69,7 @@ class OptTraceSplit(Optimization):
                 if arg is None:
                     raise IndexError
                 v = arg.getvalue()
-                name = metainterp_sd.get_name_from_address(v)
+                name = self.metainterp_sd.get_name_from_address(v)
                 if name is None:
                     raise IndexError
 
@@ -99,17 +99,17 @@ class OptTraceSplit(Optimization):
             args = op.getarglist()
             get_undefined_ops_from_args(args)
 
-        prev = _fillup_jump(metainterp_sd, prev, fname, target_token)
+        prev = self._fillup_jump(prev, fname, target_token)
         return SplittedTrace(prev, undefined + latter, inputargs)
 
 
-    def _fillup_jump(self, metainterp_sd, ops, fname, target_token):
+    def _fillup_jump(self, ops, fname, target_token):
         last_op = ops[-1]
         jump_op = None
         if last_op.getopnum() == rop.CALL_I:
             arg = last_op.getarg(0)
             v = arg.getvalue()
-            name = metainterp_sd.get_name_from_address(v)
+            name = self.metainterp_sd.get_name_from_address(v)
             if name.find(fname) != -1:
                 target = last_op.getarg(2)
                 jump_op = ResOperation(rop.JUMP, [target], descr=target_token)
@@ -134,7 +134,6 @@ class OptTraceSplit(Optimization):
                     return None
 
         return self.emit(op)
-
 
 # dispatch_opt = make_dispatcher_method(OptTraceSplit, 'optimize_',
 #                                       default=OptTraceSplit.emit)

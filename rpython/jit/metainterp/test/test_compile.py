@@ -6,7 +6,7 @@ from rpython.jit.metainterp.history import ConstInt, History, Stats, AbstractVal
 from rpython.jit.metainterp.history import INT
 from rpython.jit.metainterp import compile
 from rpython.jit.metainterp.compile import (
-    compile_loop, compile_simple_and_split, compile_tmp_callback, make_jitcell_token)
+    compile_loop, compile_tmp_callback, make_jitcell_token)
 from rpython.jit.metainterp import jitexc
 from rpython.rlib.rjitlog import rjitlog as jl
 from rpython.jit.metainterp import jitprof, compile

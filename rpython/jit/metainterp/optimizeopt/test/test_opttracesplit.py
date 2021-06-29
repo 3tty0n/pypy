@@ -17,7 +17,6 @@ from rpython.jit.metainterp import compile, executor, pyjitpl
 from rpython.jit.metainterp.resoperation import (
     rop, ResOperation, InputArgInt, OpHelpers, InputArgRef)
 from rpython.jit.metainterp.support import ptr2int
-from rpython.jit.metainterp.optimizeopt import tracesplit as ts
 from rpython.jit.metainterp.optimizeopt.intdiv import magic_numbers
 from rpython.jit.metainterp.test.test_resume import (
     ResumeDataFakeReader, MyMetaInterp)
@@ -150,12 +149,14 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
             trace, call_pure_results=call_pure_results,
             enable_opts=self.enable_opts)
         info, ops = compile_data.optimize_trace(self.metainterp_sd, None, {})
-        return info, ops, token
+        return trace, info, ops, token
 
     def optimize_and_split(self, ops, split_at, call_pure_results=None):
-        info, ops, token = self.optimize(ops, call_pure_results)
+        trace, info, ops, token = self.optimize(ops, call_pure_results)
         assert split_at is not None
-        res = ts.split_ops(self.metainterp_sd, info.inputargs, ops, split_at, token)
+        data = compile.SimpleSplitCompileData(
+            trace, None, enable_opts=self.enable_opts)
+        res = data.split(self.metainterp_sd, None, {}, ops, split_at, token)
         # TODO: add label to body_loop and bridge_loop
         label_op = ResOperation(rop.LABEL, info.inputargs)
         body_loop = compile.create_empty_loop(self.metainterp)
@@ -250,18 +251,20 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         i25 = call_i(ConstClass(func_ptr), p0, p22, descr=calldescr)
         setfield_gc(p0, i20, descr=arraydescr)
         guard_true(i25) [i25, p0]
-        jump(8)
-        """
-
-        bridge = """
-        [p0]
-        p21 = getfield_gc_r(p0, descr=valuedescr)
+        i29 = call_i(ConstClass(cut_here_ptr), 8, 8, descr=cutheredescr)
         debug_merge_point(0, 0, '8: CONST_INT 1')
         i33 = call_i(ConstClass(func_ptr), p0, 9, descr=calldescr)
         debug_merge_point(0, 0, '10: SUB ')
         i37 = call_i(ConstClass(func_ptr), p0, 11, descr=calldescr)
         debug_merge_point(0, 0, '11: JUMP 0')
-        i42 = call_i(ConstClass(emit_jump_ptr), 6, 0, descr=emit_jump_descr)
+        # i42 = call_i(ConstClass(emit_jump_ptr), 6, 0, descr=emit_jump_descr)
+        jump(0)
+        """
+
+        # descr
+        bridge = """
+        [p0]
+        p21 = getfield_gc_r(p0, descr=valuedescr)
         debug_merge_point(0, 0, '6: JUMP 13')
         debug_merge_point(0, 0, '13: EXIT ')
         i44 = getfield_gc_i(p0, descr=valuedescr)
@@ -273,4 +276,4 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         finish(p47)
         """
 
-        self.assert_equal_split(ops, body, bridge, split_at="cut_here")
+        self.assert_equal_split(ops, body, bridge, split_at="emit_jump")
