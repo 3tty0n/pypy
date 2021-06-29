@@ -36,14 +36,6 @@ class SplittedTrace:
             (self.prev, self.latter, self.inputs)
 
 
-def split_trace(trace, at_fname):
-    assert at_fname is not None
-
-    cut_point = trace.cut_point_by_fname(at_fname)
-    iter = trace.get_iter()
-    prev, undef, latter = iter.split_at(cut_point)
-    return SplittedTrace(prev, undef + latter, trace.inputargs)
-
 class TraceSplitInfo(BasicLoopInfo):
     """ A state after splitting the trace, containing the following:
 
