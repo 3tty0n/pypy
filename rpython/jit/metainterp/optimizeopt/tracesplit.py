@@ -91,11 +91,11 @@ class TraceSplitOpt(Optimizer):
             args = op.getarglist()
             get_undefined_ops_from_args(args)
 
-        prev = self._fillup_jump(prev, fname, target_token)
+        prev = self._fillup_op(rop.JUMP, target_token, prev, fname)
         return SplittedTrace(prev, undefined + latter, inputargs)
 
 
-    def _fillup_jump(self, ops, fname, target_token):
+    def _fillup_op(self, opnum, target_token, ops, fname):
         last_op = ops[-1]
         jump_op = None
         if last_op.getopnum() == rop.CALL_I:
@@ -104,7 +104,7 @@ class TraceSplitOpt(Optimizer):
             name = self.metainterp_sd.get_name_from_address(v)
             if name.find(fname) != -1:
                 target = last_op.getarg(2)
-                jump_op = ResOperation(rop.JUMP, [target], descr=target_token)
+                jump_op = ResOperation(opnum, [target], descr=target_token)
 
         if jump_op is None:
             return None

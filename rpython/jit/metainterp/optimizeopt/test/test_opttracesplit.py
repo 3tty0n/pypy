@@ -202,7 +202,6 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
 class TestOptTraceSplit(BaseTestTraceSplit):
 
     def test_trace_split_real_trace(self):
-        from pprint import pprint
         ops = """
         [p0]
         debug_merge_point(0, 0, '0: DUP ')
