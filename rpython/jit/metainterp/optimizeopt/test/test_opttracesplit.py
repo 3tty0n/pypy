@@ -12,7 +12,7 @@ from rpython.jit.backend.llgraph import runner
 from rpython.jit.metainterp.jitprof import EmptyProfiler
 from rpython.jit.metainterp.optimize import InvalidLoop
 from rpython.jit.metainterp.history import (
-    JitCellToken, ConstInt, Stats, get_const_ptr_for_string)
+    JitCellToken, BasicFinalDescr, ConstInt, Stats, get_const_ptr_for_string)
 from rpython.jit.metainterp import compile, executor, pyjitpl
 from rpython.jit.metainterp.resoperation import (
     rop, ResOperation, InputArgInt, OpHelpers, InputArgRef)
@@ -133,6 +133,8 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
     calldescr = cpu.calldescrof(FPTR.TO, (lltype.Signed,), lltype.Signed,
                                 EffectInfo.MOST_GENERAL)
 
+    finaldescr = BasicFinalDescr(0)
+
     namespace = merge_dicts(test_util.LLtypeMixin.__dict__.copy(), locals().copy())
     metainterp = FakeMetaInterp()
     metainterp_sd = FakeMetaInterpStaticData(cpu)
@@ -232,7 +234,7 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         setarrayitem_gc(p21, i46, ConstPtr(nullptr), descr=arraydescr)
         leave_portal_frame(0)
         setfield_gc(p0, i46, descr=valuedescr)
-        finish(p47)
+        finish(p47, descr=finaldescr)
         """
 
         body = """
@@ -257,7 +259,7 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         debug_merge_point(0, 0, '10: SUB ')
         i37 = call_i(ConstClass(func_ptr), p0, 11, descr=calldescr)
         debug_merge_point(0, 0, '11: JUMP 0')
-        # i42 = call_i(ConstClass(emit_jump_ptr), 6, 0, descr=emit_jump_descr)
+        # i42 = call_i(ConstClass(emit_jump_ptr), 6, 0, descr=emit_jump_descr) # removed
         jump(0)
         """
 
@@ -273,7 +275,7 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         setarrayitem_gc(p21, i46, ConstPtr(nullptr), descr=arraydescr)
         leave_portal_frame(0)
         setfield_gc(p0, i46, descr=valuedescr)
-        finish(p47)
+        finish(p47, descr=finaldescr)
         """
 
         self.assert_equal_split(ops, body, bridge, split_at="emit_jump")
