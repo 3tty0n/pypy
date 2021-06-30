@@ -103,8 +103,8 @@ class TraceSplitOpt(Optimizer):
             v = arg.getvalue()
             name = self.metainterp_sd.get_name_from_address(v)
             if name.find(fname) != -1:
-                target = last_op.getarg(2)
-                jump_op = ResOperation(opnum, [target], descr=target_token)
+                arg = last_op.getarg(3)
+                jump_op = ResOperation(opnum, [arg], descr=target_token)
 
         if jump_op is None:
             return None

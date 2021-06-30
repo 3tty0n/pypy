@@ -114,14 +114,14 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
                                 EffectInfo.MOST_GENERAL)
     def emit_jump(x, y):
         return x
-    FPTR2 = Ptr(FuncType([lltype.Signed, lltype.Signed], lltype.Signed))
+    FPTR2 = Ptr(FuncType([lltype.Signed, lltype.Signed, lltype.Signed], lltype.Signed))
     emit_jump_if_ptr = llhelper(FPTR2, emit_jump)
     emit_jump_if_descr = cpu.calldescrof(FPTR2.TO, (lltype.Signed, lltype.Signed), lltype.Signed,
                                          EffectInfo.MOST_GENERAL)
 
-    def emit_jump_if(x, y):
+    def emit_jump_if(x, y, z):
         return x
-    FPTR3 = Ptr(FuncType([lltype.Signed, lltype.Signed], lltype.Signed))
+    FPTR3 = Ptr(FuncType([lltype.Signed, lltype.Signed, lltype.Signed], lltype.Signed))
     emit_jump_ptr = llhelper(FPTR3, emit_jump_if)
     emit_jump_descr = cpu.calldescrof(FPTR2.TO, (lltype.Signed, lltype.Signed), lltype.Signed,
                                       EffectInfo.MOST_GENERAL)
@@ -224,7 +224,7 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         debug_merge_point(0, 0, '10: SUB ')
         i37 = call_i(ConstClass(func_ptr), p0, 11, descr=calldescr)
         debug_merge_point(0, 0, '11: JUMP 0')
-        i42 = call_i(ConstClass(emit_jump_ptr), 6, 0, descr=emit_jump_descr)
+        i42 = call_i(ConstClass(emit_jump_ptr), 6, 0, p0, descr=emit_jump_descr)
         debug_merge_point(0, 0, '6: JUMP 13')
         debug_merge_point(0, 0, '13: EXIT ')
         i44 = getfield_gc_i(p0, descr=valuedescr)
@@ -258,8 +258,8 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         debug_merge_point(0, 0, '10: SUB ')
         i37 = call_i(ConstClass(func_ptr), p0, 11, descr=calldescr)
         debug_merge_point(0, 0, '11: JUMP 0')
-        # i42 = call_i(ConstClass(emit_jump_ptr), 6, 0, descr=emit_jump_descr) # removed
-        jump(0)
+        # i42 = call_i(ConstClass(emit_jump_ptr), 6, 0, p0, descr=emit_jump_descr) # removed
+        jump(p0)
         """
 
         # descr
