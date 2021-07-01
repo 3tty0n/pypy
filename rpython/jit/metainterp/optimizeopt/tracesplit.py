@@ -26,14 +26,13 @@ def split_trace_at(trace, at_fname):
 
 
 class SplittedTrace:
-    def __init__(self, prev, latter, inputs):
-        self.prev = prev
-        self.latter = latter
+    def __init__(self, ops, inputs):
+        self.ops = ops
         self.inputs = inputs
 
     def __repr__(self):
         return "ResSplitTrace(%s, %s, %s)" % \
-            (self.prev, self.latter, self.inputs)
+            (self.oplist, self.inputs)
 
 
 class TraceSplitInfo(BasicLoopInfo):
@@ -56,7 +55,9 @@ class TraceSplitOpt(Optimizer):
     def split_ops(self, inputargs, ops, fname, target_token):
         cut_point = 0
         for op in ops:
-            if op.getopnum() == rop.CALL_I:
+            if op.getopnum() in (rop.CALL_I,
+                                 rop.CALL_R,
+                                 rop.CALL_F):
                 arg = op.getarg(0)
                 if arg is None:
                     raise IndexError
@@ -91,11 +92,10 @@ class TraceSplitOpt(Optimizer):
             args = op.getarglist()
             get_undefined_ops_from_args(args)
 
-        prev = self._fillup_op(rop.JUMP, target_token, prev, fname)
-        return SplittedTrace(prev, undefined + latter, inputargs)
+        prev = self._invent_op(rop.JUMP, target_token, prev, fname)
+        return SplittedTrace(prev, inputargs), SplittedTrace(undefined + latter, inputargs)
 
-
-    def _fillup_op(self, opnum, target_token, ops, fname):
+    def _invent_op(self, opnum, target_token, ops, fname):
         last_op = ops[-1]
         jump_op = None
         if last_op.getopnum() == rop.CALL_I:
@@ -111,6 +111,34 @@ class TraceSplitOpt(Optimizer):
 
         ops[-1] = jump_op
         return ops
+
+    def _invent_inputargs(self, ops, marker):
+        for op in ops:
+            if op.is_guard():
+                arg = op.getarg(0)
+                if self._has_marker(ops, marker):
+                    descr = arg.getdescr()
+
+        assert descr is not None
+
+
+    def _has_marker(self, ops, marker):
+        "check if an op has the marker in ConstClass"
+        for op in ops:
+            if op.getopnum() in (rop.CALL_I,
+                                 rop.CALL_R,
+                                 rop.CALL_F):
+                arg = op.getarg(0)
+                if arg is None:
+                    return False
+                v = arg.getvalue()
+                name = self.metainterp_sd.get_name_from_address(v)
+                if name is None:
+                    return False
+
+                if name.find(marker) != -1:
+                    return True
+
 
     def emit(self, op):
         return Optimization.emit(self, op)

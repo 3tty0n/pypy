@@ -133,6 +133,14 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
     calldescr = cpu.calldescrof(FPTR.TO, (lltype.Signed,), lltype.Signed,
                                 EffectInfo.MOST_GENERAL)
 
+    def is_true(x, y):
+        return True
+
+    FPTR = Ptr(FuncType([lltype.Signed, lltype.Signed, lltype.Signed], lltype.Bool))
+    is_true_ptr = llhelper(FPTR, is_true)
+    istruedescr = cpu.calldescrof(FPTR.TO, (lltype.Signed,lltype.Signed), lltype.Bool,
+                                EffectInfo.MOST_GENERAL)
+
     finaldescr = BasicFinalDescr(0)
 
     namespace = merge_dicts(test_util.LLtypeMixin.__dict__.copy(), locals().copy())
@@ -158,15 +166,15 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
         assert split_at is not None
         data = compile.SimpleSplitCompileData(
             trace, None, enable_opts=self.enable_opts)
-        res = data.split(self.metainterp_sd, None, {}, ops, split_at, token)
+        prev,latter = data.split(self.metainterp_sd, None, {}, ops, split_at, token)
         # TODO: add label to body_loop and bridge_loop
         label_op = ResOperation(rop.LABEL, info.inputargs)
         body_loop = compile.create_empty_loop(self.metainterp)
         body_loop.inputargs = info.inputargs
-        body_loop.operations = [label_op] + res.prev
+        body_loop.operations = [label_op] + prev.ops
         bridge_loop = compile.create_empty_loop(self.metainterp)
         bridge_loop.inputargs = info.inputargs
-        bridge_loop.operations = [label_op] + res.latter
+        bridge_loop.operations = [label_op] + latter.ops
         return body_loop, bridge_loop
 
     def assert_equal_split(self, ops, bodyops, bridgeops,
@@ -215,10 +223,10 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         i20 = int_sub(i18, 1)
         p21 = getfield_gc_r(p0, descr=valuedescr)
         p22 = getarrayitem_gc_r(p21, i20, descr=arraydescr)
-        i25 = call_i(ConstClass(func_ptr), p0, p22, descr=calldescr)
+        i25 = call_i(ConstClass(is_true_ptr), p0, p22, descr=istruedescr)
         setfield_gc(p0, i20, descr=arraydescr)
         guard_true(i25) [i25, p0]
-        i29 = call_i(ConstClass(cut_here_ptr), 8, 8, descr=cutheredescr)
+        i29 = call_i(ConstClass(func_ptr), 8, 8, descr=cutheredescr)
         debug_merge_point(0, 0, '8: CONST_INT 1')
         i33 = call_i(ConstClass(func_ptr), p0, 9, descr=calldescr)
         debug_merge_point(0, 0, '10: SUB ')
@@ -249,10 +257,10 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         i20 = int_sub(i18, 1)
         p21 = getfield_gc_r(p0, descr=valuedescr)
         p22 = getarrayitem_gc_r(p21, i20, descr=arraydescr)
-        i25 = call_i(ConstClass(func_ptr), p0, p22, descr=calldescr)
+        i25 = call_i(ConstClass(is_true_ptr), p0, p22, descr=istruedescr)
         setfield_gc(p0, i20, descr=arraydescr)
         guard_true(i25) [i25, p0]
-        i29 = call_i(ConstClass(cut_here_ptr), 8, 8, descr=cutheredescr)
+        i29 = call_i(ConstClass(func_ptr), 8, 8, descr=cutheredescr)
         debug_merge_point(0, 0, '8: CONST_INT 1')
         i33 = call_i(ConstClass(func_ptr), p0, 9, descr=calldescr)
         debug_merge_point(0, 0, '10: SUB ')
@@ -263,6 +271,7 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         """
 
         # descr
+        # [i0, p0] todo: fix, i0 <- dummy variable
         bridge = """
         [p0]
         p21 = getfield_gc_r(p0, descr=valuedescr)
@@ -278,3 +287,9 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         """
 
         self.assert_equal_split(ops, body, bridge, split_at="emit_jump")
+
+        body_loop, bridge_loop = self.optimize_and_split(ops, "emit_jump")
+        guard = compile.find_guard(body_loop.operations, "is_true")
+        assert guard is not None
+        guard_descr = guard.getdescr()
+        assert isinstance(guard_descr, compile.ResumeGuardDescr)
