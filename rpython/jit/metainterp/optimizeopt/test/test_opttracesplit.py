@@ -105,13 +105,13 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
     FuncType = lltype.FuncType
     FPTR = Ptr(FuncType([lltype.Char], lltype.Char))
 
-    def cut_here(x, y):
+    def pop(x, y):
         return x
 
-    FPTR = Ptr(FuncType([lltype.Signed, lltype.Signed], lltype.Signed))
-    cut_here_ptr = llhelper(FPTR, cut_here)
-    cutheredescr = cpu.calldescrof(FPTR.TO, (lltype.Signed, lltype.Signed), lltype.Signed,
-                                EffectInfo.MOST_GENERAL)
+    FPTR = Ptr(FuncType([lltype.Signed,], lltype.Signed))
+    pop = llhelper(FPTR, pop)
+    popdescr = cpu.calldescrof(FPTR.TO, (lltype.Signed,), lltype.Signed,
+                               EffectInfo.MOST_GENERAL)
     def emit_jump(x, y):
         return x
     FPTR2 = Ptr(FuncType([lltype.Signed, lltype.Signed, lltype.Signed], lltype.Signed))
@@ -233,29 +233,20 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         debug_merge_point(0, 0, '3: LT ')
         i16 = call_i(ConstClass(func_ptr), p0, 4, descr=calldescr)
         debug_merge_point(0, 0, '4: JUMP_IF 8')
-        i18 = getfield_gc_i(p0, descr=valuedescr)
-        i20 = int_sub(i18, 1)
-        p21 = getfield_gc_r(p0, descr=valuedescr)
-        p22 = getarrayitem_gc_r(p21, i20, descr=arraydescr)
-        i25 = call_i(ConstClass(is_true_ptr), p0, p22, descr=istruedescr)
-        setfield_gc(p0, i20, descr=arraydescr)
-        guard_true(i25) [i25, p0]
-        i29 = call_i(ConstClass(func_ptr), 8, 8, descr=cutheredescr)
+        p19 = call_r(ConstClass(pop), p0, descr=popdescr)
+        i21 = call_i(ConstClass(is_true_ptr), p0, p19, descr=istruedescr)
+        guard_true(i21, descr=<Guard0x7f86266bc140>) [i21, p0]
         debug_merge_point(0, 0, '8: CONST_INT 1')
-        i33 = call_i(ConstClass(func_ptr), p0, 9, descr=calldescr)
+        i29 = call_i(ConstClass(func_ptr), p0, 9, descr=calldescr)
         debug_merge_point(0, 0, '10: SUB ')
-        i37 = call_i(ConstClass(func_ptr), p0, 11, descr=calldescr)
+        i33 = call_i(ConstClass(func_ptr), p0, 11, descr=calldescr)
         debug_merge_point(0, 0, '11: JUMP 0')
-        i42 = call_i(ConstClass(emit_jump_ptr), 6, 0, p0, descr=emit_jump_descr)
+        i38 = call_i(ConstClass(emit_jump_ptr), 6, 0, p0, descr=emit_jump_descr)
         debug_merge_point(0, 0, '6: JUMP 13')
         debug_merge_point(0, 0, '13: EXIT ')
-        i44 = getfield_gc_i(p0, descr=valuedescr)
-        i46 = int_sub(i44, 1)
-        p47 = getarrayitem_gc_r(p21, i46, descr=arraydescr)
-        setarrayitem_gc(p21, i46, ConstPtr(nullptr), descr=arraydescr)
+        p41 = call_r(ConstClass(pop), p0, descr=popdescr)
         leave_portal_frame(0)
-        setfield_gc(p0, i46, descr=valuedescr)
-        finish(p47, descr=finaldescr)
+        finish(p41)
         """
 
         body = """
@@ -267,37 +258,26 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         debug_merge_point(0, 0, '3: LT ')
         i16 = call_i(ConstClass(func_ptr), p0, 4, descr=calldescr)
         debug_merge_point(0, 0, '4: JUMP_IF 8')
-        i18 = getfield_gc_i(p0, descr=valuedescr)
-        i20 = int_sub(i18, 1)
-        p21 = getfield_gc_r(p0, descr=valuedescr)
-        p22 = getarrayitem_gc_r(p21, i20, descr=arraydescr)
-        i25 = call_i(ConstClass(is_true_ptr), p0, p22, descr=istruedescr)
-        setfield_gc(p0, i20, descr=arraydescr)
-        guard_true(i25) [p0] # [i25, p0] # ^^^ should we remove useless failargs?
-        i29 = call_i(ConstClass(func_ptr), 8, 8, descr=cutheredescr)
+        p19 = call_r(ConstClass(pop), p0, descr=popdescr)
+        i21 = call_i(ConstClass(is_true_ptr), p0, p19, descr=istruedescr)
+        guard_true(i21, descr=<Guard0x7f86266bc140>) [p0]
         debug_merge_point(0, 0, '8: CONST_INT 1')
-        i33 = call_i(ConstClass(func_ptr), p0, 9, descr=calldescr)
+        i29 = call_i(ConstClass(func_ptr), p0, 9, descr=calldescr)
         debug_merge_point(0, 0, '10: SUB ')
-        i37 = call_i(ConstClass(func_ptr), p0, 11, descr=calldescr)
+        i33 = call_i(ConstClass(func_ptr), p0, 11, descr=calldescr)
         debug_merge_point(0, 0, '11: JUMP 0')
-        # i42 = call_i(ConstClass(emit_jump_ptr), 6, 0, p0, descr=emit_jump_descr) # removed
+        # i38 = call_i(ConstClass(emit_jump_ptr), 6, 0, p0, descr=emit_jump_descr)
         jump(p0)
         """
 
         # descr
-        # [i0, p0] todo: fix, i0 <- dummy variable
         bridge = """
         [p0]
-        p21 = getfield_gc_r(p0, descr=valuedescr)
         debug_merge_point(0, 0, '6: JUMP 13')
         debug_merge_point(0, 0, '13: EXIT ')
-        i44 = getfield_gc_i(p0, descr=valuedescr)
-        i46 = int_sub(i44, 1)
-        p47 = getarrayitem_gc_r(p21, i46, descr=arraydescr)
-        setarrayitem_gc(p21, i46, ConstPtr(nullptr), descr=arraydescr)
+        p41 = call_r(ConstClass(pop), p0, descr=popdescr)
         leave_portal_frame(0)
-        setfield_gc(p0, i46, descr=valuedescr)
-        finish(p47, descr=finaldescr)
+        finish(p41, descr=finaldescr)
         """
 
         self.assert_equal_split(ops, body, bridge, split_at="emit_jump")
