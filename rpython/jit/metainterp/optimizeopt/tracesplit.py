@@ -1,11 +1,13 @@
 from rpython.rtyper.lltypesystem.llmemory import AddressAsInt
 from rpython.rlib.rjitlog import rjitlog as jl
-from rpython.jit.metainterp.history import ConstInt
+from rpython.jit.metainterp.history import ConstInt, \
+    RefFrontendOp, IntFrontendOp, FloatFrontendOp
 from rpython.jit.metainterp.optimizeopt.optimizer import Optimizer, \
     Optimization, BasicLoopInfo
 from rpython.jit.metainterp.optimizeopt.util import make_dispatcher_method
 from rpython.jit.metainterp.opencoder import Trace, TraceIterator
-from rpython.jit.metainterp.resoperation import rop, OpHelpers, ResOperation
+from rpython.jit.metainterp.resoperation import rop, OpHelpers, ResOperation, \
+    InputArgRef, InputArgInt, InputArgFloat, InputArgVector
 
 def split_trace_at(trace, at_fname):
     import copy
@@ -26,9 +28,9 @@ def split_trace_at(trace, at_fname):
 
 
 class SplittedTrace:
-    def __init__(self, ops, inputs):
+    def __init__(self, ops, inputargs):
         self.ops = ops
-        self.inputs = inputs
+        self.inputargs = inputargs
 
     def __repr__(self):
         return "ResSplitTrace(%s, %s, %s)" % \
@@ -52,6 +54,12 @@ class TraceSplitInfo(BasicLoopInfo):
         return True
 
 class TraceSplitOpt(Optimizer):
+
+    def __init__(self, metainterp_sd, jitdriver_sd, optimizations=None, resumekey=None, runtime_boxes=None):
+        super(TraceSplitOpt, self).__init__(metainterp_sd, jitdriver_sd, optimizations=optimizations)
+        self.resumekey = resumekey
+        self.runtime_boxes = runtime_boxes
+
     def split_ops(self, inputargs, ops, fname, target_token):
         cut_point = 0
         for op in ops:
@@ -92,8 +100,10 @@ class TraceSplitOpt(Optimizer):
             args = op.getarglist()
             get_undefined_ops_from_args(args)
 
-        prev = self._invent_op(rop.JUMP, target_token, prev, fname)
-        return SplittedTrace(prev, inputargs), SplittedTrace(undefined + latter, inputargs)
+        body = self._invent_op(rop.JUMP, target_token, prev, fname)
+        body = self._invent_failargs(body, inputargs, marker="is_true")
+
+        return SplittedTrace(body, inputargs), SplittedTrace(undefined + latter, inputargs)
 
     def _invent_op(self, opnum, target_token, ops, fname):
         last_op = ops[-1]
@@ -112,33 +122,67 @@ class TraceSplitOpt(Optimizer):
         ops[-1] = jump_op
         return ops
 
-    def _invent_inputargs(self, ops, marker):
+    def _invent_failargs(self, ops, orig_inputs, marker):
+        for i in range(len(ops)):
+            op = ops[i]
+            if op.is_guard():
+                arg = op.getarg(0)
+                if self._has_marker(ops, arg, marker):
+                    op.setfailargs(orig_inputs)
+                    ops[i] = op
+        return ops
+
+    def _invent_inputargs(self, ops, orig_inputs, marker):
+        from copy import copy
+
         for op in ops:
             if op.is_guard():
                 arg = op.getarg(0)
-                if self._has_marker(ops, marker):
-                    descr = arg.getdescr()
+                if self._has_marker(ops, arg, marker):
+                    guard_with_mark = op
 
-        assert descr is not None
+        assert guard_with_mark is not None
+        failargs = guard_with_mark.getfailargs()
 
+        assert failargs is not None
 
-    def _has_marker(self, ops, marker):
-        "check if an op has the marker in ConstClass"
-        for op in ops:
-            if op.getopnum() in (rop.CALL_I,
-                                 rop.CALL_R,
-                                 rop.CALL_F):
-                arg = op.getarg(0)
-                if arg is None:
-                    return False
-                v = arg.getvalue()
+        l = copy(orig_inputs)
+        # create dummy inputargs
+        for failarg in failargs:
+            if failarg not in orig_inputs:
+                typ = failarg.type
+                if typ == 'i':
+                    l.insert(0, InputArgInt(0))
+                elif typ == 'f':
+                    l.insert(0, InputArgFloat(0))
+                elif typ == 'v':
+                    l.insert(0, InputArgVector(0))
+        return l
+
+    def find_guard(self, oplist, marker):
+        for op in oplist:
+            if op.is_guard():
+                if op.getopnum() in (rop.GUARD_TRUE,
+                                     rop.GUARD_FALSE):
+                    for i in range(op.numargs()):
+                        arg = op.getarg(i)
+                        if self._has_marker(oplist, arg, marker):
+                            return op
+        return None
+
+    def _has_marker(self, oplist, arg, marker):
+        for op in oplist:
+            if op.getopnum() in (rop.CALL_I, rop.CALL_F, rop.CALL_R):
+                call_to = op.getarg(0)
+                v = call_to.getvalue()
                 name = self.metainterp_sd.get_name_from_address(v)
-                if name is None:
-                    return False
-
                 if name.find(marker) != -1:
                     return True
+        return False
 
+    def _get_name_from_arg(self, arg):
+        addr = arg.getvalue()
+        return self.metainterp_sd.get_name_from_address(addr)
 
     def emit(self, op):
         return Optimization.emit(self, op)

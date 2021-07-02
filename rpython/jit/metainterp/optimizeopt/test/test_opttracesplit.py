@@ -166,15 +166,19 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
         assert split_at is not None
         data = compile.SimpleSplitCompileData(
             trace, None, enable_opts=self.enable_opts)
-        prev,latter = data.split(self.metainterp_sd, None, {}, ops, split_at, token)
+        body, bridge = data.split(self.metainterp_sd, None, {},
+                                  ops, info.inputargs, split_at, token)
         # TODO: add label to body_loop and bridge_loop
-        label_op = ResOperation(rop.LABEL, info.inputargs)
+        # label_op = ResOperation(rop.LABEL, info.inputargs)
+        body_label_op = ResOperation(rop.LABEL, body.inputargs)
         body_loop = compile.create_empty_loop(self.metainterp)
-        body_loop.inputargs = info.inputargs
-        body_loop.operations = [label_op] + prev.ops
+        body_loop.inputargs = body.inputargs # prev.inputargs
+        body_loop.operations = [body_label_op] + body.ops
+
+        bridge_label_op = ResOperation(rop.LABEL, bridge.inputargs)
         bridge_loop = compile.create_empty_loop(self.metainterp)
         bridge_loop.inputargs = info.inputargs
-        bridge_loop.operations = [label_op] + latter.ops
+        bridge_loop.operations = [bridge_label_op] + bridge.ops
         return body_loop, bridge_loop
 
     def assert_equal_split(self, ops, bodyops, bridgeops,
@@ -187,6 +191,16 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
         bridge_exp = convert_old_style_to_targets(bridge_exp_opts, jump=True)
         self.assert_equal(body, body_exp)
         self.assert_equal(bridge, bridge_exp)
+
+    def assert_equal_guard(self, ops, bodyops, bridgeops,
+                           split_at=None, marker=None, call_pure_results=None,):
+        body, bridge = self.optimize_and_split(ops, split_at,
+                                               call_pure_results)
+        body_exp_opts = parse(bodyops, namespace=self.namespace)
+        body_exp = convert_old_style_to_targets(body_exp_opts, jump=True)
+        bridge_exp_opts = parse(bridgeops, namespace=self.namespace)
+        bridge_exp = convert_old_style_to_targets(bridge_exp_opts, jump=True)
+
 
     def optimize_loop(self, ops, optops, call_pure_results=None):
         loop = self.parse(ops)
@@ -259,7 +273,7 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         p22 = getarrayitem_gc_r(p21, i20, descr=arraydescr)
         i25 = call_i(ConstClass(is_true_ptr), p0, p22, descr=istruedescr)
         setfield_gc(p0, i20, descr=arraydescr)
-        guard_true(i25) [i25, p0]
+        guard_true(i25) [p0] # [i25, p0] # ^^^ should we remove useless failargs?
         i29 = call_i(ConstClass(func_ptr), 8, 8, descr=cutheredescr)
         debug_merge_point(0, 0, '8: CONST_INT 1')
         i33 = call_i(ConstClass(func_ptr), p0, 9, descr=calldescr)
@@ -289,7 +303,7 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         self.assert_equal_split(ops, body, bridge, split_at="emit_jump")
 
         body_loop, bridge_loop = self.optimize_and_split(ops, "emit_jump")
-        guard = compile.find_guard(body_loop.operations, "is_true")
+        guard = compile.find_guard(self.metainterp_sd, body_loop.operations, "is_true")
         assert guard is not None
-        guard_descr = guard.getdescr()
+        guard_descr = guard.getdescr() # resumekey
         assert isinstance(guard_descr, compile.ResumeGuardDescr)

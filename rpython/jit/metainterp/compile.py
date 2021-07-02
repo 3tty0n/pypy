@@ -152,11 +152,11 @@ class SimpleSplitCompileData(CompileData):
         self.inline_short_preamble = inline_short_preamble
 
     def split(self, metainterp_sd, jitdriver_sd, optimizations,
-              ops, fname, target_token):
+              ops, inputargs, fname, target_token):
         from rpython.jit.metainterp.optimizeopt.tracesplit import TraceSplitOpt
-        opt = TraceSplitOpt(metainterp_sd, jitdriver_sd, optimizations)
-        return opt.split_ops(
-            self.trace.inputargs, ops, fname, target_token)
+        opt = TraceSplitOpt(metainterp_sd, jitdriver_sd, optimizations,
+                            runtime_boxes=self.runtime_boxes)
+        return opt.split_ops(inputargs, ops, fname, target_token)
 
 
 def show_procedures(metainterp_sd, procedure=None, error=None):
