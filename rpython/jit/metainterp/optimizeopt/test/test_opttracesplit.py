@@ -166,19 +166,20 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
         assert split_at is not None
         data = compile.SimpleSplitCompileData(
             trace, None, enable_opts=self.enable_opts)
-        body, bridge = data.split(self.metainterp_sd, None, {},
-                                  ops, info.inputargs, split_at, token)
+        (body_info, body_ops), (bridge_info, bridge_ops) = \
+            data.split(self.metainterp_sd, None, {}, ops, info.inputargs, split_at, token)
+
         # TODO: add label to body_loop and bridge_loop
         # label_op = ResOperation(rop.LABEL, info.inputargs)
-        body_label_op = ResOperation(rop.LABEL, body.inputargs)
+        body_label_op = ResOperation(rop.LABEL, body_info.inputargs)
         body_loop = compile.create_empty_loop(self.metainterp)
-        body_loop.inputargs = body.inputargs # prev.inputargs
-        body_loop.operations = [body_label_op] + body.ops
+        body_loop.inputargs = body_info.inputargs # prev.inputargs
+        body_loop.operations = [body_label_op] + body_ops
 
-        bridge_label_op = ResOperation(rop.LABEL, bridge.inputargs)
+        bridge_label_op = ResOperation(rop.LABEL, bridge_info.inputargs)
         bridge_loop = compile.create_empty_loop(self.metainterp)
         bridge_loop.inputargs = info.inputargs
-        bridge_loop.operations = [bridge_label_op] + bridge.ops
+        bridge_loop.operations = [bridge_label_op] + bridge_ops
         return body_loop, bridge_loop
 
     def assert_equal_split(self, ops, bodyops, bridgeops,

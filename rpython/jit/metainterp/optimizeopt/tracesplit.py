@@ -55,8 +55,10 @@ class TraceSplitInfo(BasicLoopInfo):
 
 class TraceSplitOpt(Optimizer):
 
-    def __init__(self, metainterp_sd, jitdriver_sd, optimizations=None, resumekey=None, runtime_boxes=None):
-        super(TraceSplitOpt, self).__init__(metainterp_sd, jitdriver_sd, optimizations=optimizations)
+    def __init__(self, metainterp_sd, jitdriver_sd, optimizations=None,
+                 resumekey=None, runtime_boxes=None):
+        super(TraceSplitOpt, self).__init__(metainterp_sd, jitdriver_sd,
+                                            optimizations=optimizations)
         self.resumekey = resumekey
         self.runtime_boxes = runtime_boxes
 
@@ -100,10 +102,11 @@ class TraceSplitOpt(Optimizer):
             args = op.getarglist()
             get_undefined_ops_from_args(args)
 
-        body = self._invent_op(rop.JUMP, target_token, prev, fname)
-        body = self._invent_failargs(body, inputargs, marker="is_true")
+        body_ops = self._invent_op(rop.JUMP, target_token, prev, fname)
+        body_ops = self._invent_failargs(body_ops, inputargs, marker="is_true")
 
-        return SplittedTrace(body, inputargs), SplittedTrace(undefined + latter, inputargs)
+        return (TraceSplitInfo(target_token, body_ops[-1], inputargs, None), body_ops), \
+            (TraceSplitInfo(None, latter[-1], inputargs, None), undefined + latter)
 
     def _invent_op(self, opnum, target_token, ops, fname):
         last_op = ops[-1]
