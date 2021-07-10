@@ -288,9 +288,3 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         """
 
         self.assert_equal_split(ops, body, bridge, split_at="emit_jump")
-
-        body_loop, bridge_loop = self.optimize_and_split(ops, "emit_jump")
-        guard = find_guard(self.metainterp_sd, body_loop.operations, "is_true")
-        assert guard is not None
-        guard_descr = guard.getdescr() # resumekey
-        assert isinstance(guard_descr, compile.ResumeGuardDescr)
