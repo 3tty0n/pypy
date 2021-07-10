@@ -44,5 +44,48 @@ class BasicTests:
         assert res == 55
         self.check_trace_count(1)
 
+    def test_branching(self):
+        @dont_look_inside
+        def lt(x, y):
+            return x < y
+
+        @dont_look_inside
+        def gt(x, y):
+            return x > y
+
+        @dont_look_inside
+        def add(x, y):
+            return x + y
+
+        @dont_look_inside
+        def sub(x, y):
+            return x - y
+
+        @dont_look_inside
+        def emit_jump(x):
+            return x
+
+        myjitdriver = JitDriver(greens = [],
+                                reds = ['y', 'x', 'res'])
+        def interp(x, y):
+            res = 0
+            while True:
+                myjitdriver.can_enter_jit(x=x, y=y, res=res)
+                myjitdriver.jit_merge_point(x=x, y=y, res=res)
+                if not lt(y, 0):
+                    if we_are_jitted():
+                        y = sub(y, 1)
+                        res = add(res, x)
+                        res = emit_jump(res)
+                        # XXX: pseudo-reproduction of method-traversing
+                        return res
+                    else:
+                        y = sub(y, 1)
+                        res = add(res, x)
+                else:
+                    return res
+
+        res = self.meta_interp(interp, [10, 10])
+
 class TestLLtype(BasicTests, LLJitMixin):
     pass
