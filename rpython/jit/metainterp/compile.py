@@ -152,11 +152,11 @@ class SimpleSplitCompileData(CompileData):
         self.inline_short_preamble = inline_short_preamble
 
     def split(self, metainterp_sd, jitdriver_sd, optimizations,
-              ops, inputargs, fname, target_token):
+              ops, inputargs, fname, body_token, bridge_token):
         from rpython.jit.metainterp.optimizeopt.tracesplit import TraceSplitOpt
         opt = TraceSplitOpt(metainterp_sd, jitdriver_sd, optimizations,
                             runtime_boxes=self.runtime_boxes)
-        return opt.split_ops(inputargs, ops, fname, target_token)
+        return opt.split_ops(inputargs, ops, fname, body_token, bridge_token)
 
 
 def show_procedures(metainterp_sd, procedure=None, error=None):
@@ -286,7 +286,6 @@ def compile_simple_and_split(metainterp, greenkey, start, inputargs, jumpargs,
     trace = history.trace
     warmstate = jitdriver_sd.warmstate
     enable_opts = jitdriver_sd.warmstate.enable_opts
-    jitcell_token = make_jitcell_token(jitdriver_sd)
     cut_at = history.get_trace_position()
 
     trace.tracing_done()
@@ -297,19 +296,60 @@ def compile_simple_and_split(metainterp, greenkey, start, inputargs, jumpargs,
                              enable_opts=enable_opts)
 
     try:
-        loop_info, ops = data.optimize_trace(
+        loop_info, ops = data.optimize(
             metainterp_sd, jitdriver_sd, metainterp.box_names_memo)
     except InvalidLoop:
         metainterp_sd.jitlog.trace_aborted()
         trace.cut_at(cut_at)
         return None
 
-    inputargs = loop_info.inputargs
+    body_jitcell_token = make_jitcell_token(jitdriver_sd)
+    bridge_jitcell_token = make_jitcell_token(jitdriver_sd)
+
+    body_start_descr = TargetToken(body_jitcell_token,
+                                   original_jitcell_token=body_jitcell_token)
+    bridge_start_descr = TargetToken(bridge_jitcell_token,
+                                     original_jitcell_token=bridge_jitcell_token)
+
     data = SimpleSplitCompileData(trace, runtime_boxes, resumestorage,
                                   call_pure_results=call_pure_results,
                                   enable_opts=enable_opts,
                                   inline_short_preamble=inline_short_preamble)
-    pass
+    try:
+        # TODO: need to contain a resume key in body_info
+        (body_info, body_ops), (bridge_info, bridge_ops) = \
+            data.split(metainterp_sd, jitdriver_sd, metainterp.box_names_memo,
+                       ops, loop_info.inputargs, fname="emit_jump",
+                       target_token=body_start_descr)
+    except InvalidLoop:
+        metainterp_sd.jitlog.trace_aborted()
+        trace.cut_at(cut_at)
+        return None
+
+    #  compiling loop body
+    body = create_empty_loop(metainterp)
+    body.original_jitcell_token = body_jitcell_token
+    body.inputargs = body_info.inputargs
+    body_start_label = ResOperation(rop.LABEL, body_info.inputargs,
+                                    descr=body_start_descr)
+    body.operations = [body_start_label] + body_ops
+    body_faildescr_= body_info.fail_descr
+    if not we_are_translated():
+        body.check_consistency()
+    send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, body, "loop",
+                         body_info.inputargs, metainterp.box_names_memo)
+    record_loop_or_bridge(metainterp_sd, body)
+
+    # compiling bridge
+    bridge = create_empty_loop(metainterp)
+    body.original_jitcell_token = bridge_jitcell_token
+    bridge.inputargs = bridge_info.inputargs
+    bridge_start_label = ResOperation(rop.LABEL, bridge_info.inputargs,
+                                      descr=bridge_start_label)
+    bridge.operations = [bridge_start_label] + bridge_ops
+    resumekey.compile_and_attach(metainterp, bridge, bridge_info.inputargs)
+
+    return body_start_descr
 
 def compile_loop(metainterp, greenkey, start, inputargs, jumpargs,
                  use_unroll=True):
