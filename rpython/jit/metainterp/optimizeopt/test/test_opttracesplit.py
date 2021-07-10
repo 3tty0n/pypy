@@ -12,17 +12,18 @@ from rpython.jit.backend.llgraph import runner
 from rpython.jit.metainterp.jitprof import EmptyProfiler
 from rpython.jit.metainterp.optimize import InvalidLoop
 from rpython.jit.metainterp.history import (
-    JitCellToken, BasicFinalDescr, ConstInt, Stats, get_const_ptr_for_string)
+    JitCellToken, BasicFinalDescr, BasicFailDescr ,ConstInt, Stats, get_const_ptr_for_string)
 from rpython.jit.metainterp import compile, executor, pyjitpl
 from rpython.jit.metainterp.resoperation import (
     rop, ResOperation, InputArgInt, OpHelpers, InputArgRef)
 from rpython.jit.metainterp.support import ptr2int
 from rpython.jit.metainterp.optimizeopt.intdiv import magic_numbers
+from rpython.jit.metainterp.optimizeopt.tracesplit import find_guard
 from rpython.jit.metainterp.test.test_resume import (
     ResumeDataFakeReader, MyMetaInterp)
 from rpython.jit.metainterp.optimizeopt.test import test_util, test_dependency
 from rpython.jit.metainterp.optimizeopt.test.test_util import (
-    BaseTest, convert_old_style_to_targets)
+    BaseTest, FakeDescr, convert_old_style_to_targets)
 from rpython.jit.tool.oparser import parse, convert_loop_to_trace
 
 class FakeCPU(object):
@@ -163,20 +164,25 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
 
     def optimize_and_split(self, ops, split_at, call_pure_results=None):
         trace, info, ops, token = self.optimize(ops, call_pure_results)
+        bridge_token = JitCellToken()
         assert split_at is not None
         data = compile.SimpleSplitCompileData(
             trace, None, enable_opts=self.enable_opts)
-        (body_info, body_ops), (bridge_info, bridge_ops) = \
-            data.split(self.metainterp_sd, None, {}, ops, info.inputargs, split_at, token)
+        (body_info, body_ops), (bridge_info, bridge_ops) = data.split(
+            self.metainterp_sd, None, {}, ops, info.inputargs, split_at,
+            token, bridge_token)
+        assert isinstance(body_info.fail_descr, compile.ResumeGuardDescr)
 
         # TODO: add label to body_loop and bridge_loop
         # label_op = ResOperation(rop.LABEL, info.inputargs)
         body_label_op = ResOperation(rop.LABEL, body_info.inputargs)
+        body_label_op.setdescr(token)
         body_loop = compile.create_empty_loop(self.metainterp)
         body_loop.inputargs = body_info.inputargs # prev.inputargs
         body_loop.operations = [body_label_op] + body_ops
 
         bridge_label_op = ResOperation(rop.LABEL, bridge_info.inputargs)
+        bridge_label_op.setdescr(bridge_token)
         bridge_loop = compile.create_empty_loop(self.metainterp)
         bridge_loop.inputargs = info.inputargs
         bridge_loop.operations = [bridge_label_op] + bridge_ops
@@ -284,7 +290,7 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         self.assert_equal_split(ops, body, bridge, split_at="emit_jump")
 
         body_loop, bridge_loop = self.optimize_and_split(ops, "emit_jump")
-        guard = compile.find_guard(self.metainterp_sd, body_loop.operations, "is_true")
+        guard = find_guard(self.metainterp_sd, body_loop.operations, "is_true")
         assert guard is not None
         guard_descr = guard.getdescr() # resumekey
         assert isinstance(guard_descr, compile.ResumeGuardDescr)
