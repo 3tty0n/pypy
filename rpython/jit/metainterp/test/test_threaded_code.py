@@ -72,18 +72,15 @@ class BasicTests:
             while True:
                 myjitdriver.can_enter_jit(x=x, y=y, res=res)
                 myjitdriver.jit_merge_point(x=x, y=y, res=res)
-                if not lt(y, 0):
+                y = sub(y, 1)
+                res = add(res, x)
+                if lt(y, 0):
+                    return res
+                else:
                     if we_are_jitted():
-                        y = sub(y, 1)
-                        res = add(res, x)
                         res = emit_jump(res)
                         # XXX: pseudo-reproduction of method-traversing
                         return res
-                    else:
-                        y = sub(y, 1)
-                        res = add(res, x)
-                else:
-                    return res
 
         res = self.meta_interp(interp, [10, 10])
 
