@@ -2129,7 +2129,7 @@ class BasicTests:
         res = self.meta_interp(g, [6, 14])
         assert res == g(6, 14)
 
-    def test_specialied_bridge_const(self):
+    def test_specialized_bridge_const(self):
         myjitdriver = JitDriver(greens = [], reds = ['y', 'const', 'x', 'res'])
         class A:
             def __init__(self, val):
