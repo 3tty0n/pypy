@@ -91,7 +91,7 @@ class BasicTests:
                     return res
 
         interp.oopspec = 'jit.not_in_trace()'
-        res = self.meta_interp(interp, [10, 2])
+        res = self.meta_interp(interp, [10, 0])
         # get_stats().loops[0].operations
 
 class TestLLtype(BasicTests, LLJitMixin):
