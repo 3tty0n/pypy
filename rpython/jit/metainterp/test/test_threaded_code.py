@@ -7,7 +7,7 @@ import weakref
 from rpython.rlib import rgc
 from rpython.jit.codewriter.policy import StopAtXPolicy
 from rpython.jit.metainterp import history
-from rpython.jit.metainterp.test.support import LLJitMixin, noConst
+from rpython.jit.metainterp.test.support import LLJitMixin, noConst, get_stats
 from rpython.jit.metainterp.warmspot import get_stats
 from rpython.jit.metainterp.pyjitpl import MetaInterp
 from rpython.rlib import rerased
@@ -20,38 +20,18 @@ from rpython.rlib.rarithmetic import ovfcheck, is_valid_int, int_force_ge_zero
 from rpython.rtyper.lltypesystem import lltype, rffi
 
 
+def compile_threaded_code():
+    pass
+
 class BasicTests:
-    def test_basic(self):
-        myjitdriver = JitDriver(greens = [], reds = ['y', 'res', 'x'])
+    def test_minilang_1(self):
 
-        @dont_look_inside
-        def add(x, y):
-            return x + y
-
-        @dont_look_inside
-        def minus(x, y):
-            return x - y
-
-        def interp(x, y):
-            res = 0
-            while y > 0:
-                myjitdriver.can_enter_jit(x=x, y=y, res=res)
-                myjitdriver.jit_merge_point(x=x, y=y, res=res)
-                res = add(res, add(x, 1))
-                y = minus(y, 1)
-            return res
-        res = self.meta_interp(interp, [10, 5])
-        assert res == 55
-        self.check_trace_count(1)
-
-    def test_branching(self):
         @dont_look_inside
         def lt(x, y):
-            return x < y
-
-        @dont_look_inside
-        def gt(x, y):
-            return x > y
+            if x < y:
+                return 1
+            else:
+                return 0
 
         @dont_look_inside
         def add(x, y):
@@ -62,30 +42,57 @@ class BasicTests:
             return x - y
 
         @dont_look_inside
+        def is_true(x):
+            return x != 0
+
+        @dont_look_inside
         def emit_jump(x):
             return x
 
-        myjitdriver = JitDriver(greens = [],
-                                reds = ['y', 'x', 'res'])
+        ADD = -1
+        SUB = 0
+        LT = 1
+        JUMP = 2
+        JUMP_IF = 3
+        JUMP = 4
+        EXIT = 5
+        myjitdriver = JitDriver(greens=['pc', 'bytecode'], reds=['y', 'x', 'res'])
         def interp(x, y):
-            res = 0
+            pc = 0
+            res = x
+            bytecode = [LT, JUMP_IF, 6, SUB, JUMP, 0, EXIT]
             while True:
-                myjitdriver.can_enter_jit(x=x, y=y, res=res)
-                myjitdriver.jit_merge_point(x=x, y=y, res=res)
-                if not lt(y, 0):
-                    if we_are_jitted():
-                        y = sub(y, 1)
-                        res = add(res, x)
-                        res = emit_jump(res)
-                        # XXX: pseudo-reproduction of method-traversing
-                        return res
+                myjitdriver.can_enter_jit(pc=pc, bytecode=bytecode, x=x, y=y, res=res)
+                myjitdriver.jit_merge_point(pc=pc, bytecode=bytecode, x=x, y=y, res=res)
+                op = bytecode[pc]
+                pc += 1
+                if op == ADD:
+                    res = add(res, 1)
+                elif op == SUB:
+                    res = sub(res, 1)
+                elif op == JUMP:
+                    t = bytecode[pc]
+                    pc = t
+                elif op == JUMP_IF:
+                    t = bytecode[pc]
+                    if is_true(y):
+                        pc = t
+                        if we_are_jitted():
+                            pc = emit_jump(t)
+                            pc += 1
                     else:
-                        y = sub(y, 1)
-                        res = add(res, x)
-                else:
+                        pc += 1
+                        if we_are_jitted():
+                            pc = emit_jump(pc)
+                            pc = t
+                elif op == LT:
+                    y = lt(res, 0)
+                elif op == EXIT:
                     return res
 
-        res = self.meta_interp(interp, [10, 10])
+        interp.oopspec = 'jit.not_in_trace()'
+        res = self.meta_interp(interp, [10, 2])
+        # get_stats().loops[0].operations
 
 class TestLLtype(BasicTests, LLJitMixin):
     pass
