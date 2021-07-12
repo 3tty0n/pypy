@@ -1,44 +1,22 @@
 from rpython.rtyper.lltypesystem.llmemory import AddressAsInt
 from rpython.rlib.rjitlog import rjitlog as jl
-from rpython.jit.metainterp.history import ConstInt, \
-    RefFrontendOp, IntFrontendOp, FloatFrontendOp
-from rpython.jit.metainterp import compile
-from rpython.jit.metainterp.optimizeopt.optimizer import Optimizer, \
-    Optimization, BasicLoopInfo
+from rpython.rlib.objectmodel import specialize, we_are_translated
+from rpython.jit.metainterp.history import (
+    ConstInt, RefFrontendOp, IntFrontendOp, FloatFrontendOp)
+from rpython.jit.metainterp import compile, jitprof
+from rpython.jit.metainterp.optimizeopt.optimizer import (
+    Optimizer, Optimization, BasicLoopInfo)
+from rpython.jit.metainterp.optimizeopt.intutils import (
+    IntBound, ConstIntBound, MININT, MAXINT, IntUnbounded)
+from rpython.jit.metainterp.optimizeopt.bridgeopt import (
+    deserialize_optimizer_knowledge)
 from rpython.jit.metainterp.optimizeopt.util import make_dispatcher_method
 from rpython.jit.metainterp.opencoder import Trace, TraceIterator
-from rpython.jit.metainterp.resoperation import rop, OpHelpers, ResOperation, \
-    InputArgRef, InputArgInt, InputArgFloat, InputArgVector
+from rpython.jit.metainterp.resoperation import (
+    rop, OpHelpers, ResOperation, InputArgRef, InputArgInt,
+    InputArgFloat, InputArgVector, GuardResOp)
 
 from pprint import pprint
-
-def split_trace_at(trace, at_fname):
-    import copy
-
-    if at_fname is None:
-        return None
-
-    cut_point = trace.cut_point_by_fname(at_fname)
-    (c_start, c_count, c_index) = cut_point
-
-    c_after_point = c_start, trace._count - c_count + 1, c_index # important hack
-    t_after_cutted = trace.cut_trace_from(c_after_point, trace.inputargs)
-
-    t = copy.copy(trace)
-    t.cut_at(list(cut_point))
-
-    return t_after_cutted, t
-
-
-class SplittedTrace:
-    def __init__(self, ops, inputargs):
-        self.ops = ops
-        self.inputargs = inputargs
-
-    def __repr__(self):
-        return "ResSplitTrace(%s, %s, %s)" % \
-            (self.oplist, self.inputs)
-
 
 class TraceSplitInfo(BasicLoopInfo):
     """ A state after splitting the trace, containing the following:
@@ -57,13 +35,20 @@ class TraceSplitInfo(BasicLoopInfo):
     def final(self):
         return True
 
-class TraceSplitOpt(Optimizer):
+class TraceSplitOpt(object):
 
     def __init__(self, metainterp_sd, jitdriver_sd, optimizations=None,
-                 resumekey=None):
-        super(TraceSplitOpt, self).__init__(metainterp_sd, jitdriver_sd,
-                                            optimizations=optimizations)
+                 resumekey=None, split_at=None, guard_at=None):
+        self.metainterp_sd = metainterp_sd
+        self.jitdriver_sd = jitdriver_sd
+        self.optimizations = optimizations
         self.resumekey = resumekey
+        self.split_at = split_at
+        self.guard_at = guard_at
+        self.ops_body = []
+        self.ops_bridge = []
+        self.splitted = False
+        self._split_point = 0
 
     def split(self, ops, inputargs, fname, gmark, tc_jump, tc_guard, body_token, bridge_token):
         cut_point = 0
@@ -74,11 +59,7 @@ class TraceSplitOpt(Optimizer):
                 arg = op.getarg(0)
                 if arg is None:
                     raise IndexError
-                box = arg.getvalue()
-                if isinstance(box, AddressAsInt):
-                    name = str(box.adr.ptr)
-                else:
-                    name = self.metainterp_sd.get_name_from_address(box)
+                name = _get_name_from_arg(self.metainterp_sd, arg)
 
                 if name is None:
                     raise IndexError
@@ -110,7 +91,7 @@ class TraceSplitOpt(Optimizer):
             get_undefined_ops_from_args(args)
 
         body_ops = self._invent_op(rop.JUMP, inputargs, body_token, prev, fname, tc_jump=tc_jump)
-        guard_op = find_guard(self.metainterp_sd, body_ops, gmark)
+        body_ops, guard_op = self._invent_and_find(body_ops, inputargs, gmark)
         fail_descr = guard_op.getdescr()
 
         bridge_ops = self._invent_last_op(undefined + latter, inputargs, bridge_token)
@@ -143,10 +124,21 @@ class TraceSplitOpt(Optimizer):
         return ops
 
     def _invent_last_op(self, ops, orig_inputs, target_token):
+        pseudo_ret = None
+        for op in ops:
+            if op.getopnum() == rop.CALL_I:
+                arg = op.getarg(0)
+                name = _get_name_from_arg(self.metainterp_sd, arg)
+                if name.find("emit_ret") != -1:
+                    pseudo_ret = op
+                    ops.remove(op)
+                    break
+        assert pseudo_ret is not None
+
         last_op = ops[-1]
         if last_op.getopnum() == rop.GUARD_FUTURE_CONDITION:
             newops = [ResOperation(rop.LEAVE_PORTAL_FRAME, [ConstInt(0)]),
-                      ResOperation(rop.FINISH, [],
+                      ResOperation(rop.FINISH, [pseudo_ret.getarg(1)],
                                    descr=compile.DoneWithThisFrameDescrInt())]
             ops.pop()
             return ops + newops
@@ -161,7 +153,6 @@ class TraceSplitOpt(Optimizer):
                 arg = op.getarg(0)
                 if _has_marker(self.metainterp_sd, ops, arg, marker):
                     # change failargs for trace-stitching
-                    # failargs = self._invent_inputargs(orig_inputs)
                     op.setfailargs(orig_inputs)
                     ops[i] = op
                     guard_op_with_marker = op
@@ -184,12 +175,32 @@ class TraceSplitOpt(Optimizer):
                 l.append(InputArgVector(0))
         return l
 
-    def _get_name_from_arg(self, arg):
-        addr = arg.getvalue()
-        return self.metainterp_sd.get_name_from_address(addr)
+
+class OptTraceSplit(Optimizer):
+    def __init__(self, metainterp_sd, jitdriver_sd, optimizations=None,
+                 split_at=None, guard_at=None):
+        super(OptTraceSplit, self).__init__(metainterp_sd, jitdriver_sd, optimizations=optimizations)
+        self.split_at = split_at
+        self.guard_at = guard_at
+        self.ops_body = []
+        self.ops_bridge = []
+        self.splitted = False
+        self._split_point = 0
+
+    def optimize_and_split(self, trace, resumestorage, call_pure_results):
+        traceiter = trace.get_iter()
+        if resumestorage:
+            frontend_inputargs = trace.inputargs
+            deserialize_optimizer_knowledge(
+                self, resumestorage, frontend_inputargs, traceiter.inputargs)
+        return self.propagate_all_forward(traceiter, call_pure_results)
 
     def emit(self, op):
-        return Optimization.emit(self, op)
+        result = Optimization.emit(self, op)
+        print result.op
+        if result.op.is_guard():
+            print result.op.getfailargs()
+        return result
 
     def optimize_CALL_I(self, op):
         arg0 = op.getarg(0)
@@ -198,8 +209,8 @@ class TraceSplitOpt(Optimizer):
                 metainterp = self.optimizer.metainterp_sd
                 addr = arg0.getaddr()
                 name = metainterp.get_name_from_address(addr)
-                if name.find('cut_here') != -1:
-                    return None
+                if name.find(self.split_at) != -1:
+                    self.splitted = True
 
         return self.emit(op)
 
@@ -214,19 +225,22 @@ def find_guard(metainterp_sd, oplist, marker):
                         return op
     return None
 
+def _get_name_from_arg(metainterp_sd, arg):
+    box = arg.getvalue()
+    if isinstance(box, AddressAsInt):
+        return str(box.adr.ptr)
+    else:
+        return metainterp_sd.get_name_from_address(box)
+
 def _has_marker(metainterp_sd, oplist, arg, marker):
     for op in oplist:
         if op.getopnum() in (rop.CALL_I, rop.CALL_F, rop.CALL_R):
             call_to = op.getarg(0)
-            box = call_to.getvalue()
-            if isinstance(box, AddressAsInt):
-                name = str(box.adr.ptr)
-            else:
-                name = metainterp_sd.get_name_from_address(v)
+            name = _get_name_from_arg(metainterp_sd, call_to)
             if name.find(marker) != -1:
                 return True
     return False
 
-# dispatch_opt = make_dispatcher_method(OptTraceSplit, 'optimize_',
-#                                       default=OptTraceSplit.emit)
-# OptTraceSplit.propagate_forward = dispatch_opt
+dispatch_opt = make_dispatcher_method(OptTraceSplit, 'optimize_',
+                                      default=OptTraceSplit.emit)
+OptTraceSplit.propagate_forward = dispatch_opt
