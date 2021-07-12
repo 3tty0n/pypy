@@ -46,7 +46,11 @@ class BasicTests:
             return x != 0
 
         @dont_look_inside
-        def emit_jump(x):
+        def emit_jump(x, y, z):
+            return x
+
+        @dont_look_inside
+        def emit_ret(x):
             return x
 
         ADD = -1
@@ -56,14 +60,15 @@ class BasicTests:
         JUMP_IF = 3
         JUMP = 4
         EXIT = 5
-        myjitdriver = JitDriver(greens=['pc', 'bytecode'], reds=['y', 'x', 'res'])
-        def interp(x, y):
+        myjitdriver = JitDriver(greens=['pc', 'bytecode',], reds=['x', 'res'],
+                                threaded_code_gen=True)
+        def interp(x):
             pc = 0
             res = x
             bytecode = [LT, JUMP_IF, 6, SUB, JUMP, 0, EXIT]
             while True:
-                myjitdriver.can_enter_jit(pc=pc, bytecode=bytecode, x=x, y=y, res=res)
-                myjitdriver.jit_merge_point(pc=pc, bytecode=bytecode, x=x, y=y, res=res)
+                myjitdriver.can_enter_jit(pc=pc, bytecode=bytecode, x=x, res=res)
+                myjitdriver.jit_merge_point(pc=pc, bytecode=bytecode, x=x, res=res)
                 op = bytecode[pc]
                 pc += 1
                 if op == ADD:
@@ -75,23 +80,24 @@ class BasicTests:
                     pc = t
                 elif op == JUMP_IF:
                     t = bytecode[pc]
-                    if is_true(y):
+                    if is_true(x):
                         pc = t
                         if we_are_jitted():
-                            pc = emit_jump(t)
+                            pc = emit_jump(pc, x, res)
                             pc += 1
                     else:
                         pc += 1
                         if we_are_jitted():
-                            pc = emit_jump(pc)
+                            pc = emit_jump(t, x, res)
                             pc = t
+                            res = emit_ret(res)
                 elif op == LT:
-                    y = lt(res, 0)
+                    x = lt(res, 0)
                 elif op == EXIT:
                     return res
 
         interp.oopspec = 'jit.not_in_trace()'
-        res = self.meta_interp(interp, [10, 0])
+        res = self.meta_interp(interp, [10])
         # get_stats().loops[0].operations
 
 class TestLLtype(BasicTests, LLJitMixin):

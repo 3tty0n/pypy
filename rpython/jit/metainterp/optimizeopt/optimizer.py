@@ -638,6 +638,7 @@ class Optimizer(Optimization):
         self._emittedoperations[new_op] = None
 
     def store_final_boxes_in_guard(self, op, pendingfields):
+        pendingfields = []      # TODO: specify an empty list when applying splitting
         assert pendingfields is not None
         if op.getdescr() is not None:
             descr = op.getdescr()

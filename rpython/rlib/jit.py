@@ -608,7 +608,8 @@ class JitDriver(object):
                  can_never_inline=None, should_unroll_one_iteration=None,
                  name='jitdriver', check_untranslated=True, vectorize=False,
                  get_unique_id=None, is_recursive=False, threaded_code_gen=False,
-                 get_location=None):
+                 tc_jump=None, tc_guard=None, get_location=None):
+
         """get_location:
               The return value is designed to provide enough information to express the
               state of an interpreter when invoking jit_merge_point.
@@ -674,6 +675,8 @@ class JitDriver(object):
         self.is_recursive = is_recursive
         self.vec = vectorize
         self.threaded_code_gen = threaded_code_gen
+        self.tc_jump = tc_jump
+        self.tc_guard = tc_guard
 
     def _freeze_(self):
         return True

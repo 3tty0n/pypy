@@ -2112,6 +2112,8 @@ class MetaInterp(object):
         self.aborted_tracing_jitdriver = None
         self.aborted_tracing_greenkey = None
 
+        self.threaded_code_gen = jitdriver_sd.jitdriver.threaded_code_gen
+
     def retrace_needed(self, trace, exported_state):
         self.partial_trace = trace
         self.retracing_from = self.potential_retrace_position
@@ -2647,6 +2649,16 @@ class MetaInterp(object):
         for j in range(len(self.current_merge_points)-1, -1, -1):
             original_boxes, start = self.current_merge_points[j]
             assert len(original_boxes) == len(live_arg_boxes)
+            if self.threaded_code_gen:
+                target_token = self.compile_threaded_code(
+                    original_boxes, live_arg_boxes, start)
+                self.raise_if_successful(live_arg_boxes, target_token)
+                # creation of the loop was cancelled!
+                self.cancel_count += 1
+                if self.cancelled_too_many_times():
+                    self.staticdata.log('cancelled too many times!')
+                    raise SwitchToBlackhole(Counters.ABORT_BAD_LOOP)
+
             if not same_greenkey(original_boxes, live_arg_boxes, num_green_args):
                 continue
             if self.partial_trace:
@@ -2809,8 +2821,8 @@ class MetaInterp(object):
             self.staticdata.log('cancelled: we already have a token now')
             raise SwitchToBlackhole(Counters.ABORT_BAD_LOOP)
         target_token = compile.compile_loop(
-            self, greenkey, start, original_boxes[num_green_args:],
-            live_arg_boxes[num_green_args:], use_unroll=use_unroll)
+            self, greenkey, start, inputargs=original_boxes[num_green_args:],
+            jumpargs=live_arg_boxes[num_green_args:], use_unroll=use_unroll)
         if target_token is not None:
             assert isinstance(target_token, TargetToken)
             self.jitdriver_sd.warmstate.attach_procedure_to_interp(
@@ -2840,8 +2852,14 @@ class MetaInterp(object):
             self.history.cut(cut_at)  # pop the jump
         self.raise_if_successful(live_arg_boxes, target_token)
 
-    def compile_threaded_code(self, live_arg_boxes, ptoken):
-        pass
+    def compile_threaded_code(self, original_boxes, live_arg_boxes, start):
+        num_green_args = self.jitdriver_sd.num_green_args
+        greenkey = original_boxes[:num_green_args]
+        cut_at = self.history.get_trace_position()
+        return compile.compile_simple_and_split(
+            self, greenkey, start, inputargs=original_boxes[num_green_args:],
+            jumpargs=live_arg_boxes[num_green_args:], resumekey=self.resumekey)
+
 
     def compile_done_with_this_frame(self, exitbox):
         self.store_token_in_vable()
