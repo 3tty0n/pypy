@@ -63,7 +63,7 @@ class TraceSplitOpt(Optimizer):
         self.resumekey = resumekey
         self.runtime_boxes = runtime_boxes
 
-    def split_ops(self, inputargs, ops, fname, body_token, bridge_token):
+    def split_ops(self, inputargs, ops, fname, gmark, body_token, bridge_token):
         cut_point = 0
         for op in ops:
             if op.getopnum() in (rop.CALL_I,
@@ -104,7 +104,7 @@ class TraceSplitOpt(Optimizer):
             get_undefined_ops_from_args(args)
 
         body_ops = self._invent_op(rop.JUMP, body_token, prev, fname)
-        body_ops, guard_op = self._invent_and_find(body_ops, inputargs, marker="is_true")
+        body_ops, guard_op = self._invent_and_find(body_ops, inputargs, marker=gmark)
 
         body_label_op = ResOperation(rop.LABEL, inputargs, descr=body_token)
         bridge_label_op = ResOperation(rop.LABEL, inputargs, descr=bridge_token)

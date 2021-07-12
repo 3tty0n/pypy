@@ -5,14 +5,14 @@ from rpython.rlib.rarithmetic import intmask
 from rpython.rlib.rarithmetic import LONG_BIT
 from rpython.rlib.rjitlog import rjitlog as jl
 from rpython.rtyper import rclass
-from rpython.rtyper.lltypesystem import lltype
+from rpython.rtyper.lltypesystem import lltype, llmemory
 from rpython.rtyper.annlowlevel import llhelper
 from rpython.jit.codewriter.effectinfo import EffectInfo
 from rpython.jit.backend.llgraph import runner
 from rpython.jit.metainterp.jitprof import EmptyProfiler
 from rpython.jit.metainterp.optimize import InvalidLoop
 from rpython.jit.metainterp.history import (
-    JitCellToken, BasicFinalDescr, BasicFailDescr ,ConstInt, Stats, get_const_ptr_for_string)
+    JitCellToken, BasicFinalDescr, BasicFailDescr, ConstInt, INT, Stats, get_const_ptr_for_string)
 from rpython.jit.metainterp import compile, executor, pyjitpl
 from rpython.jit.metainterp.resoperation import (
     rop, ResOperation, InputArgInt, OpHelpers, InputArgRef)
@@ -47,6 +47,11 @@ class FakeCPU(object):
                      logger=None):
         token.compiled_loop_token = self.Storage()
         self.seen.append((inputargs, operations, token))
+
+    def compile_bridge(self, faildescr, inputargs, operations,
+                       original_loop_token, log=True, logger=None):
+        original_loop_token.compiled_loop_token = self.Storage()
+        self.seen.append((inputargs, operations, original_loop_token))
 
 # ____________________________________________________________
 
@@ -91,7 +96,6 @@ class FakeMetaInterpStaticData(object):
             retrace_limit = 5
             max_retrace_guards = 15
         jitcounter = test_util.DeterministicJitCounter()
-
 
 class FakeMetaInterp(object):
     cpu = FakeCPU()
@@ -162,15 +166,16 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
         info, ops = compile_data.optimize_trace(self.metainterp_sd, None, {})
         return trace, info, ops, token
 
-    def optimize_and_split(self, ops, split_at, call_pure_results=None):
+    def optimize_and_split(self, ops, split_at, guard_at, call_pure_results=None):
         trace, info, ops, token = self.optimize(ops, call_pure_results)
         bridge_token = JitCellToken()
         assert split_at is not None
+        assert guard_at is not None
         data = compile.SimpleSplitCompileData(
             trace, None, enable_opts=self.enable_opts)
         (body_info, body_ops), (bridge_info, bridge_ops) = data.split(
             self.metainterp_sd, None, {}, ops, info.inputargs, split_at,
-            token, bridge_token)
+            guard_at, token, bridge_token)
         assert isinstance(body_info.fail_descr, compile.ResumeGuardDescr)
 
         # TODO: add label to body_loop and bridge_loop
@@ -189,8 +194,8 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
         return body_loop, bridge_loop
 
     def assert_equal_split(self, ops, bodyops, bridgeops,
-                           split_at=None, call_pure_results=None):
-        body, bridge = self.optimize_and_split(ops, split_at,
+                           split_at=None, guard_at=None, call_pure_results=None):
+        body, bridge = self.optimize_and_split(ops, split_at, guard_at,
                                                call_pure_results)
         body_exp_opts = parse(bodyops, namespace=self.namespace)
         body_exp = convert_old_style_to_targets(body_exp_opts, jump=True)
@@ -287,4 +292,4 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         finish(p41, descr=finaldescr)
         """
 
-        self.assert_equal_split(ops, body, bridge, split_at="emit_jump")
+        self.assert_equal_split(ops, body, bridge, split_at="emit_jump", guard_at="is_true")
