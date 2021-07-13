@@ -2649,16 +2649,6 @@ class MetaInterp(object):
         for j in range(len(self.current_merge_points)-1, -1, -1):
             original_boxes, start = self.current_merge_points[j]
             assert len(original_boxes) == len(live_arg_boxes)
-            if self.threaded_code_gen:
-                target_token = self.compile_threaded_code(
-                    original_boxes, live_arg_boxes, start)
-                self.raise_if_successful(live_arg_boxes, target_token)
-                # creation of the loop was cancelled!
-                self.cancel_count += 1
-                if self.cancelled_too_many_times():
-                    self.staticdata.log('cancelled too many times!')
-                    raise SwitchToBlackhole(Counters.ABORT_BAD_LOOP)
-
             if not same_greenkey(original_boxes, live_arg_boxes, num_green_args):
                 continue
             if self.partial_trace:
@@ -2852,14 +2842,12 @@ class MetaInterp(object):
             self.history.cut(cut_at)  # pop the jump
         self.raise_if_successful(live_arg_boxes, target_token)
 
-    def compile_threaded_code(self, original_boxes, live_arg_boxes, start):
+    def compile_threaded_code(self, live_arg_boxes, ptoken):
         num_green_args = self.jitdriver_sd.num_green_args
-        greenkey = original_boxes[:num_green_args]
         cut_at = self.history.get_trace_position()
-        return compile.compile_simple_and_split(
-            self, greenkey, start, inputargs=original_boxes[num_green_args:],
-            jumpargs=live_arg_boxes[num_green_args:], resumekey=self.resumekey)
-
+        target_token = compile.compile_simple_and_split(
+            self, self.resumekey, live_arg_boxes[num_green_args:])
+        self.raise_if_successful(live_arg_boxes, target_token)
 
     def compile_done_with_this_frame(self, exitbox):
         self.store_token_in_vable()
@@ -2881,7 +2869,12 @@ class MetaInterp(object):
         else:
             assert False
         self.history.record(rop.FINISH, exits, None, descr=token)
-        target_token = compile.compile_trace(self, self.resumekey, exits)
+        if not self.threaded_code_gen:
+            target_token = compile.compile_trace(self, self.resumekey, exits)
+        else:
+            # XXX: special entry point of executing threaded code generation
+            # execute compile_threaded_code in the case of threaded code gen
+            target_token = compile.compile_trace_and_split(self, self.resumekey, exits)
         if target_token is not token:
             compile.giveup()
 
