@@ -133,7 +133,8 @@ class TraceSplitOpt(object):
                     pseudo_ret = op
                     ops.remove(op)
                     break
-        assert pseudo_ret is not None
+        if pseudo_ret is None:
+            return ops
 
         last_op = ops[-1]
         if last_op.getopnum() == rop.GUARD_FUTURE_CONDITION:
@@ -197,9 +198,6 @@ class OptTraceSplit(Optimizer):
 
     def emit(self, op):
         result = Optimization.emit(self, op)
-        print result.op
-        if result.op.is_guard():
-            print result.op.getfailargs()
         return result
 
     def optimize_CALL_I(self, op):
