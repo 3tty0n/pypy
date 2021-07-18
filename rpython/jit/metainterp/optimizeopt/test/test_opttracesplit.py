@@ -18,7 +18,6 @@ from rpython.jit.metainterp.resoperation import (
     rop, ResOperation, InputArgInt, OpHelpers, InputArgRef)
 from rpython.jit.metainterp.support import ptr2int
 from rpython.jit.metainterp.optimizeopt.intdiv import magic_numbers
-from rpython.jit.metainterp.optimizeopt.tracesplit import find_guard
 from rpython.jit.metainterp.test.test_resume import (
     ResumeDataFakeReader, MyMetaInterp)
 from rpython.jit.metainterp.optimizeopt.test import test_util, test_dependency
@@ -103,7 +102,7 @@ class FakeMetaInterp(object):
 
 class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
 
-    enable_opts = "intbounds:rewrite:string:earlyforce:pure"
+    enable_opts = "intbounds:rewrite:string:earlyforce:pure:heap"
 
     cpu = runner.LLGraphCPU(None)
     Ptr = lltype.Ptr
@@ -147,6 +146,7 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
                                 EffectInfo.MOST_GENERAL)
 
     finaldescr = BasicFinalDescr(0)
+    faildescr  = compile.ResumeGuardDescr()
 
     namespace = merge_dicts(test_util.LLtypeMixin.__dict__.copy(), locals().copy())
     metainterp = FakeMetaInterp()
@@ -166,7 +166,7 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
         info, ops = compile_data.optimize_trace(self.metainterp_sd, None, {})
         return trace, info, ops, token
 
-    def optimize_and_split(self, ops, split_at, guard_at, call_pure_results=None):
+    def optimize_and_split(self, ops, split_at, guard_at, call_pure_results=None, split_func=None):
         trace, info, ops, token = self.optimize(ops, call_pure_results)
         bridge_token = JitCellToken()
         assert split_at is not None
@@ -176,10 +176,32 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
         (body_info, body_ops), (bridge_info, bridge_ops) = data.split(
             self.metainterp_sd, None, {}, ops, info.inputargs, split_at,
             guard_at, token, bridge_token)
-        assert isinstance(body_info.fail_descr, compile.ResumeGuardDescr)
+        # assert isinstance(body_info.fail_descr, compile.ResumeGuardDescr)
 
         # TODO: add label to body_loop and bridge_loop
         # label_op = ResOperation(rop.LABEL, info.inputargs)
+        body_label_op = ResOperation(rop.LABEL, body_info.inputargs)
+        body_label_op.setdescr(token)
+        body_loop = compile.create_empty_loop(self.metainterp)
+        body_loop.inputargs = body_info.inputargs # prev.inputargs
+        body_loop.operations = [body_label_op] + body_ops
+
+        bridge_label_op = ResOperation(rop.LABEL, bridge_info.inputargs)
+        bridge_label_op.setdescr(bridge_token)
+        bridge_loop = compile.create_empty_loop(self.metainterp)
+        bridge_loop.inputargs = info.inputargs
+        bridge_loop.operations = [bridge_label_op] + bridge_ops
+        return body_loop, bridge_loop
+
+    def optimize_and_split2(self, ops, split_at, guard_at, call_pure_results):
+        trace, info, ops, token = self.optimize(ops, call_pure_results)
+        bridge_token = JitCellToken()
+        data = compile.SimpleSplitCompileData(
+            trace, None, enable_opts=self.enable_opts)
+        (body_info, body_ops), (bridge_info, bridge_ops) = data.split2(
+            self.metainterp_sd, None, {}, ops, info.inputargs, split_at, guard_at,
+            token, bridge_token)
+
         body_label_op = ResOperation(rop.LABEL, body_info.inputargs)
         body_label_op.setdescr(token)
         body_loop = compile.create_empty_loop(self.metainterp)
@@ -235,7 +257,7 @@ class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
 
 class TestOptTraceSplit(BaseTestTraceSplit):
 
-    def test_trace_split_real_trace(self):
+    def test_trace_split_real_trace_1(self):
         ops = """
         [p0]
         debug_merge_point(0, 0, '0: DUP ')
@@ -285,6 +307,7 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         # descr
         bridge = """
         [p0]
+        i38 = call_i(ConstClass(emit_jump_ptr), 6, 0, p0, descr=emit_jump_descr)
         debug_merge_point(0, 0, '6: JUMP 13')
         debug_merge_point(0, 0, '13: EXIT ')
         p41 = call_r(ConstClass(pop), p0, descr=popdescr)

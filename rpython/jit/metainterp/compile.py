@@ -151,19 +151,24 @@ class SimpleSplitCompileData(CompileData):
         self.enable_opts = enable_opts
         self.inline_short_preamble = inline_short_preamble
 
+    # def split(self, metainterp_sd, jitdriver_sd, optimizations,
+    #           ops, inputargs, split_at, guard_at, body_token, bridge_token):
+    #     from rpython.jit.metainterp.optimizeopt.tracesplit import TraceSplitOpt
+    #     opt = TraceSplitOpt(metainterp_sd, jitdriver_sd, optimizations,)
+    #     return opt.split(ops, inputargs, split_at, guard_at,
+    #                      body_token, bridge_token)
+
     def split(self, metainterp_sd, jitdriver_sd, optimizations,
-              ops, inputargs, fname, gmark, body_token, bridge_token,
-              tc_jump=None, tc_guard=None):
+              ops, inputargs, split_at, guard_at, body_token, bridge_token):
         from rpython.jit.metainterp.optimizeopt.tracesplit import TraceSplitOpt
-        opt = TraceSplitOpt(metainterp_sd, jitdriver_sd, optimizations,)
-        return opt.split(ops, inputargs, fname, gmark,
-                         tc_jump, tc_guard, body_token, bridge_token)
+        opt = TraceSplitOpt(metainterp_sd, jitdriver_sd, optimizations,
+                            split_at=split_at, guard_at=guard_at)
+        return opt.split(self.trace, ops, inputargs, body_token, bridge_token)
 
     def optimize_and_split(self, metainterp_sd, jitdriver_sd, optimizations,
                            fname, gmark, body_token, bridge_token):
         from rpython.jit.metainterp.optimizeopt.tracesplit import OptTraceSplit
-        opt = OptTraceSplit(metainterp_sd, jitdriver_sd, optimizations,
-                            split_at=fname, guard_at=gmark)
+        opt = OptTraceSplit(metainterp_sd, jitdriver_sd, optimizations, split_at=fname, guard_at=gmark)
         return opt.optimize_and_split(self.trace, self.resumestorage, self.call_pure_results)
 
 
@@ -1141,6 +1146,8 @@ def compile_trace_and_split(metainterp, resumekey, runtime_boxes,
         debug_print('InvalidLoop in compile_new_bridge')
         return None
 
+    logger.log_loop(info.inputargs, newops)
+
     data = SimpleSplitCompileData(trace, resumestorage,
                                   call_pure_results=call_pure_results,
                                   enable_opts=enable_opts)
@@ -1150,7 +1157,7 @@ def compile_trace_and_split(metainterp, resumekey, runtime_boxes,
     try:
         (body_info, body_ops), (bridge_info, bridge_ops) = \
             data.split(metainterp_sd, jitdriver_sd, metainterp.box_names_memo,
-                       newops, info.inputargs, fname="emit_jump", gmark="is_true",
+                       newops, info.inputargs, split_at="emit_jump", guard_at="is_true",
                        body_token=body_token, bridge_token=bridge_token)
     except InvalidLoop:
         metainterp_sd.jitlog.trace_aborted()

@@ -2,7 +2,7 @@ from rpython.rtyper.lltypesystem.llmemory import AddressAsInt
 from rpython.rlib.rjitlog import rjitlog as jl
 from rpython.rlib.objectmodel import specialize, we_are_translated
 from rpython.jit.metainterp.history import (
-    ConstInt, RefFrontendOp, IntFrontendOp, FloatFrontendOp)
+    ConstInt, ConstFloat, RefFrontendOp, IntFrontendOp, FloatFrontendOp)
 from rpython.jit.metainterp import compile, jitprof
 from rpython.jit.metainterp.optimizeopt.optimizer import (
     Optimizer, Optimization, BasicLoopInfo)
@@ -45,199 +45,224 @@ class TraceSplitOpt(object):
         self.resumekey = resumekey
         self.split_at = split_at
         self.guard_at = guard_at
-        self.ops_body = []
-        self.ops_bridge = []
-        self.splitted = False
-        self._split_point = 0
 
-    def split(self, ops, inputargs, fname, gmark, tc_jump, tc_guard, body_token, bridge_token):
-        cut_point = 0
-        for op in ops:
-            if op.getopnum() in (rop.CALL_I,
-                                 rop.CALL_R,
-                                 rop.CALL_F):
+    def split(self, trace, oplist, inputs, body_token, bridge_token):
+        ops_body, ops_bridge, inputs_body, inputs_bridge = [], [], inputs, []
+        cut_at = 0
+        last_op = None
+        newops = []
+        for i in range(len(oplist)):
+            op = oplist[i]
+            if op.getopnum() in (rop.CALL_I, rop.CALL_R, rop.CALL_F, rop.CALL_N):
                 arg = op.getarg(0)
-                if arg is None:
-                    raise IndexError
-                name = _get_name_from_arg(self.metainterp_sd, arg)
+                name = self._get_name_from_arg(arg)
+                assert name is not None
 
-                if name is None:
-                    raise IndexError
+                if name.find(self.split_at) != -1:
+                    if self.split_at.find("jump"):
+                        last_op = ResOperation(rop.JUMP, inputs, body_token)
+                        cut_at = i
 
-                if name.find(fname) != -1:
-                    break
-            cut_point += 1
-
-        prev = ops[:cut_point+1]
-        latter = ops[cut_point+1:]
-        if len(latter) == 0:
-            return None
-
-        undefined = []
-
-        def get_undefined_ops_from_args(args):
-            l = []
-            for arg in args:
-                for op in prev:
-                    if op == arg:
-                        if op not in undefined:
-                            l.insert(0, op)
-                        args = op.getarglist()
-                        get_undefined_ops_from_args(args)
-            undefined.extend(l)
-
-        for op in latter:
-            args = op.getarglist()
-            get_undefined_ops_from_args(args)
-
-        body_ops = self._invent_op(rop.JUMP, inputargs, body_token, prev, fname, tc_jump=tc_jump)
-        body_ops, guard_op = self._invent_and_find(body_ops, inputargs, gmark)
-        fail_descr = guard_op.getdescr()
-
-        bridge_ops = self._invent_last_op(undefined + latter, inputargs, bridge_token)
-
-        body_label_op = ResOperation(rop.LABEL, inputargs, descr=body_token)
-        bridge_label_op = ResOperation(rop.LABEL, inputargs, descr=bridge_token)
-
-        return (TraceSplitInfo(body_token, body_label_op, inputargs, None, fail_descr), body_ops), \
-            (TraceSplitInfo(bridge_token, bridge_label_op, inputargs, None), bridge_ops)
-
-    def _invent_op(self, opnum, orig_inputs, target_token, ops, fname, tc_jump=None):
-        last_op = ops[-1]
-        jump_op = None
-        if last_op.getopnum() == rop.CALL_I:
-            arg = last_op.getarg(0)
-            box = arg.getvalue()
-            if isinstance(box, AddressAsInt):
-                name = str(box.adr.ptr)
+                newops.append(op)
             else:
-                name = self.metainterp_sd.get_name_from_address(box)
-            if name.find(fname) != -1:
-                numargs = last_op.numargs()
-                arg = last_op.getarg(numargs-1)
-                jump_op = ResOperation(opnum, orig_inputs, descr=target_token)
+                newops.append(op)
 
-        if jump_op is None:
-            return None
 
-        ops[-1] = jump_op
-        return ops
+        assert last_op is not None
 
-    def _invent_last_op(self, ops, orig_inputs, target_token):
-        pseudo_ret = None
-        for op in ops:
-            if op.getopnum() == rop.CALL_I:
-                arg = op.getarg(0)
-                name = _get_name_from_arg(self.metainterp_sd, arg)
-                if name.find("emit_ret") != -1:
-                    pseudo_ret = op
-                    ops.remove(op)
-                    break
-        if pseudo_ret is None:
-            return ops
+        ops_body = newops[:cut_at] + [last_op]
+        ops_bridge = newops[cut_at:]
 
-        last_op = ops[-1]
-        if last_op.getopnum() == rop.GUARD_FUTURE_CONDITION:
-            newops = [ResOperation(rop.LEAVE_PORTAL_FRAME, [ConstInt(0)]),
-                      ResOperation(rop.FINISH, [pseudo_ret.getarg(1)],
-                                   descr=compile.DoneWithThisFrameDescrInt())]
-            ops.pop()
-            return ops + newops
-        else:
-            return ops
+        ops_body, ops_bridge, inputs_bridge = self.set_guard_descr_and_bridge_inputs(
+            ops_body, ops_bridge, bridge_token)
 
-    def _invent_and_find(self, ops, orig_inputs, marker):
-        guard_op_with_marker = None
-        for i in range(len(ops)):
-            op = ops[i]
+        body_label = ResOperation(rop.LABEL, inputs, descr=body_token)
+        bridge_label = ResOperation(rop.LABEL, inputs_bridge, descr=bridge_token)
+
+        return (TraceSplitInfo(body_token, body_label, inputs, None, None), ops_body), \
+            (TraceSplitInfo(bridge_token, bridge_label, inputs_bridge, None, None), ops_bridge)
+
+    def set_guard_descr_and_bridge_inputs(self, ops_body, ops_bridge, bridge_token):
+        inputs_bridge = []
+        l = []
+        for op in ops_body:
             if op.is_guard():
                 arg = op.getarg(0)
-                if _has_marker(self.metainterp_sd, ops, arg, marker):
-                    # change failargs for trace-stitching
-                    op.setfailargs(orig_inputs)
-                    ops[i] = op
-                    guard_op_with_marker = op
+                if self._has_marker(ops_body, arg, self.guard_at):
+                    op.setdescr(bridge_token)
+                    # setting up inputargs for the bridge_ops
+                    inputs_bridge = self._invent_failargs(op.getfailargs())
+                    op.setfailargs(inputs_bridge)
+            l.append(op)
 
-        return ops, guard_op_with_marker
+        return l, ops_bridge, inputs_bridge
 
-    def _invent_inputargs(self, orig_inputs):
-        from copy import copy
-
+    def _invent_failargs(self, failargs):
         l = []
-        for input in orig_inputs:
-            typ = input.type
-            if typ == 'i':
-                l.append(InputArgInt(0))
-            elif typ == 'f':
-                l.append(InputArgFloat(0))
-            elif typ == 'r':
-                l.append(InputArgRef(0))
-            elif typ == 'v':
-                l.append(InputArgVector(0))
+        for arg in failargs:
+            if isinstance(arg, InputArgInt) or isinstance(arg, InputArgFloat) or \
+               isinstance(arg, InputArgRef) or isinstance(arg, InputArgVector):
+                l.append(arg)
         return l
 
-
-class OptTraceSplit(Optimizer):
-    def __init__(self, metainterp_sd, jitdriver_sd, optimizations=None,
-                 split_at=None, guard_at=None):
-        super(OptTraceSplit, self).__init__(metainterp_sd, jitdriver_sd, optimizations=optimizations)
-        self.split_at = split_at
-        self.guard_at = guard_at
-        self.ops_body = []
-        self.ops_bridge = []
-        self.splitted = False
-        self._split_point = 0
-
-    def optimize_and_split(self, trace, resumestorage, call_pure_results):
-        traceiter = trace.get_iter()
-        if resumestorage:
-            frontend_inputargs = trace.inputargs
-            deserialize_optimizer_knowledge(
-                self, resumestorage, frontend_inputargs, traceiter.inputargs)
-        return self.propagate_all_forward(traceiter, call_pure_results)
-
-    def emit(self, op):
-        result = Optimization.emit(self, op)
-        return result
-
-    def optimize_CALL_I(self, op):
-        arg0 = op.getarg(0)
-        if isinstance(arg0, ConstInt):
-            if jl.int_could_be_an_address(arg0.value):
-                metainterp = self.optimizer.metainterp_sd
-                addr = arg0.getaddr()
-                name = metainterp.get_name_from_address(addr)
-                if name.find(self.split_at) != -1:
-                    self.splitted = True
-
-        return self.emit(op)
-
-def find_guard(metainterp_sd, oplist, marker):
-    for op in oplist:
-        if op.is_guard():
-            if op.getopnum() in (rop.GUARD_TRUE,
-                                 rop.GUARD_FALSE):
-                for i in range(op.numargs()):
-                    arg = op.getarg(i)
-                    if _has_marker(metainterp_sd, oplist, arg, marker):
-                        return op
-    return None
-
-def _get_name_from_arg(metainterp_sd, arg):
-    box = arg.getvalue()
-    if isinstance(box, AddressAsInt):
-        return str(box.adr.ptr)
-    else:
-        return metainterp_sd.get_name_from_address(box)
-
-def _has_marker(metainterp_sd, oplist, arg, marker):
-    for op in oplist:
-        if op.getopnum() in (rop.CALL_I, rop.CALL_F, rop.CALL_R):
-            call_to = op.getarg(0)
-            name = _get_name_from_arg(metainterp_sd, call_to)
-            if name.find(marker) != -1:
+    def _has_op(self, op1, oplist):
+        for op2 in oplist:
+            if op1 in op2.getarglist():
                 return True
-    return False
+        return False
+
+
+    # def split(self, ops, inputargs, fname, gmark, tc_jump, tc_guard, body_token, bridge_token):
+    #     cut_point = 0
+    #     for op in ops:
+    #         if op.getopnum() in (rop.CALL_I,
+    #                              rop.CALL_R,
+    #                              rop.CALL_F):
+    #             arg = op.getarg(0)
+    #             if arg is None:
+    #                 raise IndexError
+    #             name = self._get_name_from_arg(arg)
+
+    #             if name is None:
+    #                 raise IndexError
+
+    #             if name.find(fname) != -1:
+    #                 break
+    #         cut_point += 1
+
+    #     prev = ops[:cut_point+1]
+    #     latter = ops[cut_point+1:]
+    #     if len(latter) == 0:
+    #         return None
+
+    #     undefined = []
+
+    #     def get_undefined_ops_from_args(args):
+    #         l = []
+    #         for arg in args:
+    #             for op in prev:
+    #                 if op == arg:
+    #                     if op not in undefined:
+    #                         l.insert(0, op)
+    #                     args = op.getarglist()
+    #                     get_undefined_ops_from_args(args)
+    #         undefined.extend(l)
+
+    #     for op in latter:
+    #         args = op.getarglist()
+    #         get_undefined_ops_from_args(args)
+
+    #     body_ops = self._invent_op(rop.JUMP, inputargs, body_token, prev, fname, tc_jump=tc_jump)
+    #     body_ops, guard_op = self._invent_and_find(body_ops, inputargs, gmark)
+    #     fail_descr = guard_op.getdescr()
+
+    #     bridge_ops = undefined + latter
+
+    #     body_label_op = ResOperation(rop.LABEL, inputargs, descr=body_token)
+    #     bridge_label_op = ResOperation(rop.LABEL, inputargs, descr=bridge_token)
+
+    #     return (TraceSplitInfo(body_token, body_label_op, inputargs, None, fail_descr), body_ops), \
+    #         (TraceSplitInfo(bridge_token, bridge_label_op, inputargs, None), bridge_ops)
+
+    # def _invent_op(self, opnum, orig_inputs, target_token, ops, fname, tc_jump=None):
+    #     last_op = ops[-1]
+    #     jump_op = None
+    #     if last_op.getopnum() == rop.CALL_I:
+    #         arg = last_op.getarg(0)
+    #         box = arg.getvalue()
+    #         if isinstance(box, AddressAsInt):
+    #             name = str(box.adr.ptr)
+    #         else:
+    #             name = self.metainterp_sd.get_name_from_address(box)
+    #         if name.find(fname) != -1:
+    #             numargs = last_op.numargs()
+    #             arg = last_op.getarg(numargs-1)
+    #             jump_op = ResOperation(opnum, orig_inputs, descr=target_token)
+
+    #     if jump_op is None:
+    #         return None
+
+    #     ops[-1] = jump_op
+    #     return ops
+
+    # def _invent_last_op(self, ops, orig_inputs, target_token):
+    #     pseudo_ret = None
+    #     for op in ops:
+    #         if op.getopnum() == rop.CALL_I:
+    #             arg = op.getarg(0)
+    #             name = self._get_name_from_arg(arg)
+    #             if name.find("emit_ret") != -1:
+    #                 pseudo_ret = op
+    #                 ops.remove(op)
+    #                 break
+    #     if pseudo_ret is None:
+    #         return ops
+
+    #     last_op = ops[-1]
+    #     if last_op.getopnum() == rop.GUARD_FUTURE_CONDITION:
+    #         newops = [ResOperation(rop.LEAVE_PORTAL_FRAME, [ConstInt(0)]),
+    #                   ResOperation(rop.FINISH, [pseudo_ret.getarg(1)],
+    #                                descr=compile.DoneWithThisFrameDescrInt())]
+    #         ops.pop()
+    #         return ops + newops
+    #     else:
+    #         return ops
+
+    # def _invent_and_find(self, ops, orig_inputs, marker):
+    #     guard_op_with_marker = None
+    #     for i in range(len(ops)):
+    #         op = ops[i]
+    #         if op.is_guard():
+    #             arg = op.getarg(0)
+    #             if _has_marker(self.metainterp_sd, ops, arg, marker):
+    #                 # change failargs for trace-stitching
+    #                 op.setfailargs(orig_inputs)
+    #                 ops[i] = op
+    #                 guard_op_with_marker = op
+
+    #     return ops, guard_op_with_marker
+
+    # def find_guard(self, oplist):
+    #     metainterp_sd = self.metainterp_sd
+    #     guard_at = self.guard_at
+    #     for op in oplist:
+    #         if op.is_guard():
+    #             if op.getopnum() in (rop.GUARD_TRUE,
+    #                                  rop.GUARD_FALSE):
+    #                 for i in range(op.numargs()):
+    #                     arg = op.getarg(i)
+    #                     if self._has_marker(oplist, arg, guard_at):
+    #                         return op
+    #     return None
+
+    def _get_name_from_arg(self, arg):
+        marker = self.metainterp_sd
+        box = arg.getvalue()
+        if isinstance(box, AddressAsInt):
+            return str(box.adr.ptr)
+        else:
+            return metainterp_sd.get_name_from_address(box)
+
+    def _has_marker(self, oplist, arg, marker):
+        metainterp_sd = self.metainterp_sd
+        for op in oplist:
+            if op.getopnum() in (rop.CALL_I, rop.CALL_F, rop.CALL_R):
+                call_to = op.getarg(0)
+                name = self._get_name_from_arg(call_to)
+                if name.find(marker) != -1:
+                    return True
+        return False
+
+
+class OptTraceSplit(Optimization):
+
+    def __init__(self, metainterp_sd, jitdriver_sd):
+        Optimizer.__init__(self, metainterp_sd, jitdriver_sd)
+        self.split_at = None
+        self.guard_at = None
+        self.body_ops = []
+        self.bridge_ops = []
+
 
 dispatch_opt = make_dispatcher_method(OptTraceSplit, 'optimize_',
                                       default=OptTraceSplit.emit)
