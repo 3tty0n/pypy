@@ -307,7 +307,6 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         # descr
         bridge = """
         [p0]
-        i38 = call_i(ConstClass(emit_jump_ptr), 6, 0, p0, descr=emit_jump_descr)
         debug_merge_point(0, 0, '6: JUMP 13')
         debug_merge_point(0, 0, '13: EXIT ')
         p41 = call_r(ConstClass(pop), p0, descr=popdescr)
