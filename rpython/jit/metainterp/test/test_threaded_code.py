@@ -366,8 +366,6 @@ class BasicTests:
                             pc, tstack = tstack.t_pop()
                             pc = emit_jump(pc, t, None)
                     else:
-                        # if t < pc:
-                        #     myjitdriver.can_enter_jit(pc=pc, bytecode=bytecode, x=x, acc=acc, tstack=tstack)
                         pc = t
                 elif op == JUMP_IF:
                     t = int(bytecode[pc])
@@ -375,9 +373,7 @@ class BasicTests:
                         if we_are_jitted():
                             pc += 1
                             tstack = t_push(pc, tstack)
-                        # else:
-                            # if t < pc:
-                            #     myjitdriver.can_enter_jit(pc=pc, bytecode=bytecode, x=x, acc=acc, tstack=tstack)
+
                         pc = t
                     else:
                         if we_are_jitted():
