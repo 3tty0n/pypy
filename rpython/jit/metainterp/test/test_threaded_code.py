@@ -173,7 +173,7 @@ class BasicTests:
         res = self.meta_interp(interp, [20, 2])
 
 
-    def test_minilang_1(self):
+    def test_minilang_num_1(self):
 
         @dont_look_inside
         def lt(lhs, rhs):
@@ -192,7 +192,7 @@ class BasicTests:
 
         @dont_look_inside
         def is_true(x):
-            return x != 0
+            return x > 0
 
         @dont_look_inside
         def emit_jump(x, y, z):
@@ -227,12 +227,11 @@ class BasicTests:
                                 get_printable_location=opcode_to_string,
                                 threaded_code_gen=True)
         def interp(x):
-            # set_param(myjitdriver, 'threshold', 3)
             tstack = TStack(-100, None)
             pc = 0
-            bytecode = [NOP, JUMP_IF, 5, JUMP, 8, SUB, JUMP, 1, EXIT]
+            # bytecode = [NOP, JUMP_IF, 5, JUMP, 8, SUB, JUMP, 1, EXIT]
+            bytecode = [NOP, SUB, JUMP_IF, 1, EXIT]
             while True:
-                myjitdriver.can_enter_jit(pc=pc, bytecode=bytecode, tstack=tstack, x=x)
                 myjitdriver.jit_merge_point(pc=pc, bytecode=bytecode, tstack=tstack, x=x)
                 op = bytecode[pc]
                 pc += 1
@@ -249,19 +248,21 @@ class BasicTests:
                             pc, tstack = tstack.t_pop()
                             pc = emit_jump(pc, t, None)
                     else:
-                        # if t < pc:
-                        #     myjitdriver.can_enter_jit(pc=pc, bytecode=bytecode, x=x, acc=acc, tstack=tstack)
+                        if t < pc:
+                            myjitdriver.can_enter_jit(pc=t, bytecode=bytecode, tstack=tstack, x=x)
                         pc = t
                 elif op == JUMP_IF:
                     t = int(bytecode[pc])
                     if is_true(x):
                         if we_are_jitted():
                             pc += 1
-                            tstack = t_push(pc, tstack)
-                        # else:
-                            # if t < pc:
-                            #     myjitdriver.can_enter_jit(pc=pc, bytecode=bytecode, x=x, acc=acc, tstack=tstack)
-                        pc = t
+                            if not t < pc:
+                                tstack = t_push(pc, tstack)
+                            pc = emit_jump(pc, t, None)
+                        else:
+                            if t < pc:
+                                myjitdriver.can_enter_jit(pc=t, bytecode=bytecode, tstack=tstack, x=x)
+                            pc = t
                     else:
                         if we_are_jitted():
                             tstack = t_push(t, tstack)
@@ -277,7 +278,7 @@ class BasicTests:
                         return x
 
         interp.oopspec = 'jit.not_in_trace()'
-        res = self.meta_interp(interp, [10])
+        res = self.meta_interp(interp, [100])
 
     def test_minilang_stack_1(self):
 
@@ -333,19 +334,19 @@ class BasicTests:
             name = inst_set.get(op)
             return "%s: %s, tstack top: %s" % (pc, name, tstack.pc)
 
-        myjitdriver = JitDriver(greens=['pc', 'bytecode', 'tstack'], reds=['x', 'frame'],
+        myjitdriver = JitDriver(greens=['pc', 'bytecode', 'tstack'], reds=['frame'],
                                 get_printable_location=opcode_to_string,
                                 threaded_code_gen=True)
-        def interp(x):
+        def interp():
             # set_param(myjitdriver, 'threshold', 100)
             tstack = TStack(-100, None)
             pc = 0
             bytecode = [NOP, DUP, JUMP_IF, 6, JUMP, 11, CONST, 1, SUB, JUMP, 1, EXIT]
             frame = Frame(bytecode)
-            frame.push(x)
+            frame.push(10)
             while True:
-                myjitdriver.can_enter_jit(pc=pc, bytecode=bytecode, tstack=tstack, frame=frame, x=x)
-                myjitdriver.jit_merge_point(pc=pc, bytecode=bytecode, tstack=tstack, frame=frame, x=x)
+                myjitdriver.can_enter_jit(pc=pc, bytecode=bytecode, tstack=tstack, frame=frame)
+                myjitdriver.jit_merge_point(pc=pc, bytecode=bytecode, tstack=tstack, frame=frame)
                 op = bytecode[pc]
                 pc += 1
                 if op == CONST:
@@ -385,12 +386,12 @@ class BasicTests:
                             return frame.pop()
                         else:
                             pc, tstack = tstack.t_pop()
-                            pc = emit_ret(pc, x)
+                            pc = emit_ret(pc, None)
                     else:
                         return frame.pop()
 
         interp.oopspec = 'jit.not_in_trace()'
-        res = self.meta_interp(interp, [10])
+        res = self.meta_interp(interp, [])
 
 class TestLLtype(BasicTests, LLJitMixin):
     pass
