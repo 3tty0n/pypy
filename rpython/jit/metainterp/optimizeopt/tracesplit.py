@@ -82,10 +82,10 @@ class TraceSplitOpt(object):
         ops_body = newops[:cut_at] + [last_op]
         ops_bridge = newops[cut_at:]
 
-        ops_bridge = self.copy_from_body_to_bridge(ops_body, ops_bridge)
+        ops_body, ops_bridge, inputs_bridge = self.invent_failargs(
+            inputs, ops_body, ops_bridge, bridge_token)
 
-        ops_body, ops_bridge, inputs_bridge = self.set_guard_descr_and_bridge_inputs(
-            ops_body, ops_bridge, bridge_token)
+        # ops_bridge = self.copy_from_body_to_bridge(ops_body, ops_bridge)
 
         body_label = ResOperation(rop.LABEL, inputs, descr=body_token)
         bridge_label = ResOperation(rop.LABEL, inputs_bridge, descr=bridge_token)
@@ -93,20 +93,46 @@ class TraceSplitOpt(object):
         return (TraceSplitInfo(body_token, body_label, inputs, None, None), ops_body), \
             (TraceSplitInfo(bridge_token, bridge_label, inputs_bridge, None, None), ops_bridge)
 
-    def set_guard_descr_and_bridge_inputs(self, ops_body, ops_bridge, bridge_token):
-        inputs_bridge = []
-        l = []
-        for op in ops_body:
+    def invent_failargs(self, inputs, ops_body, ops_bridge, bridge_token):
+        newops_body, newops_bridge, inputs_bridge = [], [], []
+        descr_to_attach = None
+        for i in range(len(ops_body)):
+            op = ops_body[i]
             if op.is_guard():
                 arg = op.getarg(0)
                 if self._has_marker(ops_body, arg, self.guard_at):
-                    op.setdescr(bridge_token)
                     # setting up inputargs for the bridge_ops
-                    inputs_bridge = self._invent_failargs(op.getfailargs())
-                    op.setfailargs(inputs_bridge)
-            l.append(op)
+                    failargs = op.getfailargs()
+                    descr_to_attach = op.getdescr()
+                    inputs_bridge, new_failargs, newops_bridge = self._invent_failargs(
+                        inputs, ops_bridge, failargs)
+                    op.setfailargs(new_failargs)
+                    ops_body[i] = op
+                    break
+        return ops_body, newops_bridge, inputs_bridge
 
-        return l, ops_bridge, inputs_bridge
+    def _invent_failargs(self, inputs, oplist, failargs):
+        newfargs = []
+        for arg in failargs:
+            for i in range(len(oplist)):
+                op = oplist[i]
+                oparglist = op.getarglist()
+                if arg in oparglist:
+                    if arg not in newfargs:
+                        newfargs.append(arg)
+
+        assert len(newfargs) == len(inputs)
+
+        for farg, input in zip(newfargs, inputs):
+            for op in oplist:
+                args = op.getarglist()
+                if farg in args:
+                    i = args.index(farg)
+                    op.setarg(i, input)
+                    n = oplist.index(op)
+                    oplist[n] = op
+
+        return inputs, newfargs, oplist
 
     def copy_from_body_to_bridge(self, ops_body, ops_bridge):
 
@@ -127,14 +153,6 @@ class TraceSplitOpt(object):
 
         return l + ops_bridge
 
-    def _invent_failargs(self, failargs):
-        l = []
-        for arg in failargs:
-            if isinstance(arg, InputArgInt) or isinstance(arg, InputArgFloat) or \
-               isinstance(arg, InputArgRef) or isinstance(arg, InputArgVector):
-                l.append(arg)
-        return l
-
     def _has_op(self, op1, oplist):
         for op2 in oplist:
             if op1 in op2.getarglist():
@@ -152,7 +170,7 @@ class TraceSplitOpt(object):
     def _has_marker(self, oplist, arg, marker):
         metainterp_sd = self.metainterp_sd
         for op in oplist:
-            if op.getopnum() in (rop.CALL_I, rop.CALL_F, rop.CALL_R):
+            if op == arg:
                 call_to = op.getarg(0)
                 name = self._get_name_from_arg(call_to)
                 if name.find(marker) != -1:
