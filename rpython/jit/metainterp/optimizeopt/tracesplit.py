@@ -47,11 +47,15 @@ class TraceSplitOpt(object):
         self.guard_at = guard_at
 
     def split(self, trace, oplist, inputs, body_token, bridge_token):
+        """ For threaded code: splitting the given oplist into the two --
+        the body and bridge oplists.
+        """
         ops_body, ops_bridge, inputs_body, inputs_bridge = [], [], inputs, []
         cut_at = 0
         last_op = None
         newops = []
         pseudo_ops = []
+        descr_to_attach = None
         for i in range(len(oplist)):
             op = oplist[i]
             if op.getopnum() in (rop.CALL_I, rop.CALL_R, rop.CALL_F, rop.CALL_N):
@@ -60,6 +64,9 @@ class TraceSplitOpt(object):
                 assert name is not None
 
                 if name.find(self.split_at) != -1:
+                    # recording pseudo operations like call_i(ConstClass(emit_jump), ..)
+                    # or call_i(ConstClass(emit_ret) ..) to remove guard operations
+                    # for checking this pseudo op
                     pseudo_ops.append(op)
                     if self.split_at.find("jump"):
                         last_op = ResOperation(rop.JUMP, inputs, body_token)
@@ -82,7 +89,7 @@ class TraceSplitOpt(object):
         ops_body = newops[:cut_at] + [last_op]
         ops_bridge = newops[cut_at:]
 
-        ops_body, ops_bridge, inputs_bridge = self.invent_failargs(
+        ops_body, ops_bridge, inputs_bridge, descr_to_attach = self.invent_failargs(
             inputs, ops_body, ops_bridge, bridge_token)
 
         # ops_bridge = self.copy_from_body_to_bridge(ops_body, ops_bridge)
@@ -90,7 +97,7 @@ class TraceSplitOpt(object):
         body_label = ResOperation(rop.LABEL, inputs, descr=body_token)
         bridge_label = ResOperation(rop.LABEL, inputs_bridge, descr=bridge_token)
 
-        return (TraceSplitInfo(body_token, body_label, inputs, None, None), ops_body), \
+        return (TraceSplitInfo(body_token, body_label, inputs, None, descr_to_attach), ops_body), \
             (TraceSplitInfo(bridge_token, bridge_label, inputs_bridge, None, None), ops_bridge)
 
     def invent_failargs(self, inputs, ops_body, ops_bridge, bridge_token):
@@ -109,7 +116,7 @@ class TraceSplitOpt(object):
                     op.setfailargs(new_failargs)
                     ops_body[i] = op
                     break
-        return ops_body, newops_bridge, inputs_bridge
+        return ops_body, newops_bridge, inputs_bridge, descr_to_attach
 
     def _invent_failargs(self, inputs, oplist, failargs):
         newfargs = []
