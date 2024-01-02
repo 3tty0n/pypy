@@ -694,7 +694,7 @@ def CExternVariable(TYPE, name, eci, _CConstantClass=CConstant,
     getter_name = 'get_' + name
     setter_name = 'set_' + name
     getter_prototype = (
-       "RPY_EXTERN %(c_type)s %(getter_name)s ();" % locals())
+       "RPY_EXTERN %(c_type)s %(getter_name)s (void);" % locals())
     setter_prototype = (
        "RPY_EXTERN void %(setter_name)s (%(c_type)s v);" % locals())
     c_getter = "%(c_type)s %(getter_name)s () { return %(name)s; }" % locals()
@@ -1073,7 +1073,7 @@ def str2constcharp(s, track_allocation=True):
     """
     cp = str2charp(s, track_allocation)
     return cast(CONST_CCHARP, cp)
-str2constcharp._annenforceargs_ = [str]
+str2constcharp._annenforceargs_ = [str, bool]
 
 @not_rpython
 def _deprecated_get_nonmovingbuffer(*args):
