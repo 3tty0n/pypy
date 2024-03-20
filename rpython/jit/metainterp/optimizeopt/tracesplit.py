@@ -285,7 +285,7 @@ class OptTraceSplit(Optimizer):
             self._specialguardop.append(op)
             self.emit(op)
         elif startswith(name, "handler_"):
-            self._handle_dummy_flag(op)
+            # self._handle_dummy_flag(op)
             self.emit(op)
         else:
             self.emit(op)
@@ -296,7 +296,7 @@ class OptTraceSplit(Optimizer):
             self._handle_call_assembler(op)
             # self.emit(op)
         elif startswith(name, "handler_"):
-            self._handle_dummy_flag(op)
+            # self._handle_dummy_flag(op)
             self.emit(op)
         else:
             self.emit(op)
