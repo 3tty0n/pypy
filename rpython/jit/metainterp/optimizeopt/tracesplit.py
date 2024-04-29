@@ -31,7 +31,7 @@ class TokenMapError(Exception):
             self.message = "%s, key is %d" % (message, key)
 
 class mark(object):
-    CALL_ASSEMBLER = "CALL_ASSEMBLER"
+    CALL_ASSEMBLER = "call_assembler"
 
 class TraceSplitInfo(BasicLoopInfo):
     """ A state after splitting the trace, containing the following:
@@ -91,7 +91,7 @@ class OptTraceSplit(Optimizer):
         self._newoperations_slow_path = []
 
         self._slow_ops = []
-        self._slow_path_flag = False
+        self._in_slow_path = False
         self._slow_path_newopsandinfo = []
         self._slow_path_emit_ptr_eq = None
         self._slow_path_faildescr = None
@@ -171,7 +171,7 @@ class OptTraceSplit(Optimizer):
                 self._handle_emit_ret(op)
                 continue
             elif rop.is_begin_slow_path(opnum):
-                self._slow_path_flag = True
+                self._in_slow_path = True
                 jitcell_token = compile.make_jitcell_token(self.jitdriver_sd)
                 original_jitcell_token = self.token.original_jitcell_token
                 token = TargetToken(jitcell_token,
@@ -189,7 +189,7 @@ class OptTraceSplit(Optimizer):
                 self._slow_ops.append(label)
                 continue
 
-            if self._slow_path_flag:
+            if self._in_slow_path:
                 # re-encountering DEBUG_MERGE_POINT when the slow flag is True
                 # means the slow path ends just before
                 if rop.is_debug_merge_point(opnum):
@@ -207,7 +207,7 @@ class OptTraceSplit(Optimizer):
                     self._newoperations = self._newoperations_slow_path[:]
                     self._slow_ops = []
                     self._newoperations_slow_path = []
-                    self._slow_path_flag = False
+                    self._in_slow_path = False
 
                     self.send_extra_operation(slow_path_label)
                     slow_path_label = None
