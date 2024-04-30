@@ -4,6 +4,7 @@ from rpython.rtyper.lltypesystem.llmemory import AddressAsInt, cast_int_to_adr
 from rpython.rlib.rjitlog import rjitlog as jl
 from rpython.rlib.rstring import find, startswith, endswith
 from rpython.rlib.objectmodel import specialize, we_are_translated, r_dict
+from rpython.jit.codewriter.effectinfo import EffectInfo
 from rpython.jit.metainterp.history import (
     AbstractFailDescr, ConstInt, ConstFloat, RefFrontendOp, IntFrontendOp, FloatFrontendOp,
     INT, REF, FLOAT, VOID)
@@ -99,10 +100,6 @@ class OptTraceSplit(Optimizer):
 
         self.set_optimizations(optimizations)
         self.setup()
-
-    def setup_condition(self):
-        jd = self.jitdriver_sd
-        self.conditions = jd.jitdriver.conditions
 
     def split(self, trace, resumestorage, call_pure_results, token):
         traceiter = trace.get_iter()
@@ -280,6 +277,8 @@ class OptTraceSplit(Optimizer):
     optimize_GUARD_FALSE = optimize_GUARD_VALUE
 
     def optimize_CALL_N(self, op):
+        descr = op.getdescr()
+        extra_info = descr.get_extra_info()
         name = self._get_name_from_op(op)
         if self._check_if_cond_marked(op):
             self._specialguardop.append(op)
@@ -291,10 +290,12 @@ class OptTraceSplit(Optimizer):
             self.emit(op)
 
     def optimize_CALL_MAY_FORCE_R(self, op):
+        descr = op.getdescr()
+        extra_info = descr.get_extra_info()
         name = self._get_name_from_op(op)
-        if endswith(name, mark.CALL_ASSEMBLER):
+        if extra_info == EffectInfo.EF_CALL_ASSEMBLER or \
+           endswith(name, mark.CALL_ASSEMBLER):
             self._handle_call_assembler(op)
-            # self.emit(op)
         elif startswith(name, "handler_"):
             self._handle_dummy_flag(op)
             self.emit(op)
