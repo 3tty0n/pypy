@@ -235,6 +235,7 @@ class CallControl(object):
         # get the 'elidable' and 'loopinvariant' flags from the function object
         elidable = False
         loopinvariant = False
+        call_assembler = False
         call_release_gil_target = EffectInfo._NO_CALL_RELEASE_GIL_TARGET
         if op.opname == "direct_call":
             funcobj = op.args[0].value._obj
@@ -245,6 +246,7 @@ class CallControl(object):
             func = getattr(funcobj, '_callable', None)
             elidable = getattr(func, "_elidable_function_", False)
             loopinvariant = getattr(func, "_jit_loop_invariant_", False)
+            call_assembler = getattr(func, "_jit_call_assembler_", False)
             if loopinvariant:
                 assert not NON_VOID_ARGS, ("arguments not supported for "
                                            "loop-invariant function!")
@@ -254,7 +256,7 @@ class CallControl(object):
                     "JIT backend does not support natural_arity calls, please wrap it in a helper")
                 tgt_func = llmemory.cast_ptr_to_adr(tgt_func)
                 call_release_gil_target = (tgt_func, tgt_saveerr)
-            
+
         elif op.opname == 'indirect_call':
             # check that we're not trying to call indirectly some
             # function with the special flags
@@ -269,6 +271,8 @@ class CallControl(object):
                     error = '@jit.loop_invariant'
                 if hasattr(graph.func, '_call_aroundstate_target_'):
                     error = '_call_aroundstate_target_'
+                if hasattr(graph.func, '_jit_call_assembler'):
+                    error = '@jit.call_assembler'
                 if not error:
                     continue
                 raise Exception(
@@ -296,6 +300,8 @@ class CallControl(object):
                     extraeffect = EffectInfo.EF_ELIDABLE_CAN_RAISE
                 else:
                     extraeffect = EffectInfo.EF_ELIDABLE_CANNOT_RAISE
+            elif call_assembler:
+                extraeffect = EffectInfo.EF_CALL_ASSEMBLER
             elif self._canraise(op):   # True or "mem"
                 extraeffect = EffectInfo.EF_CAN_RAISE
             else:

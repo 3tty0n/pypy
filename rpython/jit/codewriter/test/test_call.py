@@ -396,3 +396,22 @@ def test_can_or_cannot_collect():
         assert call_op.opname == 'direct_call'
         call_descr = cc.getcalldescr(call_op)
         assert call_descr.extrainfo.check_can_collect() == expected
+
+def test_call_assembler():
+    from rpython.jit.backend.llgraph.runner import LLGraphCPU
+    l = []
+    @jit.call_assembler
+    def fn(n, m):
+        l.append(n)
+    def fancy_graph_name(n, m):
+        fn(n, m)
+        return n + m
+
+    rtyper = support.annotate(fancy_graph_name, [7, 9])
+    jitdriver_sd = FakeJitDriverSD(rtyper.annotator.translator.graphs[0])
+    cc = CallControl(LLGraphCPU(rtyper), jitdrivers_sd=[jitdriver_sd])
+    res = cc.find_all_graphs(FakePolicy())
+    [f_graph] = [x for x in res if x.func is fancy_graph_name]
+    call_op = f_graph.startblock.operations[0]
+    calldescr = cc.getcalldescr(call_op)
+    assert calldescr.get_extra_info().check_is_call_assembler()

@@ -1443,6 +1443,11 @@ def end_slow_path():
     from rpython.rtyper.lltypesystem.lloperation import llop
     llop.end_slow_path(lltype.Void)
 
+def call_assembler(func):
+    dont_look_inside(func)
+    func._jit_call_assembler_ = True
+    return func
+
 class Counters(object):
     counters="""
     TRACING
