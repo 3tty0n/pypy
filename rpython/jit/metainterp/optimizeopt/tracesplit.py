@@ -119,7 +119,7 @@ class OptTraceSplit(Optimizer):
         num_green_args = jd.num_green_args
         num_red_args = jd.num_red_args
 
-        slow_ops_jump_op = None
+        slow_path_jump_op = None
         slow_path_label = None
         while not trace.done():
             self._really_emitted_operation = None
@@ -190,9 +190,9 @@ class OptTraceSplit(Optimizer):
                 # re-encountering DEBUG_MERGE_POINT when the slow flag is True
                 # means the slow path ends just before
                 if rop.is_debug_merge_point(opnum):
-                    assert slow_ops_jump_op is not None
-                    self.send_extra_operation(slow_ops_jump_op)
-                    slow_ops_jump_op = None
+                    assert slow_path_jump_op is not None
+                    self.send_extra_operation(slow_path_jump_op)
+                    slow_path_jump_op = None
 
                     assert self._slow_path_faildescr is not None
                     label = self._slow_ops[0]
@@ -217,9 +217,8 @@ class OptTraceSplit(Optimizer):
                     original_jitcell_token = self.token.original_jitcell_token
                     token_jump_to = TargetToken(jitcell_token,
                                                 original_jitcell_token=original_jitcell_token)
-                    jump_op = ResOperation(rop.JUMP, self.inputargs, descr=token_jump_to)
+                    slow_path_jump_op = ResOperation(rop.JUMP, self.inputargs, descr=token_jump_to)
                     slow_path_label = ResOperation(rop.LABEL, self.inputargs, descr=token_jump_to)
-                    slow_ops_jump_op = jump_op
                     continue
 
                 self.send_extra_operation(op)
@@ -277,8 +276,6 @@ class OptTraceSplit(Optimizer):
     optimize_GUARD_FALSE = optimize_GUARD_VALUE
 
     def optimize_CALL_N(self, op):
-        descr = op.getdescr()
-        extra_info = descr.get_extra_info()
         name = self._get_name_from_op(op)
         if self._check_if_cond_marked(op):
             self._specialguardop.append(op)
@@ -290,11 +287,8 @@ class OptTraceSplit(Optimizer):
             self.emit(op)
 
     def optimize_CALL_MAY_FORCE_R(self, op):
-        descr = op.getdescr()
-        extra_info = descr.get_extra_info()
         name = self._get_name_from_op(op)
-        if extra_info == EffectInfo.EF_CALL_ASSEMBLER or \
-           endswith(name, mark.CALL_ASSEMBLER):
+        if endswith(name, mark.CALL_ASSEMBLER):
             self._handle_call_assembler(op)
         elif startswith(name, "handler_"):
             self._handle_dummy_flag(op)
