@@ -1781,6 +1781,10 @@ class Transformer(object):
                     % (op.args[0],))
             return self._handle_oopspec_call(op, op.args[1:],
                 EffectInfo.OS_NOT_IN_TRACE)
+        elif oopspec_name == 'jit.call_assembler':
+            return self._handle_oopspec_call(op, args,
+                EffectInfo.OS_JIT_CALL_ASSEMBLER,
+                EffectInfo.EF_RANDOM_EFFECTS)
         else:
             raise AssertionError("missing support for %r" % oopspec_name)
 
@@ -2021,7 +2025,8 @@ class Transformer(object):
                                                   calling_graph=self.graph)
         if extraeffect is not None:
             assert (is_test_calldescr(calldescr)      # for tests
-                    or calldescr.get_extra_info().extraeffect == extraeffect)
+                    or calldescr.get_extra_info().extraeffect == extraeffect), \
+                    "extraeffect is not matched: %s %s" % (calldescr.get_extra_info().extraeffect, extraeffect)
         if isinstance(op.args[0].value, str):
             pass  # for tests only
         else:

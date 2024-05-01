@@ -22,7 +22,6 @@ class EffectInfo(object):
     EF_CAN_RAISE                       = 5 #normal function (can raise)
     EF_FORCES_VIRTUAL_OR_VIRTUALIZABLE = 6 #can raise and force virtualizables
     EF_RANDOM_EFFECTS                  = 7 #can do whatever
-    EF_CALL_ASSEMBLER                  = 8 #not inline, but call portal function
 
     # the 'oopspecindex' field is one of the following values:
     OS_NONE                     = 0    # normal case, no oopspec
@@ -105,11 +104,13 @@ class EffectInfo(object):
     OS_JIT_FORCE_VIRTUAL        = 120
     OS_JIT_FORCE_VIRTUALIZABLE  = 121
 
+    OS_JIT_CALL_ASSEMBLER       = 130
+
     # for debugging:
     _OS_CANRAISE = set([
         OS_NONE, OS_STR2UNICODE, OS_LIBFFI_CALL, OS_RAW_MALLOC_VARSIZE_CHAR,
         OS_JIT_FORCE_VIRTUAL, OS_SHRINK_ARRAY, OS_DICT_LOOKUP,
-        OS_NOT_IN_TRACE,
+        OS_NOT_IN_TRACE, OS_JIT_CALL_ASSEMBLER,
     ])
 
     _NO_CALL_RELEASE_GIL_TARGET = (llmemory.NULL, 0)
@@ -256,9 +257,6 @@ class EffectInfo(object):
     def is_call_release_gil(self):
         tgt_func, tgt_saveerr = self.call_release_gil_target
         return bool(tgt_func)
-
-    def check_is_call_assembler(self):
-        return self.extraeffect == self.EF_CALL_ASSEMBLER
 
     def __repr__(self):
         more = ''

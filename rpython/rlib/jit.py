@@ -1445,7 +1445,7 @@ def end_slow_path():
 
 def call_assembler(func):
     dont_look_inside(func)
-    func._jit_call_assembler_ = True
+    func.oopspec = "jit.call_assembler()"
     return func
 
 class Counters(object):
