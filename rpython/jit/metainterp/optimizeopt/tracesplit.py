@@ -277,8 +277,12 @@ class OptTraceSplit(Optimizer):
     optimize_GUARD_FALSE = optimize_GUARD_VALUE
 
     def optimize_CALL_N(self, op):
+        descr = op.getdescr()
+        effectinfo = descr.get_extra_info()
         name = self._get_name_from_op(op)
-        if self._check_if_cond_marked(op):
+        if effectinfo.oopspecindex == EffectInfo.OS_JIT_CALL_ASSEMBLER:
+            self._handle_call_assembler(op)
+        elif self._check_if_cond_marked(op):
             self._specialguardop.append(op)
             self.emit(op)
         elif startswith(name, "handler_"):
@@ -288,8 +292,10 @@ class OptTraceSplit(Optimizer):
             self.emit(op)
 
     def optimize_CALL_MAY_FORCE_R(self, op):
+        descr = op.getdescr()
+        effectinfo = descr.get_extra_info()
         name = self._get_name_from_op(op)
-        if endswith(name, mark.CALL_ASSEMBLER):
+        if effectinfo.oopspecindex == EffectInfo.OS_JIT_CALL_ASSEMBLER:
             self._handle_call_assembler(op)
         elif startswith(name, "handler_"):
             self._handle_dummy_flag(op)

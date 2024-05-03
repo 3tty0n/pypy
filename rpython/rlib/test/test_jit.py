@@ -6,7 +6,7 @@ from rpython.rlib.jit import (hint, we_are_jitted, JitDriver, elidable_promote,
     JitHintError, oopspec, isconstant, conditional_call,
     elidable, unroll_safe, dont_look_inside, conditional_call_elidable,
     enter_portal_frame, leave_portal_frame, record_known_result,
-    record_exact_value, emit_ret, emit_jump)
+    record_exact_value, emit_ret, emit_jump, call_assembler)
 from rpython.rlib.rarithmetic import r_uint
 from rpython.rtyper.test.tool import BaseRtypingTest
 from rpython.rtyper.lltypesystem import lltype
@@ -416,3 +416,13 @@ class TestJIT(BaseRtypingTest):
 
         t = Translation(g, [])
         t.compile_c() # does not crash
+
+    def test_call_assembler(self):
+        from rpython.translator.interactive import Translation
+        @call_assembler
+        def f(n):
+            return n
+        assert not f._jit_look_inside_
+        assert f.oopspec == "jit.call_assembler()"
+        t = Translation(f, [int])
+        t.compile_c()

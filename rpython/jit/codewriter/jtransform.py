@@ -1782,9 +1782,9 @@ class Transformer(object):
             return self._handle_oopspec_call(op, op.args[1:],
                 EffectInfo.OS_NOT_IN_TRACE)
         elif oopspec_name == 'jit.call_assembler':
-            return self._handle_oopspec_call(op, args,
-                EffectInfo.OS_JIT_CALL_ASSEMBLER,
-                EffectInfo.EF_RANDOM_EFFECTS)
+            # ignore 'args' and use the original 'op.args'
+            return self._handle_oopspec_call(op, op.args[1:],
+                EffectInfo.OS_JIT_CALL_ASSEMBLER)
         else:
             raise AssertionError("missing support for %r" % oopspec_name)
 

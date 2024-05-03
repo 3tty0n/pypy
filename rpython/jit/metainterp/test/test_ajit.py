@@ -4986,3 +4986,57 @@ class TestLLtype(BaseLLtypeTests, LLJitMixin):
         res2 = self.interp_operations(f, [6])
         assert res1 == res2
         self.check_operations_history(guard_class=1, record_exact_class=0)
+
+    def test_jit_call_assembler(self):
+        class X:
+            n = 0
+        def g(x):
+            if we_are_jitted():
+                raise NotImplementedError
+            x.n += 1
+        g.oopspec = 'jit.call_assembler()'
+
+        jitdriver = JitDriver(greens=[], reds=['n', 'token', 'x'])
+        def f(n):
+            token = 0
+            x = X()
+            while n >= 0:
+                jitdriver.jit_merge_point(n=n, x=x, token=token)
+                if not we_are_jitted():
+                    token += 1
+                g(x)
+                n -= 1
+            return x.n + token * 1000
+
+        res = self.meta_interp(f, [10])
+        assert res == 2011
+        self.check_resops(int_add=0, call_i=0, call_may_force_i=0,
+                          call_r=0, call_may_force_r=0, call_f=0,
+                          call_may_force_f=0)
+
+    def test_jit_threaded_code(self):
+        class X:
+            n = 0
+        def g(n, token, x):
+            if we_are_jitted():
+                raise NotImplementedError
+            x.n += 1
+        g.oopspec = 'jit.call_assembler()'
+        g._look_inside_ = False
+
+        jitdriver = JitDriver(greens=[], reds=['n', 'token', 'x'],
+                              threaded_code_gen=True,
+                              conditions=["_is_true"])
+        def f(n):
+            token = 0
+            x = X()
+            while n >= 0:
+                jitdriver.jit_merge_point(n=n, x=x, token=token)
+                jitdriver.can_enter_jit(n=n, x=x, token=token)
+                if not we_are_jitted():
+                    token += 1
+                g(n, token, x)
+                n -= 1
+            return x.n + token * 1000
+
+        res = self.meta_interp(f, [10])
