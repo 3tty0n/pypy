@@ -143,12 +143,13 @@ class OptTraceSplit(Optimizer):
                 arglist = op.getarglist()
                 # TODO: look up `pc' by name
                 greens = arglist[1+num_red_args:1+num_red_args+num_green_args]
-                box = greens[0]
-                assert isinstance(box, ConstInt)
-                token = self._create_token()
-                self.token_map[box.getint()] = token
-                self.emit(ResOperation(rop.LABEL, self.inputargs, token))
-                self._already_setup_current_token = True
+                if len(greens) > 0:
+                    box = greens[0]
+                    assert isinstance(box, ConstInt)
+                    token = self._create_token()
+                    self.token_map[box.getint()] = token
+                    self.emit(ResOperation(rop.LABEL, self.inputargs, token))
+                    self._already_setup_current_token = True
 
             if opnum in (rop.FINISH, rop.JUMP):
                 last_op = op
