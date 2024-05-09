@@ -96,7 +96,6 @@ class OptTraceSplit(Optimizer):
         self._slow_path_newopsandinfo = []
         self._slow_path_emit_ptr_eq = None
         self._slow_path_faildescr = None
-        self._slow_path_recorded = []
 
         self.set_optimizations(optimizations)
         self.setup()
@@ -200,7 +199,6 @@ class OptTraceSplit(Optimizer):
                     info = TraceSplitInfo(label.getdescr(), label, self.inputargs,
                                           faildescr=self._slow_path_faildescr)
                     self._slow_path_newopsandinfo.append((info, self._slow_ops[1:]))
-                    self._slow_path_recorded.append(self._slow_ops[1:])
 
                     self._newoperations = self._newoperations_slow_path[:]
                     self._reset_slow_path()
