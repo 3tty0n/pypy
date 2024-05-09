@@ -92,6 +92,14 @@ class CallDescr(BackendDescr):
         self.ARGS = ARGS
         self.ABI = ABI
         self.extrainfo = extrainfo
+        self.calldescr_without_flag = None
+
+        if len(self.ARGS) >= 2:
+            if isinstance(self.ARGS[-1], lltype.Primitive) and isinstance(self.ARGS[-2], lltype.Ptr):
+                offset = len(self.ARGS) - 2
+                assert offset >= 0
+                self.calldescr_without_flag = CallDescr(
+                    self.RESULT, self.ARGS[:offset], self.extrainfo, self.ABI)
 
     def __repr__(self):
         return 'CallDescr(%r, %r, %r)' % (self.RESULT, self.ARGS,
@@ -105,6 +113,9 @@ class CallDescr(BackendDescr):
 
     def get_result_type(self):
         return getkind(self.RESULT)[0]
+
+    def get_calldescr_without_flag(self):
+        return self.calldescr_without_flag
 
     get_normalized_result_type = get_result_type
 
