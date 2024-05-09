@@ -6,12 +6,21 @@ from rpython.rlib.jit import JitDriver, we_are_jitted, hint
 from rpython.rlib.rarithmetic import r_uint
 from rpython.rlib.rrandom import Random
 
-from rpython.jit.tl.threadedcode.hints import enable_shallow_tracing, enable_shallow_tracing_argn, \
+from rpython.jit.tl.threadedcode.hints import (
+    enable_shallow_tracing,
+    enable_shallow_tracing_argn,
     enable_shallow_tracing_with_value
+)
 from rpython.jit.tl.threadedcode.traverse_stack import TStack, t_empty, t_push
 from rpython.jit.tl.threadedcode.tlib import emit_jump, emit_ret
-from rpython.jit.tl.threadedcode.object import W_Object, W_IntObject, \
-    W_FloatObject, W_StringObject, W_ListObject, OperationError
+from rpython.jit.tl.threadedcode.object import (
+    W_Object,
+    W_IntObject,
+    W_FloatObject,
+    W_StringObject,
+    W_ListObject,
+    OperationError
+)
 from rpython.jit.tl.threadedcode.bytecode import *
 
 
@@ -78,7 +87,7 @@ def _construct_float(bytecode, pc):
 tier1driver = JitDriver(
     greens=['pc', 'entry', 'bytecode', 'tstack'], reds=['self'],
     get_printable_location=get_printable_location_tier1,
-    threaded_code_gen=True, conditions=["_is_true"])
+    threaded_code_gen=True, conditions=["is_true"])
 
 
 tier2driver = JitDriver(
@@ -171,9 +180,7 @@ class Frame(object):
         sys.stderr.write("]\n")
 
     @enable_shallow_tracing_with_value(True)
-    def is_true(self, dummy):
-        if dummy:
-            return True
+    def is_true(self):
         w_x = self.pop()
         return w_x.is_true()
 
@@ -249,8 +256,10 @@ class Frame(object):
     def _PUSH(self, w_x):
         self.push(w_x)
 
-    @enable_shallow_tracing_with_value(W_Object())
-    def POP(self):
+    @jit.dont_look_inside
+    def POP(self, dummy=False):
+        if dummy:
+            return self.take(0)
         return self.pop()
 
     def _POP(self):
@@ -268,8 +277,6 @@ class Frame(object):
 
     @enable_shallow_tracing
     def POP1(self):
-        if dummy:
-            return
         v = self.pop()
         _ = self.pop()
         self.push(v)
@@ -280,9 +287,7 @@ class Frame(object):
         self._push(v)
 
     @enable_shallow_tracing
-    def ADD(self, dummy):
-        if dummy:
-            return
+    def ADD(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.add(w_y)
@@ -423,8 +428,10 @@ class Frame(object):
         else:
             self._push(W_IntObject(0))
 
-    @enable_shallow_tracing
-    def CALL(self, oldframe, t, argnum):
+    @jit.dont_look_inside
+    def CALL(self, oldframe, t, argnum, dummy=True):
+        if dummy:
+            return
         w_x = self.interp(t)
         oldframe.drop(argnum)
         if w_x:
@@ -436,9 +443,9 @@ class Frame(object):
         "Special handler to be compiled to call_assembler_r"
         w_x = self.interp_CALL_ASSEMBLER(t, t, bytecode,
                                          tstack, dummy)
-        oldframe.DROP(argnum, dummy)
+        oldframe.DROP(argnum)
         if w_x:
-            oldframe.PUSH(w_x, dummy)
+            oldframe.PUSH(w_x)
 
     def _CALL(self, oldframe, t, argnum):
         w_x = self._interp(t)
@@ -446,10 +453,8 @@ class Frame(object):
         if w_x:
             oldframe._push(w_x)
 
-    @jit.dont_look_inside
-    def RET(self, n, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing_with_value(W_Object())
+    def RET(self, n):
         v = self.pop()
         return v
 
@@ -458,9 +463,7 @@ class Frame(object):
         return v
 
     @enable_shallow_tracing
-    def PRINT(self, dummy):
-        if dummy:
-            return
+    def PRINT(self):
         v = self.take(0)
         print v.getrepr()
 
@@ -470,9 +473,6 @@ class Frame(object):
 
     @enable_shallow_tracing
     def FRAME_RESET(self, o, l, n):
-        if dummy:
-            return
-
         ret = self.stack[self.stackpos - n - 1]
         old_base = self.stackpos - n
         new_base = self.stackpos - o - n - l - 1
@@ -500,8 +500,6 @@ class Frame(object):
 
     @enable_shallow_tracing
     def BUILD_LIST(self):
-        if dummy:
-            return
         size = self.pop()
         init = self.pop()
 
@@ -519,8 +517,6 @@ class Frame(object):
 
     @enable_shallow_tracing
     def LOAD(self):
-        if dummy:
-            return
         w_index = self.pop()
         w_lst = self.pop()
 
@@ -543,8 +539,6 @@ class Frame(object):
 
     @enable_shallow_tracing
     def STORE(self):
-        if dummy:
-            return
         w_index = self.pop()
         w_lst = self.pop()
         w_x = self.pop()
@@ -617,8 +611,6 @@ class Frame(object):
 
     @enable_shallow_tracing
     def SQRT(self):
-        if dummy:
-            return
         w_x = self.pop()
         if isinstance(w_x, W_IntObject):
             w_x = W_FloatObject(math.sqrt(w_x.intvalue))
@@ -692,7 +684,7 @@ class Frame(object):
                 pc += 1
 
             elif opcode == CONST_NEG_INT:
-                self._CONST_INT(pc, neg=True)
+                self._CONST_INT(pc, True)
                 pc += 1
 
             elif opcode == CONST_FLOAT:
@@ -700,7 +692,7 @@ class Frame(object):
                 pc += 9
 
             elif opcode == CONST_NEG_FLOAT:
-                self._CONST_FLOAT(pc, neg=True)
+                self._CONST_FLOAT(pc, True)
                 pc += 9
 
             elif opcode == CONST_N:
@@ -880,7 +872,7 @@ class Frame(object):
                 pc += 1
 
             elif opcode == CONST_NEG_INT:
-                self.CONST_INT(pc, neg=True)
+                self.CONST_INT(pc, True)
                 pc += 1
 
             elif opcode == CONST_FLOAT:
@@ -888,7 +880,7 @@ class Frame(object):
                 pc += 9
 
             elif opcode == CONST_NEG_FLOAT:
-                self.CONST_FLOAT(pc, neg=True)
+                self.CONST_FLOAT(pc, True)
                 pc += 9
 
             elif opcode == CONST_N:
@@ -896,10 +888,13 @@ class Frame(object):
                 pc += 4
 
             elif opcode == POP:
-                self.POP(dummy=True)
+                if we_are_jitted():
+                    _ = self.POP(dummy=True)
+                else:
+                    _ = self.POP(dummy=False)
 
             elif opcode == POP1:
-                self.POP1(dummy=True)
+                self.POP1()
 
             elif opcode == DUP:
                 self.DUP()
@@ -975,7 +970,7 @@ class Frame(object):
                     entry = t
                     if t < pc:
                         tier1driver.can_enter_jit(
-                            bytecode=bytecode, entry=t, pc=t, tstack=tstack, self=frame)
+                            bytecode=bytecode, entry=entry, pc=t, tstack=tstack, self=frame)
                     frame.CALL(self, t, argnum, dummy=False)
 
             elif opcode == CALL_N:
@@ -993,7 +988,7 @@ class Frame(object):
                     entry = t
                     if t < pc:
                         tier1driver.can_enter_jit(
-                            bytecode=bytecode, entry=t, pc=t, tstack=tstack, self=frame)
+                            bytecode=bytecode, entry=entry, pc=t, tstack=tstack, self=frame)
                     frame.CALL(self, t, argnum, dummy=False)
 
             elif opcode == CALL_ASSEMBLER:
@@ -1010,7 +1005,7 @@ class Frame(object):
                     entry = t
                     if t < pc:
                         tier1driver.can_enter_jit(
-                            bytecode=bytecode, entry=t, pc=t, tstack=tstack, self=frame)
+                            bytecode=bytecode, entry=entry, pc=t, tstack=tstack, self=frame)
                     frame.CALL_ASSEMBLER(self, t, argnum, bytecode, t_empty(), dummy=False)
 
             elif opcode == RET:
@@ -1018,25 +1013,26 @@ class Frame(object):
                 pc += 1
                 if we_are_jitted():
                     if tstack.t_is_empty():
-                        w_x = self.POP()
-                        pc = emit_ret(entry, w_x)
+                        w_x = self.POP(dummy=True)
+                        jit.emit_ret(w_x)
+                        pc = entry
                         tier1driver.can_enter_jit(
-                            bytecode=bytecode, entry=entry, pc=pc, tstack=tstack, self=self)
+                            bytecode=bytecode, entry=entry, pc=entry, tstack=tstack, self=self)
                     else:
-                        w_x = self.POP()
+                        w_x = self.POP(dummy=True)
                         pc, tstack = tstack.t_pop()
-                        pc = emit_ret(pc, w_x)
+                        jit.emit_ret(w_x)
                 else:
                     return self.RET(argnum)
 
             elif opcode == JUMP:
                 t = ord(bytecode[pc])
 
-                if t < pc:
-                    # pc is incremented just after fetching opcode
-                    if bytecode.counts[pc-1] == TRACE_THRESHOLD:
-                        raise ContinueInTracingJIT(pc-1)
-                    bytecode.counts[pc-1] += 1
+                # if t < pc:
+                #     # pc is incremented just after fetching opcode
+                #     if bytecode.counts[pc-1] == TRACE_THRESHOLD:
+                #         raise ContinueInTracingJIT(pc-1)
+                #     bytecode.counts[pc-1] += 1
 
                 if we_are_jitted():
                     if tstack.t_is_empty():
@@ -1048,7 +1044,7 @@ class Frame(object):
                         pc, tstack = tstack.t_pop()
 
                     if t < pc:
-                        emit_jump(pc, t)
+                        jit.emit_jump(t)
                 else:
                     if t < pc:
                         tier1driver.can_enter_jit(
@@ -1069,7 +1065,7 @@ class Frame(object):
                         pc, tstack = tstack.t_pop()
 
                     if t < pc:
-                        pc = emit_jump(pc, t)
+                        jit.emit_jump(t)
                 else:
                     if t < pc:
                         tier1driver.can_enter_jit(
@@ -1116,15 +1112,15 @@ class Frame(object):
             elif opcode == EXIT:
                 if we_are_jitted():
                     if tstack.t_is_empty():
-                        w_x = self.POP()
+                        w_x = self.POP(dummy=True)
+                        jit.emit_ret(w_x)
                         pc = entry
-                        pc = emit_ret(pc, w_x)
                         tier1driver.can_enter_jit(
                             bytecode=bytecode, entry=entry, pc=pc, tstack=tstack, self=self)
                     else:
-                        w_x = self.POP()
+                        w_x = self.POP(dummy=True)
                         pc, tstack = tstack.t_pop()
-                        pc = emit_ret(pc, w_x)
+                        jit.emit_ret(w_x)
                 else:
                     return self.POP()
 
@@ -1145,17 +1141,17 @@ class Frame(object):
                 assert False, 'Unknown opcode: %s' % bytecodes[opcode]
 
 
-# def run(bytecode, w_arg, debug=False, tier=None):
-#     frame = Frame(bytecode)
-#     frame.push(w_arg)
-#     if tier >= 2:
-#         w_result = frame._interp()
-#     else:
-#         w_result = frame.interp()
-#     return w_result
-
-
 def run(bytecode, w_arg, debug=False, tier=1):
+    frame = Frame(bytecode)
+    frame.push(w_arg)
+    if tier >= 2:
+        w_result = frame._interp()
+    else:
+        w_result = frame.interp()
+    return w_result
+
+
+def _run(bytecode, w_arg, debug=False, tier=1):
     frame = Frame(bytecode)
     frame.push(w_arg)
     if tier >= 2:
