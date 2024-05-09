@@ -1,5 +1,5 @@
-from rlib.objectmodel import always_inline
-from rlib.jit import dont_look_inside, we_are_jitted
+from rpython.rlib.objectmodel import always_inline
+from rpython.rlib.jit import dont_look_inside, we_are_jitted
 
 def enable_shallow_tracing(func):
     "A decorator to enable an actual handler to do shallow tracing"
