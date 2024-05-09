@@ -203,9 +203,7 @@ class OptTraceSplit(Optimizer):
                     self._slow_path_recorded.append(self._slow_ops[1:])
 
                     self._newoperations = self._newoperations_slow_path[:]
-                    self._slow_ops = []
-                    self._newoperations_slow_path = []
-                    self._in_slow_path = False
+                    self._reset_slow_path()
 
                     self.send_extra_operation(slow_path_label)
                     slow_path_label = None
@@ -252,6 +250,11 @@ class OptTraceSplit(Optimizer):
         # XXX: workaround to pass the type checking
         return self._newopsandinfo[0]
 
+    def _reset_slow_path(self):
+        self._slow_ops = []
+        self._newoperations_slow_path = []
+        self._in_slow_path = False
+
     def emit_pseudoop(self, op):
         self._pseudoops.append(op)
 
@@ -287,7 +290,6 @@ class OptTraceSplit(Optimizer):
             self.emit(op)
         elif startswith(name, "handler_"):
             self._handle_dummy_flag(op)
-            self.emit(op)
         else:
             self.emit(op)
 
@@ -299,7 +301,6 @@ class OptTraceSplit(Optimizer):
             self._handle_call_assembler(op)
         elif startswith(name, "handler_"):
             self._handle_dummy_flag(op)
-            self.emit(op)
         else:
             self.emit(op)
 
@@ -412,6 +413,7 @@ class OptTraceSplit(Optimizer):
 
         newop = op.copy_and_change(opnum, newargs, descr=newdescr)
         op.set_forwarded(newop)
+        self.emit(op)
 
     def _check_and_insert_label(self, ops, targetbox, token):
         for i, op in enumerate(ops):
