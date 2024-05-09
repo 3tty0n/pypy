@@ -6,6 +6,8 @@ from rpython.rlib.jit import JitDriver, we_are_jitted, hint
 from rpython.rlib.rarithmetic import r_uint
 from rpython.rlib.rrandom import Random
 
+from rpython.jit.tl.threadedcode.hints import enable_shallow_tracing, enable_shallow_tracing_argn, \
+    enable_shallow_tracing_with_value
 from rpython.jit.tl.threadedcode.traverse_stack import TStack, t_empty, t_push
 from rpython.jit.tl.threadedcode.tlib import emit_jump, emit_ret
 from rpython.jit.tl.threadedcode.object import W_Object, W_IntObject, \
@@ -107,7 +109,7 @@ class Frame(object):
         bytecode = jit.promote(self.bytecode)
         return Frame(bytecode, newstack, argnum + 2)
 
-    @jit.dont_look_inside
+    @enable_shallow_tracing
     def push(self, w_x):
         self.stack[self.stackpos] = w_x
         self.stackpos += 1
@@ -117,7 +119,7 @@ class Frame(object):
         self.stack[stackpos] = w_x
         self.stackpos += 1
 
-    @jit.dont_look_inside
+    @enable_shallow_tracing_with_value(W_Object())
     def pop(self):
         stackpos = self.stackpos - 1
         assert stackpos >= 0
@@ -134,7 +136,7 @@ class Frame(object):
         self.stack[stackpos] = None
         return res
 
-    @jit.dont_look_inside
+    @enable_shallow_tracing_with_value(W_Object())
     def take(self, n):
         assert len(self.stack) is not 0
         w_x = self.stack[self.stackpos - n - 1]
@@ -148,7 +150,7 @@ class Frame(object):
         assert w_x is not None
         return w_x
 
-    @jit.dont_look_inside
+    @enable_shallow_tracing
     def drop(self, n):
         for _ in range(n):
             self.pop()
@@ -168,7 +170,7 @@ class Frame(object):
                 sys.stderr.write(w_x.getrepr() + ", ")
         sys.stderr.write("]\n")
 
-    @jit.dont_look_inside
+    @enable_shallow_tracing_with_value(True)
     def is_true(self, dummy):
         if dummy:
             return True
@@ -179,10 +181,8 @@ class Frame(object):
         w_x = self._pop()
         return w_x.is_true()
 
-    @jit.dont_look_inside
-    def CONST_INT(self, pc, neg=False, dummy=False):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def CONST_INT(self, pc, neg=False):
         if isinstance(pc, int):
             x = ord(self.bytecode[pc])
             if neg:
@@ -203,10 +203,8 @@ class Frame(object):
         else:
             raise OperationError
 
-    @jit.dont_look_inside
-    def CONST_FLOAT(self, pc, neg=False, dummy=False):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def CONST_FLOAT(self, pc, neg=False):
         if isinstance(pc, int):
             x = _construct_float(self.bytecode, pc)
             if neg:
@@ -227,10 +225,8 @@ class Frame(object):
         else:
             raise OperationError
 
-    @jit.dont_look_inside
-    def CONST_N(self, pc, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def CONST_N(self, pc):
         if isinstance(pc, int):
             bytecode = jit.promote(self.bytecode)
             x = _construct_value(bytecode, pc)
@@ -246,28 +242,22 @@ class Frame(object):
         else:
             raise OperationError
 
-    @jit.dont_look_inside
-    def PUSH(self, w_x, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def PUSH(self, w_x):
         self.push(w_x)
 
     def _PUSH(self, w_x):
         self.push(w_x)
 
-    @jit.dont_look_inside
-    def POP(self, dummy):
-        if dummy:
-            return self.take(0)
+    @enable_shallow_tracing_with_value(W_Object())
+    def POP(self):
         return self.pop()
 
     def _POP(self):
         return self._pop()
 
-    @jit.dont_look_inside
-    def DROP(self, n, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def DROP(self, n):
         for _ in range(n):
             self.pop()
 
@@ -276,8 +266,8 @@ class Frame(object):
         for _ in range(n):
             self._pop()
 
-    @jit.dont_look_inside
-    def POP1(self, dummy):
+    @enable_shallow_tracing
+    def POP1(self):
         if dummy:
             return
         v = self.pop()
@@ -289,7 +279,7 @@ class Frame(object):
         _ = self._pop()
         self._push(v)
 
-    @jit.dont_look_inside
+    @enable_shallow_tracing
     def ADD(self, dummy):
         if dummy:
             return
@@ -304,10 +294,8 @@ class Frame(object):
         w_z = w_x.add(w_y)
         self._push(w_z)
 
-    @jit.dont_look_inside
-    def SUB(self, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def SUB(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.sub(w_y)
@@ -319,10 +307,8 @@ class Frame(object):
         w_z = w_x.sub(w_y)
         self._push(w_z)
 
-    @jit.dont_look_inside
-    def MUL(self, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def MUL(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.mul(w_y)
@@ -334,10 +320,8 @@ class Frame(object):
         w_z = w_x.mul(w_y)
         self._push(w_z)
 
-    @jit.dont_look_inside
-    def DIV(self, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def DIV(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.div(w_y)
@@ -349,10 +333,8 @@ class Frame(object):
         w_z = w_x.div(w_y)
         self._push(w_z)
 
-    @jit.dont_look_inside
-    def MOD(self, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def MOD(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.mod(w_y)
@@ -364,10 +346,8 @@ class Frame(object):
         w_z = w_x.mod(w_y)
         self._push(w_z)
 
-    @jit.dont_look_inside
-    def DUP(self, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def DUP(self):
         w_x = self.pop()
         self.push(w_x)
         self.push(w_x)
@@ -377,10 +357,8 @@ class Frame(object):
         self._push(w_x)
         self._push(w_x)
 
-    @jit.dont_look_inside
-    def DUPN(self, pc, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def DUPN(self, pc):
         n = ord(self.bytecode[pc])
         w_x = self.take(n)
         self.push(w_x)
@@ -391,10 +369,8 @@ class Frame(object):
         w_x = self._take(n)
         self._push(w_x)
 
-    @jit.dont_look_inside
-    def LT(self, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def LT(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.le(w_y)
@@ -406,10 +382,8 @@ class Frame(object):
         w_z = w_x.le(w_y)
         self._push(w_z)
 
-    @jit.dont_look_inside
-    def GT(self, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def GT(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.ge(w_y)
@@ -421,10 +395,8 @@ class Frame(object):
         w_z = w_x.ge(w_y)
         self._push(w_z)
 
-    @jit.dont_look_inside
-    def EQ(self, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def EQ(self):
         w_y = self.pop()
         w_x = self.pop()
         self.push(w_x.eq(w_y))
@@ -434,10 +406,8 @@ class Frame(object):
         w_x = self._pop()
         self.push(w_x.eq(w_y))
 
-    @jit.dont_look_inside
-    def NE(self, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def NE(self):
         w_y = self.pop()
         w_x = self.pop()
         if w_x.eq(w_y).intvalue:
@@ -453,15 +423,14 @@ class Frame(object):
         else:
             self._push(W_IntObject(0))
 
-    @jit.dont_look_inside
-    def CALL(self, oldframe, t, argnum, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def CALL(self, oldframe, t, argnum):
         w_x = self.interp(t)
         oldframe.drop(argnum)
         if w_x:
             oldframe.push(w_x)
 
+    @jit.call_assembler
     def CALL_ASSEMBLER(self, oldframe, t, argnum, bytecode,
                        tstack, dummy):
         "Special handler to be compiled to call_assembler_r"
@@ -488,7 +457,7 @@ class Frame(object):
         v = self._pop()
         return v
 
-    @jit.dont_look_inside
+    @enable_shallow_tracing
     def PRINT(self, dummy):
         if dummy:
             return
@@ -499,8 +468,8 @@ class Frame(object):
         v = self._take(0)
         # print v.getrepr()
 
-    @jit.dont_look_inside
-    def FRAME_RESET(self, o, l, n, dummy):
+    @enable_shallow_tracing
+    def FRAME_RESET(self, o, l, n):
         if dummy:
             return
 
@@ -529,8 +498,8 @@ class Frame(object):
         self.stack[new_base + n] = ret
         self.stackpos = new_base + n + 1
 
-    @jit.dont_look_inside
-    def BUILD_LIST(self, dummy):
+    @enable_shallow_tracing
+    def BUILD_LIST(self):
         if dummy:
             return
         size = self.pop()
@@ -548,8 +517,8 @@ class Frame(object):
         lst = [init] * int(size.intvalue)
         self.push(W_ListObject(lst))
 
-    @jit.dont_look_inside
-    def LOAD(self, dummy):
+    @enable_shallow_tracing
+    def LOAD(self):
         if dummy:
             return
         w_index = self.pop()
@@ -572,8 +541,8 @@ class Frame(object):
         w_x = w_lst.listvalue[int(w_index.intvalue)]
         self._push(w_x)
 
-    @jit.dont_look_inside
-    def STORE(self, dummy):
+    @enable_shallow_tracing
+    def STORE(self):
         if dummy:
             return
         w_index = self.pop()
@@ -597,18 +566,15 @@ class Frame(object):
         w_lst.listvalue[int(w_index.intvalue)] = w_x
         self._push(w_lst)
 
-    @jit.dont_look_inside
-    def RAND_INT(self, dummy):
+    @enable_shallow_tracing
+    def RAND_INT(self):
         raise NotImplementedError
 
     def _RAND_INT(self):
         raise NotImplementedError
 
-    @jit.dont_look_inside
-    def COS(self, dummy):
-        if dummy:
-            return
-
+    @enable_shallow_tracing
+    def COS(self):
         w_x = self.pop()
         if isinstance(w_x, W_IntObject):
             w_c = W_FloatObject(math.cos(w_x.intvalue))
@@ -628,11 +594,8 @@ class Frame(object):
             raise OperationError
         self._push(w_c)
 
-    @jit.dont_look_inside
-    def SIN(self, dummy):
-        if dummy:
-            return
-
+    @enable_shallow_tracing
+    def SIN(self):
         w_x = self.pop()
         if isinstance(w_x, W_IntObject):
             w_c = W_FloatObject(math.sin(w_x.intvalue))
@@ -652,8 +615,8 @@ class Frame(object):
             raise OperationError
         self._push(w_c)
 
-    @jit.dont_look_inside
-    def SQRT(self, dummy):
+    @enable_shallow_tracing
+    def SQRT(self):
         if dummy:
             return
         w_x = self.pop()
@@ -675,11 +638,8 @@ class Frame(object):
             raise OperationError
         self._push(w_x)
 
-    @jit.dont_look_inside
-    def INT_TO_FLOAT(self, dummy):
-        if dummy:
-            return
-
+    @enable_shallow_tracing
+    def INT_TO_FLOAT(self):
         w_x = self.pop()
         if isinstance(w_x, W_IntObject):
             w_x = W_FloatObject(float(w_x.intvalue))
@@ -691,11 +651,8 @@ class Frame(object):
         w_x = W_FloatObject(float(w_x.intvalue))
         self.push(w_x)
 
-    @jit.dont_look_inside
-    def FLOAT_TO_INT(self, dummy):
-        if dummy:
-            return
-
+    @enable_shallow_tracing
+    def FLOAT_TO_INT(self):
         w_x = self.pop()
         assert isinstance(w_x, W_FloatObject)
         w_x = W_IntObject(int(w_x.floatvalue))
@@ -707,10 +664,8 @@ class Frame(object):
         w_x = W_IntObject(int(w_x.floatvalue))
         self.push(w_x)
 
-    @jit.dont_look_inside
-    def ABS_FLOAT(self, dummy):
-        if dummy:
-            return
+    @enable_shallow_tracing
+    def ABS_FLOAT(self):
         w_x = self.pop()
         assert isinstance(w_x, W_FloatObject)
         self.push(W_FloatObject(abs(w_x.floatvalue)))
@@ -894,7 +849,7 @@ class Frame(object):
             else:
                 assert False, 'Unknown opcode: %s' % bytecodes[opcode]
 
-    @jit.dont_look_inside
+    @jit.call_assembler
     def interp_CALL_ASSEMBLER(self, pc, entry, bytecode, tstack, dummy):
         if dummy:
             return self.take(0)
@@ -921,172 +876,90 @@ class Frame(object):
             pc += 1
 
             if opcode == CONST_INT:
-                if we_are_jitted():
-                    self.CONST_INT(pc, dummy=True)
-                else:
-                    self.CONST_INT(pc, dummy=False)
+                self.CONST_INT(pc)
                 pc += 1
 
             elif opcode == CONST_NEG_INT:
-                if we_are_jitted():
-                    self.CONST_INT(pc, neg=True, dummy=True)
-                else:
-                    self.CONST_INT(pc, neg=True, dummy=False)
+                self.CONST_INT(pc, neg=True)
                 pc += 1
 
             elif opcode == CONST_FLOAT:
-                if we_are_jitted():
-                    self.CONST_FLOAT(pc, dummy=True)
-                else:
-                    self.CONST_FLOAT(pc, dummy=False)
+                self.CONST_FLOAT(pc)
                 pc += 9
 
             elif opcode == CONST_NEG_FLOAT:
-                if we_are_jitted():
-                    self.CONST_FLOAT(pc, neg=True, dummy=True)
-                else:
-                    self.CONST_FLOAT(pc, neg=True, dummy=False)
+                self.CONST_FLOAT(pc, neg=True)
                 pc += 9
 
             elif opcode == CONST_N:
-                if we_are_jitted():
-                    self.CONST_N(pc, dummy=True)
-                else:
-                    self.CONST_N(pc, dummy=False)
+                self.CONST_N(pc)
                 pc += 4
 
             elif opcode == POP:
-                if we_are_jitted():
-                    self.POP(dummy=True)
-                else:
-                    self.POP(dummy=False)
+                self.POP(dummy=True)
 
             elif opcode == POP1:
-                if we_are_jitted():
-                    self.POP1(dummy=True)
-                else:
-                    self.POP1(dummy=False)
+                self.POP1(dummy=True)
 
             elif opcode == DUP:
-                if we_are_jitted():
-                    self.DUP(dummy=True)
-                else:
-                    self.DUP(dummy=False)
+                self.DUP()
 
             elif opcode == DUPN:
-                if we_are_jitted():
-                    self.DUPN(pc, dummy=True)
-                else:
-                    self.DUPN(pc, dummy=False)
-                pc += 1
+                self.DUPN(pc)
 
             elif opcode == LT:
-                if we_are_jitted():
-                    self.LT(dummy=True)
-                else:
-                    self.LT(dummy=False)
+                self.LT()
 
             elif opcode == GT:
-                if we_are_jitted():
-                    self.GT(dummy=True)
-                else:
-                    self.GT(dummy=False)
+                self.GT()
 
             elif opcode == EQ:
-                if we_are_jitted():
-                    self.EQ(dummy=True)
-                else:
-                    self.EQ(dummy=False)
+                self.EQ()
 
             elif opcode == ADD:
-                if we_are_jitted():
-                    self.ADD(dummy=True)
-                else:
-                    self.ADD(dummy=False)
+                self.ADD()
 
             elif opcode == SUB:
-                if we_are_jitted():
-                    self.SUB(dummy=True)
-                else:
-                    self.SUB(dummy=False)
+                self.SUB()
 
             elif opcode == DIV:
-                if we_are_jitted():
-                    self.DIV(dummy=True)
-                else:
-                    self.DIV(dummy=False)
+                self.DIV()
 
             elif opcode == MUL:
-                if we_are_jitted():
-                    self.MUL(dummy=True)
-                else:
-                    self.MUL(dummy=False)
+                self.MUL()
 
             elif opcode == MOD:
-                if we_are_jitted():
-                    self.MOD(dummy=True)
-                else:
-                    self.MOD(dummy=False)
+                self.MOD()
 
             elif opcode == BUILD_LIST:
-                if we_are_jitted():
-                    self.BUILD_LIST(dummy=True)
-                else:
-                    self.BUILD_LIST(dummy=False)
+                self.BUILD_LIST()
 
             elif opcode == LOAD:
-                if we_are_jitted():
-                    self.LOAD(dummy=True)
-                else:
-                    self.LOAD(dummy=False)
+                self.LOAD()
 
             elif opcode == STORE:
-                if we_are_jitted():
-                    self.STORE(dummy=True)
-                else:
-                    self.STORE(dummy=False)
+                self.STORE()
 
             elif opcode == SIN:
-                if we_are_jitted():
-                    self.SIN(dummy=True)
-                else:
-                    self.SIN(dummy=False)
+                self.SIN()
 
             elif opcode == COS:
-                if we_are_jitted():
-                    self.COS(dummy=True)
-                else:
-                    self.COS(dummy=False)
+                self.COS()
 
             elif opcode == RAND_INT:
-                if we_are_jitted():
-                    self.RAND_INT(dummy=True)
-                else:
-                    self.RAND_INT(dummy=False)
+                self.RAND_INT()
 
             elif opcode == ABS_FLOAT:
-                if we_are_jitted():
-                    self.ABS_FLOAT(dummy=True)
-                else:
-                    self.ABS_FLOAT(dummy=False)
+                self.ABS_FLOAT()
 
             elif opcode == SQRT:
-                if we_are_jitted():
-                    self.SQRT(dummy=True)
-                else:
-                    self.SQRT(dummy=False)
+                self.SQRT()
 
             elif opcode == INT_TO_FLOAT:
-                if we_are_jitted():
-                    self.INT_TO_FLOAT(dummy=True)
-                else:
-                    self.INT_TO_FLOAT(dummy=False)
+                self.INT_TO_FLOAT()
 
             elif opcode == FLOAT_TO_INT:
-                if we_are_jitted():
-                    self.FLOAT_TO_INT(dummy=True)
-                else:
-                    self.FLOAT_TO_INT(dummy=False)
+                self.FLOAT_TO_INT()
 
             elif opcode == CALL:
                 t = ord(bytecode[pc])
@@ -1145,16 +1018,16 @@ class Frame(object):
                 pc += 1
                 if we_are_jitted():
                     if tstack.t_is_empty():
-                        w_x = self.POP(dummy=True)
+                        w_x = self.POP()
                         pc = emit_ret(entry, w_x)
                         tier1driver.can_enter_jit(
                             bytecode=bytecode, entry=entry, pc=pc, tstack=tstack, self=self)
                     else:
-                        w_x = self.POP(dummy=True)
+                        w_x = self.POP()
                         pc, tstack = tstack.t_pop()
                         pc = emit_ret(pc, w_x)
                 else:
-                    return self.RET(argnum, dummy=False)
+                    return self.RET(argnum)
 
             elif opcode == JUMP:
                 t = ord(bytecode[pc])
@@ -1208,13 +1081,13 @@ class Frame(object):
                 pc += 1
 
                 if we_are_jitted():
-                    if self.is_true(dummy=True):
+                    if self.is_true():
                         tstack = t_push(pc, tstack)
                         pc = target
                     else:
                         tstack = t_push(target, tstack)
                 else:
-                    if self.is_true(dummy=False):
+                    if self.is_true():
                         if target < pc:
                             entry = target
                             tier1driver.can_enter_jit(
@@ -1226,14 +1099,14 @@ class Frame(object):
                 pc += 4
 
                 if we_are_jitted():
-                    if self.is_true(dummy=True):
+                    if self.is_true():
                         tstack = t_push(pc, tstack)
                         pc = target
                     else:
                         tstack = t_push(target, tstack)
 
                 else:
-                    if self.is_true(dummy=False):
+                    if self.is_true():
                         if target < pc:
                             entry = target
                             tier1driver.can_enter_jit(
@@ -1243,33 +1116,27 @@ class Frame(object):
             elif opcode == EXIT:
                 if we_are_jitted():
                     if tstack.t_is_empty():
-                        w_x = self.POP(dummy=True)
+                        w_x = self.POP()
                         pc = entry
                         pc = emit_ret(pc, w_x)
                         tier1driver.can_enter_jit(
                             bytecode=bytecode, entry=entry, pc=pc, tstack=tstack, self=self)
                     else:
-                        w_x = self.POP(dummy=True)
+                        w_x = self.POP()
                         pc, tstack = tstack.t_pop()
                         pc = emit_ret(pc, w_x)
                 else:
-                    return self.POP(dummy=False)
+                    return self.POP()
 
             elif opcode == PRINT:
-                if we_are_jitted():
-                    self.PRINT(dummy=True)
-                else:
-                    self.PRINT(dummy=True)
+                self.PRINT()
 
             elif opcode == FRAME_RESET:
                 old_arity = ord(bytecode[pc])
                 local_size = ord(bytecode[pc+1])
                 new_arity = ord(bytecode[pc+2])
                 pc += 3
-                if we_are_jitted():
-                    self.FRAME_RESET(old_arity, local_size, new_arity, dummy=True)
-                else:
-                    self.FRAME_RESET(old_arity, local_size, new_arity, dummy=False)
+                self.FRAME_RESET(old_arity, local_size, new_arity)
 
             elif opcode == NOP:
                 continue
