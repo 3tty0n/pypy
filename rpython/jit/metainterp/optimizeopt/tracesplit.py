@@ -223,7 +223,7 @@ class OptTraceSplit(Optimizer):
 
             if rop.is_call(opnum):
                 name = self._get_name_from_op(op)
-                if endswith(name, "emit_ptr_eq"):
+                if endswith(name, "in_fast_path"):
                     self._slow_path_emit_ptr_eq = op
 
             self.send_extra_operation(op)
