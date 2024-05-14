@@ -189,13 +189,18 @@ class Frame(object):
         return w_x.is_true()
 
     @enable_shallow_tracing
-    def CONST_INT(self, pc, neg=False):
+    def CONST_INT(self, pc):
         if isinstance(pc, int):
             x = ord(self.bytecode[pc])
-            if neg:
-                self.push(W_IntObject(-x))
-            else:
-                self.push(W_IntObject(x))
+            self.push(W_IntObject(x))
+        else:
+            raise OperationError
+
+    @enable_shallow_tracing
+    def CONST_INT_NEG(self, pc):
+        if isinstance(pc, int):
+            x = ord(self.bytecode[pc])
+            self.push(W_IntObject(-x))
         else:
             raise OperationError
 
@@ -214,10 +219,15 @@ class Frame(object):
     def CONST_FLOAT(self, pc, neg=False):
         if isinstance(pc, int):
             x = _construct_float(self.bytecode, pc)
-            if neg:
-                self.push(W_FloatObject(-x))
-            else:
-                self.push(W_FloatObject(x))
+            self.push(W_FloatObject(x))
+        else:
+            raise OperationError
+
+    @enable_shallow_tracing
+    def CONST_FLOAT_NEG(self, pc):
+        if isinstance(pc, int):
+            x = _construct_float(self.bytecode, pc)
+            self.push(W_FloatObject(-x))
         else:
             raise OperationError
 
@@ -453,8 +463,10 @@ class Frame(object):
         if w_x:
             oldframe._push(w_x)
 
-    @enable_shallow_tracing_with_value(W_Object())
-    def RET(self, n):
+    @jit.dont_look_inside
+    def RET(self, n, dummy=False):
+        if dummy:
+            return self.take(0)
         v = self.pop()
         return v
 
@@ -684,7 +696,7 @@ class Frame(object):
                 pc += 1
 
             elif opcode == CONST_NEG_INT:
-                self._CONST_INT(pc, True)
+                self._CONST_INT_NEG(pc)
                 pc += 1
 
             elif opcode == CONST_FLOAT:
@@ -692,7 +704,7 @@ class Frame(object):
                 pc += 9
 
             elif opcode == CONST_NEG_FLOAT:
-                self._CONST_FLOAT(pc, True)
+                self._CONST_FLOAT_NEG(pc)
                 pc += 9
 
             elif opcode == CONST_N:
@@ -872,7 +884,7 @@ class Frame(object):
                 pc += 1
 
             elif opcode == CONST_NEG_INT:
-                self.CONST_INT(pc, True)
+                self.CONST_INT_NEG(pc)
                 pc += 1
 
             elif opcode == CONST_FLOAT:
@@ -880,7 +892,7 @@ class Frame(object):
                 pc += 9
 
             elif opcode == CONST_NEG_FLOAT:
-                self.CONST_FLOAT(pc, True)
+                self.CONST_FLOAT_NEG(pc)
                 pc += 9
 
             elif opcode == CONST_N:
@@ -888,10 +900,7 @@ class Frame(object):
                 pc += 4
 
             elif opcode == POP:
-                if we_are_jitted():
-                    _ = self.POP(dummy=True)
-                else:
-                    _ = self.POP(dummy=False)
+                self.POP()
 
             elif opcode == POP1:
                 self.POP1()
@@ -1013,13 +1022,13 @@ class Frame(object):
                 pc += 1
                 if we_are_jitted():
                     if tstack.t_is_empty():
-                        w_x = self.POP(dummy=True)
-                        jit.emit_ret(w_x)
+                        w_x = self.RET(argnum, dummy=True)
                         pc = entry
+                        jit.emit_ret(w_x)
                         tier1driver.can_enter_jit(
                             bytecode=bytecode, entry=entry, pc=entry, tstack=tstack, self=self)
                     else:
-                        w_x = self.POP(dummy=True)
+                        w_x = self.RET(argnum, dummy=True)
                         pc, tstack = tstack.t_pop()
                         jit.emit_ret(w_x)
                 else:
@@ -1113,8 +1122,8 @@ class Frame(object):
                 if we_are_jitted():
                     if tstack.t_is_empty():
                         w_x = self.POP(dummy=True)
-                        jit.emit_ret(w_x)
                         pc = entry
+                        jit.emit_ret(w_x)
                         tier1driver.can_enter_jit(
                             bytecode=bytecode, entry=entry, pc=pc, tstack=tstack, self=self)
                     else:
