@@ -411,7 +411,7 @@ class OptTraceSplit(Optimizer):
 
         newop = op.copy_and_change(opnum, newargs, descr=newdescr)
         op.set_forwarded(newop)
-        self.emit(op)
+        self.emit(newop)
 
     def _check_and_insert_label(self, ops, targetbox, token):
         for i, op in enumerate(ops):
