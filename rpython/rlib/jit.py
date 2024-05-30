@@ -561,7 +561,7 @@ class JitHintError(Exception):
     """Inconsistency in the JIT hints."""
 
 ENABLE_ALL_OPTS = (
-    'intbounds:rewrite:virtualize:string:pure:earlyforce:heap:unroll')
+    'intbounds:rewrite:virtualize:string:pure:earlyforce:heap:foldarray:unroll')
 
 PARAMETER_DOCS = {
     'threshold': 'number of times a loop has to run for it to become hot',
