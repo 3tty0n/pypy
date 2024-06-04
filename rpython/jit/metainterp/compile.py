@@ -189,6 +189,20 @@ class SimpleSplitCompileData(SplitCompileData):
         return opt.split(self.trace, self.resumestorage, self.call_pure_results,
                          self.body_token)
 
+class SimpleFoldArrayLoopData(CompileData):
+    def __init__(self, trace, resumestorage=None, call_pure_results=None,
+                 enable_opts=None):
+        self.trace = trace
+        self.resumestorage = resumestorage
+        self.call_pure_results = call_pure_results
+        self.enable_opts = enable_opts
+
+    def optimize(self, metainterp_sd, jitdriver_sd, optimizations):
+        from rpython.jit.metainterp.optimizeopt.foldarray import FoldArrayOptimizer
+        opt = FoldArrayOptimizer(metainterp_sd, jitdriver_sd, optimizations)
+        return opt.optimize(self.trace, self.resumestorage, self.call_pure_results)
+
+
 def show_procedures(metainterp_sd, procedure=None, error=None):
     from rpython.conftest import option
     # debugging

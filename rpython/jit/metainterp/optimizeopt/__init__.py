@@ -6,7 +6,7 @@ from rpython.jit.metainterp.optimizeopt.vstring import OptString
 from rpython.jit.metainterp.optimizeopt.simplify import OptSimplify
 from rpython.jit.metainterp.optimizeopt.pure import OptPure
 from rpython.jit.metainterp.optimizeopt.earlyforce import OptEarlyForce
-from rpython.jit.metainterp.optimizeopt.foldarray import OptFoldAarray
+from rpython.jit.metainterp.optimizeopt.foldarray import OptFoldArray
 from rpython.rlib.jit import PARAMETERS, ENABLE_ALL_OPTS
 from rpython.rlib.unroll import unrolling_iterable
 
@@ -18,7 +18,7 @@ ALL_OPTS = [('intbounds', OptIntBounds),
             ('pure', OptPure),
             ('earlyforce', OptEarlyForce),
             ('heap', OptHeap),
-            ('foldarray', OptFoldAarray),
+            ('foldarray', OptFoldArray),
             ('unroll', None)]
 # no direct instantiation of unroll
 unroll_all_opts = unrolling_iterable(ALL_OPTS)
