@@ -834,5 +834,3 @@ class CantReplaceGuards(object):
 
     def __exit__(self, *args):
         self.optimizer.can_replace_guards = self.oldval
-
-
