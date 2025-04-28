@@ -286,8 +286,8 @@ class OptTraceSplit(Optimizer):
         elif self._check_if_cond_marked(op):
             self._specialguardop.append(op)
             self.emit(op)
-        elif startswith(name, "handler_"):
-            self._handle_dummy_flag(op)
+        #elif startswith(name, "handler_"):
+        #    self._handle_dummy_flag(op)
         else:
             self.emit(op)
 
@@ -297,8 +297,8 @@ class OptTraceSplit(Optimizer):
         name = self._get_name_from_op(op)
         if effectinfo.oopspecindex == EffectInfo.OS_JIT_CALL_ASSEMBLER:
             self._handle_call_assembler(op)
-        elif startswith(name, "handler_"):
-            self._handle_dummy_flag(op)
+        #elif startswith(name, "handler_"):
+        #    self._handle_dummy_flag(op)
         else:
             self.emit(op)
 
