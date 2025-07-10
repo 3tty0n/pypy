@@ -703,7 +703,9 @@ class Specializer(object):
 
         self._emit_sync_registers(lines)
         lines.append('self.opimpl_int_guard_value(self.registers_i[%d], %d)' % (arg0.index, self.orig_pc))
+        lines.append('i%d = self.registers_i[%d].getint()' % (arg0.index, arg0.index))
 
+        self.constant_registers.add(arg0)
         return lines
 
     def emit_unspecialized_goto_if_not_int_lt(self):

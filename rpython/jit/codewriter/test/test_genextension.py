@@ -578,6 +578,8 @@ def test_int_guard_value():
     insn = ('int_guard_value', i0)
     insns = [insn]
     work_list = WorkList()
+
+    # specialized case
     insn_specializer = work_list.specialize(insn, {i0}, 5)
     newpc = insn_specializer.get_pc()
     assert newpc == 100
@@ -586,6 +588,7 @@ def test_int_guard_value():
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == {i0}
 
+    # unspecialized cases
     insn_specializer = work_list.specialize(insn, set(), 5)
     s = insn_specializer.make_code()
     assert s == """\
@@ -593,7 +596,10 @@ ri0 = self.registers_i[0]
 if ri0.is_constant():
     pc = 100
     continue
-self.opimpl_int_guard_value(self.registers_i[0], 5)"""
+self.opimpl_int_guard_value(self.registers_i[0], 5)
+i0 = self.registers_i[0].getint()"""
+    next_constant_registers = insn_specializer.get_next_constant_registers()
+    assert next_constant_registers == {i0}
 
     insn_specializer = work_list.specialize(insn, {i1, i2}, 5)
     s = insn_specializer.make_code()
@@ -606,7 +612,13 @@ if ri0.is_constant():
     continue
 self.registers_i[1] = ConstInt(i1)
 self.registers_i[2] = ConstInt(i2)
-self.opimpl_int_guard_value(self.registers_i[0], 5)"""
+self.opimpl_int_guard_value(self.registers_i[0], 5)
+i0 = self.registers_i[0].getint()"""
+    next_constant_registers = insn_specializer.get_next_constant_registers()
+    assert next_constant_registers == {i0, i1, i2}
+
+def test_ref_guard_value():
+    pass
 
 def test_switch():
     pass
