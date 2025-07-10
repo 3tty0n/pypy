@@ -618,7 +618,48 @@ i0 = self.registers_i[0].getint()"""
     assert next_constant_registers == {i0, i1, i2}
 
 def test_ref_guard_value():
-    pass
+    r0, r1, r2 = Register('ref', 0), Register('ref', 1), Register('ref', 2)
+    insn = ('ref_guard_value', r0)
+    insns = [insn]
+    work_list = WorkList()
+
+    # specialized case
+    insn_specializer = work_list.specialize(insn, {r0}, 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == 100
+    s = insn_specializer.make_code()
+    assert s == 'pass # ref_guard_value, argument is already constant'
+    next_constant_registers = insn_specializer.get_next_constant_registers()
+    assert next_constant_registers == {r0}
+
+    # unspecialized cases
+    insn_specializer = work_list.specialize(insn, set(), 5)
+    s = insn_specializer.make_code()
+    assert s == """\
+rr0 = self.registers_r[0]
+if rr0.is_constant():
+    pc = 100
+    continue
+self.opimpl_ref_guard_value(self.registers_r[0], 5)
+r0 = self.registers_r[0].getvalue()"""
+    next_constant_registers = insn_specializer.get_next_constant_registers()
+    assert next_constant_registers == {r0}
+
+    insn_specializer = work_list.specialize(insn, {r1, r2}, 5)
+    s = insn_specializer.make_code()
+    # we need to sync the registers from the unboxed values to allow the guard to be created
+    # TODO: only do this for registers that are alive at this point
+    assert s == """\
+rr0 = self.registers_r[0]
+if rr0.is_constant():
+    pc = 102
+    continue
+self.registers_r[1] = ConstPtr(r1)
+self.registers_r[2] = ConstPtr(r2)
+self.opimpl_ref_guard_value(self.registers_r[0], 5)
+r0 = self.registers_r[0].getvalue()"""
+    next_constant_registers = insn_specializer.get_next_constant_registers()
+    assert next_constant_registers == {r0, r1, r2}
 
 def test_switch():
     pass

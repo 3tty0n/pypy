@@ -553,6 +553,9 @@ class Specializer(object):
     def emit_specialized_int_guard_value(self):
         return ['pass # int_guard_value, argument is already constant']
 
+    def emit_specialized_ref_guard_value(self):
+        return ['pass # ref_guard_value, argument is already constant']
+
     def emit_specialized_goto_if_not_int_lt(self):
         lines = []
         args = self._get_args()
@@ -591,11 +594,21 @@ class Specializer(object):
         if isinstance(arg, Constant):
             kind = getkind(arg.concretetype)
             # TODO: consider other types
-            assert kind == 'int'
-            return "ConstInt(%d)" % (arg.value)
+            assert kind in ['int', 'ref'], "%s is not supported" % kind
+            if kind == 'int':
+                return "ConstInt(%d)" % arg.value
+            elif kind == 'ref':
+                return "ConstPtr(%d)" % arg.value
+            else:
+                assert False
         elif arg in self.constant_registers:
-            assert arg.kind == 'int'
-            return "ConstInt(i%s)" % arg.index
+            assert arg.kind in ['int', 'ref'], "%s is not supported" % kind
+            if arg.kind == 'int':
+                return "ConstInt(i%d)" % arg.index
+            elif arg.kind == 'ref':
+                return "ConstPtr(r%d)" % arg.index
+            else:
+                assert False
         else:
             t = self._get_type_prefix(arg)
             return "r%s%d" % (t, arg.index)
@@ -704,6 +717,24 @@ class Specializer(object):
         self._emit_sync_registers(lines)
         lines.append('self.opimpl_int_guard_value(self.registers_i[%d], %d)' % (arg0.index, self.orig_pc))
         lines.append('i%d = self.registers_i[%d].getint()' % (arg0.index, arg0.index))
+
+        self.constant_registers.add(arg0)
+        return lines
+
+    def emit_unspecialized_ref_guard_value(self):
+        lines = []
+        arg0 = self.insn[1]
+
+        lines.append('rr%d = self.registers_r[%d]' % (arg0.index, arg0.index))
+        lines.append('if rr%d.is_constant():' % arg0.index)
+        specializer = self.work_list.specialize(
+            self.insn, self.constant_registers.union({arg0}), self.orig_pc)
+        lines.append('    pc = %d' % specializer.get_pc())
+        lines.append('    continue')
+
+        self._emit_sync_registers(lines)
+        lines.append('self.opimpl_ref_guard_value(self.registers_r[%d], %d)' % (arg0.index, self.orig_pc))
+        lines.append('r%d = self.registers_r[%d].getvalue()' % (arg0.index, arg0.index))
 
         self.constant_registers.add(arg0)
         return lines
