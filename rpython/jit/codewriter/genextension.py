@@ -58,7 +58,7 @@ class GenExtension(object):
             if isinstance(insn[0], Label) or insn[0] == '---':
                 continue
             self.insn = insn
-            if insn[0] == 'goto_if_not_int_lt':
+            if 'switch' in insn[0]:
                 import pdb; pdb.set_trace()
             pc = ssarepr._insns_pos[index]
             self.code.append("if pc == %s: # %s" % (pc, self.insn))
@@ -432,6 +432,7 @@ class WorkList(object):
         self.free_pc = 100 # TODO: will be fixed as a dynamic number
         self.label_to_pc = {}
         self.label_to_spec_pc = {}
+        self.globals = {}
 
     def _make_spec(self, insn, constant_registers, orig_pc):
         key = (orig_pc, insn, frozenset(constant_registers))

@@ -662,7 +662,44 @@ r0 = self.registers_r[0].getvalue()"""
     assert next_constant_registers == {r0, r1, r2}
 
 def test_switch():
-    pass
+    i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
+    switchdescr = SwitchDictDescr({-5: 9,  2: 14, 7: 19})
+    insn = ('switch', i0, switchdescr)
+    work_list = WorkList()
+    # Manage a switchdict as a global variagble
+    work_list.globals = {'glob0': switchdescr.dict}
+
+    # specialized case
+    # TODO: specialized destination pcs
+    insn_specializer = work_list.specialize(insn, {i0}, 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == 100
+    s = insn_specializer.make_code()
+    assert s == """\
+if i0 == -5:
+    pc = self.pc = 9
+    continue
+elif i0 == 2:
+    pc = self.pc = 14
+    continue
+elif i0 == 7:
+    pc = self.pc = 19
+    continue
+else:
+    assert 0, 'unreachable path'"""
+
+    # unspecialized case
+    insn_specializer = work_list.specialize(insn, {}, 5)
+    s = insn_specializer.make_code()
+    # TODO: manage switchdict as a global variable
+    assert s == """\
+ri0 = self.registers_i[0]
+if ri0.is_constant():
+    i0 = ri0.getint()
+    pc = 100
+    continue
+self.opimpl_switch(ri0, glob0)"""
+
 
 def dont_test_int_add_sequence():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
