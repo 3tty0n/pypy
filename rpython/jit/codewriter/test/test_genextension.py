@@ -663,11 +663,13 @@ r0 = self.registers_r[0].getvalue()"""
 
 def test_switch():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
-    switchdescr = SwitchDictDescr({-5: 9,  2: 14, 7: 19})
-    insn = ('switch', i0, switchdescr)
+    switchdict = {-5: 9,  2: 14, 7: 19}
+    descr = SwitchDictDescr()
+    descr.attach(switchdict)
+    insn = ('switch', i0, descr)
     work_list = WorkList()
     # Manage a switchdict as a global variagble
-    work_list.globals = {'glob0': switchdescr.dict}
+    work_list.globals = {'glob0': switchdict}
 
     # specialized case
     # TODO: specialized destination pcs
