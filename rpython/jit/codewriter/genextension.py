@@ -4,6 +4,7 @@ from rpython.jit.metainterp.history import (Const, ConstInt, ConstPtr,
     ConstFloat, CONST_NULL, getkind)
 from rpython.flowspace.model import Constant
 from rpython.jit.codewriter.flatten import Register, TLabel, Label
+from rpython.jit.codewriter.jitcode import SwitchDictDescr
 
 class GenExtension(object):
     def __init__(self, assembler):
@@ -467,8 +468,6 @@ class Specializer(object):
             assert orig_pc == spec_pc
         self.work_list = work_list
 
-        #assert self.insn[0] == 'int_add'
-
         self.name = self.insn[0]
         self.methodname = "opimpl_" + self.name
         self.resindex = len(self.insn) - 1 if '->' in self.insn else None
@@ -477,6 +476,11 @@ class Specializer(object):
         self.name = None
         self.methoname = None
         self.resindex = None
+
+    def _add_global(self, obj):
+        name = "glob%s" % len(self.work_list.globals)
+        self.work_list.globals[name] = obj
+        return name
 
     def _get_args(self):
         if self.resindex:
@@ -767,8 +771,20 @@ class Specializer(object):
         lines = []
         arg0 = self.insn[1] # register
         arg1 = self.insn[2] # descr
-        raise NotImplementedError
+        name_descr = self._add_global(arg1) # add descr to global
 
+        arg0_var = 'r%s%d' % (self._get_type_prefix(arg0), arg0.index)
+        lines.append('%s = self.registers_%s[%d]' % (
+            arg0_var, self._get_type_prefix(arg0), arg0.index))
+        lines.append('if %s.is_constant():' % (arg0_var))
+        specializer = self.work_list.specialize(
+            self.insn, self.constant_registers.union({arg0}), self.orig_pc)
+        lines.append('    %s%d = %s' % (
+            self._get_type_prefix(arg0), arg0.index, self._emit_unbox_by_type(arg0)))
+        lines.append('    pc = %d' % specializer.get_pc())
+        lines.append('    continue')
+        lines.append("self.opimpl_switch(%s, %s, %d)" % (arg0_var, name_descr, self.orig_pc))
+        return lines
 
     def _emit_sync_registers(self, lines):
         # we need to sync the registers from the unboxed values to e.g. allow a guard to be created

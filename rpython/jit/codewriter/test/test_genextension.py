@@ -668,8 +668,18 @@ def test_switch():
     descr.attach(switchdict)
     insn = ('switch', i0, descr)
     work_list = WorkList()
-    # Manage a switchdict as a global variagble
-    work_list.globals = {'glob0': switchdict}
+
+    # unspecialized case
+    insn_specializer = work_list.specialize(insn, set(), 5)
+    s = insn_specializer.make_code()
+    # TODO: manage switchdict as a global variable
+    assert s == """\
+ri0 = self.registers_i[0]
+if ri0.is_constant():
+    i0 = ri0.getint()
+    pc = 100
+    continue
+self.opimpl_switch(ri0, glob0, 5)"""
 
     # specialized case
     # TODO: specialized destination pcs
@@ -689,18 +699,6 @@ elif i0 == 7:
     continue
 else:
     assert 0, 'unreachable path'"""
-
-    # unspecialized case
-    insn_specializer = work_list.specialize(insn, {}, 5)
-    s = insn_specializer.make_code()
-    # TODO: manage switchdict as a global variable
-    assert s == """\
-ri0 = self.registers_i[0]
-if ri0.is_constant():
-    i0 = ri0.getint()
-    pc = 100
-    continue
-self.opimpl_switch(ri0, glob0)"""
 
 
 def dont_test_int_add_sequence():
