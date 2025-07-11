@@ -570,6 +570,9 @@ class Specializer(object):
         lines.append("continue")
         return lines
 
+    def emit_specialized_switch(self):
+        raise NotImplementedError
+
     def _get_type_prefix(self, arg):
         if isinstance(arg, Constant) or isinstance(arg, Register):
             # TODO: this logic also works for the 'else' case. probably.
@@ -594,8 +597,6 @@ class Specializer(object):
     def _get_as_box(self, arg):
         if isinstance(arg, Constant):
             kind = getkind(arg.concretetype)
-            # TODO: consider other types
-            assert kind in ['int', 'ref'], "%s is not supported" % kind
             if kind == 'int':
                 return "ConstInt(%d)" % arg.value
             elif kind == 'ref':
@@ -603,7 +604,6 @@ class Specializer(object):
             else:
                 assert False
         elif arg in self.constant_registers:
-            assert arg.kind in ['int', 'ref'], "%s is not supported" % kind
             if arg.kind == 'int':
                 return "ConstInt(i%d)" % arg.index
             elif arg.kind == 'ref':
@@ -762,6 +762,13 @@ class Specializer(object):
         self._emit_sync_registers(lines)
         lines.append("self.opimpl_goto_if_not(condbox, %d, %d)" % (target_pc, self.orig_pc))
         return lines
+
+    def emit_unspecialized_switch(self):
+        lines = []
+        arg0 = self.insn[1] # register
+        arg1 = self.insn[2] # descr
+        raise NotImplementedError
+
 
     def _emit_sync_registers(self, lines):
         # we need to sync the registers from the unboxed values to e.g. allow a guard to be created
