@@ -662,17 +662,47 @@ r0 = self.registers_r[0].getvalue()""" % (work_list.OFFSET + 2)
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == {r0, r1, r2}
 
-@pytest.mark.xfail
 def test_switch():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
     switchdict = {-5: 9,  2: 14, 7: 19}
     descr = SwitchDictDescr()
     descr.attach(switchdict)
     insn = ('switch', i0, descr)
-    work_list = WorkList()
+    dummy_insn = ('-live-')
+    dummy_insn2 = ('int_add', i0, i1, '->', i2)
+    dummy_insn3 = ('int_sub', i0, i1, '->', i2)
+    insns = {5: insn, 9: dummy_insn, 14: dummy_insn2, 19: dummy_insn3}
+    max_used_pc = max(insns)
+    work_list = WorkList(insns)
+
+    # specialized case
+    # TODO: specialized destination pcs
+    insn_specializer = work_list.specialize_pc({i0}, 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == work_list.OFFSET + max_used_pc
+    s = insn_specializer.make_code()
+    assert s == """\
+ri0 = self.registers_i[0]
+if arg.is_constant():
+    i0 = ri0.getint()
+    if i0 == -5:
+        pc = self.pc = %d
+        continue
+    elif i0 == 2:
+        pc = self.pc = %d
+        continue
+    elif i0 == 7:
+        pc = self.pc = %d
+        continue
+    else:
+        assert 0 # unreachable""" % (
+            max_used_pc + work_list.OFFSET + 1,
+            max_used_pc + work_list.OFFSET + 2,
+            max_used_pc + work_list.OFFSET + 3
+        )
 
     # unspecialized case
-    insn_specializer = work_list.specialize_insn(insn, set(), 5)
+    insn_specializer = work_list.specialize_pc(set(), 5)
     s = insn_specializer.make_code()
     # TODO: manage switchdict as a global variable
     assert s == """\
@@ -681,26 +711,7 @@ if ri0.is_constant():
     i0 = ri0.getint()
     pc = %d
     continue
-self.opimpl_switch(ri0, glob0, 5)""" % work_list.OFFSET
-
-    # specialized case
-    # TODO: specialized destination pcs
-    insn_specializer = work_list.specialize_insn(insn, {i0}, 5)
-    newpc = insn_specializer.get_pc()
-    assert newpc == work_list.OFFSET
-    s = insn_specializer.make_code()
-    assert s == """\
-if i0 == -5:
-    pc = self.pc = 9
-    continue
-elif i0 == 2:
-    pc = self.pc = 14
-    continue
-elif i0 == 7:
-    pc = self.pc = 19
-    continue
-else:
-    assert 0, 'unreachable path'"""
+self.opimpl_switch(ri0, glob0, 5)""" % (work_list.OFFSET + max_used_pc)
 
 
 def dont_test_int_add_sequence():

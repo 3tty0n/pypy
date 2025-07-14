@@ -428,15 +428,12 @@ class GenExtension(object):
 
 class WorkList(object):
 
-    OFFSET = 10
+    OFFSET = 100
 
-    def __init__(self, pc_to_insn = None):
-        if pc_to_insn is None:
-            pc_to_insn = dict()
+    def __init__(self, pc_to_insn=dict()):
+        self.max_used_pc = 0
         if len(pc_to_insn) > 0:
             self.max_used_pc = max(pc_to_insn)
-        else:
-            self.max_used_pc = 0
         self.orig_pc_to_insn = pc_to_insn
         self.specialize_instruction = dict() # (pc, insn, constant?registers) =? Specializer
         self.todo = []
@@ -522,7 +519,7 @@ class Specializer(object):
     def _check_all_constant_args(self, args):
         for arg in args:
             if (
-                    not (isinstance(arg, Label) or isinstance(arg, TLabel)) and
+                    not (isinstance(arg, Label) or isinstance(arg, TLabel) or isinstance(arg, SwitchDictDescr)) and
                     arg not in self.constant_registers and
                     not isinstance(arg, Constant)
             ):
@@ -588,7 +585,28 @@ class Specializer(object):
         return lines
 
     def emit_specialized_switch(self):
-        raise NotImplementedError
+        lines = []
+        arg = self.insn[1]
+        descr = self.insn[2]
+        switchdict = descr.dict
+
+        lines.append('r%s%d = self.registers_%s[%d]' % (
+            self._get_type_prefix(arg), arg.index,
+            self._get_type_prefix(arg), arg.index))
+        lines.append('if arg.is_constant():')
+        lines.append('    %s%d = %s' % (self._get_type_prefix(arg), arg.index,
+                                        self._emit_unbox_by_type(arg)))
+        prefix = ''
+        for val in switchdict:
+            lines.append('    %sif %s%d == %d:' % (prefix, self._get_type_prefix(arg), arg.index, val))
+            target_pc = switchdict[val]
+            spec = self.work_list.specialize_pc(self.constant_registers, target_pc)
+            lines.append('        pc = self.pc = %d' % (spec.get_pc()))
+            lines.append('        continue')
+            prefix = 'el'
+        lines.append('    else:')
+        lines.append('        assert 0 # unreachable')
+        return lines
 
     def _get_type_prefix(self, arg):
         if isinstance(arg, Constant) or isinstance(arg, Register):
