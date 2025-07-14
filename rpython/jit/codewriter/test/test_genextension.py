@@ -618,7 +618,7 @@ def test_goto_if_not_int_lt_constant():
 ri0 = self.registers_i[0]
 if ri0.is_constant():
     i0 = ri0.getint()
-    pc = 27
+    pc = 117
     continue
 condbox = self.opimpl_int_lt(ri0, ConstInt(1))
 self.opimpl_goto_if_not(condbox, 17, 5)"""
@@ -630,7 +630,7 @@ self.opimpl_goto_if_not(condbox, 17, 5)"""
 ri0 = self.registers_i[0]
 if ri0.is_constant():
     i0 = ri0.getint()
-    pc = 29
+    pc = 119
     continue
 condbox = self.opimpl_int_lt(ri0, ConstInt(1))
 self.registers_i[2] = ConstInt(i2)
@@ -643,7 +643,7 @@ self.opimpl_goto_if_not(condbox, 17, 5)"""
     assert s == """\
 cond = i0 < 1
 if not cond:
-    pc = 31
+    pc = 121
     continue"""
 
 
@@ -786,6 +786,29 @@ if ri0.is_constant():
     continue
 self.opimpl_switch(ri0, glob0, 5)""" % (work_list.OFFSET + max_used_pc)
 
+def test_goto():
+    i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
+    L1 = TLabel('L1')
+    insn = ('goto', L1)
+    pc_to_insn = {5: insn, 17: ('int_add', i0, i1, '->', i2)}
+    work_list = WorkList(pc_to_insn, label_to_pc={'L1': 17})
+
+    # unspecialized case
+    insn_specializer = work_list.specialize_pc(set(), 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == 5
+    s = insn_specializer.make_code()
+    assert s == """\
+pc = 17
+continue"""
+
+    # specialized case
+    insn_specializer = work_list.specialize_pc({i0, i1}, 5)
+    newpc = insn_specializer.get_pc()
+    s = insn_specializer.make_code()
+    assert s == """\
+pc = 118
+continue"""
 
 def dont_test_int_add_sequence():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)

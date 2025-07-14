@@ -56,7 +56,7 @@ class GenExtension(object):
         #    spec = self.work_list.specialize_pc(frozenset([]), startpc)
         #size = len(code_per_pc)
         #while len(code_per_pc) != len(self.work_list.specialize_instruction):
-        #    for key, spec in self.work_list.specialize_instruction.iteritems():
+        #    for key, spec in self.work_list.specialize_instruction.items():
         #        code_per_pc[spec.spec_pc] = spec.make_code()
         #import pdb;pdb.set_trace()
 
@@ -583,21 +583,13 @@ class Specializer(object):
         return ['pass # ref_guard_value, argument is already constant']
 
     def emit_specialized_goto(self):
-        lines = []
-        args = self._get_args()
-        assert len(args) == 1
-        label = args[0]
-        # TODO refactor these checks
-        if label in self.work_list.label_to_spec_pc:
-            dest = self.get_target_spec_pc(label)
-        elif label in self.work_list.label_to_pc:
-            dest = self.get_target_pc(label)
-            # TODO: Call specialize on destination?
-        else:
-            assert 0, "goto label with unknown pc"
-        lines.append("pc = %d" % (dest))
-        lines.append("continue")
-        return lines
+        label, = self._get_args()
+        label_pc = self.get_target_pc(label)
+        target_spec = self.work_list.specialize_pc(self.constant_registers, label_pc)
+        return [
+            "pc = %s" % target_spec.spec_pc,
+            "continue"
+        ]
 
     def emit_specialized_goto_if_not_int_comparison(self, name, symbol):
         lines = []
@@ -789,8 +781,9 @@ class Specializer(object):
         lines = []
         arg0 = self.insn[1]
 
-        lines.append('ri%d = self.registers_i[%d]' % (arg0.index, arg0.index))
-        lines.append('if ri%d.is_constant():' % arg0.index)
+        cond = self._emit_assignment_return_const_check(arg0, lines)
+        assert cond is not None
+        lines.append('if %s:' % cond)
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0}), self.orig_pc)
         lines.append('    pc = %d' % specializer.get_pc())
@@ -874,6 +867,15 @@ class Specializer(object):
         lines.append("self.opimpl_switch(%s, %s, %d)" % (arg0_var, name_descr, self.orig_pc))
         return lines
 
+    def emit_unspecialized_return(self):
+        lines = []
+        value, = self._get_args()
+        lines.append("try:")
+        lines.append("    self.%s(%s)" % (self.methodname, self._get_as_box(value)))
+        lines.append("except ChangeFrame: return")
+        return lines
+    emit_unspecialized_int_return = emit_unspecialized_return
+
     def _emit_sync_registers(self, lines):
         # we need to sync the registers from the unboxed values to e.g. allow a guard to be created
         for const_reg in self.constant_registers:
@@ -882,10 +884,12 @@ class Specializer(object):
     def _emit_specialized_fallback(self):
         # we don't know how to implement this specialized op, sync registers
         # and jump to unspecialized op
-        lines = []
+        import pdb;pdb.set_trace()
+        lines = ["# fall back to unspecialized"]
         self._emit_sync_registers(lines)
         spec = self.work_list.specialize_pc(set(), self.orig_pc)
-        lines["# fall back to unspecialized", "pc = %s" % (spec.spec_pc, ), "continue"]
+        lines.append("pc = %s" % (spec.spec_pc, ))
+        lines.append("continue")
         return lines
 
     def _emit_unspecialized_fallback(self):
