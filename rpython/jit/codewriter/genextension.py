@@ -427,10 +427,20 @@ class GenExtension(object):
 
 
 class WorkList(object):
-    def __init__(self):
+
+    OFFSET = 10
+
+    def __init__(self, pc_to_insn = None):
+        if pc_to_insn is None:
+            pc_to_insn = dict()
+        if len(pc_to_insn) > 0:
+            self.max_used_pc = max(pc_to_insn)
+        else:
+            self.max_used_pc = 0
+        self.orig_pc_to_insn = pc_to_insn
         self.specialize_instruction = dict() # (pc, insn, constant?registers) =? Specializer
         self.todo = []
-        self.free_pc = 100 # TODO: will be fixed as a dynamic number
+        self.free_pc = self.max_used_pc + self.OFFSET
         self.label_to_pc = {}
         self.label_to_spec_pc = {}
         self.globals = {}
@@ -454,8 +464,11 @@ class WorkList(object):
         self.free_pc += 1
         return free_pc
 
-    def specialize(self, insn, constant_registers, orig_pc, label=None):
+    def specialize_insn(self, insn, constant_registers, orig_pc, label=None):
         return self._make_spec(insn, constant_registers, orig_pc)
+
+    def specialize_pc(self, constant_registers, orig_pc):
+        return self._make_spec(self.orig_pc_to_insn[orig_pc], constant_registers, orig_pc)
 
 
 class Specializer(object):
@@ -670,7 +683,7 @@ class Specializer(object):
             lines.append("    %s = %s" % (arg0_local_rep, self._emit_unbox_by_type(arg0)))
             lines.append("    %s = %s" % (arg1_local_rep, self._emit_unbox_by_type(arg1)))
             next_constant_registers = {arg0, arg1}
-        specializer = self.work_list.specialize(
+        specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union(next_constant_registers), self.orig_pc)
         lines.append("    pc = %d" % (specializer.get_pc()))
         lines.append("    continue")
@@ -699,7 +712,7 @@ class Specializer(object):
             lines.append("    r%d = rr%d.getref_base()" % (arg0.index, arg0.index))
             lines.append("    i%d = ri%d.getint()" % (arg1.index, arg1.index))
             next_constant_registers = {arg0, arg1}
-        specializer = self.work_list.specialize(
+        specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union(next_constant_registers), self.orig_pc)
         lines.append("    pc = %d" % (specializer.get_pc()))
         lines.append("    continue")
@@ -714,7 +727,7 @@ class Specializer(object):
 
         lines.append('ri%d = self.registers_i[%d]' % (arg0.index, arg0.index))
         lines.append('if ri%d.is_constant():' % arg0.index)
-        specializer = self.work_list.specialize(
+        specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0}), self.orig_pc)
         lines.append('    pc = %d' % specializer.get_pc())
         lines.append('    continue')
@@ -732,7 +745,7 @@ class Specializer(object):
 
         lines.append('rr%d = self.registers_r[%d]' % (arg0.index, arg0.index))
         lines.append('if rr%d.is_constant():' % arg0.index)
-        specializer = self.work_list.specialize(
+        specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0}), self.orig_pc)
         lines.append('    pc = %d' % specializer.get_pc())
         lines.append('    continue')
@@ -757,7 +770,7 @@ class Specializer(object):
                                                                           self._get_type_prefix(arg1), arg1.index))
         lines.append("    i%d = r%s%d.getint()" % (arg0.index, self._get_type_prefix(arg0), arg0.index))
         lines.append("    i%d = r%s%d.getint()" % (arg1.index, self._get_type_prefix(arg1), arg1.index))
-        specializer = self.work_list.specialize(
+        specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
         lines.append("    pc = %d" % (specializer.get_pc()))
         lines.append("    continue")
@@ -777,7 +790,7 @@ class Specializer(object):
         lines.append('%s = self.registers_%s[%d]' % (
             arg0_var, self._get_type_prefix(arg0), arg0.index))
         lines.append('if %s.is_constant():' % (arg0_var))
-        specializer = self.work_list.specialize(
+        specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0}), self.orig_pc)
         lines.append('    %s%d = %s' % (
             self._get_type_prefix(arg0), arg0.index, self._emit_unbox_by_type(arg0)))
