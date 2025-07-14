@@ -57,7 +57,11 @@ class GenExtension(object):
         #size = len(code_per_pc)
         #while len(code_per_pc) != len(self.work_list.specialize_instruction):
         #    for key, spec in self.work_list.specialize_instruction.items():
-        #        code_per_pc[spec.spec_pc] = spec.make_code()
+        #        code_per_pc[spec.spec_pc] = spec.make_code(), spec
+        #for pc, (code, spec) in code_per_pc.iteritems():
+        #    print "______"
+        #    print pc, self.pc_to_insn[spec.orig_pc], spec.constant_registers
+        #    print code
         #import pdb;pdb.set_trace()
 
         for index, insn in enumerate(self.ssarepr.insns):
