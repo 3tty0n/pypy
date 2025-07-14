@@ -557,11 +557,11 @@ def test_goto_if_not_int_lt():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
     L1 = TLabel('L1')
     insn = ('goto_if_not_int_lt', i0, i1, L1)
-    work_list = WorkList()
-    work_list.label_to_pc[L1] = 17
+    pc_to_insn = {5: insn, 17: ('int_add', i0, i1, '->', i2)}
+    work_list = WorkList(pc_to_insn, label_to_pc={'L1': 17})
 
     # unspecialized case
-    insn_specializer = work_list.specialize_insn(insn, set(), 5, L1)
+    insn_specializer = work_list.specialize_pc(set(), 5)
     newpc = insn_specializer.get_pc()
     assert newpc == 5
     s = insn_specializer.make_code()
@@ -571,13 +571,13 @@ ri1 = self.registers_i[1]
 if ri0.is_constant() and ri1.is_constant():
     i0 = ri0.getint()
     i1 = ri1.getint()
-    pc = %d
+    pc = 117
     continue
 condbox = self.opimpl_int_lt(ri0, ri1)
-self.opimpl_goto_if_not(condbox, 17, 5)""" % work_list.OFFSET
+self.opimpl_goto_if_not(condbox, 17, 5)"""
 
     # unspecialized case
-    insn_specializer = work_list.specialize_insn(insn, {i2}, 5, L1)
+    insn_specializer = work_list.specialize_pc({i2}, 5)
     s = insn_specializer.make_code()
     assert s == """\
 ri0 = self.registers_i[0]
@@ -585,25 +585,22 @@ ri1 = self.registers_i[1]
 if ri0.is_constant() and ri1.is_constant():
     i0 = ri0.getint()
     i1 = ri1.getint()
-    pc = %d
+    pc = 119
     continue
 condbox = self.opimpl_int_lt(ri0, ri1)
 self.registers_i[2] = ConstInt(i2)
-self.opimpl_goto_if_not(condbox, 17, 5)""" % (work_list.OFFSET + 2)
+self.opimpl_goto_if_not(condbox, 17, 5)"""
 
     # specialized case
-    work_list.label_to_spec_pc[L1] = 200  # TODO: where would that entry come from otherwise?
-    insn_specializer = work_list.specialize_insn(insn, {i0, i1}, 5, L1)
+    insn_specializer = work_list.specialize_pc({i0, i1}, 5)
     newpc = insn_specializer.get_pc()
-    assert newpc == work_list.OFFSET
+    assert newpc == work_list.OFFSET + max(pc_to_insn)
     s = insn_specializer.make_code()
     assert s == """\
 cond = i0 < i1
 if not cond:
-    pc = 200
-else:
-    pc = %d
-continue""" % (work_list.OFFSET + 1)
+    pc = 120
+    continue"""
 
 def test_int_guard_value():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)

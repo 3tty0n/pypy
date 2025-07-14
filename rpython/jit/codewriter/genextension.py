@@ -50,6 +50,16 @@ class GenExtension(object):
             else:
                 nextpc = self.ssarepr._insns_pos[index + 1]
             self.pc_to_nextpc[pc] = nextpc
+        #import pdb;pdb.set_trace()
+        #self.work_list = WorkList(self.pc_to_insn, self.assembler.label_positions)
+        #code_per_pc = {}
+        #for startpc in self.assembler.startpoints:
+        #    spec = self.work_list.specialize_pc(frozenset([]), startpc)
+        #size = len(code_per_pc)
+        #while len(code_per_pc) != len(self.work_list.specialize_instruction):
+        #    for key, spec in self.work_list.specialize_instruction.iteritems():
+        #        code_per_pc[spec.spec_pc] = spec.make_code()
+        #import pdb;pdb.set_trace()
 
         for index, insn in enumerate(self.ssarepr.insns):
             self._reset_insn()
@@ -427,8 +437,10 @@ class WorkList(object):
 
     OFFSET = 100
 
-    def __init__(self, pc_to_insn=dict()):
+    def __init__(self, pc_to_insn=None, label_to_pc=None):
         self.max_used_pc = 0
+        if pc_to_insn is None:
+            pc_to_insn = dict()
         if len(pc_to_insn) > 0:
             self.max_used_pc = max(pc_to_insn)
         self.orig_pc_to_insn = pc_to_insn
@@ -436,6 +448,8 @@ class WorkList(object):
         self.todo = []
         self.free_pc = self.max_used_pc + self.OFFSET
         self.label_to_pc = {}
+        if label_to_pc is not None:
+            self.label_to_pc.update(label_to_pc)
         self.label_to_spec_pc = {}
         self.globals = {}
 
@@ -499,9 +513,10 @@ class Specializer(object):
         return self.spec_pc
 
     def get_target_pc(self, label):
-        return self.work_list.label_to_pc[label]
+        return self.work_list.label_to_pc[label.name]
 
     def get_target_spec_pc(self, label):
+        import pdb;pdb.set_trace()
         return self.work_list.label_to_spec_pc[label]
 
     def is_constant(self, arg):
@@ -524,11 +539,11 @@ class Specializer(object):
         return True
 
     def _make_code_specialized(self):
-        meth = getattr(self, "emit_specialized_" + self.name)
+        meth = getattr(self, "emit_specialized_" + self.name, self._emit_specialized_fallback)
         return '\n'.join(meth())
 
     def _make_code_unspecialized(self):
-        meth = getattr(self, "emit_unspecialized_" + self.name)
+        meth = getattr(self, "emit_unspecialized_" + self.name, self._emit_unspecialized_fallback)
         return '\n'.join(meth())
 
     def get_next_constant_registers(self):
@@ -585,18 +600,23 @@ class Specializer(object):
         lines.append("continue")
         return lines
 
-    def emit_specialized_goto_if_not_int_lt(self):
+    def emit_specialized_goto_if_not_int_comparison(self, name, symbol):
         lines = []
         args = self._get_args()
         label = args[-1]
-        lines.append("cond = i%d < i%d" % (args[0].index, args[1].index))
+        lines.append("cond = i%d %s i%d" % (args[0].index, symbol, args[1].index))
         lines.append("if not cond:")
-        lines.append("    pc = %d" % self.get_target_spec_pc(label))
-        lines.append("else:")
-        # TODO: calculate pc in the else-branch of goto_if
-        lines.append("    pc = %s" % (self.get_pc() + 1))
-        lines.append("continue")
+        label_pc = self.get_target_pc(label)
+        target_spec = self.work_list.specialize_pc(self.constant_registers, label_pc)
+        lines.append("    pc = %d" % target_spec.spec_pc)
+        lines.append("    continue")
         return lines
+
+    def emit_specialized_goto_if_not_int_lt(self):
+        return self.emit_specialized_goto_if_not_int_comparison('int_lt', '<')
+
+    def emit_specialized_goto_if_not_int_gt(self):
+        return self.emit_specialized_goto_if_not_int_comparison('int_gt', '>')
 
     def emit_specialized_switch(self):
         lines = []
@@ -789,11 +809,9 @@ class Specializer(object):
         self.constant_registers.add(arg0)
         return lines
 
-    def emit_unspecialized_goto_if_not_int_lt(self):
+    def emit_unspecialized_goto_if_not_comparison(self, name, symbol):
         lines = []
-        arg0 = self.insn[1] # lhs
-        arg1 = self.insn[2] # rhs
-        arg2 = self.insn[3] # Label
+        _, arg0, arg1, arg2 = self.insn # left, right, label
 
         target_pc = self.get_target_pc(arg2)
         lines.append(self._emit_assignment_from_reg_by_type(arg0))
@@ -806,11 +824,17 @@ class Specializer(object):
             self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
         lines.append("    pc = %d" % (specializer.get_pc()))
         lines.append("    continue")
-        lines.append("condbox = self.opimpl_int_lt(r%s%d, r%s%d)" % (self._get_type_prefix(arg0), arg0.index,
-                                                                     self._get_type_prefix(arg1), arg1.index))
+        lines.append("condbox = self.opimpl_%s(r%s%d, r%s%d)" % (name, self._get_type_prefix(arg0), arg0.index,
+                                                                 self._get_type_prefix(arg1), arg1.index))
         self._emit_sync_registers(lines)
         lines.append("self.opimpl_goto_if_not(condbox, %d, %d)" % (target_pc, self.orig_pc))
         return lines
+
+    def emit_unspecialized_goto_if_not_int_lt(self):
+        return self.emit_unspecialized_goto_if_not_comparison("int_lt", "<")
+
+    def emit_unspecialized_goto_if_not_int_gt(self):
+        return self.emit_unspecialized_goto_if_not_comparison("int_gt", ">")
 
     def emit_unspecialized_switch(self):
         lines = []
@@ -835,3 +859,16 @@ class Specializer(object):
         # we need to sync the registers from the unboxed values to e.g. allow a guard to be created
         for const_reg in self.constant_registers:
             lines.append('self.registers_%s[%d] = %s' % (const_reg.kind[0], const_reg.index, self._get_as_box(const_reg)))
+
+    def _emit_specialized_fallback(self):
+        # we don't know how to implement this specialized op, sync registers
+        # and jump to unspecialized op
+        lines = []
+        self._emit_sync_registers(lines)
+        spec = self.work_list.specialize_pc(set(), self.orig_pc)
+        lines["# fall back to unspecialized", "pc = %s" % (spec.spec_pc, ), "continue"]
+        return lines
+
+    def _emit_unspecialized_fallback(self):
+        import pdb;pdb.set_trace()
+        assert 0
