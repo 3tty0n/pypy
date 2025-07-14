@@ -571,6 +571,23 @@ class Specializer(object):
     def emit_specialized_ref_guard_value(self):
         return ['pass # ref_guard_value, argument is already constant']
 
+    def emit_specialized_goto(self):
+        lines = []
+        args = self._get_args()
+        assert len(args) == 1
+        label = args[0]
+        # TODO refactor these checks
+        if label in self.work_list.label_to_spec_pc:
+            dest = self.get_target_spec_pc(label)
+        elif label in self.work_list.label_to_pc:
+            dest = self.get_target_pc(label)
+            # TODO: Call specialize on destination?
+        else:
+            assert 0, "goto label with unknown pc"
+        lines.append("pc = %d" % (dest))
+        lines.append("continue")
+        return lines
+
     def emit_specialized_goto_if_not_int_lt(self):
         lines = []
         args = self._get_args()

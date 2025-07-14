@@ -522,6 +522,37 @@ else:
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == {r0, i0, i1}
 
+@pytest.mark.xfail
+def test_goto():
+    i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
+    L1 = TLabel('L1')
+    insn = ('goto', L1)
+    dummy_insn = ('-live-')
+    dummy_target_insn = ('int_add', i0, i1, '->', i2)
+    dummy_insn3 = ('int_sub', i0, i1, '->', i2)
+    insns = {1: insn, 3: dummy_insn, 17: dummy_target_insn, 18: dummy_insn3}
+    max_used_pc = 42
+    work_list = WorkList(insns)
+
+    # unspecialized case
+    work_list.label_to_pc[L1] = 17
+    insn_specializer = work_list.specialize_pc(set(), 1)
+    newpc = insn_specializer.get_pc()
+    assert newpc == 1
+    s = insn_specializer.make_code()
+    assert s == """\
+self.opimpl_goto(17)"""
+
+    # specialized case
+    work_list.label_to_spec_pc[L1] = 200  # TODO: where would that entry come from otherwise?
+    insn_specializer = work_list.specialize_pc(set(), 1)
+    newpc = insn_specializer.get_pc()
+    assert newpc == max_used_pc + work_list.OFFSET
+    s = insn_specializer.make_code()
+    assert s == """\
+pc = %d
+continue""" % 200
+
 def test_goto_if_not_int_lt():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
     L1 = TLabel('L1')
@@ -561,7 +592,7 @@ self.registers_i[2] = ConstInt(i2)
 self.opimpl_goto_if_not(condbox, 17, 5)""" % (work_list.OFFSET + 2)
 
     # specialized case
-    work_list.label_to_spec_pc[L1] = 200
+    work_list.label_to_spec_pc[L1] = 200  # TODO: where would that entry come from otherwise?
     insn_specializer = work_list.specialize_insn(insn, {i0, i1}, 5, L1)
     newpc = insn_specializer.get_pc()
     assert newpc == work_list.OFFSET
