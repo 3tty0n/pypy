@@ -50,7 +50,6 @@ class GenExtension(object):
             else:
                 nextpc = self.ssarepr._insns_pos[index + 1]
             self.pc_to_nextpc[pc] = nextpc
-        #import pdb;pdb.set_trace()
         #self.work_list = WorkList(self.pc_to_insn, self.assembler.label_positions)
         #code_per_pc = {}
         #for startpc in self.assembler.startpoints:
@@ -566,8 +565,8 @@ class Specializer(object):
         assert len(args) == 2
         arg0, arg1 = args[0], args[1]
         result = self.insn[self.resindex]
-        return ["i%s = %s %s %s" % (result.index, self._get_as_constant(arg0),
-                                    op, self._get_as_constant(arg1))]
+        return ["i%s = %s %s %s" % (result.index, self._get_as_unboxed(arg0),
+                                    op, self._get_as_unboxed(arg1))]
 
     def emit_specialized_strgetitem(self):
         args = self._get_args()
@@ -575,7 +574,7 @@ class Specializer(object):
         arg0, arg1 = args[0], args[1]
         result = self.insn[self.resindex]
         return ["i%s = ord(lltype.cast_opaque_ptr(lltype.Ptr(rstr.STR), r%d).chars[%s])" % (
-            result.index, arg0.index, self._get_as_constant(arg1))]
+            result.index, arg0.index, self._get_as_unboxed(arg1))]
 
     def emit_specialized_int_guard_value(self):
         return ['pass # int_guard_value, argument is already constant']
@@ -602,9 +601,8 @@ class Specializer(object):
 
     def emit_specialized_goto_if_not_int_comparison(self, name, symbol):
         lines = []
-        args = self._get_args()
-        label = args[-1]
-        lines.append("cond = i%d %s i%d" % (args[0].index, symbol, args[1].index))
+        arg0, arg1, label = self._get_args()
+        lines.append("cond = %s %s %s" % (self._get_as_unboxed(arg0), symbol, self._get_as_unboxed(arg1)))
         lines.append("if not cond:")
         label_pc = self.get_target_pc(label)
         target_spec = self.work_list.specialize_pc(self.constant_registers, label_pc)
@@ -656,7 +654,7 @@ class Specializer(object):
             assert m is not None, "ensure regex match"
             return m.group(1)
 
-    def _get_as_constant(self, arg):
+    def _get_as_unboxed(self, arg):
         if isinstance(arg, Constant):
             return str(arg.value)
         else:
@@ -704,6 +702,20 @@ class Specializer(object):
             return "rf%d = self.registers_f[%d]" % (arg.index, arg.index)
         else:
             assert False, "%s is unsupported type" % (arg)
+
+    def _emit_assignment_return_const_check(self, arg, lines):
+        if isinstance(arg, Constant):
+            return None
+        t = self._get_type_prefix(arg)
+        if t in 'irf':
+            lines.append("r%s%d = self.registers_i[%d]" % (t, arg.index, arg.index))
+        else:
+            assert False, "%s is unsupported type" % (arg)
+        if arg in self.constant_registers:
+            return None
+        else:
+            return "r%s%s.is_constant()" % (t, arg.index)
+
 
     def _emit_unspecialized_binary(self):
         lines = []
@@ -814,18 +826,25 @@ class Specializer(object):
         _, arg0, arg1, arg2 = self.insn # left, right, label
 
         target_pc = self.get_target_pc(arg2)
-        lines.append(self._emit_assignment_from_reg_by_type(arg0))
-        lines.append(self._emit_assignment_from_reg_by_type(arg1))
-        lines.append("if r%s%d.is_constant() and r%s%d.is_constant():" % (self._get_type_prefix(arg0), arg0.index,
-                                                                          self._get_type_prefix(arg1), arg1.index))
-        lines.append("    i%d = r%s%d.getint()" % (arg0.index, self._get_type_prefix(arg0), arg0.index))
-        lines.append("    i%d = r%s%d.getint()" % (arg1.index, self._get_type_prefix(arg1), arg1.index))
+        check0 = self._emit_assignment_return_const_check(arg0, lines)
+        check1 = self._emit_assignment_return_const_check(arg1, lines)
+        assert check0 is not None or check1 is not None
+        if check0 is None:
+            cond = check1
+        elif check1 is None:
+            cond = check0
+        else:
+            cond = "%s and %s" % (check0, check1)
+        lines.append("if %s:" % (cond, ))
+        if check0 is not None:
+            lines.append("    i%d = r%s%d.getint()" % (arg0.index, self._get_type_prefix(arg0), arg0.index))
+        if check1 is not None:
+            lines.append("    i%d = r%s%d.getint()" % (arg1.index, self._get_type_prefix(arg1), arg1.index))
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
         lines.append("    pc = %d" % (specializer.get_pc()))
         lines.append("    continue")
-        lines.append("condbox = self.opimpl_%s(r%s%d, r%s%d)" % (name, self._get_type_prefix(arg0), arg0.index,
-                                                                 self._get_type_prefix(arg1), arg1.index))
+        lines.append("condbox = self.opimpl_%s(%s, %s)" % (name, self._get_as_box(arg0), self._get_as_box(arg1)))
         self._emit_sync_registers(lines)
         lines.append("self.opimpl_goto_if_not(condbox, %d, %d)" % (target_pc, self.orig_pc))
         return lines
