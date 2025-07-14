@@ -53,7 +53,7 @@ class Assembler(object):
             jitcode._dump = format_assembler(ssarepr)
         self._count_jitcodes += 1
         if ssarepr.genextension:
-            GenExtension(self).generate(ssarepr, jitcode)
+            GenExtension(self, ssarepr, jitcode).generate()
         return jitcode
 
     def setup(self, name):

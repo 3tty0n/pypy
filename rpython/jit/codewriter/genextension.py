@@ -7,13 +7,11 @@ from rpython.jit.codewriter.flatten import Register, TLabel, Label
 from rpython.jit.codewriter.jitcode import SwitchDictDescr
 
 class GenExtension(object):
-    def __init__(self, assembler):
+    def __init__(self, assembler, ssarepr, jitcode):
         self.assembler = assembler
         self.insns = [None] * len(assembler.insns)
         for insn, index in assembler.insns.iteritems():
             self.insns[index] = insn
-
-    def setup(self, ssarepr, jitcode):
         self.ssarepr = ssarepr
         self.jitcode = jitcode
         self.precode = []
@@ -34,19 +32,18 @@ class GenExtension(object):
         self.returncode = None
         self.returnindex = None
 
-    def generate(self, ssarepr, jitcode):
+    def generate(self):
         from rpython.jit.codewriter.flatten import Label
         from rpython.jit.codewriter.jitcode import JitCode
         from rpython.jit.metainterp.pyjitpl import ChangeFrame
-        self.setup(ssarepr, jitcode)
-        self.precode.append("def jit_shortcut(self): # %s" % jitcode.name)
+        self.precode.append("def jit_shortcut(self): # %s" % self.jitcode.name)
         self.precode.append("    pc = self.pc")
         self.precode.append("    while 1:")
-        for index, insn in enumerate(ssarepr.insns):
+        for index, insn in enumerate(self.ssarepr.insns):
             self._reset_insn()
             if isinstance(insn[0], Label) or insn[0] == '---':
                 continue
-            pc = ssarepr._insns_pos[index]
+            pc = self.ssarepr._insns_pos[index]
             self.pc_to_insn[pc] = insn
             if index == len(self.ssarepr.insns) - 1:
                 nextpc = len(self.jitcode.code)
@@ -54,14 +51,14 @@ class GenExtension(object):
                 nextpc = self.ssarepr._insns_pos[index + 1]
             self.pc_to_nextpc[pc] = nextpc
 
-        for index, insn in enumerate(ssarepr.insns):
+        for index, insn in enumerate(self.ssarepr.insns):
             self._reset_insn()
             if isinstance(insn[0], Label) or insn[0] == '---':
                 continue
             self.insn = insn
             if 'switch' in insn[0]:
                 import pdb; pdb.set_trace()
-            pc = ssarepr._insns_pos[index]
+            pc = self.ssarepr._insns_pos[index]
             self.code.append("if pc == %s: # %s" % (pc, self.insn))
             nextpc = self.pc_to_nextpc[pc]
             self.code.append("    self.pc = %s" % (nextpc, ))
@@ -100,14 +97,14 @@ class GenExtension(object):
         allcode.extend(self.precode)
         for line in self.code:
             allcode.append(" " * 8 + line)
-        jitcode._genext_source = "\n".join(allcode)
+        self.jitcode._genext_source = "\n".join(allcode)
         d = {"ConstInt": ConstInt, "JitCode": JitCode, "ChangeFrame": ChangeFrame}
         d.update(self.globals)
-        source = py.code.Source(jitcode._genext_source)
+        source = py.code.Source(self.jitcode._genext_source)
         exec source.compile() in d
-        print jitcode._genext_source
-        jitcode.genext_function = d['jit_shortcut']
-        jitcode.genext_function.__name__ += "_" + jitcode.name
+        print self.jitcode._genext_source
+        self.jitcode.genext_function = d['jit_shortcut']
+        self.jitcode.genext_function.__name__ += "_" + self.jitcode.name
 
     def _add_global(self, obj):
         name = "glob%s" % len(self.globals)
