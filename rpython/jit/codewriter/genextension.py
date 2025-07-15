@@ -816,7 +816,7 @@ class Specializer(object):
             t = self._get_type_prefix(arg)
             return "r%s%d" % (t, arg.index)
 
-    def _emit_unbox_by_type(self, arg, lines, offset=0):
+    def _emit_unbox_by_type(self, arg, lines, indent=''):
         t = self._get_type_prefix(arg)
         line = ''
         if t == 'i':
@@ -827,9 +827,9 @@ class Specializer(object):
             line = "i%d = rf%d.getfloat()" % (arg.index, arg.index,)
         else:
             assert False, "%s is unsupported type" % (arg)
-        lines.append(' ' * offset + line)
+        lines.append(indent + line)
 
-    def _emit_box_by_type(self, arg, lines, offset=0):
+    def _emit_box_by_type(self, arg, lines, indent=''):
         t = self._get_type_prefix(arg)
         line = ''
         if t == 'i':
@@ -840,7 +840,7 @@ class Specializer(object):
             line = "rf%d = self.registers_f[%d]" % (arg.index, arg.index)
         else:
             assert False, "%s is unsupported type" % (arg)
-        lines.append(' ' * offset + line)
+        lines.append(indent + line)
 
     def _emit_assignment_return_const_check(self, arg, lines):
         if isinstance(arg, Constant):
@@ -927,7 +927,7 @@ class Specializer(object):
         cond = self._emit_assignment_return_const_check(arg0, lines)
         assert cond is not None
         lines.append('if %s:' % cond)
-        self._emit_unbox_by_type(arg0, lines, offset=4)
+        self._emit_unbox_by_type(arg0, lines, indent='    ')
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0}), self.orig_pc)
         lines.append('    pc = %d' % specializer.get_pc())
@@ -1028,7 +1028,7 @@ class Specializer(object):
         lines.append('if %s:' % (cond, ))
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0}), self.orig_pc)
-        self._emit_unbox_by_type(arg0, lines, offset=4)
+        self._emit_unbox_by_type(arg0, lines, indent='    ')
         lines.append('    pc = %d' % specializer.get_pc())
         lines.append('    continue')
         self._emit_sync_registers(lines)
