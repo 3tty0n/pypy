@@ -1,7 +1,7 @@
 import py
 import re
 from rpython.jit.metainterp.history import (Const, ConstInt, ConstPtr,
-    ConstFloat, CONST_NULL, getkind)
+    ConstFloat, CONST_NULL, getkind, AbstractDescr)
 from rpython.jit.metainterp import support
 from rpython.flowspace.model import Constant
 from rpython.jit.codewriter.flatten import Register, TLabel, Label
@@ -591,12 +591,16 @@ class Specializer(object):
         except Unsupported:
             return None
 
+    def _is_label(self, arg):
+        return isinstance(arg, Label) or isinstance(arg, TLabel)
+
     def _check_all_constant_args(self, args):
         for arg in args:
             if (
-                    not (isinstance(arg, Label) or isinstance(arg, TLabel) or isinstance(arg, SwitchDictDescr)) and
                     arg not in self.constant_registers and
-                    not isinstance(arg, Constant)
+                    not isinstance(arg, Constant) and
+                    not self._is_label(arg) and
+                    not isinstance(arg, AbstractDescr)
             ):
                 return False
         return True
