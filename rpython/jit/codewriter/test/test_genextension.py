@@ -72,7 +72,7 @@ def jit_shortcut(self): # test
                 continue
             else:
                 self.registers_i[22] = self.opimpl_int_sub(ri22, ConstInt(1))
-            pc = 13
+            pc = 0
             continue
         if pc == 13: # ('goto', TLabel('L1')) frozenset([])
             self.pc = 16
@@ -100,7 +100,7 @@ def jit_shortcut(self): # test
         if pc == 118: # ('int_sub', %i22, (1), '->', %i22) frozenset([%i22])
             self.pc = 13
             i22 = i22 - 1
-            pc = 122
+            pc = 116
             continue
         if pc == 119: # ('int_return', %i23) frozenset([%i22])
             self.pc = 18
@@ -123,25 +123,17 @@ def jit_shortcut(self): # test
         if pc == 121: # ('int_sub', %i22, (1), '->', %i22) frozenset([%i23, %i22])
             self.pc = 13
             i22 = i22 - 1
-            pc = 123
+            pc = 122
             continue
-        if pc == 122: # ('goto', TLabel('L1')) frozenset([%i22])
-            self.pc = 16
-            pc = 116
-            continue
-        if pc == 123: # ('goto', TLabel('L1')) frozenset([%i23, %i22])
-            self.pc = 16
-            pc = 124
-            continue
-        if pc == 124: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([%i23, %i22])
+        if pc == 122: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([%i23, %i22])
             self.pc = 5
             cond = i22 > 4
             if not cond:
-                pc = 125
+                pc = 123
                 continue
             pc = 117
             continue
-        if pc == 125: # ('int_return', %i23) frozenset([%i23, %i22])
+        if pc == 123: # ('int_return', %i23) frozenset([%i23, %i22])
             self.pc = 18
             self.registers_i[23] = ConstInt(i23)
             self.registers_i[22] = ConstInt(i22)
@@ -195,7 +187,6 @@ def jit_shortcut(self): # test
     while 1:
         if pc == 0: # ('-live-', %i22) frozenset([])
             self.pc = 3
-            self.pc = 0
             pc = 3
             continue
         if pc == 3: # ('switch', %i22, <SwitchDictDescr {-5: 9, 2: 14, 7: 19}>) frozenset([])
@@ -205,7 +196,7 @@ def jit_shortcut(self): # test
                 i22 = ri22.getint()
                 pc = 122
                 continue
-            self.opimpl_switch(ri22, glob3, 3)
+            self.opimpl_switch(ri22, glob2, 3)
             pc = self.pc
             if pc == 9: pc = 9
             elif pc == 14: pc = 14
@@ -220,7 +211,6 @@ def jit_shortcut(self): # test
             except ChangeFrame: return
         if pc == 9: # ('-live-',) frozenset([])
             self.pc = 12
-            self.pc = 9
             pc = 12
             continue
         if pc == 12: # ('int_return', (12)) frozenset([])
@@ -230,7 +220,6 @@ def jit_shortcut(self): # test
             except ChangeFrame: return
         if pc == 14: # ('-live-',) frozenset([])
             self.pc = 17
-            self.pc = 14
             pc = 17
             continue
         if pc == 17: # ('int_return', (51)) frozenset([])
@@ -240,7 +229,6 @@ def jit_shortcut(self): # test
             except ChangeFrame: return
         if pc == 19: # ('-live-',) frozenset([])
             self.pc = 22
-            self.pc = 19
             pc = 22
             continue
         if pc == 22: # ('int_return', (1212)) frozenset([])
@@ -251,54 +239,21 @@ def jit_shortcut(self): # test
         if pc == 122: # ('switch', %i22, <SwitchDictDescr {-5: 9, 2: 14, 7: 19}>) frozenset([%i22])
             self.pc = 7
             if i22 == -5:
-                pc = 123
+                pc = 12
                 continue
             elif i22 == 2:
-                pc = 124
+                pc = 17
                 continue
             elif i22 == 7:
-                pc = 125
+                pc = 22
                 continue
-            pc = 126
+            pc = 123
             continue
-        if pc == 123: # ('-live-',) frozenset([%i22])
-            self.pc = 12
-            self.pc = 9
-            pc = 127
-            continue
-        if pc == 124: # ('-live-',) frozenset([%i22])
-            self.pc = 17
-            self.pc = 14
-            pc = 128
-            continue
-        if pc == 125: # ('-live-',) frozenset([%i22])
-            self.pc = 22
-            self.pc = 19
-            pc = 129
-            continue
-        if pc == 126: # ('int_return', (42)) frozenset([%i22])
+        if pc == 123: # ('int_return', (42)) frozenset([%i22])
             self.pc = 9
             self.registers_i[22] = ConstInt(i22)
             try:
                 self.opimpl_int_return(ConstInt(42))
-            except ChangeFrame: return
-        if pc == 127: # ('int_return', (12)) frozenset([%i22])
-            self.pc = 14
-            self.registers_i[22] = ConstInt(i22)
-            try:
-                self.opimpl_int_return(ConstInt(12))
-            except ChangeFrame: return
-        if pc == 128: # ('int_return', (51)) frozenset([%i22])
-            self.pc = 19
-            self.registers_i[22] = ConstInt(i22)
-            try:
-                self.opimpl_int_return(ConstInt(51))
-            except ChangeFrame: return
-        if pc == 129: # ('int_return', (1212)) frozenset([%i22])
-            self.pc = 24
-            self.registers_i[22] = ConstInt(i22)
-            try:
-                self.opimpl_int_return(ConstInt(1212))
             except ChangeFrame: return
         assert 0 # unreachable"""
 
@@ -812,8 +767,8 @@ def test_goto():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
     L1 = TLabel('L1')
     insn = ('goto', L1)
-    pc_to_insn = {5: insn, 17: ('int_add', i0, i1, '->', i2)}
-    work_list = WorkList(pc_to_insn, label_to_pc={'L1': 17})
+    pc_to_insn = {5: insn, 17: ('int_add', i0, i1, '->', i2), 19: ('int_return', i2)}
+    work_list = WorkList(pc_to_insn, label_to_pc={'L1': 17}, pc_to_nextpc={5: 17, 17: 19})
 
     # unspecialized case
     insn_specializer = work_list.specialize_pc(set(), 5)
@@ -829,7 +784,7 @@ continue"""
     newpc = insn_specializer.get_pc()
     s = insn_specializer.make_code()
     assert s == """\
-pc = 118
+pc = 120
 continue"""
 
 def test_guard_class():
@@ -844,7 +799,7 @@ def test_guard_class():
     s = insn_specializer.make_code()
     assert s == """\
 # guard_class, argument is already constant
-i0 = lltype.cast_opaque_ptr(OBJECTPTR, r0)
+i0 = support.ptr2int(lltype.cast_opaque_ptr(OBJECTPTR, r0))
 pc = 107
 continue"""
 
@@ -884,3 +839,19 @@ self.registers_i[0] = ri2
 pc = 6
 continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
+
+
+def test_live():
+    i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
+    insn0 = ('int_add', i0, i1, '->', i2)
+    insn1 = ('-live-', i2)
+    insn2 = ('int_return', i2)
+    work_list = WorkList({0: insn0, 1: insn1, 2: insn2}, pc_to_nextpc={0: 1, 1: 2})
+
+    insn_specializer = work_list.specialize_pc({i0, i1, i2}, 1)
+    assert insn_specializer.orig_pc == 1
+    assert insn_specializer.constant_registers == frozenset([i2])
+    s = insn_specializer.make_code()
+    assert s == """\
+pc = 103
+continue"""

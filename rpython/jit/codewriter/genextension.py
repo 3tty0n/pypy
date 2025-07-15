@@ -2,6 +2,7 @@ import py
 import re
 from rpython.jit.metainterp.history import (Const, ConstInt, ConstPtr,
     ConstFloat, CONST_NULL, getkind)
+from rpython.jit.metainterp import support
 from rpython.flowspace.model import Constant
 from rpython.jit.codewriter.flatten import Register, TLabel, Label
 from rpython.jit.codewriter.jitcode import SwitchDictDescr
@@ -102,7 +103,7 @@ class GenExtension(object):
             allcode.append(" " * 8 + line)
         self.jitcode._genext_source = "\n".join(allcode)
         d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
-             "lltype": lltype, "rstr": rstr, 'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR}
+             "lltype": lltype, "rstr": rstr, 'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR, 'support': support}
         d.update(self.globals)
         source = py.code.Source(self.jitcode._genext_source)
         exec source.compile() in d
@@ -496,6 +497,7 @@ class WorkList(object):
     def _make_spec(self, insn, constant_registers, orig_pc):
         assert self.orig_pc_to_insn[orig_pc] == insn
         constant_registers = frozenset(val for val in constant_registers if not isinstance(val, Constant))
+        constant_registers = self._remove_dead_const_registers(insn, constant_registers, orig_pc)
         key = (orig_pc, insn, frozenset(constant_registers))
         if key in self.specialize_instruction:
             return self.specialize_instruction[key]
@@ -508,6 +510,22 @@ class WorkList(object):
                 insn, constant_registers, orig_pc, spec_pc, self)
             self.todo.append(spec)
             return spec
+
+    def _remove_dead_const_registers(self, insn, constant_registers, orig_pc):
+        if insn[0] == '-live-':
+            constant_registers = frozenset([var for var in constant_registers if var in insn])
+        return constant_registers
+
+    def _shortcut_live_and_goto(self, insn, constant_registers, orig_pc):
+        while insn[0] in ('-live-', 'goto'):
+            if insn[0] == '-live-':
+                constant_registers = frozenset([var for var in constant_registers if var in insn])
+                orig_pc = self.pc_to_nextpc[orig_pc]
+            else:
+                assert insn[0] == 'goto'
+                orig_pc = self.label_to_pc[insn[1].name]
+            insn = self.orig_pc_to_insn[orig_pc]
+        return insn, constant_registers, orig_pc
 
     def payout_new_free_pc(self):
         free_pc = self.free_pc
@@ -626,15 +644,19 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
 
-    def _emit_jump(self, lines, target_pc=-1, constant_registers=None):
+    def _emit_jump(self, lines, target_pc=-1, constant_registers=None, indent=''):
         if target_pc == -1:
             target_pc = self.work_list.pc_to_nextpc[self.orig_pc]
         if constant_registers is None:
             constant_registers = self.get_next_constant_registers()
+        insn = self.work_list.orig_pc_to_insn[target_pc]
+        insn, constant_registers, target_pc = self.work_list._shortcut_live_and_goto(
+                insn, constant_registers, target_pc)
+        
         spec_next = self.work_list.specialize_pc(
                 constant_registers, target_pc)
-        lines.append("pc = %s" % spec_next.spec_pc)
-        lines.append("continue")
+        lines.append("%spc = %s" % (indent, spec_next.spec_pc))
+        lines.append(indent + "continue")
 
     def emit_specialized_strgetitem(self):
         args = self._get_args()
@@ -656,7 +678,7 @@ class Specializer(object):
         lines = ['# guard_class, argument is already constant']
         arg, = self._get_args()
         res = self.insn[self.resindex]
-        lines.append('i%s = lltype.cast_opaque_ptr(OBJECTPTR, r%s)' % (res.index, arg.index))
+        lines.append('i%s = support.ptr2int(lltype.cast_opaque_ptr(OBJECTPTR, r%s))' % (res.index, arg.index))
         self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
         return lines
 
@@ -722,9 +744,7 @@ class Specializer(object):
         for val in switchdict:
             lines.append('%sif %s%d == %d:' % (prefix, self._get_type_prefix(arg), arg.index, val))
             target_pc = switchdict[val]
-            spec = self.work_list.specialize_pc(self.constant_registers, target_pc)
-            lines.append('    pc = %d' % (spec.get_pc()))
-            lines.append('    continue')
+            self._emit_jump(lines, target_pc=target_pc, indent='    ')
             prefix = 'el'
         self._emit_jump(lines)
         return lines
@@ -1032,7 +1052,7 @@ class Specializer(object):
     emit_unspecialized_int_return = emit_unspecialized_return
 
     def emit_unspecialized_live(self):
-        lines = ["self.pc = %s" % (self.orig_pc, )]
+        lines = []
         self._emit_jump(lines)
         return lines
     emit_specialized_live = emit_unspecialized_live
