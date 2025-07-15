@@ -629,22 +629,15 @@ class Specializer(object):
         descr = self.insn[2]
         switchdict = descr.dict
 
-        lines.append('r%s%d = self.registers_%s[%d]' % (
-            self._get_type_prefix(arg), arg.index,
-            self._get_type_prefix(arg), arg.index))
-        lines.append('if arg.is_constant():')
-        lines.append('    %s%d = %s' % (self._get_type_prefix(arg), arg.index,
-                                        self._emit_unbox_by_type(arg)))
         prefix = ''
         for val in switchdict:
-            lines.append('    %sif %s%d == %d:' % (prefix, self._get_type_prefix(arg), arg.index, val))
+            lines.append('%sif %s%d == %d:' % (prefix, self._get_type_prefix(arg), arg.index, val))
             target_pc = switchdict[val]
             spec = self.work_list.specialize_pc(self.constant_registers, target_pc)
-            lines.append('        pc = self.pc = %d' % (spec.get_pc()))
-            lines.append('        continue')
+            lines.append('    pc = %d' % (spec.get_pc()))
+            lines.append('    continue')
             prefix = 'el'
-        lines.append('    else:')
-        lines.append('        assert 0 # unreachable')
+        self._emit_jump(lines)
         return lines
 
     def _get_type_prefix(self, arg):
@@ -852,14 +845,13 @@ class Specializer(object):
 
     def emit_unspecialized_switch(self):
         lines = []
-        arg0 = self.insn[1] # register
-        arg1 = self.insn[2] # descr
-        name_descr = self._add_global(arg1) # add descr to global
+        arg0, descr = self._get_args()
+        name_descr = self._add_global(descr) # add descr to global
 
-        arg0_var = 'r%s%d' % (self._get_type_prefix(arg0), arg0.index)
-        lines.append('%s = self.registers_%s[%d]' % (
-            arg0_var, self._get_type_prefix(arg0), arg0.index))
-        lines.append('if %s.is_constant():' % (arg0_var))
+        cond = self._emit_assignment_return_const_check(arg0, lines)
+        assert cond is not None
+        arg0_var = self._get_as_box(arg0)
+        lines.append('if %s:' % (cond, ))
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0}), self.orig_pc)
         lines.append('    %s%d = %s' % (

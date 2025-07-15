@@ -653,34 +653,31 @@ def test_switch():
     dummy_insn = ('-live-')
     dummy_insn2 = ('int_add', i0, i1, '->', i2)
     dummy_insn3 = ('int_sub', i0, i1, '->', i2)
-    insns = {5: insn, 9: dummy_insn, 14: dummy_insn2, 19: dummy_insn3}
+    insns = {5: insn, 9: dummy_insn, 14: dummy_insn2, 19: dummy_insn3, 21: ('int_return', i0)}
     max_used_pc = max(insns)
-    work_list = WorkList(insns)
+    work_list = WorkList(insns, pc_to_nextpc={5: 21})
 
     # specialized case
-    # TODO: specialized destination pcs
     insn_specializer = work_list.specialize_pc({i0}, 5)
     newpc = insn_specializer.get_pc()
     assert newpc == work_list.OFFSET + max_used_pc
     s = insn_specializer.make_code()
     assert s == """\
-ri0 = self.registers_i[0]
-if arg.is_constant():
-    i0 = ri0.getint()
-    if i0 == -5:
-        pc = self.pc = %d
-        continue
-    elif i0 == 2:
-        pc = self.pc = %d
-        continue
-    elif i0 == 7:
-        pc = self.pc = %d
-        continue
-    else:
-        assert 0 # unreachable""" % (
+if i0 == -5:
+    pc = %d
+    continue
+elif i0 == 2:
+    pc = %d
+    continue
+elif i0 == 7:
+    pc = %d
+    continue
+pc = %s
+continue""" % (
             max_used_pc + work_list.OFFSET + 1,
             max_used_pc + work_list.OFFSET + 2,
-            max_used_pc + work_list.OFFSET + 3
+            max_used_pc + work_list.OFFSET + 3,
+            max_used_pc + work_list.OFFSET + 4,
         )
 
     # unspecialized case
