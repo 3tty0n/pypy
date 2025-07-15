@@ -812,7 +812,7 @@ class Specializer(object):
             t = self._get_type_prefix(arg)
             return "r%s%d" % (t, arg.index)
 
-    def _emit_unbox_by_type(self, lines, arg, offset=0):
+    def _emit_unbox_by_type(self, arg, lines, offset=0):
         t = self._get_type_prefix(arg)
         line = ''
         if t == 'i':
@@ -825,7 +825,7 @@ class Specializer(object):
             assert False, "%s is unsupported type" % (arg)
         lines.append(' ' * offset + line)
 
-    def _emit_box_by_type(self, lines, arg, offset=0):
+    def _emit_box_by_type(self, arg, lines, offset=0):
         t = self._get_type_prefix(arg)
         line = ''
         if t == 'i':
@@ -923,7 +923,7 @@ class Specializer(object):
         cond = self._emit_assignment_return_const_check(arg0, lines)
         assert cond is not None
         lines.append('if %s:' % cond)
-        self._emit_unbox_by_type(lines, arg0, offset=4)
+        self._emit_unbox_by_type(arg0, lines, offset=4)
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0}), self.orig_pc)
         lines.append('    pc = %d' % specializer.get_pc())
@@ -931,8 +931,8 @@ class Specializer(object):
 
         self._emit_sync_registers(lines)
         lines.append('self.opimpl_%s(%s, %d)' % (self.insn[0], self._get_as_box(arg0), self.orig_pc))
-        self._emit_box_by_type(lines, arg0)
-        self._emit_unbox_by_type(lines, arg0)
+        self._emit_box_by_type(arg0, lines)
+        self._emit_unbox_by_type(arg0, lines)
         self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0}))
         return lines
     emit_unspecialized_int_guard_value = emit_unspecialized_guard_value
@@ -942,7 +942,7 @@ class Specializer(object):
         arg0 = self.insn[1]
         res = self.insn[self.resindex]
         lines = []
-        self._emit_box_by_type(lines, arg0)
+        self._emit_box_by_type(arg0, lines)
         box = self._get_as_box(arg0)
         lines.append('if self.metainterp.heapcache.is_class_known(%s):' % box)
 
@@ -1024,7 +1024,7 @@ class Specializer(object):
         lines.append('if %s:' % (cond, ))
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0}), self.orig_pc)
-        self._emit_unbox_by_type(lines, arg0, offset=4)
+        self._emit_unbox_by_type(arg0, lines, offset=4)
         lines.append('    pc = %d' % specializer.get_pc())
         lines.append('    continue')
         self._emit_sync_registers(lines)
@@ -1045,7 +1045,7 @@ class Specializer(object):
         lines = []
         value, = self._get_args()
         if not isinstance(value, Constant):
-            self._emit_box_by_type(lines, value)
+            self._emit_box_by_type(value, lines)
         lines.append("try:")
         lines.append("    self.%s(%s)" % (self.methodname, self._get_as_box(value)))
         lines.append("except ChangeFrame: return")
