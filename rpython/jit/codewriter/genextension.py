@@ -69,8 +69,6 @@ class GenExtension(object):
             if isinstance(insn[0], Label) or insn[0] == '---':
                 continue
             self.insn = insn
-            if 'switch' in insn[0]:
-                import pdb; pdb.set_trace()
             pc = self.ssarepr._insns_pos[index]
             self.code.append("if pc == %s: # %s" % (pc, self.insn))
             nextpc = self.pc_to_nextpc[pc]
@@ -440,12 +438,15 @@ class WorkList(object):
 
     OFFSET = 100
 
-    def __init__(self, pc_to_insn=None, label_to_pc=None):
+    def __init__(self, pc_to_insn=None, label_to_pc=None, pc_to_nextpc=None):
         self.max_used_pc = 0
         if pc_to_insn is None:
             pc_to_insn = dict()
         if len(pc_to_insn) > 0:
             self.max_used_pc = max(pc_to_insn)
+        if pc_to_nextpc is None:
+            pc_to_nextpc = {}
+        self.pc_to_nextpc = pc_to_nextpc
         self.orig_pc_to_insn = pc_to_insn
         self.specialize_instruction = dict() # (pc, insn, constant?registers) =? Specializer
         self.todo = []
@@ -569,8 +570,13 @@ class Specializer(object):
         assert len(args) == 2
         arg0, arg1 = args[0], args[1]
         result = self.insn[self.resindex]
+        spec_next = self.work_list.specialize_pc(
+                self.get_next_constant_registers(), self.work_list.pc_to_nextpc[self.orig_pc])
+
         return ["i%s = %s %s %s" % (result.index, self._get_as_unboxed(arg0),
-                                    op, self._get_as_unboxed(arg1))]
+                                    op, self._get_as_unboxed(arg1)),
+                "pc = %s" % spec_next.spec_pc,
+                "continue"]
 
     def emit_specialized_strgetitem(self):
         args = self._get_args()
