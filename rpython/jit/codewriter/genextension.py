@@ -38,14 +38,6 @@ class GenExtension(object):
         from rpython.jit.codewriter.flatten import Label
         from rpython.jit.codewriter.jitcode import JitCode
         from rpython.jit.metainterp.pyjitpl import ChangeFrame
-        self.precode.append("def jit_shortcut(self): # %s" % self.jitcode.name)
-        self.precode.append("    pc = self.pc")
-        prefix = ""
-        for pc in self.assembler.startpoints:
-            self.precode.append("    %sif pc == %s: pass" % (prefix, pc))
-            prefix = "el"
-        self.precode.append("    else: assert 0, 'unreachable'")
-        self.precode.append("    while 1:")
         for index, insn in enumerate(self.ssarepr.insns):
             self._reset_insn()
             if isinstance(insn[0], Label) or insn[0] == '---':
@@ -66,10 +58,6 @@ class GenExtension(object):
         while len(code_per_pc) != len(self.work_list.specialize_instruction):
             for key, spec in self.work_list.specialize_instruction.items():
                 code_per_pc[spec.spec_pc] = spec.make_code(), spec
-        for pc, (code, spec) in code_per_pc.iteritems():
-            print "______"
-            print pc, self.pc_to_insn[spec.orig_pc], spec.constant_registers
-            print code
         assert not self.code
         for pc, (code, spec) in code_per_pc.iteritems():
             if code is None:
@@ -82,7 +70,9 @@ class GenExtension(object):
                     self._make_code(self.pc_to_index[spec.orig_pc], spec.insn)
                 code_per_pc[pc] = (str(py.code.Source("\n".join(self.code)).deindent()), spec)
         self.code = []
+        allconsts = set()
         for pc, (code, spec) in code_per_pc.iteritems():
+            allconsts.update(spec.constant_registers)
             self.code.append("if pc == %s: # %s %s" % (pc, spec.insn, spec.constant_registers))
             #self.code.append("    import pdb;pdb.set_trace()")
             self.code.append("    self.pc = %s" % (self.pc_to_nextpc[spec.orig_pc], ))
@@ -90,12 +80,28 @@ class GenExtension(object):
                 self.code.append(line)
         self.code.append("assert 0 # unreachable")
         allcode = []
+        allconsts = sorted(["%s%s" % (val.kind[0], val.index) for val in allconsts])
+        self.precode.append("def jit_shortcut(self): # %s" % self.jitcode.name)
+        self.precode.append("    pc = self.pc")
+        for name in allconsts:
+            assert name[0] in 'ir'
+            if name[0] == 'i':
+                default = '0xcafedead'
+            else:
+                default = 'lltype.nullptr(llmemory.GCREF.TO)'
+            self.precode.append("    %s = %s" % (name, default))
+        prefix = ""
+        for pc in self.assembler.startpoints:
+            self.precode.append("    %sif pc == %s: pc = %s" % (prefix, pc, pc))
+            prefix = "el"
+        self.precode.append("    else: assert 0, 'unreachable'")
+        self.precode.append("    while 1:")
         allcode.extend(self.precode)
         for line in self.code:
             allcode.append(" " * 8 + line)
         self.jitcode._genext_source = "\n".join(allcode)
         d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
-             "lltype": lltype, "rstr": rstr}
+             "lltype": lltype, "rstr": rstr, 'llmemory': llmemory}
         d.update(self.globals)
         source = py.code.Source(self.jitcode._genext_source)
         exec source.compile() in d
@@ -906,6 +912,7 @@ class Specializer(object):
             lines.append("%sif pc == %s: pc = %s" % (prefix, pc, specializer.spec_pc))
             prefix = "el"
         lines.append("else: assert 0")
+        lines.append("continue")
         return lines
 
     def emit_unspecialized_return(self):

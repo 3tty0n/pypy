@@ -110,6 +110,8 @@ class BlockRecorder(Recorder):
         for case in [False, True]:
             egg = EggBlock([], block, case)
             ctx.pendingblocks.append(egg)
+            if len(egg.framestate.locals_w) == 13 and str(egg.framestate.locals_w[1]) == "1044" and egg.framestate.locals_w[5] is None:
+                import pdb;pdb.set_trace()
             link = Link([], egg, case)
             links.append(link)
 
@@ -137,6 +139,8 @@ class BlockRecorder(Recorder):
                 vars = []
                 vars2 = []
             egg = EggBlock(vars2, block, case)
+            if len(egg.framestate.locals_w) == 13 and str(egg.framestate.locals_w[1]) == "1044" and egg.framestate.locals_w[5] is None:
+                import pdb;pdb.set_trace()
             ctx.pendingblocks.append(egg)
             link = Link(vars, egg, case)
             if case is not None:

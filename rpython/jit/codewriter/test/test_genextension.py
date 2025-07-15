@@ -25,11 +25,13 @@ def test_assemble_loop():
     assert jitcode._genext_source == """\
 def jit_shortcut(self): # test
     pc = self.pc
-    if pc == 0: pass
-    elif pc == 5: pass
-    elif pc == 9: pass
-    elif pc == 13: pass
-    elif pc == 16: pass
+    i22 = 0xcafedead
+    i23 = 0xcafedead
+    if pc == 0: pc = 0
+    elif pc == 5: pc = 5
+    elif pc == 9: pc = 9
+    elif pc == 13: pc = 13
+    elif pc == 16: pc = 16
     else: assert 0, 'unreachable'
     while 1:
         if pc == 0: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([])
@@ -179,15 +181,16 @@ def test_integration_switch():
     assert jitcode._genext_source == """\
 def jit_shortcut(self): # test
     pc = self.pc
-    if pc == 0: pass
-    elif pc == 3: pass
-    elif pc == 7: pass
-    elif pc == 9: pass
-    elif pc == 12: pass
-    elif pc == 14: pass
-    elif pc == 17: pass
-    elif pc == 19: pass
-    elif pc == 22: pass
+    i22 = 0xcafedead
+    if pc == 0: pc = 0
+    elif pc == 3: pc = 3
+    elif pc == 7: pc = 7
+    elif pc == 9: pc = 9
+    elif pc == 12: pc = 12
+    elif pc == 14: pc = 14
+    elif pc == 17: pc = 17
+    elif pc == 19: pc = 19
+    elif pc == 22: pc = 22
     else: assert 0, 'unreachable'
     while 1:
         if pc == 0: # ('-live-', %i22) frozenset([])
@@ -209,6 +212,7 @@ def jit_shortcut(self): # test
             elif pc == 19: pc = 19
             elif pc == 7: pc = 7
             else: assert 0
+            continue
         if pc == 7: # ('int_return', (42)) frozenset([])
             self.pc = 9
             try:
@@ -801,7 +805,8 @@ if pc == 9: pc = 9
 elif pc == 14: pc = 14
 elif pc == 19: pc = 19
 elif pc == 21: pc = 21
-else: assert 0"""
+else: assert 0
+continue"""
 
 def test_goto():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
