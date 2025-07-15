@@ -50,7 +50,7 @@ class GenExtension(object):
             else:
                 nextpc = self.ssarepr._insns_pos[index + 1]
             self.pc_to_nextpc[pc] = nextpc
-        #self.work_list = WorkList(self.pc_to_insn, self.assembler.label_positions)
+        #self.work_list = WorkList(self.pc_to_insn, self.assembler.label_positions, self.pc_to_nextpc)
         #code_per_pc = {}
         #for startpc in self.assembler.startpoints:
         #    spec = self.work_list.specialize_pc(frozenset([]), startpc)
@@ -543,11 +543,11 @@ class Specializer(object):
         return True
 
     def _make_code_specialized(self):
-        meth = getattr(self, "emit_specialized_" + self.name, self._emit_specialized_fallback)
+        meth = getattr(self, "emit_specialized_" + self.name.strip('-'), self._emit_specialized_fallback)
         return '\n'.join(meth())
 
     def _make_code_unspecialized(self):
-        meth = getattr(self, "emit_unspecialized_" + self.name, self._emit_unspecialized_fallback)
+        meth = getattr(self, "emit_unspecialized_" + self.name.strip('-'), self._emit_unspecialized_fallback)
         return '\n'.join(meth())
 
     def get_next_constant_registers(self):
@@ -570,36 +570,41 @@ class Specializer(object):
         assert len(args) == 2
         arg0, arg1 = args[0], args[1]
         result = self.insn[self.resindex]
-        spec_next = self.work_list.specialize_pc(
-                self.get_next_constant_registers(), self.work_list.pc_to_nextpc[self.orig_pc])
+        lines = ["i%s = %s %s %s" % (result.index, self._get_as_unboxed(arg0),
+                                     op, self._get_as_unboxed(arg1))]
+        self._emit_jump(lines)
+        return lines
 
-        return ["i%s = %s %s %s" % (result.index, self._get_as_unboxed(arg0),
-                                    op, self._get_as_unboxed(arg1)),
-                "pc = %s" % spec_next.spec_pc,
-                "continue"]
+    def _emit_jump(self, lines, target_pc=-1):
+        if target_pc == -1:
+            target_pc = self.work_list.pc_to_nextpc[self.orig_pc]
+        spec_next = self.work_list.specialize_pc(
+                self.get_next_constant_registers(), target_pc)
+        lines.append("pc = %s" % spec_next.spec_pc)
+        lines.append("continue")
 
     def emit_specialized_strgetitem(self):
         args = self._get_args()
         assert len(args) == 2
         arg0, arg1 = args[0], args[1]
         result = self.insn[self.resindex]
-        return ["i%s = ord(lltype.cast_opaque_ptr(lltype.Ptr(rstr.STR), r%d).chars[%s])" % (
+        lines = ["i%s = ord(lltype.cast_opaque_ptr(lltype.Ptr(rstr.STR), r%d).chars[%s])" % (
             result.index, arg0.index, self._get_as_unboxed(arg1))]
+        self._emit_jump(lines)
+        return lines
 
     def emit_specialized_int_guard_value(self):
-        return ['pass # int_guard_value, argument is already constant']
-
-    def emit_specialized_ref_guard_value(self):
-        return ['pass # ref_guard_value, argument is already constant']
+        lines = ['# guard_value, argument is already constant']
+        self._emit_jump(lines)
+        return lines
+    emit_specialized_ref_guard_value = emit_specialized_int_guard_value
 
     def emit_specialized_goto(self):
         label, = self._get_args()
         label_pc = self.get_target_pc(label)
-        target_spec = self.work_list.specialize_pc(self.constant_registers, label_pc)
-        return [
-            "pc = %s" % target_spec.spec_pc,
-            "continue"
-        ]
+        lines = []
+        self._emit_jump(lines, label_pc)
+        return lines
 
     def emit_specialized_goto_if_not_int_comparison(self, name, symbol):
         lines = []
@@ -718,7 +723,6 @@ class Specializer(object):
         else:
             return "r%s%s.is_constant()" % (t, arg.index)
 
-
     def _emit_unspecialized_binary(self):
         lines = []
         args = self._get_args()
@@ -757,6 +761,7 @@ class Specializer(object):
         lines.append("    self.registers_%s[%d] = self.%s(%s, %s)" % (
             res_type_prefix, result.index, self.methodname,
             self._get_as_box(arg0), self._get_as_box(arg1)))
+        self._emit_jump(lines)
         return lines
 
     emit_unspecialized_int_add = _emit_unspecialized_binary
@@ -785,9 +790,10 @@ class Specializer(object):
         lines.append("else:")
         lines.append("    self.registers_i[%d] = self.opimpl_strgetitem(%s, %s)" % (
             result.index, self._get_as_box(arg0), self._get_as_box(arg1)))
+        self._emit_jump(lines)
         return lines
 
-    def emit_unspecialized_int_guard_value(self):
+    def emit_unspecialized_guard_value(self):
         lines = []
         arg0 = self.insn[1]
 
@@ -800,29 +806,15 @@ class Specializer(object):
         lines.append('    continue')
 
         self._emit_sync_registers(lines)
-        lines.append('self.opimpl_int_guard_value(self.registers_i[%d], %d)' % (arg0.index, self.orig_pc))
-        lines.append('i%d = self.registers_i[%d].getint()' % (arg0.index, arg0.index))
-
+        lines.append('self.opimpl_%s(%s, %d)' % (self.insn[0], self._get_as_box(arg0), self.orig_pc))
+        lines.append(self._emit_assignment_from_reg_by_type(arg0))
+        lines.append('%s%d = %s' % (
+            self._get_type_prefix(arg0), arg0.index, self._emit_unbox_by_type(arg0)))
         self.constant_registers.add(arg0)
+        self._emit_jump(lines)
         return lines
-
-    def emit_unspecialized_ref_guard_value(self):
-        lines = []
-        arg0 = self.insn[1]
-
-        lines.append('rr%d = self.registers_r[%d]' % (arg0.index, arg0.index))
-        lines.append('if rr%d.is_constant():' % arg0.index)
-        specializer = self.work_list.specialize_insn(
-            self.insn, self.constant_registers.union({arg0}), self.orig_pc)
-        lines.append('    pc = %d' % specializer.get_pc())
-        lines.append('    continue')
-
-        self._emit_sync_registers(lines)
-        lines.append('self.opimpl_ref_guard_value(self.registers_r[%d], %d)' % (arg0.index, self.orig_pc))
-        lines.append('r%d = self.registers_r[%d].getvalue()' % (arg0.index, arg0.index))
-
-        self.constant_registers.add(arg0)
-        return lines
+    emit_unspecialized_int_guard_value = emit_unspecialized_guard_value
+    emit_unspecialized_ref_guard_value = emit_unspecialized_guard_value
 
     def emit_unspecialized_goto_if_not_comparison(self, name, symbol):
         lines = []
@@ -880,11 +872,16 @@ class Specializer(object):
     def emit_unspecialized_return(self):
         lines = []
         value, = self._get_args()
+        if not isinstance(value, Constant):
+            lines.append(self._emit_assignment_from_reg_by_type(value))
         lines.append("try:")
         lines.append("    self.%s(%s)" % (self.methodname, self._get_as_box(value)))
         lines.append("except ChangeFrame: return")
         return lines
     emit_unspecialized_int_return = emit_unspecialized_return
+
+    def emit_unspecialized_live(self):
+        return []
 
     def _emit_sync_registers(self, lines):
         # we need to sync the registers from the unboxed values to e.g. allow a guard to be created

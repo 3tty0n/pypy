@@ -409,7 +409,9 @@ if ri1.is_constant() and ri0.is_constant():
     pc = 108
     continue
 else:
-    self.registers_i[1] = self.opimpl_int_add(ri1, ri0)"""
+    self.registers_i[1] = self.opimpl_int_add(ri1, ri0)
+pc = 6
+continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 
@@ -424,7 +426,9 @@ if ri1.is_constant() and ri0.is_constant():
     pc = 113
     continue
 else:
-    self.registers_i[1] = self.opimpl_int_add(ri1, ri0)"""
+    self.registers_i[1] = self.opimpl_int_add(ri1, ri0)
+pc = 114
+continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == {i2}
 
@@ -455,7 +459,9 @@ if ri0.is_constant():
     pc = %d
     continue
 else:
-    self.registers_i[1] = self.opimpl_int_add(ri0, ConstInt(1))""" % (work_list.OFFSET + 7)
+    self.registers_i[1] = self.opimpl_int_add(ri0, ConstInt(1))
+pc = 7
+continue""" % (work_list.OFFSET + 7)
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 
@@ -463,7 +469,7 @@ else:
 def test_strgetitem():
     r0, i0, i1 = Register('ref', 0), Register('int', 0), Register('int', 1)
     insn1 = ('strgetitem', r0, i0, '->', i1)
-    work_list = WorkList()
+    work_list = WorkList({5: insn1, 6: ('int_return', i1)}, pc_to_nextpc={5: 6})
 
     insn_specializer = work_list.specialize_insn(insn1, set(), 5) # i0 and i1 are unboxed in local variables already
     s = insn_specializer.make_code()
@@ -476,14 +482,19 @@ if rr0.is_constant() and ri0.is_constant():
     pc = %d
     continue
 else:
-    self.registers_i[1] = self.opimpl_strgetitem(rr0, ri0)""" % work_list.OFFSET
+    self.registers_i[1] = self.opimpl_strgetitem(rr0, ri0)
+pc = 6
+continue""" % (work_list.OFFSET + 6)
 
     insn_specializer = work_list.specialize_insn(insn1, {i0, r0}, 5) # i0 and i1 are unboxed in local variables already
     assert work_list.specialize_insn(insn1, {i0, r0}, 5) is insn_specializer
     newpc = insn_specializer.get_pc()
-    assert newpc == work_list.OFFSET
+    assert newpc == work_list.OFFSET + 6
     s = insn_specializer.make_code()
-    assert s == "i1 = ord(lltype.cast_opaque_ptr(lltype.Ptr(rstr.STR), r0).chars[i0])"
+    assert s == """\
+i1 = ord(lltype.cast_opaque_ptr(lltype.Ptr(rstr.STR), r0).chars[i0])
+pc = 107
+continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == {r0, i0, i1}
 
@@ -584,15 +595,17 @@ if not cond:
 def test_int_guard_value():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
     insn = ('int_guard_value', i0)
-    insns = [insn]
-    work_list = WorkList()
+    work_list = WorkList({5: insn, 6: ('int_return', 6)}, pc_to_nextpc={5: 6})
 
     # specialized case
     insn_specializer = work_list.specialize_insn(insn, {i0}, 5)
     newpc = insn_specializer.get_pc()
-    assert newpc == work_list.OFFSET
+    assert newpc == work_list.OFFSET + 6
     s = insn_specializer.make_code()
-    assert s == 'pass # int_guard_value, argument is already constant'
+    assert s == """\
+# guard_value, argument is already constant
+pc = 107
+continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == {i0}
 
@@ -604,8 +617,11 @@ ri0 = self.registers_i[0]
 if ri0.is_constant():
     pc = %d
     continue
-self.opimpl_int_guard_value(self.registers_i[0], 5)
-i0 = self.registers_i[0].getint()""" % work_list.OFFSET
+self.opimpl_int_guard_value(ri0, 5)
+ri0 = self.registers_i[0]
+i0 = ri0.getint()
+pc = 107
+continue""" % (work_list.OFFSET + 6)
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == {i0}
 
@@ -616,58 +632,17 @@ i0 = self.registers_i[0].getint()""" % work_list.OFFSET
     assert s == """\
 ri0 = self.registers_i[0]
 if ri0.is_constant():
-    pc = %d
+    pc = 109
     continue
 self.registers_i[1] = ConstInt(i1)
 self.registers_i[2] = ConstInt(i2)
-self.opimpl_int_guard_value(self.registers_i[0], 5)
-i0 = self.registers_i[0].getint()""" % (work_list.OFFSET + 2)
+self.opimpl_int_guard_value(ri0, 5)
+ri0 = self.registers_i[0]
+i0 = ri0.getint()
+pc = 110
+continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == {i0, i1, i2}
-
-def test_ref_guard_value():
-    r0, r1, r2 = Register('ref', 0), Register('ref', 1), Register('ref', 2)
-    insn = ('ref_guard_value', r0)
-    insns = [insn]
-    work_list = WorkList()
-
-    # specialized case
-    insn_specializer = work_list.specialize_insn(insn, {r0}, 5)
-    newpc = insn_specializer.get_pc()
-    assert newpc == work_list.OFFSET
-    s = insn_specializer.make_code()
-    assert s == 'pass # ref_guard_value, argument is already constant'
-    next_constant_registers = insn_specializer.get_next_constant_registers()
-    assert next_constant_registers == {r0}
-
-    # unspecialized cases
-    insn_specializer = work_list.specialize_insn(insn, set(), 5)
-    s = insn_specializer.make_code()
-    assert s == """\
-rr0 = self.registers_r[0]
-if rr0.is_constant():
-    pc = %d
-    continue
-self.opimpl_ref_guard_value(self.registers_r[0], 5)
-r0 = self.registers_r[0].getvalue()""" % work_list.OFFSET
-    next_constant_registers = insn_specializer.get_next_constant_registers()
-    assert next_constant_registers == {r0}
-
-    insn_specializer = work_list.specialize_insn(insn, {r1, r2}, 5)
-    s = insn_specializer.make_code()
-    # we need to sync the registers from the unboxed values to allow the guard to be created
-    # TODO: only do this for registers that are alive at this point
-    assert s == """\
-rr0 = self.registers_r[0]
-if rr0.is_constant():
-    pc = %d
-    continue
-self.registers_r[1] = ConstPtr(r1)
-self.registers_r[2] = ConstPtr(r2)
-self.opimpl_ref_guard_value(self.registers_r[0], 5)
-r0 = self.registers_r[0].getvalue()""" % (work_list.OFFSET + 2)
-    next_constant_registers = insn_specializer.get_next_constant_registers()
-    assert next_constant_registers == {r0, r1, r2}
 
 def test_switch():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
