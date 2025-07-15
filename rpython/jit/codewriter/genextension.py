@@ -603,6 +603,12 @@ class Specializer(object):
     def emit_specialized_int_add(self):
         return self._emit_specialized_int_binary("+")
 
+    def emit_specialized_int_mul(self):
+        return self._emit_specialized_int_binary("*")
+
+    def emit_specialized_int_or(self):
+        return self._emit_specialized_int_binary("|")
+
     def emit_specialized_int_sub(self):
         return self._emit_specialized_int_binary("-")
 
@@ -667,6 +673,18 @@ class Specializer(object):
     def emit_specialized_goto_if_not_int_gt(self):
         return self.emit_specialized_goto_if_not_int_comparison('int_gt', '>')
 
+    def emit_specialized_goto_if_not_int_ge(self):
+        return self.emit_specialized_goto_if_not_int_comparison('int_ge', '>=')
+
+    def emit_specialized_goto_if_not_int_le(self):
+        return self.emit_specialized_goto_if_not_int_comparison('int_le', '<=')
+
+    def emit_specialized_goto_if_not_int_ne(self):
+        return self.emit_specialized_goto_if_not_int_comparison('int_ne', '!=')
+
+    def emit_specialized_goto_if_not_int_eq(self):
+        return self.emit_specialized_goto_if_not_int_comparison('int_eq', '==')
+
     def emit_specialized_switch(self):
         lines = []
         arg = self.insn[1]
@@ -683,6 +701,10 @@ class Specializer(object):
             prefix = 'el'
         self._emit_jump(lines)
         return lines
+
+    def emit_specialized_unreachable(self):
+        return ["assert 0, 'unreachable'"]
+    emit_unspecialized_unreachable = emit_specialized_unreachable
 
     def emit_specialized_int_return(self):
         lines = []
@@ -802,6 +824,8 @@ class Specializer(object):
 
     emit_unspecialized_int_add = _emit_unspecialized_binary
     emit_unspecialized_int_sub = _emit_unspecialized_binary
+    emit_unspecialized_int_mul = _emit_unspecialized_binary
+    emit_unspecialized_int_or = _emit_unspecialized_binary
 
     def emit_unspecialized_strgetitem(self):
         lines = []
@@ -885,6 +909,18 @@ class Specializer(object):
 
     def emit_unspecialized_goto_if_not_int_gt(self):
         return self.emit_unspecialized_goto_if_not_comparison("int_gt", ">")
+
+    def emit_unspecialized_goto_if_not_int_le(self):
+        return self.emit_unspecialized_goto_if_not_comparison("int_le", "<=")
+
+    def emit_unspecialized_goto_if_not_int_ge(self):
+        return self.emit_unspecialized_goto_if_not_comparison("int_ge", ">=")
+
+    def emit_unspecialized_goto_if_not_int_ne(self):
+        return self.emit_unspecialized_goto_if_not_comparison("int_ne", "!=")
+
+    def emit_unspecialized_goto_if_not_int_eq(self):
+        return self.emit_unspecialized_goto_if_not_comparison("int_eq", "==")
 
     def emit_unspecialized_switch(self):
         lines = []
