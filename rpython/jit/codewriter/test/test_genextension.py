@@ -861,3 +861,26 @@ i0 = self.opimpl_guard_class(rr0, 5).getint()
 pc = 108
 continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
+
+def test_int_copy():
+    i0, r0, i2 = Register('int', 0), Register('ref', 0), Register('int', 2)
+    insn = ('int_copy', i2, '->', i0)
+    work_list = WorkList({5: insn, 6: ('int_return', i0)}, pc_to_nextpc={5: 6})
+
+    # specialized case
+    insn_specializer = work_list.specialize_insn(insn, {i2}, 5)
+    s = insn_specializer.make_code()
+    assert s == """\
+i0 = i2
+pc = 107
+continue"""
+
+    # unspecialized cases
+    insn_specializer = work_list.specialize_insn(insn, set(), 5)
+    s = insn_specializer.make_code()
+    assert s == """\
+ri2 = self.registers_i[2]
+self.registers_i[0] = ri2
+pc = 6
+continue"""
+    next_constant_registers = insn_specializer.get_next_constant_registers()

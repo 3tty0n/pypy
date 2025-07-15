@@ -660,6 +660,21 @@ class Specializer(object):
         self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
         return lines
 
+    def emit_specialized_getfield_raw_i(self):
+        import pdb;pdb.set_trace()
+        raise Unsupported
+
+    def emit_specialized_getfield_gc_i(self):
+        import pdb;pdb.set_trace()
+        raise Unsupported
+
+    def emit_specialized_int_copy(self):
+        arg0, = self._get_args()
+        res = self.insn[self.resindex]
+        lines = ["%s = %s" % (self._get_as_unboxed(res), self._get_as_unboxed(arg0))]
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
+        return lines
+
     def emit_specialized_goto(self):
         label, = self._get_args()
         label_pc = self.get_target_pc(label)
@@ -919,6 +934,16 @@ class Specializer(object):
         lines.append('i%s = self.opimpl_%s(%s, %d).getint()' % (res.index, self.insn[0], self._get_as_box(arg0), self.orig_pc))
         lines.append('pc = %d' % specializer.get_pc())
         lines.append('continue')
+        return lines
+
+    def emit_unspecialized_int_copy(self):
+        arg0, = self._get_args()
+        res = self.insn[self.resindex]
+        lines = []
+        cond = self._emit_assignment_return_const_check(arg0, lines)
+        assert cond is not None
+        lines.append("self.registers_%s[%s] = %s" % (res.kind[0], res.index, self._get_as_box(arg0)))
+        self._emit_jump(lines)
         return lines
 
     def emit_unspecialized_goto_if_not_comparison(self, name, symbol):
