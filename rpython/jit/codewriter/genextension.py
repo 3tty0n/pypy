@@ -5,6 +5,7 @@ from rpython.jit.metainterp.history import (Const, ConstInt, ConstPtr,
 from rpython.flowspace.model import Constant
 from rpython.jit.codewriter.flatten import Register, TLabel, Label
 from rpython.jit.codewriter.jitcode import SwitchDictDescr
+from rpython.rtyper.lltypesystem import lltype, llmemory, rstr
 
 class GenExtension(object):
     def __init__(self, assembler, ssarepr, jitcode):
@@ -17,6 +18,7 @@ class GenExtension(object):
         self.precode = []
         self.pc_to_insn = {}
         self.pc_to_nextpc = {}
+        self.pc_to_index = {}
         self.code = []
         self.globals = {}
         self._reset_insn()
@@ -38,6 +40,11 @@ class GenExtension(object):
         from rpython.jit.metainterp.pyjitpl import ChangeFrame
         self.precode.append("def jit_shortcut(self): # %s" % self.jitcode.name)
         self.precode.append("    pc = self.pc")
+        prefix = ""
+        for pc in self.assembler.startpoints:
+            self.precode.append("    %sif pc == %s: pass" % (prefix, pc))
+            prefix = "el"
+        self.precode.append("    else: assert 0, 'unreachable'")
         self.precode.append("    while 1:")
         for index, insn in enumerate(self.ssarepr.insns):
             self._reset_insn()
@@ -50,29 +57,61 @@ class GenExtension(object):
             else:
                 nextpc = self.ssarepr._insns_pos[index + 1]
             self.pc_to_nextpc[pc] = nextpc
-        #self.work_list = WorkList(self.pc_to_insn, self.assembler.label_positions, self.pc_to_nextpc)
-        #code_per_pc = {}
-        #for startpc in self.assembler.startpoints:
-        #    spec = self.work_list.specialize_pc(frozenset([]), startpc)
-        #size = len(code_per_pc)
-        #while len(code_per_pc) != len(self.work_list.specialize_instruction):
-        #    for key, spec in self.work_list.specialize_instruction.items():
-        #        code_per_pc[spec.spec_pc] = spec.make_code(), spec
-        #for pc, (code, spec) in code_per_pc.iteritems():
-        #    print "______"
-        #    print pc, self.pc_to_insn[spec.orig_pc], spec.constant_registers
-        #    print code
-        #import pdb;pdb.set_trace()
+            self.pc_to_index[pc] = index
+        self.work_list = WorkList(self.pc_to_insn, self.assembler.label_positions, self.pc_to_nextpc, self.globals)
+        code_per_pc = {}
+        for startpc in self.assembler.startpoints:
+            spec = self.work_list.specialize_pc(frozenset([]), startpc)
+        size = len(code_per_pc)
+        while len(code_per_pc) != len(self.work_list.specialize_instruction):
+            for key, spec in self.work_list.specialize_instruction.items():
+                code_per_pc[spec.spec_pc] = spec.make_code(), spec
+        for pc, (code, spec) in code_per_pc.iteritems():
+            print "______"
+            print pc, self.pc_to_insn[spec.orig_pc], spec.constant_registers
+            print code
+        assert not self.code
+        for pc, (code, spec) in code_per_pc.iteritems():
+            if code is None:
+                self.code = []
+                if spec.constant_registers:
+                    spec._emit_sync_registers(self.code)
+                    self.code.append("pc = %s" % spec.orig_pc)
+                    self.code.append("continue")
+                else:
+                    self._make_code(self.pc_to_index[spec.orig_pc], spec.insn)
+                code_per_pc[pc] = (str(py.code.Source("\n".join(self.code)).deindent()), spec)
+        self.code = []
+        for pc, (code, spec) in code_per_pc.iteritems():
+            self.code.append("if pc == %s: # %s %s" % (pc, spec.insn, spec.constant_registers))
+            #self.code.append("    import pdb;pdb.set_trace()")
+            self.code.append("    self.pc = %s" % (self.pc_to_nextpc[spec.orig_pc], ))
+            for line in str(py.code.Source(code).indent('    ')).splitlines():
+                self.code.append(line)
+        self.code.append("assert 0 # unreachable")
+        allcode = []
+        allcode.extend(self.precode)
+        for line in self.code:
+            allcode.append(" " * 8 + line)
+        self.jitcode._genext_source = "\n".join(allcode)
+        d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
+             "lltype": lltype, "rstr": rstr}
+        d.update(self.globals)
+        source = py.code.Source(self.jitcode._genext_source)
+        exec source.compile() in d
+        print "_____"
+        print self.jitcode.dump()
+        print "_____"
+        print self.jitcode._genext_source
+        self.jitcode.genext_function = d['jit_shortcut']
+        self.jitcode.genext_function.__name__ += "_" + self.jitcode.name
 
-        for index, insn in enumerate(self.ssarepr.insns):
+    def _make_code(self, index, insn):
             self._reset_insn()
-            if isinstance(insn[0], Label) or insn[0] == '---':
-                continue
+            assert not (isinstance(insn[0], Label) or insn[0] == '---')
             self.insn = insn
             pc = self.ssarepr._insns_pos[index]
-            self.code.append("if pc == %s: # %s" % (pc, self.insn))
             nextpc = self.pc_to_nextpc[pc]
-            self.code.append("    self.pc = %s" % (nextpc, ))
             instruction = self.insns[ord(self.jitcode.code[pc])]
             self.name, self.argcodes = instruction.split("/")
             self.methodname = 'opimpl_' + self.name
@@ -86,7 +125,7 @@ class GenExtension(object):
             pcs = self.next_possible_pcs(insn, needed_label, nextpc)
             if len(pcs) == 0:
                 self.code.append("    assert 0 # unreachable")
-                continue
+                return
             elif len(pcs) == 1:
                 next_insn = self.pc_to_insn[pcs[0]]
                 goto_target = self._find_actual_jump_target_chain(next_insn, pcs[0])
@@ -103,19 +142,6 @@ class GenExtension(object):
                 self.code.append("    else:")
                 self.code.append("        assert 0 # unreachable")
             self.code.append("    continue")
-        self.code.append("assert 0 # unreachable")
-        allcode = []
-        allcode.extend(self.precode)
-        for line in self.code:
-            allcode.append(" " * 8 + line)
-        self.jitcode._genext_source = "\n".join(allcode)
-        d = {"ConstInt": ConstInt, "JitCode": JitCode, "ChangeFrame": ChangeFrame}
-        d.update(self.globals)
-        source = py.code.Source(self.jitcode._genext_source)
-        exec source.compile() in d
-        print self.jitcode._genext_source
-        self.jitcode.genext_function = d['jit_shortcut']
-        self.jitcode.genext_function.__name__ += "_" + self.jitcode.name
 
     def _add_global(self, obj):
         name = "glob%s" % len(self.globals)
@@ -438,7 +464,7 @@ class WorkList(object):
 
     OFFSET = 100
 
-    def __init__(self, pc_to_insn=None, label_to_pc=None, pc_to_nextpc=None):
+    def __init__(self, pc_to_insn=None, label_to_pc=None, pc_to_nextpc=None, globals=None):
         self.max_used_pc = 0
         if pc_to_insn is None:
             pc_to_insn = dict()
@@ -455,9 +481,14 @@ class WorkList(object):
         if label_to_pc is not None:
             self.label_to_pc.update(label_to_pc)
         self.label_to_spec_pc = {}
-        self.globals = {}
+        if globals is not None:
+            self.globals = globals
+        else:
+            self.globals = {}
 
     def _make_spec(self, insn, constant_registers, orig_pc):
+        assert self.orig_pc_to_insn[orig_pc] == insn
+        constant_registers = frozenset(val for val in constant_registers if not isinstance(val, Constant))
         key = (orig_pc, insn, frozenset(constant_registers))
         if key in self.specialize_instruction:
             return self.specialize_instruction[key]
@@ -543,12 +574,16 @@ class Specializer(object):
         return True
 
     def _make_code_specialized(self):
-        meth = getattr(self, "emit_specialized_" + self.name.strip('-'), self._emit_specialized_fallback)
-        return '\n'.join(meth())
+        meth = getattr(self, "emit_specialized_" + self.name.strip('-'), None)
+        if meth is not None:
+            return '\n'.join(meth())
+        return None
 
     def _make_code_unspecialized(self):
-        meth = getattr(self, "emit_unspecialized_" + self.name.strip('-'), self._emit_unspecialized_fallback)
-        return '\n'.join(meth())
+        meth = getattr(self, "emit_unspecialized_" + self.name.strip('-'), None)
+        if meth is not None:
+            return '\n'.join(meth())
+        return None
 
     def get_next_constant_registers(self):
         if not self.resindex:
@@ -575,11 +610,13 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
 
-    def _emit_jump(self, lines, target_pc=-1):
+    def _emit_jump(self, lines, target_pc=-1, constant_registers=None):
         if target_pc == -1:
             target_pc = self.work_list.pc_to_nextpc[self.orig_pc]
+        if constant_registers is None:
+            constant_registers = self.get_next_constant_registers()
         spec_next = self.work_list.specialize_pc(
-                self.get_next_constant_registers(), target_pc)
+                constant_registers, target_pc)
         lines.append("pc = %s" % spec_next.spec_pc)
         lines.append("continue")
 
@@ -615,6 +652,7 @@ class Specializer(object):
         target_spec = self.work_list.specialize_pc(self.constant_registers, label_pc)
         lines.append("    pc = %d" % target_spec.spec_pc)
         lines.append("    continue")
+        self._emit_jump(lines)
         return lines
 
     def emit_specialized_goto_if_not_int_lt(self):
@@ -639,6 +677,11 @@ class Specializer(object):
             prefix = 'el'
         self._emit_jump(lines)
         return lines
+
+    def emit_specialized_int_return(self):
+        lines = []
+        self._emit_sync_registers(lines)
+        return lines + self.emit_unspecialized_int_return()
 
     def _get_type_prefix(self, arg):
         if isinstance(arg, Constant) or isinstance(arg, Register):
@@ -665,7 +708,8 @@ class Specializer(object):
         if isinstance(arg, Constant):
             kind = getkind(arg.concretetype)
             if kind == 'int':
-                return "ConstInt(%d)" % arg.value
+                val = lltype.cast_primitive(lltype.Signed, arg.value)
+                return "ConstInt(%d)" % val
             elif kind == 'ref':
                 return "ConstPtr(%d)" % arg.value
             else:
@@ -686,7 +730,7 @@ class Specializer(object):
         if t == 'i':
             return "ri%d.getint()" % (arg.index)
         elif t == 'r':
-            return "rf%d.getref_base()" % (arg.index)
+            return "rr%d.getref_base()" % (arg.index)
         elif t == 'f':
             return "rf%d.getfloat()" % (arg.index)
         else:
@@ -708,7 +752,7 @@ class Specializer(object):
             return None
         t = self._get_type_prefix(arg)
         if t in 'irf':
-            lines.append("r%s%d = self.registers_i[%d]" % (t, arg.index, arg.index))
+            lines.append("r%s%d = self.registers_%s[%d]" % (t, arg.index, t, arg.index))
         else:
             assert False, "%s is unsupported type" % (arg)
         if arg in self.constant_registers:
@@ -716,43 +760,36 @@ class Specializer(object):
         else:
             return "r%s%s.is_constant()" % (t, arg.index)
 
+    def _emit_binary_if(self, arg0, arg1, lines):
+        check0 = self._emit_assignment_return_const_check(arg0, lines)
+        check1 = self._emit_assignment_return_const_check(arg1, lines)
+        assert check0 is not None or check1 is not None
+        if check0 is None:
+            cond = check1
+        elif check1 is None:
+            cond = check0
+        else:
+            cond = "%s and %s" % (check0, check1)
+        lines.append("if %s:" % (cond, ))
+        if check0 is not None:
+            lines.append("    i%d = r%s%d.getint()" % (arg0.index, self._get_type_prefix(arg0), arg0.index))
+        if check1 is not None:
+            lines.append("    i%d = r%s%d.getint()" % (arg1.index, self._get_type_prefix(arg1), arg1.index))
+
     def _emit_unspecialized_binary(self):
         lines = []
         args = self._get_args()
         assert len(args) == 2
         arg0, arg1 = args[0], args[1]
         result = self.insn[self.resindex]
-
-        arg0_type_prefix = self._get_type_prefix(arg0)
-        arg0_reg_rep = "r%s%d" % (arg0_type_prefix, arg0.index)
-        arg0_local_rep = "%s%d" % (arg0_type_prefix, arg0.index)
-
-        res_type_prefix = self._get_type_prefix(result)
-
-        lines.append("%s = self.registers_%s[%d]" % (
-            arg0_reg_rep, arg0_type_prefix, arg0.index))
-        if isinstance(arg1, Constant):
-            lines.append("if %s.is_constant():" % (arg0_reg_rep))
-            lines.append("    %s = %s" % (arg0_local_rep, self._emit_unbox_by_type(arg0)))
-            next_constant_registers = {arg0}
-        else:
-            arg1_type_prefix = self._get_type_prefix(arg1)
-            arg1_reg_rep = "r%s%d" % (arg1_type_prefix, arg1.index)
-            arg1_local_rep = "%s%d" % (arg1_type_prefix, arg1.index)
-            lines.append("%s = self.registers_%s[%d]" % (
-                arg1_reg_rep, arg1_type_prefix, arg1.index))
-            lines.append("if %s.is_constant() and %s.is_constant():" % (
-                arg0_reg_rep, arg1_reg_rep))
-            lines.append("    %s = %s" % (arg0_local_rep, self._emit_unbox_by_type(arg0)))
-            lines.append("    %s = %s" % (arg1_local_rep, self._emit_unbox_by_type(arg1)))
-            next_constant_registers = {arg0, arg1}
+        self._emit_binary_if(arg0, arg1, lines)
         specializer = self.work_list.specialize_insn(
-            self.insn, self.constant_registers.union(next_constant_registers), self.orig_pc)
+            self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
         lines.append("    pc = %d" % (specializer.get_pc()))
         lines.append("    continue")
         lines.append("else:")
-        lines.append("    self.registers_%s[%d] = self.%s(%s, %s)" % (
-            res_type_prefix, result.index, self.methodname,
+        lines.append("    self.registers_i[%d] = self.%s(%s, %s)" % (
+            result.index, self.methodname,
             self._get_as_box(arg0), self._get_as_box(arg1)))
         self._emit_jump(lines)
         return lines
@@ -793,6 +830,8 @@ class Specializer(object):
         cond = self._emit_assignment_return_const_check(arg0, lines)
         assert cond is not None
         lines.append('if %s:' % cond)
+        lines.append('    %s%d = %s' % (
+            self._get_type_prefix(arg0), arg0.index, self._emit_unbox_by_type(arg0)))
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0}), self.orig_pc)
         lines.append('    pc = %d' % specializer.get_pc())
@@ -803,8 +842,7 @@ class Specializer(object):
         lines.append(self._emit_assignment_from_reg_by_type(arg0))
         lines.append('%s%d = %s' % (
             self._get_type_prefix(arg0), arg0.index, self._emit_unbox_by_type(arg0)))
-        self.constant_registers.add(arg0)
-        self._emit_jump(lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0}))
         return lines
     emit_unspecialized_int_guard_value = emit_unspecialized_guard_value
     emit_unspecialized_ref_guard_value = emit_unspecialized_guard_value
@@ -814,20 +852,7 @@ class Specializer(object):
         _, arg0, arg1, arg2 = self.insn # left, right, label
 
         target_pc = self.get_target_pc(arg2)
-        check0 = self._emit_assignment_return_const_check(arg0, lines)
-        check1 = self._emit_assignment_return_const_check(arg1, lines)
-        assert check0 is not None or check1 is not None
-        if check0 is None:
-            cond = check1
-        elif check1 is None:
-            cond = check0
-        else:
-            cond = "%s and %s" % (check0, check1)
-        lines.append("if %s:" % (cond, ))
-        if check0 is not None:
-            lines.append("    i%d = r%s%d.getint()" % (arg0.index, self._get_type_prefix(arg0), arg0.index))
-        if check1 is not None:
-            lines.append("    i%d = r%s%d.getint()" % (arg1.index, self._get_type_prefix(arg1), arg1.index))
+        self._emit_binary_if(arg0, arg1, lines)
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
         lines.append("    pc = %d" % (specializer.get_pc()))
@@ -835,6 +860,18 @@ class Specializer(object):
         lines.append("condbox = self.opimpl_%s(%s, %s)" % (name, self._get_as_box(arg0), self._get_as_box(arg1)))
         self._emit_sync_registers(lines)
         lines.append("self.opimpl_goto_if_not(condbox, %d, %d)" % (target_pc, self.orig_pc))
+        lines.append("pc = self.pc")
+        lines.append("if pc == %s:" % target_pc)
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers, target_pc)
+        lines.append("    pc = %s" % specializer.spec_pc)
+        lines.append("else:")
+        next_pc = self.work_list.pc_to_nextpc[self.orig_pc]
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers, next_pc)
+        lines.append("    assert self.pc == %s" % specializer.orig_pc)
+        lines.append("    pc = %s" % specializer.spec_pc)
+        lines.append("continue")
         return lines
 
     def emit_unspecialized_goto_if_not_int_lt(self):
@@ -858,7 +895,17 @@ class Specializer(object):
             self._get_type_prefix(arg0), arg0.index, self._emit_unbox_by_type(arg0)))
         lines.append('    pc = %d' % specializer.get_pc())
         lines.append('    continue')
+        self._emit_sync_registers(lines)
         lines.append("self.opimpl_switch(%s, %s, %d)" % (arg0_var, name_descr, self.orig_pc))
+        lines.append("pc = self.pc")
+        # do the trick
+        prefix = ''
+        for pc in sorted(descr.dict.values()) + [self.work_list.pc_to_nextpc[self.orig_pc]]:
+            specializer = self.work_list.specialize_pc(
+                self.constant_registers, pc)
+            lines.append("%sif pc == %s: pc = %s" % (prefix, pc, specializer.spec_pc))
+            prefix = "el"
+        lines.append("else: assert 0")
         return lines
 
     def emit_unspecialized_return(self):
@@ -873,24 +920,12 @@ class Specializer(object):
     emit_unspecialized_int_return = emit_unspecialized_return
 
     def emit_unspecialized_live(self):
-        return []
+        lines = ["self.pc = %s" % (self.orig_pc, )]
+        self._emit_jump(lines)
+        return lines
+    emit_specialized_live = emit_unspecialized_live
 
     def _emit_sync_registers(self, lines):
         # we need to sync the registers from the unboxed values to e.g. allow a guard to be created
         for const_reg in self.constant_registers:
             lines.append('self.registers_%s[%d] = %s' % (const_reg.kind[0], const_reg.index, self._get_as_box(const_reg)))
-
-    def _emit_specialized_fallback(self):
-        # we don't know how to implement this specialized op, sync registers
-        # and jump to unspecialized op
-        import pdb;pdb.set_trace()
-        lines = ["# fall back to unspecialized"]
-        self._emit_sync_registers(lines)
-        spec = self.work_list.specialize_pc(set(), self.orig_pc)
-        lines.append("pc = %s" % (spec.spec_pc, ))
-        lines.append("continue")
-        return lines
-
-    def _emit_unspecialized_fallback(self):
-        import pdb;pdb.set_trace()
-        assert 0

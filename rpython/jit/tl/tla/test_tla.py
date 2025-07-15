@@ -176,5 +176,5 @@ class TestLLtype(LLJitMixin):
             w_result = interp(code, tla.W_IntObject(intvalue))
             assert isinstance(w_result, tla.W_IntObject)
             return w_result.intvalue
-        res = self.meta_interp(interp_w, [42], listops=True)
+        res = self.meta_interp(interp_w, [42], listops=True, backendopt=True)
         assert res == 0

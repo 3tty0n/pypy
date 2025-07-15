@@ -114,7 +114,7 @@ class Frame(object):
         self.stack[stackpos] = None
         return res
 
-    #@warmup_critical_function
+    @warmup_critical_function
     def interp(self):
         bytecode = self.bytecode
         pc = 0
