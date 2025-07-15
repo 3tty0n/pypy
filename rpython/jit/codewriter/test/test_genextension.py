@@ -832,14 +832,32 @@ continue"""
 pc = 118
 continue"""
 
-def dont_test_int_add_sequence():
-    i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
-    insns = [
-        ('int_add', i0, Constant(1, lltype.Signed), '->', i1),
-        ('int_add', i0, i1, '->', i2)]
-    work_list = WorkList(insns)
-    insn_specializer = work_list.specialize_insn(insn1, {i0}, 5)
-    newpc = insn_specializer.get_pc()
-    assert newpc == 100
-    s = insn_specializer.make_code()
+def test_guard_class():
+    i0, r0, i2 = Register('int', 0), Register('ref', 0), Register('int', 2)
+    insn = ('guard_class', r0, '->', i0)
+    work_list = WorkList({5: insn, 6: ('int_return', 6)}, pc_to_nextpc={5: 6})
 
+    # specialized case
+    insn_specializer = work_list.specialize_insn(insn, {r0}, 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == work_list.OFFSET + 6
+    s = insn_specializer.make_code()
+    assert s == """\
+# guard_class, argument is already constant
+i0 = lltype.cast_opaque_ptr(OBJECTPTR, r0)
+pc = 107
+continue"""
+
+    # unspecialized cases
+    insn_specializer = work_list.specialize_insn(insn, set(), 5)
+    s = insn_specializer.make_code()
+    assert s == """\
+rr0 = self.registers_r[0]
+if self.metainterp.heapcache.is_class_known(rr0):
+    i0 = self.cls_of_box(rr0).getint()
+    pc = 108
+    continue
+i0 = self.opimpl_guard_class(rr0, 5).getint()
+pc = 108
+continue"""
+    next_constant_registers = insn_specializer.get_next_constant_registers()
