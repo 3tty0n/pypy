@@ -780,9 +780,9 @@ class Specializer(object):
         if t == 'i':
             line = "i%d = ri%d.getint()" % (arg.index, arg.index,)
         elif t == 'r':
-            line = "i%d = rr%d.getref_base()" % (arg.index, arg.index,)
+            line = "r%d = rr%d.getref_base()" % (arg.index, arg.index,)
         elif t == 'f':
-            line = "i%d = rf%d.getfloat()" % (arg.index, arg.index,)
+            line = "f%d = rf%d.getfloat()" % (arg.index, arg.index,)
         else:
             assert False, "%s is unsupported type" % (arg)
         lines.append(indent + line)
