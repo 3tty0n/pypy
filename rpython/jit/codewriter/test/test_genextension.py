@@ -567,7 +567,7 @@ def test_strgetitem():
     assert s == """\
 rr0 = self.registers_r[0]
 ri0 = self.registers_i[0]
-if rr0.is_constant() and ri0.is_constant():
+if isinstance(rr0, ConstPtr) and isinstance(ri0, ConstInt):
     r0 = rr0.getref_base()
     i0 = ri0.getint()
     pc = %d

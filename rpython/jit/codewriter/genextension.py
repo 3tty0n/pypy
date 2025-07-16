@@ -838,9 +838,9 @@ class Specializer(object):
             cond = "%s and %s" % (check0, check1)
         lines.append("if %s:" % (cond, ))
         if check0 is not None:
-            lines.append("    i%d = r%s%d.getint()" % (arg0.index, self._get_type_prefix(arg0), arg0.index))
+            self._emit_unbox_by_type(arg0, lines, '    ')
         if check1 is not None:
-            lines.append("    i%d = r%s%d.getint()" % (arg1.index, self._get_type_prefix(arg1), arg1.index))
+            self._emit_unbox_by_type(arg1, lines, '    ')
 
     def _emit_unspecialized_binary(self):
         lines = []
@@ -869,20 +869,9 @@ class Specializer(object):
         lines = []
         arg0, arg1 = self.insn[1], self.insn[2]
         result = self.insn[self.resindex]
-        lines.append("rr%d = self.registers_r[%d]" % (arg0.index, arg0.index))
-
-        if isinstance(arg1, Constant):
-            lines.append("if rr%d.is_constant():" % (arg0.index))
-            lines.append("    i%d = ri%d.getint()" % (arg1.index, arg1.index))
-            next_constant_registers = {arg0}
-        else:
-            lines.append("ri%d = self.registers_i[%d]" % (arg1.index, arg1.index))
-            lines.append("if rr%d.is_constant() and ri%d.is_constant():" % (arg0.index, arg1.index))
-            lines.append("    r%d = rr%d.getref_base()" % (arg0.index, arg0.index))
-            lines.append("    i%d = ri%d.getint()" % (arg1.index, arg1.index))
-            next_constant_registers = {arg0, arg1}
+        self._emit_binary_if(arg0, arg1, lines)
         specializer = self.work_list.specialize_insn(
-            self.insn, self.constant_registers.union(next_constant_registers), self.orig_pc)
+            self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
         lines.append("    pc = %d" % (specializer.get_pc()))
         lines.append("    continue")
         lines.append("else:")
