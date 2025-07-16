@@ -102,7 +102,7 @@ class GenExtension(object):
         for line in self.code:
             allcode.append(" " * 8 + line)
         self.jitcode._genext_source = "\n".join(allcode)
-        d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
+        d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr, "ConstFloat": ConstFloat, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
              "lltype": lltype, "rstr": rstr, 'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR, 'support': support}
         d.update(self.globals)
         source = py.code.Source(self.jitcode._genext_source)
@@ -803,15 +803,20 @@ class Specializer(object):
     def _emit_assignment_return_const_check(self, arg, lines):
         if isinstance(arg, Constant):
             return None
+        if arg in self.constant_registers:
+            return None
         t = self._get_type_prefix(arg)
         if t in 'irf':
             lines.append("r%s%d = self.registers_%s[%d]" % (t, arg.index, t, arg.index))
         else:
             assert False, "%s is unsupported type" % (arg)
-        if arg in self.constant_registers:
-            return None
+        if t == 'i':
+            cls = 'ConstInt'
+        elif t == 'r':
+            cls = 'ConstPtr'
         else:
-            return "r%s%s.is_constant()" % (t, arg.index)
+            cls = 'ConstFloat'
+        return "isinstance(r%s%s, %s)" % (t, arg.index, cls)
 
     def _emit_binary_if(self, arg0, arg1, lines):
         check0 = self._emit_assignment_return_const_check(arg0, lines)

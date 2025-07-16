@@ -37,7 +37,7 @@ def jit_shortcut(self): # test
         if pc == 0: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([])
             self.pc = 5
             ri22 = self.registers_i[22]
-            if ri22.is_constant():
+            if isinstance(ri22, ConstInt):
                 i22 = ri22.getint()
                 pc = 116
                 continue
@@ -54,7 +54,7 @@ def jit_shortcut(self): # test
             self.pc = 9
             ri23 = self.registers_i[23]
             ri22 = self.registers_i[22]
-            if ri23.is_constant() and ri22.is_constant():
+            if isinstance(ri23, ConstInt) and isinstance(ri22, ConstInt):
                 i23 = ri23.getint()
                 i22 = ri22.getint()
                 pc = 117
@@ -66,7 +66,7 @@ def jit_shortcut(self): # test
         if pc == 9: # ('int_sub', %i22, (1), '->', %i22) frozenset([])
             self.pc = 13
             ri22 = self.registers_i[22]
-            if ri22.is_constant():
+            if isinstance(ri22, ConstInt):
                 i22 = ri22.getint()
                 pc = 118
                 continue
@@ -111,8 +111,7 @@ def jit_shortcut(self): # test
         if pc == 120: # ('int_add', %i23, %i22, '->', %i23) frozenset([%i22])
             self.pc = 9
             ri23 = self.registers_i[23]
-            ri22 = self.registers_i[22]
-            if ri23.is_constant():
+            if isinstance(ri23, ConstInt):
                 i23 = ri23.getint()
                 pc = 117
                 continue
@@ -190,7 +189,7 @@ def jit_shortcut(self): # test
         if pc == 3: # ('switch', %i22, <SwitchDictDescr {-5: 9, 2: 14, 7: 19}>) frozenset([])
             self.pc = 7
             ri22 = self.registers_i[22]
-            if ri22.is_constant():
+            if isinstance(ri22, ConstInt):
                 i22 = ri22.getint()
                 pc = 122
                 continue
@@ -495,7 +494,7 @@ continue"""
     assert s == """\
 ri1 = self.registers_i[1]
 ri0 = self.registers_i[0]
-if ri1.is_constant() and ri0.is_constant():
+if isinstance(ri1, ConstInt) and isinstance(ri0, ConstInt):
     i1 = ri1.getint()
     i0 = ri0.getint()
     pc = 108
@@ -512,7 +511,7 @@ continue"""
     assert s == """\
 ri1 = self.registers_i[1]
 ri0 = self.registers_i[0]
-if ri1.is_constant() and ri0.is_constant():
+if isinstance(ri1, ConstInt) and isinstance(ri0, ConstInt):
     i1 = ri1.getint()
     i0 = ri0.getint()
     pc = 113
@@ -546,7 +545,7 @@ continue"""
     s = insn_specializer.make_code()
     assert s == """\
 ri0 = self.registers_i[0]
-if ri0.is_constant():
+if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
     pc = %d
     continue
@@ -605,7 +604,7 @@ def test_goto_if_not_int_lt():
     assert s == """\
 ri0 = self.registers_i[0]
 ri1 = self.registers_i[1]
-if ri0.is_constant() and ri1.is_constant():
+if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
     i0 = ri0.getint()
     i1 = ri1.getint()
     pc = 117
@@ -626,7 +625,7 @@ continue"""
     assert s == """\
 ri0 = self.registers_i[0]
 ri1 = self.registers_i[1]
-if ri0.is_constant() and ri1.is_constant():
+if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
     i0 = ri0.getint()
     i1 = ri1.getint()
     pc = 119
@@ -677,7 +676,7 @@ continue"""
     s = insn_specializer.make_code()
     assert s == """\
 ri0 = self.registers_i[0]
-if ri0.is_constant():
+if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
     pc = %d
     continue
@@ -694,7 +693,7 @@ continue""" % (work_list.OFFSET + 6)
     # TODO: only do this for registers that are alive at this point
     assert s == """\
 ri0 = self.registers_i[0]
-if ri0.is_constant():
+if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
     pc = 109
     continue
@@ -747,7 +746,7 @@ continue""" % (
     s = insn_specializer.make_code()
     assert s == """\
 ri0 = self.registers_i[0]
-if ri0.is_constant():
+if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
     pc = 121
     continue
