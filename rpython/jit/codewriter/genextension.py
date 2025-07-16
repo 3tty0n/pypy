@@ -749,10 +749,10 @@ class Specializer(object):
                 TYPE = arg.concretetype
                 if isinstance(TYPE, lltype.Ptr):
                     assert TYPE.TO._gckind == 'raw'
-                    raise Unsupported
+                    return "support.ptr2int(%s)" % (self._add_global(arg.value), )
                 val = lltype.cast_primitive(lltype.Signed, arg.value)
                 return str(val)
-            return str(arg.value)
+            raise Unsupported
         else:
             t = self._get_type_prefix(arg)
             return "%s%s" % (t, arg.index)
@@ -764,7 +764,7 @@ class Specializer(object):
                 TYPE = arg.concretetype
                 if isinstance(TYPE, lltype.Ptr):
                     assert TYPE.TO._gckind == 'raw'
-                    raise Unsupported
+                    return "ConstInt(support.ptr2int(%s))" % (self._add_global(arg.value), )
                 val = lltype.cast_primitive(lltype.Signed, arg.value)
                 return "ConstInt(%d)" % val
             elif kind == 'ref':
