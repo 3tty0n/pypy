@@ -653,14 +653,24 @@ class Specializer(object):
             res = self.insn[self.resindex]
             PTRTYPE, name = _get_ptrtype_fieldname_from_fielddescr(descr)
             resultcast = _find_result_cast(PTRTYPE, name)
-            lines.append('i%s = %sllmemory.cast_adr_to_ptr(support.int2adr(i%s), %s).%s)' % (res.index, resultcast, arg.index, self._add_global(PTRTYPE), name))
+            lines.append('%s = %sllmemory.cast_adr_to_ptr(support.int2adr(i%s), %s).%s)' % (self._get_as_unboxed(res), resultcast, arg.index, self._add_global(PTRTYPE), name))
             self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
             return lines
         raise Unsupported
 
-    def emit_specialized_getfield_gc_i(self):
-        #import pdb;pdb.set_trace()
+    def emit_specialized_getfield_gc_i_pure(self):
+        if self.insn[2].is_always_pure():
+            lines = []
+            arg, descr = self._get_args()
+            res = self.insn[self.resindex]
+            PTRTYPE, name = _get_ptrtype_fieldname_from_fielddescr(descr)
+            resultcast = _find_result_cast(PTRTYPE, name)
+            lines.append('%s = %slltype.cast_opaque_ptr(%s, %s).%s)' % (
+                self._get_as_unboxed(res), resultcast, self._add_global(PTRTYPE), self._get_as_unboxed(arg), name))
+            self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
+            return lines
         raise Unsupported
+    emit_specialized_getfield_gc_r_pure = emit_specialized_getfield_gc_i_pure
 
     def emit_specialized_int_copy(self):
         arg0, = self._get_args()

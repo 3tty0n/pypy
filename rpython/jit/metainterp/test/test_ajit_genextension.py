@@ -3630,6 +3630,38 @@ class BasicTests:
         res = self.meta_interp(f, args)
         assert res == f(*args)
 
+    def test_getfield_gc_i_pure(self):
+        class Cls:
+            _immutable_fields_ = ['flag']
+        cls1 = Cls()
+        cls1.flag = 1
+        cls2 = Cls()
+        cls2.flag = 2
+        class Inst:
+            pass
+        inst_prebuild = Inst()
+        inst_prebuild.cls = cls1
+
+        @warmup_critical_function
+        def f(n):
+            if n > 5:
+                i = Inst()
+                i.cls = cls1
+            elif n == -100:
+                i = inst_prebuild
+            else:
+                i = Inst()
+                i.cls = cls2
+            if promote(i.cls).flag == 1:
+                return 100
+            return 200
+        res = self.interp_operations(f, [3], backendopt=True)
+        assert res == 200
+        res = self.interp_operations(f, [13], backendopt=True)
+        assert res == 100
+        res = self.interp_operations(f, [-100], backendopt=True)
+        assert res == 100
+
 
 class BaseLLtypeTests(BasicTests):
 
