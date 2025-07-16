@@ -345,41 +345,6 @@ class GenExtension(object):
         self.resindex = resindex
         return lines, needed_orgpc, needed_label
 
-    def emit_live(self):
-        return ["pass # live"]
-
-    def emit_goto(self):
-        assert len(self.args) == 1
-        lines = []
-        targetpc = int(self.args[0])
-        next_insn = self.pc_to_insn[targetpc]
-        goto_target = self._find_actual_jump_target_chain(next_insn, targetpc)
-        lines.append("pc = self.pc = %s # goto" % (goto_target, ))
-        lines.append("continue")
-        return lines
-
-    def emit_switch(self):
-        lines = []
-        arg, descr, pc = self.args_as_objects
-        argvalue, argname, pc = self.args
-        lines.append("arg = %s" % (argvalue))
-        lines.append("if arg.is_constant():")
-        lines.append("    value = arg.getint()")
-        dict_switch = descr.as_dict()
-        prefix = ''
-        for pc in dict_switch:
-            targetpc = dict_switch[pc]
-            next_insn = self.pc_to_insn[targetpc]
-            targetpc = self._find_actual_jump_target(next_insn, targetpc)
-            lines.append("    %sif value == %d:" % (prefix, pc))
-            lines.append("        pc = self.pc = %d" % targetpc)
-            lines.append("        continue")
-            prefix = 'el'
-        lines.append("    else:")
-        lines.append("        assert 0 # unreachable")
-        newlines = self.emit_default()
-        return lines + newlines
-
     def emit_newframe_function(self):
         return ["self._result_argcode = %r" % (self.returncode, ), "return # change frame"]
     emit_inline_call_r_i = emit_newframe_function
@@ -758,9 +723,7 @@ class Specializer(object):
     emit_unspecialized_unreachable = emit_specialized_unreachable
 
     def emit_specialized_int_return(self):
-        lines = []
-        self._emit_sync_registers(lines)
-        return lines + self.emit_unspecialized_int_return()
+        return self.emit_unspecialized_int_return()
 
     def _get_type_prefix(self, arg):
         if isinstance(arg, Constant) or isinstance(arg, Register):

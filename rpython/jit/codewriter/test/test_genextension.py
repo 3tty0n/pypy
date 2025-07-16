@@ -135,8 +135,6 @@ def jit_shortcut(self): # test
             continue
         if pc == 123: # ('int_return', %i23) frozenset([%i23, %i22])
             self.pc = 18
-            self.registers_i[23] = ConstInt(i23)
-            self.registers_i[22] = ConstInt(i22)
             ri23 = self.registers_i[23]
             try:
                 self.opimpl_int_return(ConstInt(i23))
@@ -251,7 +249,6 @@ def jit_shortcut(self): # test
             continue
         if pc == 123: # ('int_return', (42)) frozenset([%i22])
             self.pc = 9
-            self.registers_i[22] = ConstInt(i22)
             try:
                 self.opimpl_int_return(ConstInt(42))
             except ChangeFrame: return
