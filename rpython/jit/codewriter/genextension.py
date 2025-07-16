@@ -8,6 +8,7 @@ from rpython.jit.codewriter.flatten import Register, TLabel, Label
 from rpython.jit.codewriter.jitcode import SwitchDictDescr
 from rpython.rtyper.lltypesystem import lltype, llmemory, rstr
 from rpython.rtyper.rclass import OBJECTPTR
+from rpython.rlib import objectmodel
 
 class GenExtension(object):
     def __init__(self, assembler, ssarepr, jitcode):
@@ -1161,8 +1162,11 @@ class Specializer(object):
 
     def _emit_sync_registers(self, lines):
         # we need to sync the registers from the unboxed values to e.g. allow a guard to be created
-        for const_reg in self.constant_registers:
-            lines.append('self.registers_%s[%d] = %s' % (const_reg.kind[0], const_reg.index, self._get_as_box(const_reg)))
+        if not self.constant_registers:
+            return
+        func, args = _make_register_syncer(self.constant_registers)
+        funcname = self._add_global(func)
+        lines.append("%s(self, %s) # %s" % (funcname, ", ".join(args), func.func_name))
 
 
 class Unsupported(Exception):
@@ -1185,3 +1189,27 @@ def _find_result_cast(T, field):
             assert RES.TO._gckind == 'raw'
             return 'support.ptr2int('
     raise Unsupported
+
+def _make_register_syncer(constant_registers, cache={}):
+    key = constant_registers
+    if constant_registers in cache:
+        return cache[constant_registers]
+    constant_registers = sorted(constant_registers, key=lambda reg: (reg.kind, reg.index))
+    args = [reg.kind[0] + str(reg.index) for reg in constant_registers]
+    name = "jit_sync_regs_" + "_".join(args)
+    lines = ["def %s(self, %s):" % (name, ", ".join(args))]
+    for reg in constant_registers:
+        if reg.kind == 'int':
+            val = "ConstInt(i%d)" % reg.index
+        elif reg.kind == 'ref':
+            val = "ConstPtr(r%d)" % reg.index
+        else:
+            assert 0
+        lines.append('    self.registers_%s[%d] = %s' % (reg.kind[0], reg.index, val))
+    source = py.code.Source("\n".join(lines))
+    d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr}
+    exec source.compile() in d
+    res = objectmodel.dont_inline(d[name])
+    cache[key] = res, args
+    return res, args
+

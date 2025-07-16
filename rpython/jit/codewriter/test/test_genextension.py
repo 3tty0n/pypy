@@ -631,7 +631,7 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
     pc = 119
     continue
 condbox = self.opimpl_int_lt(ri0, ri1)
-self.registers_i[2] = ConstInt(i2)
+glob0(self, i2) # jit_sync_regs_i2
 self.opimpl_goto_if_not(condbox, 17, 5)
 pc = self.pc
 if pc == 17:
@@ -691,7 +691,7 @@ if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
     pc = 119
     continue
-self.registers_i[2] = ConstInt(i2)
+glob0(self, i2) # jit_sync_regs_i2
 self.opimpl_goto_if_not_int_is_true(ri0, 17, 5)
 pc = self.pc
 if pc == 17:
@@ -751,7 +751,7 @@ if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
     pc = 119
     continue
-self.registers_i[2] = ConstInt(i2)
+glob0(self, i2) # jit_sync_regs_i2
 self.opimpl_goto_if_not_int_is_zero(ri0, 17, 5)
 pc = self.pc
 if pc == 17:
@@ -811,7 +811,7 @@ if isinstance(rr0, ConstPtr):
     r0 = rr0.getref_base()
     pc = 119
     continue
-self.registers_i[2] = ConstInt(i2)
+glob0(self, i2) # jit_sync_regs_i2
 self.opimpl_goto_if_not_ptr_nonzero(rr0, 17, 5)
 pc = self.pc
 if pc == 17:
@@ -871,7 +871,7 @@ if isinstance(rr0, ConstPtr):
     r0 = rr0.getref_base()
     pc = 119
     continue
-self.registers_i[2] = ConstInt(i2)
+glob0(self, i2) # jit_sync_regs_i2
 self.opimpl_goto_if_not_ptr_zero(rr0, 17, 5)
 pc = self.pc
 if pc == 17:
@@ -975,8 +975,7 @@ if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
     pc = 109
     continue
-self.registers_i[1] = ConstInt(i1)
-self.registers_i[2] = ConstInt(i2)
+glob0(self, i1, i2) # jit_sync_regs_i1_i2
 self.opimpl_int_guard_value(ri0, 5)
 ri0 = self.registers_i[0]
 i0 = ri0.getint()
