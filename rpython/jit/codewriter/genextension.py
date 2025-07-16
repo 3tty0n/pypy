@@ -647,7 +647,15 @@ class Specializer(object):
         return lines
 
     def emit_specialized_getfield_raw_i(self):
-        #import pdb;pdb.set_trace()
+        if self.insn[2].is_always_pure():
+            lines = []
+            arg, descr = self._get_args()
+            res = self.insn[self.resindex]
+            PTRTYPE, name = _get_ptrtype_fieldname_from_fielddescr(descr)
+            resultcast = _find_result_cast(PTRTYPE, name)
+            lines.append('i%s = %sllmemory.cast_adr_to_ptr(support.int2adr(i%s), %s).%s)' % (res.index, resultcast, arg.index, self._add_global(PTRTYPE), name))
+            self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
+            return lines
         raise Unsupported
 
     def emit_specialized_getfield_gc_i(self):
@@ -1033,3 +1041,21 @@ class Specializer(object):
 
 class Unsupported(Exception):
     pass
+
+def _get_ptrtype_fieldname_from_fielddescr(descr):
+    if hasattr(descr, 'S'): # llgraph backend
+        return lltype.Ptr(descr.S), descr.fieldname
+    return lltype.Ptr(descr.offset.TYPE), descr.offset.fldname
+
+def _find_result_cast(T, field):
+    RES = getattr(T.TO, field)
+    kind = getkind(RES)
+    if kind == 'int':
+        if RES == lltype.Signed:
+            return '('
+        if isinstance(RES, lltype.Primitive):
+            return 'lltype.cast_primitive(lltype.Signed, '
+        if isinstance(RES, lltype.Ptr):
+            assert RES.TO._gckind == 'raw'
+            return 'support.ptr2int('
+    raise Unsupported
