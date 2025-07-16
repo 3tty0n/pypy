@@ -453,7 +453,6 @@ class WorkList(object):
         self.label_to_pc = {}
         if label_to_pc is not None:
             self.label_to_pc.update(label_to_pc)
-        self.label_to_spec_pc = {}
         if globals is not None:
             self.globals = globals
         else:
@@ -539,10 +538,6 @@ class Specializer(object):
 
     def get_target_pc(self, label):
         return self.work_list.label_to_pc[label.name]
-
-    def get_target_spec_pc(self, label):
-        import pdb;pdb.set_trace()
-        return self.work_list.label_to_spec_pc[label]
 
     def is_constant(self, arg):
         return arg in self.constant_registers
@@ -652,11 +647,11 @@ class Specializer(object):
         return lines
 
     def emit_specialized_getfield_raw_i(self):
-        import pdb;pdb.set_trace()
+        #import pdb;pdb.set_trace()
         raise Unsupported
 
     def emit_specialized_getfield_gc_i(self):
-        import pdb;pdb.set_trace()
+        #import pdb;pdb.set_trace()
         raise Unsupported
 
     def emit_specialized_int_copy(self):
