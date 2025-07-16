@@ -795,7 +795,7 @@ def test_guard_class():
     s = insn_specializer.make_code()
     assert s == """\
 # guard_class, argument is already constant
-i0 = support.ptr2int(lltype.cast_opaque_ptr(OBJECTPTR, r0))
+i0 = support.ptr2int(lltype.cast_opaque_ptr(OBJECTPTR, r0).typeptr)
 pc = 107
 continue"""
 

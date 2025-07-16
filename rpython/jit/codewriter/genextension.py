@@ -642,7 +642,7 @@ class Specializer(object):
         lines = ['# guard_class, argument is already constant']
         arg, = self._get_args()
         res = self.insn[self.resindex]
-        lines.append('i%s = support.ptr2int(lltype.cast_opaque_ptr(OBJECTPTR, r%s))' % (res.index, arg.index))
+        lines.append('i%s = support.ptr2int(lltype.cast_opaque_ptr(OBJECTPTR, r%s).typeptr)' % (res.index, arg.index))
         self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
         return lines
 
