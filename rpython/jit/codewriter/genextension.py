@@ -686,6 +686,27 @@ class Specializer(object):
         self._emit_jump(lines, label_pc)
         return lines
 
+    def emit_specialized_goto_if_not_int_absolute(self, name, symbol_fmt):
+        if symbol_fmt == '':
+            symbol_fmt == '%s'
+        elif '%s' not in symbol_fmt:
+            assert 0, "expected a valid format string for symbol_fmt"
+        lines = []
+        arg, label = self._get_args()
+        unboxed_arg = self._get_as_unboxed(arg)
+        operation = symbol_fmt % (unboxed_arg, )
+        lines.append("cond = %s" % (operation,))
+        lines.append("if not cond:")
+        label_pc = self.get_target_pc(label)
+        target_spec = self.work_list.specialize_pc(self.constant_registers, label_pc)
+        lines.append("    pc = %d" % (target_spec.spec_pc,))
+        lines.append("    continue")
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_goto_if_not_int_is_true(self):
+        return self.emit_specialized_goto_if_not_int_absolute('int_is_true', '%s != 0')
+
     def emit_specialized_goto_if_not_int_comparison(self, name, symbol):
         lines = []
         arg0, arg1, label = self._get_args()
@@ -693,7 +714,7 @@ class Specializer(object):
         lines.append("if not cond:")
         label_pc = self.get_target_pc(label)
         target_spec = self.work_list.specialize_pc(self.constant_registers, label_pc)
-        lines.append("    pc = %d" % target_spec.spec_pc)
+        lines.append("    pc = %d" % (target_spec.spec_pc,))
         lines.append("    continue")
         self._emit_jump(lines)
         return lines
@@ -836,6 +857,12 @@ class Specializer(object):
             cls = 'ConstFloat'
         return "isinstance(r%s%s, %s)" % (t, arg.index, cls)
 
+    def _emit_unary_if(self, arg, lines):
+        check = self._emit_assignment_return_const_check(arg, lines)
+        assert check is not None
+        lines.append("if %s:" % (check, ))
+        self._emit_unbox_by_type(arg, lines, '    ')
+
     def _emit_binary_if(self, arg0, arg1, lines):
         check0 = self._emit_assignment_return_const_check(arg0, lines)
         check1 = self._emit_assignment_return_const_check(arg1, lines)
@@ -909,6 +936,7 @@ class Specializer(object):
         self._emit_unbox_by_type(arg0, lines)
         self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0}))
         return lines
+
     emit_unspecialized_int_guard_value = emit_unspecialized_guard_value
     emit_unspecialized_ref_guard_value = emit_unspecialized_guard_value
 
@@ -942,6 +970,36 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
 
+    def emit_unspecialized_goto_if_not_absolute(self, name):
+        lines = []
+        _, arg0, arg1 = self.insn # argument, label
+
+        target_pc = self.get_target_pc(arg1)
+        self._emit_unary_if(arg0, lines)
+        specializer = self.work_list.specialize_insn(
+            self.insn, self.constant_registers.union({arg0}), self.orig_pc)
+        lines.append("    pc = %d" % (specializer.get_pc(), ))
+        lines.append("    continue")
+        self._emit_sync_registers(lines)
+        lines.append("self.opimpl_goto_if_not_%s(%s, %s, %s)" % \
+            (name, self._get_as_box(arg0), target_pc, self.orig_pc))
+        lines.append("pc = self.pc")
+        lines.append("if pc == %s:" % (target_pc,))
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers, target_pc)
+        lines.append("    pc = %s" % (specializer.spec_pc,))
+        lines.append("else:")
+        next_pc = self.work_list.pc_to_nextpc[self.orig_pc]
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers, next_pc)
+        lines.append("    assert self.pc == %s" % (specializer.orig_pc,))
+        lines.append("    pc = %s" % (specializer.spec_pc,))
+        lines.append("continue")
+        return lines
+
+    def emit_unspecialized_goto_if_not_int_is_true(self):
+        return self.emit_unspecialized_goto_if_not_absolute("int_is_true")
+
     def emit_unspecialized_goto_if_not_comparison(self, name, symbol):
         lines = []
         _, arg0, arg1, arg2 = self.insn # left, right, label
@@ -950,22 +1008,22 @@ class Specializer(object):
         self._emit_binary_if(arg0, arg1, lines)
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
-        lines.append("    pc = %d" % (specializer.get_pc()))
+        lines.append("    pc = %d" % (specializer.get_pc(), ))
         lines.append("    continue")
         lines.append("condbox = self.opimpl_%s(%s, %s)" % (name, self._get_as_box(arg0), self._get_as_box(arg1)))
         self._emit_sync_registers(lines)
         lines.append("self.opimpl_goto_if_not(condbox, %d, %d)" % (target_pc, self.orig_pc))
         lines.append("pc = self.pc")
-        lines.append("if pc == %s:" % target_pc)
+        lines.append("if pc == %s:" % (target_pc,))
         specializer = self.work_list.specialize_pc(
             self.constant_registers, target_pc)
-        lines.append("    pc = %s" % specializer.spec_pc)
+        lines.append("    pc = %s" % (specializer.spec_pc,))
         lines.append("else:")
         next_pc = self.work_list.pc_to_nextpc[self.orig_pc]
         specializer = self.work_list.specialize_pc(
             self.constant_registers, next_pc)
-        lines.append("    assert self.pc == %s" % specializer.orig_pc)
-        lines.append("    pc = %s" % specializer.spec_pc)
+        lines.append("    assert self.pc == %s" % (specializer.orig_pc,))
+        lines.append("    pc = %s" % (specializer.spec_pc,))
         lines.append("continue")
         return lines
 
