@@ -710,6 +710,9 @@ class Specializer(object):
     def emit_specialized_goto_if_not_int_is_zero(self):
         return self.emit_specialized_goto_if_not_int_absolute('int_is_zero', '%s == 0')
 
+    def emit_specialized_goto_if_not_ptr_nonzero(self):
+        return self.emit_specialized_goto_if_not_int_absolute('ptr_nonzero', '%s.nonnull()')
+
     def emit_specialized_goto_if_not_int_comparison(self, name, symbol):
         lines = []
         arg0, arg1, label = self._get_args()
@@ -1005,6 +1008,9 @@ class Specializer(object):
 
     def emit_unspecialized_goto_if_not_int_is_zero(self):
         return self.emit_unspecialized_goto_if_not_absolute("int_is_zero")
+
+    def emit_unspecialized_goto_if_not_ptr_nonzero(self):
+        return self.emit_unspecialized_goto_if_not_absolute("ptr_nonzero")
 
     def emit_unspecialized_goto_if_not_comparison(self, name, symbol):
         lines = []
