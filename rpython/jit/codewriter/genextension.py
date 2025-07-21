@@ -686,7 +686,7 @@ class Specializer(object):
         self._emit_jump(lines, label_pc)
         return lines
 
-    def emit_specialized_goto_if_not_int_absolute(self, name, symbol_fmt):
+    def emit_specialized_goto_if_not_absolute(self, name, symbol_fmt):
         if symbol_fmt == '':
             symbol_fmt == '%s'
         elif '%s' not in symbol_fmt:
@@ -705,16 +705,16 @@ class Specializer(object):
         return lines
 
     def emit_specialized_goto_if_not_int_is_true(self):
-        return self.emit_specialized_goto_if_not_int_absolute('int_is_true', '%s != 0')
+        return self.emit_specialized_goto_if_not_absolute('int_is_true', '%s != 0')
 
     def emit_specialized_goto_if_not_int_is_zero(self):
-        return self.emit_specialized_goto_if_not_int_absolute('int_is_zero', '%s == 0')
+        return self.emit_specialized_goto_if_not_absolute('int_is_zero', '%s == 0')
 
     def emit_specialized_goto_if_not_ptr_nonzero(self):
-        return self.emit_specialized_goto_if_not_int_absolute('ptr_nonzero', '%s.nonnull()')
+        return self.emit_specialized_goto_if_not_absolute('ptr_nonzero', '%s.nonnull()')
 
     def emit_specialized_goto_if_not_ptr_zero(self):
-        return self.emit_specialized_goto_if_not_int_absolute('ptr_zero', 'not %s.nonnull()')
+        return self.emit_specialized_goto_if_not_absolute('ptr_zero', 'not %s.nonnull()')
 
     def emit_specialized_goto_if_not_int_comparison(self, name, symbol):
         lines = []
