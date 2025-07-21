@@ -835,6 +835,66 @@ pc = 123
 continue"""
 
 
+def test_goto_if_not_ptr_zero():
+    r0, i1, i2 = Register('ref', 0), Register('int', 1), Register('int', 2)
+    L1 = TLabel('L1')
+    insn = ('goto_if_not_ptr_zero', r0, L1)
+    pc_to_insn = {5: insn, 17: ('int_add', r0, i1, '->', i2), 6: ('int_return', r0)}
+    work_list = WorkList(pc_to_insn, label_to_pc={'L1': 17}, pc_to_nextpc={5: 6})
+
+    # unspecialized case
+    insn_specializer = work_list.specialize_pc(set(), 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == 5
+    s = insn_specializer.make_code()
+    assert s == """\
+rr0 = self.registers_r[0]
+if isinstance(rr0, ConstPtr):
+    r0 = rr0.getref_base()
+    pc = 117
+    continue
+self.opimpl_goto_if_not_ptr_zero(rr0, 17, 5)
+pc = self.pc
+if pc == 17:
+    pc = 17
+else:
+    assert self.pc == 6
+    pc = 6
+continue"""
+
+    # unspecialized case
+    insn_specializer = work_list.specialize_pc({i2}, 5)
+    s = insn_specializer.make_code()
+    assert s == """\
+rr0 = self.registers_r[0]
+if isinstance(rr0, ConstPtr):
+    r0 = rr0.getref_base()
+    pc = 119
+    continue
+self.registers_i[2] = ConstInt(i2)
+self.opimpl_goto_if_not_ptr_zero(rr0, 17, 5)
+pc = self.pc
+if pc == 17:
+    pc = 120
+else:
+    assert self.pc == 6
+    pc = 121
+continue"""
+
+    # specialized case
+    insn_specializer = work_list.specialize_pc({r0}, 5)
+    newpc = insn_specializer.get_pc()
+    s = insn_specializer.make_code()
+    assert newpc == work_list.OFFSET + max(pc_to_insn)
+    assert s == """\
+cond = not r0.nonnull()
+if not cond:
+    pc = 122
+    continue
+pc = 123
+continue"""
+
+
 def test_int_guard_value():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
     insn = ('int_guard_value', i0)
