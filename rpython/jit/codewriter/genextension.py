@@ -516,11 +516,13 @@ class Specializer(object):
         self.name = self.insn[0]
         self.methodname = "opimpl_" + self.name
         self.resindex = len(self.insn) - 1 if '->' in self.insn else None
+        self.tempvarindex = 0
 
     def _reset_specializer(self):
         self.name = None
         self.methoname = None
         self.resindex = None
+        self.tempvarindex = 0
 
     def _add_global(self, obj):
         name = "glob%s" % len(self.work_list.globals)
@@ -585,6 +587,11 @@ class Specializer(object):
         if not self._check_all_constant_args(args):
             return self.constant_registers - {self.insn[self.resindex]}
         return self.constant_registers.union({self.insn[self.resindex]})
+
+    def _get_new_temp_variable(self):
+        i = self.tempvarindex
+        self.tempvarindex += 1
+        return "v%d" %i
 
     def emit_specialized_int_add(self):
         return self._emit_specialized_int_binary("+")
@@ -677,6 +684,19 @@ class Specializer(object):
         res = self.insn[self.resindex]
         lines = ["%s = %s" % (self._get_as_unboxed(res), self._get_as_unboxed(arg0))]
         self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
+        return lines
+
+    def emit_specialized_int_between(self):
+        arg0, arg1, arg2 = self._get_args()
+        lines = []
+        tempvar = self._get_new_temp_variable()
+        lines.append('%s = %s - %s' % (tempvar, self._get_as_unboxed(arg2), self._get_as_unboxed(arg0)))
+        lines.append('if %s == 1:' % (tempvar,))
+        lines.append('    return %s == %s' % (self._get_as_unboxed(arg0), self._get_as_unboxed(arg1)))
+        lines.append('else:')
+        tempvar2 = self._get_new_temp_variable()
+        lines.append('    %s = %s - %s' % (tempvar2, self._get_as_unboxed(arg1), self._get_as_unboxed(arg0)))
+        lines.append('    return %s < %s' % (tempvar2, tempvar))
         return lines
 
     def emit_specialized_goto(self):
@@ -888,6 +908,21 @@ class Specializer(object):
         if check1 is not None:
             self._emit_unbox_by_type(arg1, lines, '    ')
 
+    def _emit_n_ary_if(self, args, lines):
+        args_and_checks = []
+        at_least_one_not_none = False
+        for arg in args:
+            check = self._emit_assignment_return_const_check(arg, lines)
+            if check is not None:
+                at_least_one_not_none = True
+            args_and_checks.append((arg, check))
+        assert at_least_one_not_none
+        condition = ' and '.join([ac[1] for ac in args_and_checks if ac[1] is not None])
+        lines.append('if %s:' % condition)
+        for arg, check in args_and_checks:
+            if check is not None:
+                self._emit_unbox_by_type(arg, lines, '    ')
+
     def _emit_unspecialized_binary(self):
         lines = []
         args = self._get_args()
@@ -977,6 +1012,22 @@ class Specializer(object):
         assert cond is not None
         lines.append("self.registers_%s[%s] = %s" % (res.kind[0], res.index, self._get_as_box(arg0)))
         self._emit_jump(lines)
+        return lines
+
+    def emit_unspecialized_int_between(self):
+        args = self._get_args()
+        res = self.insn[self.resindex]
+        lines = []
+        # try to figure out every register is constant
+        self._emit_n_ary_if(args, lines)
+        # if all registers are constant, let the control to the specialized path
+        specializer = self.work_list.specialize_insn(
+            self.insn, self.constant_registers.union(set(args)), self.orig_pc)
+        lines.append("    pc = %d" % (specializer.get_pc(), ))
+        lines.append("    continue")
+        lines.append("self.opimpl_int_between(%s, %s, %s)" % (
+            self._get_as_box(args[0]), self._get_as_box(args[1]), self._get_as_box(args[2])
+        ))
         return lines
 
     def emit_unspecialized_goto_if_not_absolute(self, name):

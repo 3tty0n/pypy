@@ -895,6 +895,43 @@ pc = 123
 continue"""
 
 
+def test_int_between():
+    i0, i1, i2, i3 = Register('int', 0), Register('int', 1), Register('int', 2), Register('int', 3)
+    insn = ('int_between', i0, i1, i2, '->', i3)
+    pc_to_insn = {5: insn, 17: ('int_add', i0, i1, '->', i2), 6: ('int_return', i0)}
+
+    # unspecialized case
+    # every register is unconstant
+    work_list = WorkList(pc_to_insn, label_to_pc={'L1': 17}, pc_to_nextpc={})
+    insn_specializer = work_list.specialize_pc(set(), 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == 5
+    s = insn_specializer.make_code()
+    assert s == """\
+ri0 = self.registers_i[0]
+ri1 = self.registers_i[1]
+ri2 = self.registers_i[2]
+if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt) and isinstance(ri2, ConstInt):
+    i0 = ri0.getint()
+    i1 = ri1.getint()
+    i2 = ri2.getint()
+    pc = 117
+    continue
+self.opimpl_int_between(ri0, ri1, ri2)"""
+
+    work_list = WorkList(pc_to_insn, label_to_pc={'L1': 17}, pc_to_nextpc={})
+    insn_specializer = work_list.specialize_pc({i0, i1, i2, i3}, 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == work_list.OFFSET + max(pc_to_insn)
+    s = insn_specializer.make_code()
+    assert s == """\
+v0 = i2 - i0
+if v0 == 1:
+    return i0 == i1
+else:
+    v1 = i1 - i0
+    return v1 < v0"""
+
 def test_int_guard_value():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
     insn = ('int_guard_value', i0)
