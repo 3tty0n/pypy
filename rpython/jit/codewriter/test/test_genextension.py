@@ -682,7 +682,7 @@ else:
     pc = 6
 continue"""
 
-# unspecialized case
+    # unspecialized case
     insn_specializer = work_list.specialize_pc({i2}, 5)
     s = insn_specializer.make_code()
     assert s == """\
@@ -708,6 +708,66 @@ continue"""
     assert newpc == work_list.OFFSET + max(pc_to_insn)
     assert s == """\
 cond = i0 != 0
+if not cond:
+    pc = 122
+    continue
+pc = 123
+continue"""
+
+
+def test_goto_if_not_int_is_zero():
+    i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
+    L1 = TLabel('L1')
+    insn = ('goto_if_not_int_is_zero', i0, L1)
+    pc_to_insn = {5: insn, 17: ('int_add', i0, i1, '->', i2), 6: ('int_return', i0)}
+    work_list = WorkList(pc_to_insn, label_to_pc={'L1': 17}, pc_to_nextpc={5: 6})
+
+    # unspecialized case
+    insn_specializer = work_list.specialize_pc(set(), 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == 5
+    s = insn_specializer.make_code()
+    assert s == """\
+ri0 = self.registers_i[0]
+if isinstance(ri0, ConstInt):
+    i0 = ri0.getint()
+    pc = 117
+    continue
+self.opimpl_goto_if_not_int_is_zero(ri0, 17, 5)
+pc = self.pc
+if pc == 17:
+    pc = 17
+else:
+    assert self.pc == 6
+    pc = 6
+continue"""
+
+    # unspecialized case
+    insn_specializer = work_list.specialize_pc({i2}, 5)
+    s = insn_specializer.make_code()
+    assert s == """\
+ri0 = self.registers_i[0]
+if isinstance(ri0, ConstInt):
+    i0 = ri0.getint()
+    pc = 119
+    continue
+self.registers_i[2] = ConstInt(i2)
+self.opimpl_goto_if_not_int_is_zero(ri0, 17, 5)
+pc = self.pc
+if pc == 17:
+    pc = 120
+else:
+    assert self.pc == 6
+    pc = 121
+continue"""
+
+    # specialized case
+    insn_specializer = work_list.specialize_pc({i0}, 5)
+    newpc = insn_specializer.get_pc()
+    s = insn_specializer.make_code()
+    assert newpc == work_list.OFFSET + max(pc_to_insn)
+    assert s == """\
+cond = i0 == 0
 if not cond:
     pc = 122
     continue
