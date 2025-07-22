@@ -631,9 +631,7 @@ class Specializer(object):
         lines.append(indent + "continue")
 
     def emit_specialized_strgetitem(self):
-        args = self._get_args()
-        assert len(args) == 2
-        arg0, arg1 = args[0], args[1]
+        arg0, arg1 = self._get_args()
         result = self.insn[self.resindex]
         lines = ["i%s = ord(lltype.cast_opaque_ptr(lltype.Ptr(rstr.STR), r%d).chars[%s])" % (
             result.index, arg0.index, self._get_as_unboxed(arg1))]
@@ -645,6 +643,16 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
     emit_specialized_ref_guard_value = emit_specialized_int_guard_value
+
+    def emit_specialized_int_is_true(self):
+        arg, = self._get_args()
+        result = self.insn[self.resindex]
+        lines = ["i%s = int(bool(%s))" % (
+            result.index,
+            self._get_as_unboxed(arg)
+        )]
+        self._emit_jump(lines)
+        return lines
 
     def emit_specialized_guard_class(self):
         lines = ['# guard_class, argument is already constant']
@@ -1019,6 +1027,21 @@ class Specializer(object):
 
     emit_unspecialized_int_guard_value = emit_unspecialized_guard_value
     emit_unspecialized_ref_guard_value = emit_unspecialized_guard_value
+
+    def emit_unspecialized_int_is_true(self):
+        args = self._get_args()
+        res = self.insn[self.resindex]
+        arg, = self._get_args()
+        result = self.insn[self.resindex]
+        lines = []
+        self._emit_n_ary_if([arg], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg}),
+                        indent='    ', target_pc=self.orig_pc)
+        lines.append("self.registers_%s[%s] = self.opimpl_%s(%s)" % (
+            result.kind[0], result.index,
+            self.insn[0], self._get_as_box(arg)))
+        self._emit_jump(lines)
+        return lines
 
     def emit_unspecialized_guard_class(self):
         arg0 = self.insn[1]
