@@ -1046,6 +1046,22 @@ class Specializer(object):
         lines.append('continue')
         return lines
 
+    def emit_unspecialized_getfield_gc_i_pure(self):
+        if self.insn[2].is_always_pure():
+            arg, descr = self._get_args()
+            result = self.insn[self.resindex]
+            lines = []
+            self._emit_n_ary_if([arg], lines)
+            self._emit_jump(lines, constant_registers=self.constant_registers.union({arg}),
+                            indent='    ', target_pc=self.orig_pc)
+            lines.append("self.registers_%s[%s] = self.opimpl_%s(%s, %s)" % (
+                result.kind[0], result.index,
+                self.insn[0], self._get_as_box(arg), self._add_global(descr)))
+            self._emit_jump(lines)
+            return lines
+        raise Unsupported
+    emit_unspecialized_getfield_gc_r_pure = emit_unspecialized_getfield_gc_i_pure
+
     def emit_unspecialized_int_copy(self):
         arg0, = self._get_args()
         res = self.insn[self.resindex]
