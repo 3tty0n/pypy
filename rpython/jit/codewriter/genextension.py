@@ -701,17 +701,17 @@ class Specializer(object):
         self._emit_jump(lines, constant_registers=self.constant_registers.union({result}))
         return lines
 
-    def emit_specialized_instance_ptr_eq(self):
-        arg0, arg1 = self._get_args()
-        lines = []
-        result = self.insn[self.resindex]
-        lines.append('i%s = %s is %s' % (
-            result.index,
-            self._get_as_unboxed(arg0),
-            self._get_as_unboxed(arg1),
-        ))
-        self._emit_jump(lines, constant_registers=self.constant_registers.union({result}))
-        return lines
+    # def emit_specialized_instance_ptr_eq(self):
+    #     arg0, arg1 = self._get_args()
+    #     lines = []
+    #     result = self.insn[self.resindex]
+    #     lines.append('i%s = %s is %s' % (
+    #         result.index,
+    #         self._get_as_unboxed(arg0),
+    #         self._get_as_unboxed(arg1),
+    #     ))
+    #     self._emit_jump(lines, constant_registers=self.constant_registers.union({result}))
+    #     return lines
 
     def emit_specialized_goto(self):
         label, = self._get_args()
@@ -1055,23 +1055,23 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
 
-    def emit_unspecialized_instance_ptr_eq(self):
-        args = self._get_args()
-        res = self.insn[self.resindex]
-        lines = []
-        # try to figure out every register is constant
-        self._emit_n_ary_if(args, lines)
-        # if all registers are constant, let the control to the specialized path
-        specializer = self.work_list.specialize_insn(
-            self.insn, self.constant_registers.union(set(args)), self.orig_pc)
-        lines.append("    pc = %d" % (specializer.get_pc(), ))
-        lines.append("    continue")
-        result = self.insn[self.resindex]
-        lines.append("self.registers_i[%s] = self.opimpl_instance_ptr_eq(%s, %s)" % (
-            result.index, self._get_as_box(args[0]), self._get_as_box(args[1])
-        ))
-        self._emit_jump(lines)
-        return lines
+    # def emit_unspecialized_instance_ptr_eq(self):
+    #     args = self._get_args()
+    #     res = self.insn[self.resindex]
+    #     lines = []
+    #     # try to figure out every register is constant
+    #     self._emit_n_ary_if(args, lines)
+    #     # if all registers are constant, let the control to the specialized path
+    #     specializer = self.work_list.specialize_insn(
+    #         self.insn, self.constant_registers.union(set(args)), self.orig_pc)
+    #     lines.append("    pc = %d" % (specializer.get_pc(), ))
+    #     lines.append("    continue")
+    #     result = self.insn[self.resindex]
+    #     lines.append("self.registers_i[%s] = self.opimpl_instance_ptr_eq(%s, %s)" % (
+    #         result.index, self._get_as_box(args[0]), self._get_as_box(args[1])
+    #     ))
+    #     self._emit_jump(lines)
+    #     return lines
 
 
     def emit_unspecialized_goto_if_not_absolute(self, name):
