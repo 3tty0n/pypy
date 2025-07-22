@@ -831,6 +831,8 @@ class Specializer(object):
                 if not isinstance(val, int):
                     return self._add_global(arg.value)
                 return str(val)
+            if kind == 'ref':
+                return "lltype.cast_opaque_ptr(llmemory.GCREF, %s)" % self._add_global(arg.value)
             raise Unsupported
         else:
             t = self._get_type_prefix(arg)
@@ -849,7 +851,7 @@ class Specializer(object):
                     return "ConstInt(%s)" % self._add_global(arg.value)
                 return "ConstInt(%d)" % val
             elif kind == 'ref':
-                return "ConstPtr(%d)" % arg.value
+                return "ConstPtr(lltype.cast_opaque_ptr(llmemory.GCREF, %s))" % self._add_global(arg.value)
             else:
                 assert False
         elif arg in self.constant_registers:
