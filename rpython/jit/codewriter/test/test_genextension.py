@@ -1028,7 +1028,7 @@ continue""" % (work_list.OFFSET + max(pc_to_insn) + 1,
     assert newpc == work_list.OFFSET + 6
     s = insn_specializer.make_code()
     assert s == """\
-i2 = r0 is r1
+i2 = r0 == r1
 pc = %d
 continue""" % (work_list.OFFSET + max(pc_to_insn) + 1)
     next_constant_registers = insn_specializer.get_next_constant_registers()

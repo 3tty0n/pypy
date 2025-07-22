@@ -724,7 +724,7 @@ class Specializer(object):
         arg0, arg1 = self._get_args()
         lines = []
         result = self.insn[self.resindex]
-        lines.append('i%s = %s is %s' % (
+        lines.append('i%s = %s == %s' % (
             result.index,
             self._get_as_unboxed(arg0),
             self._get_as_unboxed(arg1),
