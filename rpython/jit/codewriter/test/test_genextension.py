@@ -981,59 +981,58 @@ i0 = ri0.getint()
 pc = 110
 continue"""
 
-# def test_instance_ptr_eq():
-#     r0, r1, i2 = Register('ref', 0), Register('ref', 1), Register('int', 2)
-#     insn = ('instance_ptr_eq', r0, r1, '->', i2)
-#     pc_to_insn = {5: insn, 6: ('int_return', i2)}
+def test_instance_ptr_eq():
+    r0, r1, i2 = Register('ref', 0), Register('ref', 1), Register('int', 2)
+    insn = ('instance_ptr_eq', r0, r1, '->', i2)
+    pc_to_insn = {5: insn, 6: ('int_return', i2)}
 
-#     # unspecialized case
-#     # every register is unconstant
-#     work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
-#     insn_specializer = work_list.specialize_pc(set(), 5)
-#     newpc = insn_specializer.get_pc()
-#     assert newpc == 5
-#     s = insn_specializer.make_code()
-#     assert s == """\
-# rr0 = self.registers_r[0]
-# rr1 = self.registers_r[1]
-# if isinstance(rr0, ConstPtr) and isinstance(rr1, ConstPtr):
-#     r0 = rr0.getref_base()
-#     r1 = rr1.getref_base()
-#     pc = %d
-#     continue
-# self.registers_i[2] = self.opimpl_instance_ptr_eq(rr0, rr1)
-# pc = 6
-# continue""" % (work_list.OFFSET + max(pc_to_insn))
+    # unspecialized case
+    # every register is unconstant
+    work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
+    insn_specializer = work_list.specialize_pc(set(), 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == 5
+    s = insn_specializer.make_code()
+    assert s == """\
+rr0 = self.registers_r[0]
+rr1 = self.registers_r[1]
+if isinstance(rr0, ConstPtr) and isinstance(rr1, ConstPtr):
+    r0 = rr0.getref_base()
+    r1 = rr1.getref_base()
+    pc = %d
+    continue
+self.registers_i[2] = self.opimpl_instance_ptr_eq(rr0, rr1)
+pc = 6
+continue""" % (work_list.OFFSET + max(pc_to_insn))
 
-#     work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
-#     insn_specializer = work_list.specialize_pc({r0}, 5)
-#     newpc = insn_specializer.get_pc()
-#     assert newpc == 5
-#     s = insn_specializer.make_code()
-#     assert s == """\
-# rr0 = self.registers_r[0]
-# rr1 = self.registers_r[1]
-# if isinstance(rr0, ConstPtr) and isinstance(rr1, ConstPtr):
-#     r0 = rr0.getref_base()
-#     r1 = rr1.getref_base()
-#     pc = %d
-#     continue
-# self.registers_i[2] = self.opimpl_instance_ptr_eq(ConstPtr(...), rr1)
-# pc = 6
-# continue""" % (work_list.OFFSET + max(pc_to_insn))
+    work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
+    insn_specializer = work_list.specialize_pc({r0}, 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == 106
+    s = insn_specializer.make_code()
+    assert s == """\
+rr1 = self.registers_r[1]
+if isinstance(rr1, ConstPtr):
+    r1 = rr1.getref_base()
+    pc = %d
+    continue
+self.registers_i[2] = self.opimpl_instance_ptr_eq(ConstPtr(r0), rr1)
+pc = %d
+continue""" % (work_list.OFFSET + max(pc_to_insn) + 1,
+               work_list.OFFSET + max(pc_to_insn) + 2)
 
-#     # specialized case
-#     work_list = WorkList({5: insn, 6: ('int_return', 6)}, pc_to_nextpc={5: 6})
-#     insn_specializer = work_list.specialize_insn(insn, {r0, r1}, 5)
-#     newpc = insn_specializer.get_pc()
-#     assert newpc == work_list.OFFSET + 6
-#     s = insn_specializer.make_code()
-#     assert s == """\
-# i2 = r0 is r1
-# pc = %d
-# continue""" % (work_list.OFFSET + max(pc_to_insn) + 1)
-#     next_constant_registers = insn_specializer.get_next_constant_registers()
-#     assert next_constant_registers == {r0, r1, i2}
+    # specialized case
+    work_list = WorkList({5: insn, 6: ('int_return', 6)}, pc_to_nextpc={5: 6})
+    insn_specializer = work_list.specialize_insn(insn, {r0, r1}, 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == work_list.OFFSET + 6
+    s = insn_specializer.make_code()
+    assert s == """\
+i2 = r0 is r1
+pc = %d
+continue""" % (work_list.OFFSET + max(pc_to_insn) + 1)
+    next_constant_registers = insn_specializer.get_next_constant_registers()
+    assert next_constant_registers == {r0, r1, i2}
 
 def test_switch():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
