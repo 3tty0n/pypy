@@ -691,13 +691,13 @@ class Specializer(object):
         arg0, arg1, arg2 = self._get_args()
         lines = []
         tempvar = self._get_new_temp_variable()
-        lines.append('%s = %s - %s' % (tempvar, self._get_as_unboxed(arg2), self._get_as_unboxed(arg0)))
-        lines.append('if %s == 1:' % (tempvar,))
-        lines.append('    return %s == %s' % (self._get_as_unboxed(arg0), self._get_as_unboxed(arg1)))
-        lines.append('else:')
-        tempvar2 = self._get_new_temp_variable()
-        lines.append('    %s = %s - %s' % (tempvar2, self._get_as_unboxed(arg1), self._get_as_unboxed(arg0)))
-        lines.append('    return %s < %s' % (tempvar2, tempvar))
+        result = self.insn[self.resindex]
+        lines.append('i%s = %s <= %s < %s' % (
+            result.index,
+            self._get_as_unboxed(arg0),
+            self._get_as_unboxed(arg1),
+            self._get_as_unboxed(arg2)))
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({result}))
         return lines
 
     def emit_specialized_goto(self):
@@ -732,10 +732,10 @@ class Specializer(object):
         return self.emit_specialized_goto_if_not_absolute('int_is_zero', '%s == 0')
 
     def emit_specialized_goto_if_not_ptr_nonzero(self):
-        return self.emit_specialized_goto_if_not_absolute('ptr_nonzero', '%s.nonnull()')
+        return self.emit_specialized_goto_if_not_absolute('ptr_nonzero', '%s')
 
     def emit_specialized_goto_if_not_ptr_zero(self):
-        return self.emit_specialized_goto_if_not_absolute('ptr_zero', 'not %s.nonnull()')
+        return self.emit_specialized_goto_if_not_absolute('ptr_zero', 'not %s')
 
     def emit_specialized_goto_if_not(self):
         return self.emit_specialized_goto_if_not_absolute('', '%s')
@@ -815,6 +815,8 @@ class Specializer(object):
                     assert TYPE.TO._gckind == 'raw'
                     return "support.ptr2int(%s)" % (self._add_global(arg.value), )
                 val = lltype.cast_primitive(lltype.Signed, arg.value)
+                if not isinstance(val, int):
+                    return self._add_global(arg.value)
                 return str(val)
             raise Unsupported
         else:
@@ -830,6 +832,8 @@ class Specializer(object):
                     assert TYPE.TO._gckind == 'raw'
                     return "ConstInt(support.ptr2int(%s))" % (self._add_global(arg.value), )
                 val = lltype.cast_primitive(lltype.Signed, arg.value)
+                if not isinstance(val, int):
+                    return "ConstInt(%s)" % self._add_global(arg.value)
                 return "ConstInt(%d)" % val
             elif kind == 'ref':
                 return "ConstPtr(%d)" % arg.value
@@ -1029,9 +1033,12 @@ class Specializer(object):
             self.insn, self.constant_registers.union(set(args)), self.orig_pc)
         lines.append("    pc = %d" % (specializer.get_pc(), ))
         lines.append("    continue")
-        lines.append("self.opimpl_int_between(%s, %s, %s)" % (
+        result = self.insn[self.resindex]
+        lines.append("self.registers_i[%s] = self.opimpl_int_between(%s, %s, %s)" % (
+            result.index,
             self._get_as_box(args[0]), self._get_as_box(args[1]), self._get_as_box(args[2])
         ))
+        self._emit_jump(lines)
         return lines
 
     def emit_unspecialized_goto_if_not_absolute(self, name):
