@@ -51,8 +51,9 @@ def parse_args():
     )
     parser.add_argument('filename')
     parser.add_argument('-n', '--number', type=int)
+    parser.add_argument('-t', '--threshold', type=int)
     args = parser.parse_args()
-    return (args.filename, args.number)
+    return (args.filename, args.number, args.threshold)
 
 def main():
     log_output = f"{gen_log_id()}.log"
@@ -60,14 +61,18 @@ def main():
     env["PYPYLOG"] = f"jit-summary:{log_output}"
     env["PYTHONPATH"] = "benchmarks/lib/chameleon/src:benchmarks/lib/dulwich-0.19.13:benchmarks/lib/jinja2:benchmarks/lib/pyxl:benchmarks/lib/monte:benchmarks/lib/pytz:benchmarks/lib/sympy:benchmarks/lib/genshi:benchmarks/lib/mako:benchmarks/lib/sqlalchemy:benchmarks/lib/twisted-trunk/twisted:/benchmarks/lib/genshi"
 
-    target, number = parse_args()
+    target, number, threshold = parse_args()
     binarie_w_names = [("pypy-main", "pypy/goal/pypy-c"), ("pypy-jit-ext", "pypy/goal/pypy-jit-ext")]
 
     print("===> jit-summary Tracing time (s) results")
     for i, (name, bin) in enumerate(binarie_w_names):
         tracing_times = []
 
-        command = [bin, target]
+        if threshold:
+            command = [bin, "--jit", "threshold=%d" % threshold, target]
+        else:
+            command = [bin, target]
+
         for _ in range(number):
             subprocess.run(
                 command,
