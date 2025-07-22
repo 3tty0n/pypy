@@ -1222,6 +1222,7 @@ class Specializer(object):
         lines.append("except ChangeFrame: return")
         return lines
     emit_unspecialized_int_return = emit_unspecialized_return
+    emit_unspecialized_ref_return = emit_unspecialized_return
 
     def emit_unspecialized_live(self):
         lines = []
@@ -1257,6 +1258,8 @@ def _find_result_cast(T, field):
         if isinstance(RES, lltype.Ptr):
             assert RES.TO._gckind == 'raw'
             return 'support.ptr2int('
+    elif kind == 'ref':
+        return 'lltype.cast_opaque_ptr(llmemory.GCREF, '
     raise Unsupported
 
 def _make_register_syncer(constant_registers, cache={}):
