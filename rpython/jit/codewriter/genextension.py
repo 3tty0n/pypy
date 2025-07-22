@@ -686,6 +686,7 @@ class Specializer(object):
         lines = ["%s = %s" % (self._get_as_unboxed(res), self._get_as_unboxed(arg0))]
         self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
         return lines
+    emit_specialized_ref_copy = emit_specialized_int_copy
 
     def emit_specialized_int_between(self):
         arg0, arg1, arg2 = self._get_args()
@@ -1033,6 +1034,7 @@ class Specializer(object):
         lines.append("self.registers_%s[%s] = %s" % (res.kind[0], res.index, self._get_as_box(arg0)))
         self._emit_jump(lines)
         return lines
+    emit_unspecialized_ref_copy = emit_unspecialized_int_copy
 
     def emit_unspecialized_int_between(self):
         args = self._get_args()

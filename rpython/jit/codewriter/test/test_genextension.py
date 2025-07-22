@@ -1147,7 +1147,29 @@ ri2 = self.registers_i[2]
 self.registers_i[0] = ri2
 pc = 6
 continue"""
-    next_constant_registers = insn_specializer.get_next_constant_registers()
+
+
+def test_ref_copy():
+    r0, r2 = Register('ref', 0), Register('ref', 2)
+    insn = ('ref_copy', r2, '->', r0)
+    work_list = WorkList({5: insn, 6: ('ref_return', r0)}, pc_to_nextpc={5: 6})
+
+    # specialized case
+    insn_specializer = work_list.specialize_insn(insn, {r2}, 5)
+    s = insn_specializer.make_code()
+    assert s == """\
+r0 = r2
+pc = 107
+continue"""
+
+    # unspecialized cases
+    insn_specializer = work_list.specialize_insn(insn, set(), 5)
+    s = insn_specializer.make_code()
+    assert s == """\
+rr2 = self.registers_r[2]
+self.registers_r[0] = rr2
+pc = 6
+continue"""
 
 
 def test_live():
