@@ -1128,3 +1128,39 @@ def test_live():
     assert s == """\
 pc = 103
 continue"""
+
+
+def test_goto_if_not():
+    i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
+    L1 = TLabel('L1')
+    insn = ('goto_if_not', i0, L1)
+    pc_to_insn = {5: insn, 17: ('int_add', i0, i1, '->', i2), 19: ('int_return', i2)}
+    work_list = WorkList(pc_to_insn, label_to_pc={'L1': 19}, pc_to_nextpc={5: 17, 17: 19})
+
+    insn_specializer = work_list.specialize_pc({i0}, 5)
+    s = insn_specializer.make_code()
+    assert s == """\
+cond = i0
+if not cond:
+    pc = 120
+    continue
+pc = 121
+continue"""
+
+    insn_specializer = work_list.specialize_pc({}, 5)
+    s = insn_specializer.make_code()
+    assert s == """\
+ri0 = self.registers_i[0]
+if isinstance(ri0, ConstInt):
+    i0 = ri0.getint()
+    pc = 119
+    continue
+self.opimpl_goto_if_not(ri0, 19, 5)
+pc = self.pc
+if pc == 19:
+    pc = 19
+else:
+    assert self.pc == 17
+    pc = 17
+continue"""
+

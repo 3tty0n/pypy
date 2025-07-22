@@ -737,6 +737,9 @@ class Specializer(object):
     def emit_specialized_goto_if_not_ptr_zero(self):
         return self.emit_specialized_goto_if_not_absolute('ptr_zero', 'not %s.nonnull()')
 
+    def emit_specialized_goto_if_not(self):
+        return self.emit_specialized_goto_if_not_absolute('', '%s')
+
     def emit_specialized_goto_if_not_int_comparison(self, name, symbol):
         lines = []
         arg0, arg1, label = self._get_args()
@@ -1042,7 +1045,9 @@ class Specializer(object):
         lines.append("    pc = %d" % (specializer.get_pc(), ))
         lines.append("    continue")
         self._emit_sync_registers(lines)
-        lines.append("self.opimpl_goto_if_not_%s(%s, %s, %s)" % \
+        if name:
+            name = "_" + name
+        lines.append("self.opimpl_goto_if_not%s(%s, %s, %s)" % \
             (name, self._get_as_box(arg0), target_pc, self.orig_pc))
         lines.append("pc = self.pc")
         lines.append("if pc == %s:" % (target_pc,))
@@ -1069,6 +1074,9 @@ class Specializer(object):
 
     def emit_unspecialized_goto_if_not_ptr_zero(self):
         return self.emit_unspecialized_goto_if_not_absolute("ptr_zero")
+
+    def emit_unspecialized_goto_if_not(self):
+        return self.emit_unspecialized_goto_if_not_absolute("")
 
     def emit_unspecialized_goto_if_not_comparison(self, name, symbol):
         lines = []
