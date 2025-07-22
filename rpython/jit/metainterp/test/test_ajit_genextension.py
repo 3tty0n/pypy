@@ -696,9 +696,9 @@ class BasicTests:
 
     def test_stopatxpolicy(self):
         myjitdriver = JitDriver(greens = [], reds = ['y'])
+        @warmup_critical_function
         def internfn(y):
             return y * 3
-        @warmup_critical_function
         def externfn(y):
             return y ^ 4
         @warmup_critical_function
