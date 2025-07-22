@@ -928,12 +928,6 @@ class Specializer(object):
             cls = 'ConstFloat'
         return "isinstance(r%s%s, %s)" % (t, arg.index, cls)
 
-    def _emit_unary_if(self, arg, lines):
-        check = self._emit_assignment_return_const_check(arg, lines)
-        assert check is not None
-        lines.append("if %s:" % (check, ))
-        self._emit_unbox_by_type(arg, lines, '    ')
-
     def _emit_binary_if(self, arg0, arg1, lines):
         check0 = self._emit_assignment_return_const_check(arg0, lines)
         check1 = self._emit_assignment_return_const_check(arg1, lines)
@@ -971,7 +965,7 @@ class Specializer(object):
         assert len(args) == 2
         arg0, arg1 = args[0], args[1]
         result = self.insn[self.resindex]
-        self._emit_binary_if(arg0, arg1, lines)
+        self._emit_n_ary_if(args, lines)
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
         lines.append("    pc = %d" % (specializer.get_pc()))
@@ -992,7 +986,7 @@ class Specializer(object):
         lines = []
         arg0, arg1 = self.insn[1], self.insn[2]
         result = self.insn[self.resindex]
-        self._emit_binary_if(arg0, arg1, lines)
+        self._emit_n_ary_if([arg0, arg1], lines)
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
         lines.append("    pc = %d" % (specializer.get_pc()))
@@ -1116,7 +1110,7 @@ class Specializer(object):
         _, arg0, arg1 = self.insn # argument, label
 
         target_pc = self.get_target_pc(arg1)
-        self._emit_unary_if(arg0, lines)
+        self._emit_n_ary_if([arg0], lines)
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0}), self.orig_pc)
         lines.append("    pc = %d" % (specializer.get_pc(), ))
@@ -1160,7 +1154,7 @@ class Specializer(object):
         _, arg0, arg1, arg2 = self.insn # left, right, label
 
         target_pc = self.get_target_pc(arg2)
-        self._emit_binary_if(arg0, arg1, lines)
+        self._emit_n_ary_if([arg0, arg1], lines)
         specializer = self.work_list.specialize_insn(
             self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
         lines.append("    pc = %d" % (specializer.get_pc(), ))
