@@ -680,6 +680,25 @@ class Specializer(object):
         raise Unsupported
     emit_specialized_getfield_gc_r_pure = emit_specialized_getfield_gc_i_pure
 
+    def emit_specialized_record_quasiimmut_field(self):
+        arg, descr1, descr2 = self._get_args()
+        lines = []
+        tempvar = self._get_new_temp_variable()
+        self._emit_sync_registers(lines)
+        if isinstance(arg, Constant):
+            lines.append("%s = %s" % (tempvar, self._get_as_box(arg)))
+        else:
+            lines.append("%s = self.registers_r[%s]" % (tempvar, arg.index))
+        lines.append("self.opimpl_record_quasiimmut_field(%s, %s, %s, %s)" % (
+            tempvar,
+            self._add_global(descr1),
+            self._add_global(descr2),
+            self.orig_pc
+        ))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_record_quasiimmut_field = emit_specialized_record_quasiimmut_field
+
     def emit_specialized_int_copy(self):
         arg0, = self._get_args()
         res = self.insn[self.resindex]
