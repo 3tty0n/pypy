@@ -77,29 +77,6 @@ pypyjitdriver = PyPyJitDriver(get_printable_location = get_printable_location,
 class __extend__(PyFrame):
 
     @warmup_critical_function
-    def dispatch(self, pycode, next_instr, ec):
-        self = hint(self, access_directly=True)
-        next_instr = r_uint(next_instr)
-        is_being_profiled = self.get_is_being_profiled()
-        try:
-            while True:
-                pypyjitdriver.jit_merge_point(ec=ec,
-                    frame=self, next_instr=next_instr, pycode=pycode,
-                    is_being_profiled=is_being_profiled)
-                co_code = pycode.co_code
-                self.valuestackdepth = hint(self.valuestackdepth, promote=True)
-                next_instr = self.handle_bytecode(co_code, next_instr, ec)
-                is_being_profiled = self.get_is_being_profiled()
-        except Yield:
-            self.last_exception = None
-            w_result = self.popvalue()
-            jit.hint(self, force_virtualizable=True)
-            return w_result
-        except ExitFrame:
-            self.last_exception = None
-            return self.popvalue()
-
-    @warmup_critical_function
     def jump_absolute(self, jumpto, ec):
         if we_are_jitted():
             #

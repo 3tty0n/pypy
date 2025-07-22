@@ -56,39 +56,48 @@ class __extend__(pyframe.PyFrame):
 
     @warmup_critical_function
     def dispatch(self, pycode, next_instr, ec):
-        # For the sequel, force 'next_instr' to be unsigned for performance
+        from pypy.module.pypyjit.interp_jit import pypyjitdriver
+        self = jit.hint(self, access_directly=True)
         next_instr = r_uint(next_instr)
-        co_code = pycode.co_code
-
+        is_being_profiled = self.get_is_being_profiled()
         try:
             while True:
-                next_instr = self.handle_bytecode(co_code, next_instr, ec)
+                pypyjitdriver.jit_merge_point(ec=ec,
+                    frame=self, next_instr=next_instr, pycode=pycode,
+                    is_being_profiled=is_being_profiled)
+                co_code = pycode.co_code
+                self.valuestackdepth = jit.hint(self.valuestackdepth, promote=True)
+
+                try:
+                    next_instr = self.dispatch_bytecode(co_code, next_instr, ec)
+                except OperationError as operr:
+                    next_instr = self.handle_operation_error(ec, operr)
+                except RaiseWithExplicitTraceback as e:
+                    next_instr = self.handle_operation_error(ec, e.operr,
+                                                             attach_tb=False)
+                except KeyboardInterrupt:
+                    next_instr = self.handle_asynchronous_error(ec,
+                        self.space.w_KeyboardInterrupt)
+                except MemoryError:
+                    next_instr = self.handle_asynchronous_error(ec,
+                        self.space.w_MemoryError)
+                except rstackovf.StackOverflow as e:
+                    # Note that this case catches AttributeError!
+                    rstackovf.check_stack_overflow()
+                    next_instr = self.handle_asynchronous_error(ec,
+                        self.space.w_RuntimeError,
+                        self.space.newtext("maximum recursion depth exceeded"))
+
+                is_being_profiled = self.get_is_being_profiled()
+        except Yield:
+            self.last_exception = None
+            w_result = self.popvalue()
+            jit.hint(self, force_virtualizable=True)
+            return w_result
         except ExitFrame:
             self.last_exception = None
             return self.popvalue()
 
-    #@jit.warmup_critical_function
-    def handle_bytecode(self, co_code, next_instr, ec):
-        try:
-            next_instr = self.dispatch_bytecode(co_code, next_instr, ec)
-        except OperationError as operr:
-            next_instr = self.handle_operation_error(ec, operr)
-        except RaiseWithExplicitTraceback as e:
-            next_instr = self.handle_operation_error(ec, e.operr,
-                                                     attach_tb=False)
-        except KeyboardInterrupt:
-            next_instr = self.handle_asynchronous_error(ec,
-                self.space.w_KeyboardInterrupt)
-        except MemoryError:
-            next_instr = self.handle_asynchronous_error(ec,
-                self.space.w_MemoryError)
-        except rstackovf.StackOverflow as e:
-            # Note that this case catches AttributeError!
-            rstackovf.check_stack_overflow()
-            next_instr = self.handle_asynchronous_error(ec,
-                self.space.w_RuntimeError,
-                self.space.newtext("maximum recursion depth exceeded"))
-        return next_instr
 
     def handle_asynchronous_error(self, ec, w_type, w_value=None):
         # catch asynchronous exceptions and turn them
