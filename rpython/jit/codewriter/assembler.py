@@ -10,6 +10,7 @@ from rpython.rlib.rarithmetic import r_int
 from rpython.flowspace.model import Constant
 from rpython.rtyper.lltypesystem import lltype, llmemory, rffi
 from rpython.rtyper import rclass
+from rpython.config.translationoption import get_combined_translation_config
 
 
 class AssemblerError(Exception):
@@ -52,7 +53,10 @@ class Assembler(object):
         if self._count_jitcodes < 20:    # stop if we have a lot of them
             jitcode._dump = format_assembler(ssarepr)
         self._count_jitcodes += 1
-        if ssarepr.genextension:
+        config = get_combined_translation_config()
+        translation_config = getattr(config, "translation", None)
+        genextension = getattr(translation_config, "genextension", None)
+        if genextension and ssarepr.genextension:
             GenExtension(self, ssarepr, jitcode).generate()
         return jitcode
 

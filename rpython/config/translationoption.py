@@ -130,6 +130,10 @@ translation_optiondescription = OptionDescription(
                "Forbid NUL chars in strings in some external function calls",
                default=False, cmdline=None),
 
+    # JIT shortcut
+    BoolOption("genextension", "generate JIT extension by specializing the tracer",
+               default=True,
+               cmdline="--gen-extension"),
     # misc
     BoolOption("verbose", "Print extra information", default=False,
                cmdline="--verbose"),
@@ -405,4 +409,3 @@ def get_translation_config():
     """ Return the translation config when translating. When running
     un-translated returns None """
     return _GLOBAL_TRANSLATIONCONFIG
-
