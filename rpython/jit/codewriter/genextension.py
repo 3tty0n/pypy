@@ -766,8 +766,8 @@ class Specializer(object):
     def emit_specialized_goto_if_not_ptr_nonzero(self):
         return self.emit_specialized_goto_if_not_absolute('ptr_nonzero', '%s')
 
-    def emit_specialized_goto_if_not_ptr_zero(self):
-        return self.emit_specialized_goto_if_not_absolute('ptr_zero', 'not %s')
+    def emit_specialized_goto_if_not_ptr_iszero(self):
+        return self.emit_specialized_goto_if_not_absolute('ptr_iszero', 'not %s')
 
     def emit_specialized_goto_if_not(self):
         return self.emit_specialized_goto_if_not_absolute('', '%s')
@@ -1133,8 +1133,8 @@ class Specializer(object):
     def emit_unspecialized_goto_if_not_ptr_nonzero(self):
         return self.emit_unspecialized_goto_if_not_absolute("ptr_nonzero")
 
-    def emit_unspecialized_goto_if_not_ptr_zero(self):
-        return self.emit_unspecialized_goto_if_not_absolute("ptr_zero")
+    def emit_unspecialized_goto_if_not_ptr_iszero(self):
+        return self.emit_unspecialized_goto_if_not_absolute("ptr_iszero")
 
     def emit_unspecialized_goto_if_not(self):
         return self.emit_unspecialized_goto_if_not_absolute("")

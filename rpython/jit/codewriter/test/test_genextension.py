@@ -835,10 +835,10 @@ pc = 123
 continue"""
 
 
-def test_goto_if_not_ptr_zero():
+def test_goto_if_not_ptr_iszero():
     r0, i1, i2 = Register('ref', 0), Register('int', 1), Register('int', 2)
     L1 = TLabel('L1')
-    insn = ('goto_if_not_ptr_zero', r0, L1)
+    insn = ('goto_if_not_ptr_iszero', r0, L1)
     pc_to_insn = {5: insn, 17: ('int_add', r0, i1, '->', i2), 6: ('int_return', r0)}
     work_list = WorkList(pc_to_insn, label_to_pc={'L1': 17}, pc_to_nextpc={5: 6})
 
@@ -853,7 +853,7 @@ if isinstance(rr0, ConstPtr):
     r0 = rr0.getref_base()
     pc = 117
     continue
-self.opimpl_goto_if_not_ptr_zero(rr0, 17, 5)
+self.opimpl_goto_if_not_ptr_iszero(rr0, 17, 5)
 pc = self.pc
 if pc == 17:
     pc = 17
@@ -872,7 +872,7 @@ if isinstance(rr0, ConstPtr):
     pc = 119
     continue
 glob0(self, i2) # jit_sync_regs_i2
-self.opimpl_goto_if_not_ptr_zero(rr0, 17, 5)
+self.opimpl_goto_if_not_ptr_iszero(rr0, 17, 5)
 pc = self.pc
 if pc == 17:
     pc = 120
