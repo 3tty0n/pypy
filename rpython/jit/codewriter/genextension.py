@@ -53,6 +53,24 @@ class GenExtension(object):
                 nextpc = self.ssarepr._insns_pos[index + 1]
             self.pc_to_nextpc[pc] = nextpc
             self.pc_to_index[pc] = index
+
+        # starting points are pc==0, or the instructions after a -live-, or the
+        # -live- after a call, or the target of catch_exception calls
+        starting_points = {0}
+        last_was_live = False
+        for pc in self.assembler.startpoints:
+            if last_was_live:
+                starting_points.add(pc)
+            insn = self.pc_to_insn[pc]
+            if insn[0] == 'catch_exception':
+                starting_points.add(self.assembler.label_positions[insn[1].name])
+            nextpc = self.pc_to_nextpc[pc]
+            if nextpc in self.pc_to_insn:
+                next_insn = self.pc_to_insn[nextpc]
+                if 'call' in insn[0] and next_insn[0] == '-live-':
+                    starting_points.add(nextpc)
+            last_was_live = insn[0] == '-live-'
+
         self.work_list = WorkList(self.pc_to_insn, self.assembler.label_positions, self.pc_to_nextpc, self.globals)
         code_per_pc = {}
         for startpc in self.assembler.startpoints:
@@ -94,7 +112,7 @@ class GenExtension(object):
                 default = 'lltype.nullptr(llmemory.GCREF.TO)'
             self.precode.append("    %s = %s" % (name, default))
         prefix = ""
-        for pc in self.assembler.startpoints:
+        for pc in sorted(starting_points):
             self.precode.append("    %sif pc == %s: pc = %s" % (prefix, pc, pc))
             prefix = "el"
         self.precode.append("    else: assert 0, 'unreachable'")
