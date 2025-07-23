@@ -1,5 +1,6 @@
 import py
 import re
+import collections
 from rpython.jit.metainterp.history import (Const, ConstInt, ConstPtr,
     ConstFloat, CONST_NULL, getkind, AbstractDescr)
 from rpython.jit.metainterp import support
@@ -75,12 +76,9 @@ class GenExtension(object):
         code_per_pc = {}
         for startpc in self.assembler.startpoints:
             spec = self.work_list.specialize_pc(frozenset([]), startpc)
-        size = len(code_per_pc)
-        while len(code_per_pc) != len(self.work_list.specialize_instruction):
-            for key, spec in self.work_list.specialize_instruction.items():
-                code_per_pc[spec.spec_pc] = spec.make_code(), spec
+        code_and_spec_per_pc = self.work_list.make_code()
         assert not self.code
-        for pc, (code, spec) in code_per_pc.iteritems():
+        for pc, (code, spec) in code_and_spec_per_pc.iteritems():
             if code is None:
                 self.code = []
                 if spec.constant_registers:
@@ -89,10 +87,10 @@ class GenExtension(object):
                     self.code.append("continue")
                 else:
                     self._make_code(self.pc_to_index[spec.orig_pc], spec.insn)
-                code_per_pc[pc] = (str(py.code.Source("\n".join(self.code)).deindent()), spec)
+                code_and_spec_per_pc[pc] = (str(py.code.Source("\n".join(self.code)).deindent()), spec)
         self.code = []
         allconsts = set()
-        for pc, (code, spec) in code_per_pc.iteritems():
+        for pc, (code, spec) in code_and_spec_per_pc.iteritems():
             allconsts.update(spec.constant_registers)
             self.code.append("if pc == %s: # %s %s" % (pc, spec.insn, spec.constant_registers))
             #self.code.append("    import pdb;pdb.set_trace()")
@@ -467,7 +465,7 @@ class WorkList(object):
         self.pc_to_nextpc = pc_to_nextpc
         self.orig_pc_to_insn = pc_to_insn
         self.specialize_instruction = dict() # (pc, insn, constant?registers) =? Specializer
-        self.todo = []
+        self.todo = collections.deque()
         self.free_pc = self.max_used_pc + self.OFFSET
         self.label_to_pc = {}
         if label_to_pc is not None:
@@ -520,6 +518,13 @@ class WorkList(object):
 
     def specialize_pc(self, constant_registers, orig_pc):
         return self._make_spec(self.orig_pc_to_insn[orig_pc], constant_registers, orig_pc)
+
+    def make_code(self):
+        code_and_spec_per_pc = {}
+        while self.todo:
+            spec = self.todo.popleft()
+            code_and_spec_per_pc[spec.spec_pc] = spec.make_code(), spec
+        return code_and_spec_per_pc
 
 
 class Specializer(object):
