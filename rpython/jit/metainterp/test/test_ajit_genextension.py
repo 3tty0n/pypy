@@ -3662,6 +3662,39 @@ class BasicTests:
         res = self.interp_operations(f, [-100], backendopt=True)
         assert res == 100
 
+    def test_getarrayitem_gc_i_pure(self):
+        class Cls:
+            _immutable_fields_ = ['flags[*]']
+        cls1 = Cls()
+        cls1.flags = [1, 2, 3]
+        cls2 = Cls()
+        cls2.flags = [4, 5, 7, 9]
+        class Inst:
+            pass
+        inst_prebuild = Inst()
+        inst_prebuild.cls = cls1
+
+        @warmup_critical_function
+        def f(n):
+            if n > 5:
+                i = Inst()
+                i.cls = cls1
+            elif n == -100:
+                i = inst_prebuild
+            else:
+                i = Inst()
+                i.cls = cls2
+            if promote(i.cls).flags[0] == 1:
+                return 100
+            return 200
+        res = self.interp_operations(f, [3], backendopt=True)
+        assert res == 200
+        res = self.interp_operations(f, [13], backendopt=True)
+        assert res == 100
+        res = self.interp_operations(f, [-100], backendopt=True)
+        assert res == 100
+
+
     def test_quasi_immutable(self):
         class Cls:
             _immutable_fields_ = ['flag?']

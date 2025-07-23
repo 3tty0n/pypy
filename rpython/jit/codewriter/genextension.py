@@ -554,6 +554,10 @@ class Specializer(object):
         else:
             return self.insn[1:]
 
+    def _get_args_and_res(self):
+        assert self.resindex is not None
+        return self.insn[1:-2] + (self.insn[-1], )
+
     def get_pc(self):
         return self.spec_pc
 
@@ -686,7 +690,7 @@ class Specializer(object):
             arg, descr = self._get_args()
             res = self.insn[self.resindex]
             PTRTYPE, name = _get_ptrtype_fieldname_from_fielddescr(descr)
-            resultcast = _find_result_cast(PTRTYPE, name)
+            resultcast = _find_field_result_cast(PTRTYPE, name)
             lines.append('%s = %sllmemory.cast_adr_to_ptr(support.int2adr(i%s), %s).%s)' % (self._get_as_unboxed(res), resultcast, arg.index, self._add_global(PTRTYPE), name))
             self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
             return lines
@@ -698,13 +702,25 @@ class Specializer(object):
             arg, descr = self._get_args()
             res = self.insn[self.resindex]
             PTRTYPE, name = _get_ptrtype_fieldname_from_fielddescr(descr)
-            resultcast = _find_result_cast(PTRTYPE, name)
+            resultcast = _find_field_result_cast(PTRTYPE, name)
             lines.append('%s = %slltype.cast_opaque_ptr(%s, %s).%s)' % (
                 self._get_as_unboxed(res), resultcast, self._add_global(PTRTYPE), self._get_as_unboxed(arg), name))
             self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
             return lines
         raise Unsupported
     emit_specialized_getfield_gc_r_pure = emit_specialized_getfield_gc_i_pure
+
+    def emit_specialized_getarrayitem_gc_i_pure(self):
+        lines = []
+        arg, index, descr, res = self._get_args_and_res()
+        TYPE, ITEM = _get_ptrtype_itemtype_from_arraydescr(descr)
+        resultcast = _find_result_cast(ITEM)
+        lines.append('%s = %slltype.cast_opaque_ptr(%s, %s)[%s])' % (
+            self._get_as_unboxed(res), resultcast, self._add_global(TYPE), self._get_as_unboxed(arg),
+            self._get_as_unboxed(index)))
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
+        return lines
+    emit_specialized_getarrayitem_gc_r_pure = emit_specialized_getarrayitem_gc_i_pure
 
     def emit_specialized_record_quasiimmut_field(self):
         arg, descr1, descr2 = self._get_args()
@@ -1293,13 +1309,21 @@ class Specializer(object):
 class Unsupported(Exception):
     pass
 
+def _get_ptrtype_itemtype_from_arraydescr(descr):
+    if hasattr(descr, 'A'): # llgraph backend
+        return lltype.Ptr(descr.A), descr.A.OF
+    return lltype.Ptr(descr.basesize.offsets[0].TYPE), descr.itemsize.TYPE
+
 def _get_ptrtype_fieldname_from_fielddescr(descr):
     if hasattr(descr, 'S'): # llgraph backend
         return lltype.Ptr(descr.S), descr.fieldname
     return lltype.Ptr(descr.offset.TYPE), descr.offset.fldname
 
-def _find_result_cast(T, field):
+def _find_field_result_cast(T, field):
     RES = getattr(T.TO, field)
+    return _find_result_cast(RES)
+
+def _find_result_cast(RES):
     kind = getkind(RES)
     if kind == 'int':
         if RES == lltype.Signed:
