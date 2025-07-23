@@ -66,7 +66,7 @@ class __extend__(pyframe.PyFrame):
                     frame=self, next_instr=next_instr, pycode=pycode,
                     is_being_profiled=is_being_profiled)
                 co_code = pycode.co_code
-                self.valuestackdepth = jit.hint(self.valuestackdepth, promote=True)
+                jit.hint(self.valuestackdepth, promote=True)
 
                 try:
                     next_instr = self.dispatch_bytecode(co_code, next_instr, ec)
