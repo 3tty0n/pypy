@@ -185,7 +185,7 @@ def jit_shortcut(self): # test
                 i22 = ri22.getint()
                 pc = 122
                 continue
-            self.opimpl_switch(ri22, glob2, 3)
+            self.opimpl_switch(ri22, glob0, 3)
             pc = self.pc
             if pc == 9: pc = 9
             elif pc == 14: pc = 14

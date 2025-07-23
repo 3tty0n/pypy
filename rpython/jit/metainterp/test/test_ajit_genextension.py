@@ -3731,6 +3731,40 @@ class BasicTests:
         assert res == 100
 
 
+    def test_virtualizable_implicit(self):
+        myjitdriver = JitDriver(greens = ['a'], reds = ['frame'],
+                                virtualizables = ['frame'])
+
+        class Frame(object):
+            _virtualizable_ = ['x', 'y']
+
+            def __init__(self, x, y):
+                self.x = x
+                self.y = y
+
+        class SomewhereElse:
+            pass
+        somewhere_else = SomewhereElse()
+
+        @warmup_critical_function
+        def f(n, a):
+            frame = Frame(n, 0)
+            somewhere_else.top_frame = frame        # escapes
+            while frame.x > 0:
+                myjitdriver.can_enter_jit(frame=frame, a=a)
+                myjitdriver.jit_merge_point(frame=frame, a=a)
+                frame.y += frame.x
+                if a == -88:
+                    return 129292
+                frame.x -= 1
+                if a == -99:
+                    return -121
+            return somewhere_else.top_frame.y
+
+        res = self.meta_interp(f, [10, 0])
+        assert res == 55
+
+
 class BaseLLtypeTests(BasicTests):
 
 

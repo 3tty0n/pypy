@@ -1100,8 +1100,7 @@ class Specializer(object):
 
     def emit_unspecialized_getfield_gc_i_pure(self):
         if self.insn[2].is_always_pure():
-            arg, descr = self._get_args()
-            result = self.insn[self.resindex]
+            arg, descr, result = self._get_args_and_res()
             lines = []
             self._emit_n_ary_if([arg], lines)
             self._emit_jump(lines, constant_registers=self.constant_registers.union({arg}),
@@ -1113,6 +1112,36 @@ class Specializer(object):
             return lines
         raise Unsupported
     emit_unspecialized_getfield_gc_r_pure = emit_unspecialized_getfield_gc_i_pure
+
+    def emit_unspecialized_getfield_vable_i(self):
+        arg, descr, result = self._get_args_and_res()
+        lines = []
+        self._emit_sync_registers(lines)
+        if not isinstance(arg, Constant):
+            self._emit_box_by_type(arg, lines)
+        lines.append("self.registers_%s[%s] = self.opimpl_%s(%s, %s, %s)" % (
+            result.kind[0], result.index,
+            self.insn[0], self._get_as_box(arg), self._add_global(descr),
+            self.orig_pc))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_getfield_vable_r = emit_unspecialized_getfield_vable_i
+
+    def emit_unspecialized_setfield_vable_i(self):
+        arg0, arg1, descr = self._get_args()
+        lines = []
+        self._emit_sync_registers(lines)
+        if not isinstance(arg0, Constant):
+            self._emit_box_by_type(arg0, lines)
+        if not isinstance(arg1, Constant):
+            self._emit_box_by_type(arg1, lines)
+        lines.append("self.opimpl_%s(%s, %s, %s, %s)" % (
+            self.insn[0], self._get_as_box(arg0), self._get_as_box(arg1),
+            self._add_global(descr),
+            self.orig_pc))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_setfield_vable_r = emit_unspecialized_setfield_vable_i
 
     def emit_unspecialized_int_copy(self):
         arg0, = self._get_args()
