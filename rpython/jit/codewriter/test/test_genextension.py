@@ -28,10 +28,6 @@ def jit_shortcut(self): # test
     i22 = 0xcafedead
     i23 = 0xcafedead
     if pc == 0: pc = 0
-    elif pc == 5: pc = 5
-    elif pc == 9: pc = 9
-    elif pc == 13: pc = 13
-    elif pc == 16: pc = 16
     else: assert 0, 'unreachable'
     while 1:
         if pc == 0: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([])
@@ -173,12 +169,8 @@ def jit_shortcut(self): # test
     i22 = 0xcafedead
     if pc == 0: pc = 0
     elif pc == 3: pc = 3
-    elif pc == 7: pc = 7
-    elif pc == 9: pc = 9
     elif pc == 12: pc = 12
-    elif pc == 14: pc = 14
     elif pc == 17: pc = 17
-    elif pc == 19: pc = 19
     elif pc == 22: pc = 22
     else: assert 0, 'unreachable'
     while 1:
