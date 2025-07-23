@@ -9,7 +9,7 @@ from rpython.jit.codewriter.jitcode import SwitchDictDescr
 from rpython.jit.metainterp.history import AbstractDescr
 
 
-def format_assembler(ssarepr):
+def format_assembler(ssarepr, print_extra=""):
     """For testing: format a SSARepr as a multiline string."""
     from cStringIO import StringIO
 
@@ -77,6 +77,8 @@ def format_assembler(ssarepr):
                     print(', '.join(lst), file=output)
             else:
                 print(file=output)
+    if print_extra:
+        output.write(print_extra)
     res = output.getvalue()
     return res
 

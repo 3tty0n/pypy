@@ -69,7 +69,7 @@ class CodeWriter(object):
         #
         # print the resulting assembler
         if self.debug:
-            self.print_ssa_repr(ssarepr, portal_jd, verbose)
+            self.print_ssa_repr(ssarepr, portal_jd, verbose, jitcode)
 
     def make_jitcodes(self, verbose=False):
         log.info("making JitCodes...")
@@ -101,7 +101,7 @@ class CodeWriter(object):
     def find_all_graphs(self, policy):
         return self.callcontrol.find_all_graphs(policy)
 
-    def print_ssa_repr(self, ssarepr, portal_jitdriver, verbose):
+    def print_ssa_repr(self, ssarepr, portal_jitdriver, verbose, jitcode):
         if verbose:
             print('%s:' % (ssarepr.name,))
             print(format_assembler(ssarepr))
@@ -122,4 +122,6 @@ class CodeWriter(object):
         while dir.join(name+extra).check():
             i += 1
             extra = '.%d' % i
-        dir.join(name+extra).write(format_assembler(ssarepr))
+        dir.join(name+extra).write(
+                format_assembler(ssarepr,
+                                 print_extra=getattr(jitcode, '_genext_source', '')))

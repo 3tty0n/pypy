@@ -124,10 +124,6 @@ class GenExtension(object):
         d.update(self.globals)
         source = py.code.Source(self.jitcode._genext_source)
         exec source.compile() in d
-        print "_____"
-        print self.jitcode.dump()
-        print "_____"
-        print self.jitcode._genext_source
         self.jitcode.genext_function = d['jit_shortcut']
         self.jitcode.genext_function.__name__ += "_" + self.jitcode.name
 
