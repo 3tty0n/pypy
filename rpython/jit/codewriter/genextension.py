@@ -58,7 +58,7 @@ class GenExtension(object):
         # -live- after a call, or the target of catch_exception calls
         starting_points = {0}
         last_was_live = False
-        for pc in self.assembler.startpoints:
+        for pc in sorted(self.assembler.startpoints):
             if last_was_live:
                 starting_points.add(pc)
             insn = self.pc_to_insn[pc]
@@ -67,7 +67,7 @@ class GenExtension(object):
             nextpc = self.pc_to_nextpc[pc]
             if nextpc in self.pc_to_insn:
                 next_insn = self.pc_to_insn[nextpc]
-                if 'call' in insn[0] and next_insn[0] == '-live-':
+                if ('call' in insn[0] or 'jit_merge_point' in insn[0]) and next_insn[0] == '-live-':
                     starting_points.add(nextpc)
             last_was_live = insn[0] == '-live-'
 
