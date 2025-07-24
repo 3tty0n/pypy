@@ -4,20 +4,20 @@ import os
 import subprocess
 import argparse
 
-def parse_jit_summary(path):
-    result = dict()
-    with open(path) as f:
-        while True:
-            line = f.readline().rstrip()
-            if not line:
-                break
-            if line.startswith("Tracing:"):
-                items = line.split('\t')
-                time = float(items[-1])
-                result["Tracing"] = time
-    os.remove(path)
+BENCHMARKS = [
+    'bm_chameleon', 'bm_dulwich_log', 'bm_icbd', 'bm_mako',
+    'raytrace-simple', 'scimark', 'spectral-norm', 'spitfire',
+    'telco'
+]
 
-    return result
+BENCHMARKS_NOT_RUNNABLE = [
+    'bm_gzip', 'bm_krakatau', 'bm_gzip', 'bm_mdp', 'pyxl_bench',
+]
+
+COMMANDS = [
+    ("pypy-c", "./pypy/goal/pypy-c"),
+    ("pypy-jit-ext-c", "./pypy/goal/pypy-jit-ext-c")
+]
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -36,19 +36,6 @@ def setup_env():
     ]])
     return env
 
-
-BENCHMARKS = [
-    'bm_chameleon', 'bm_dulwich_log', 'bm_gzip',
-    'bm_icbd', 'bm_krakatau', 'bm_mako', 'bm_mdp', 'pyxl_bench',
-    'raytrace-simple', 'scimark', 'spectral-norm', 'spitfire',
-    'telco'
-]
-
-COMMANDS = [
-    ("pypy-c", "./pypy/goal/pypy-c"),
-    ("pypy-jit-ext-c", "./pypy/goal/pypy-jit-ext-c")
-]
-
 def run():
     dirname = 'pypylogs'
     if not os.path.exists(dirname):
@@ -66,6 +53,7 @@ def run():
                 command = [exe_path, "--jit", "threshold=23", bm_path]
                 print("Running %s against %s..." % (exe_name, bm))
                 subprocess.run(command, env=env, stdout=subprocess.DEVNULL)
+
 
 if __name__ == '__main__':
     run()
