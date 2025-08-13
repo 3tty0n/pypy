@@ -114,9 +114,10 @@ class MIFrame(object):
                 registers[i] = missing
         if nonconst.NonConstant(0):             # force the right type
             constants[0] = ConstClass.value     # (useful for small tests)
-        for i in range(len(constants)):
-            registers[targetindex] = ConstClass(constants[i])
-            targetindex += 1
+        if self.jitcode.genext_function is None:
+            for i in range(len(constants)):
+                registers[targetindex] = ConstClass(constants[i])
+                targetindex += 1
         return registers
 
     def cleanup_registers(self):

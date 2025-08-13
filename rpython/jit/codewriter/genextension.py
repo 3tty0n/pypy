@@ -220,13 +220,13 @@ class GenExtension(object):
                 argcode = self.argcodes[next_argcode]
                 next_argcode = next_argcode + 1
                 if argcode == 'i':
-                    value = "self.registers_i[%s]" % (ord(code[position]), )
+                    value = self._read_reg_i(ord(code[position]))
                 elif argcode == 'c':
                     value = "ConstInt(%s)" % signedord(code[position])
                 elif argcode == 'r':
-                    value = "self.registers_r[%s]" % (ord(code[position]), )
+                    value = self._read_reg_r(ord(code[position]))
                 elif argcode == 'f':
-                    value = "self.registers_f[%s]" % (ord(code[position]), )
+                    value = self._read_reg_f(ord(code[position]))
                 else:
                     raise AssertionError("bad argcode")
                 position += 1
@@ -333,6 +333,8 @@ class GenExtension(object):
                         intval = self.jitcode.constants_i[pos - num_regs_i]
                         if isinstance(intval, int):
                             value = str(intval)
+                        else:
+                            import pdb;pdb.set_trace()
                 elif argcode == 'c':
                     value = str(signedord(code[position]))
                 else:
@@ -411,11 +413,35 @@ class GenExtension(object):
         position += 1
         for i in range(length):
             index = ord(code[position+i])
-            if   argcode == 'I': reg = "self.registers_i[%s]" % index
-            elif argcode == 'R': reg = "self.registers_r[%s]" % index
-            elif argcode == 'F': reg = "self.registers_f[%s]" % index
+            if   argcode == 'I': reg = self._read_reg_i(index)
+            elif argcode == 'R': reg = self._read_reg_r(index)
+            elif argcode == 'F': reg = self._read_reg_f(index)
             else: raise AssertionError(argcode)
             outvalue[startindex+i] = reg
+
+    def _read_reg_i(self, pos):
+        if pos >= self.jitcode.num_regs_i():
+            const_pos = pos - self.jitcode.num_regs_i()
+            value = self.jitcode.constants_i[const_pos]
+            return "ConstInt(%s)" % (_int_as_str(value, lltype.typeOf(value), self._add_global), )
+        else:
+            return "self.registers_i[%s]" % (pos, )
+
+    def _read_reg_r(self, pos):
+        if pos >= self.jitcode.num_regs_r():
+            const_pos = pos - self.jitcode.num_regs_r()
+            value = self.jitcode.constants_r[const_pos]
+            return "ConstPtr(%s)" % (self._add_global(value), )
+        else:
+            return "self.registers_r[%s]" % (pos, )
+
+    def _read_reg_f(self, pos):
+        if pos >= self.jitcode.num_regs_f():
+            const_pos = pos - self.jitcode.num_regs_f()
+            value = self.jitcode.constants_f[const_pos]
+            return "ConstFloat(%s)" % (self._add_global(value), )
+        else:
+            return "self.registers_f[%s]" % (pos, )
 
     def fill_registers(self, lines, argname, length, position, argcode):
         assert argcode in 'IRF'
@@ -423,11 +449,11 @@ class GenExtension(object):
         for i in range(length):
             index = ord(code[position+i])
             if   argcode == 'I':
-                lines.append("%s.registers_i[%s] = self.registers_i[%s]" % (argname, i, index))
+                lines.append("%s.registers_i[%s] = %s" % (argname, i, self._read_reg_i(index)))
             elif argcode == 'R':
-                lines.append("%s.registers_r[%s] = self.registers_r[%s]" % (argname, i, index))
+                lines.append("%s.registers_r[%s] = %s" % (argname, i, self._read_reg_r(index)))
             elif argcode == 'F':
-                lines.append("%s.registers_f[%s] = self.registers_f[%s]" % (argname, i, index))
+                lines.append("%s.registers_f[%s] = %s" % (argname, i, self._read_reg_f(index)))
             else:
                 raise AssertionError(argcode)
 
@@ -522,6 +548,15 @@ class WorkList(object):
             code_and_spec_per_pc[spec.spec_pc] = spec.make_code(), spec
         return code_and_spec_per_pc
 
+
+def _int_as_str(value, TYPE, add_global):
+    if isinstance(TYPE, lltype.Ptr):
+        assert TYPE.TO._gckind == 'raw'
+        return "support.ptr2int(%s)" % (add_global(value), )
+    val = lltype.cast_primitive(lltype.Signed, value)
+    if not isinstance(val, int):
+        return add_global(value)
+    return str(val)
 
 class Specializer(object):
     def __init__(self, insn, constant_registers, orig_pc, spec_pc, work_list):
@@ -625,6 +660,9 @@ class Specializer(object):
 
     def emit_specialized_int_or(self):
         return self._emit_specialized_int_binary("|")
+
+    def emit_specialized_int_and(self):
+        return self._emit_specialized_int_binary("&")
 
     def emit_specialized_int_sub(self):
         return self._emit_specialized_int_binary("-")
@@ -885,14 +923,7 @@ class Specializer(object):
         if isinstance(arg, Constant):
             kind = getkind(arg.concretetype)
             if kind == 'int':
-                TYPE = arg.concretetype
-                if isinstance(TYPE, lltype.Ptr):
-                    assert TYPE.TO._gckind == 'raw'
-                    return "support.ptr2int(%s)" % (self._add_global(arg.value), )
-                val = lltype.cast_primitive(lltype.Signed, arg.value)
-                if not isinstance(val, int):
-                    return self._add_global(arg.value)
-                return str(val)
+                return _int_as_str(arg.value, arg.concretetype, self._add_global)
             if kind == 'ref':
                 return "lltype.cast_opaque_ptr(llmemory.GCREF, %s)" % self._add_global(arg.value)
             raise Unsupported
@@ -904,14 +935,7 @@ class Specializer(object):
         if isinstance(arg, Constant):
             kind = getkind(arg.concretetype)
             if kind == 'int':
-                TYPE = arg.concretetype
-                if isinstance(TYPE, lltype.Ptr):
-                    assert TYPE.TO._gckind == 'raw'
-                    return "ConstInt(support.ptr2int(%s))" % (self._add_global(arg.value), )
-                val = lltype.cast_primitive(lltype.Signed, arg.value)
-                if not isinstance(val, int):
-                    return "ConstInt(%s)" % self._add_global(arg.value)
-                return "ConstInt(%d)" % val
+                return "ConstInt(%s)" % (_int_as_str(arg.value, arg.concretetype, self._add_global), )
             elif kind == 'ref':
                 return "ConstPtr(lltype.cast_opaque_ptr(llmemory.GCREF, %s))" % self._add_global(arg.value)
             else:
@@ -1024,6 +1048,7 @@ class Specializer(object):
     emit_unspecialized_int_sub = _emit_unspecialized_binary
     emit_unspecialized_int_mul = _emit_unspecialized_binary
     emit_unspecialized_int_or = _emit_unspecialized_binary
+    emit_unspecialized_int_and = _emit_unspecialized_binary
 
     def emit_unspecialized_strgetitem(self):
         lines = []
