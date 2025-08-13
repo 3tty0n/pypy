@@ -965,6 +965,8 @@ class Specializer(object):
         lines.append(indent + line)
 
     def _emit_box_by_type(self, arg, lines, indent=''):
+        if isinstance(arg, Constant) or arg in self.constant_registers:
+            return
         t = self._get_type_prefix(arg)
         line = ''
         if t == 'i':
@@ -1142,8 +1144,7 @@ class Specializer(object):
         arg, descr, result = self._get_args_and_res()
         lines = []
         self._emit_sync_registers(lines)
-        if not isinstance(arg, Constant):
-            self._emit_box_by_type(arg, lines)
+        self._emit_box_by_type(arg, lines)
         lines.append("self.registers_%s[%s] = self.opimpl_%s(%s, %s, %s)" % (
             result.kind[0], result.index,
             self.insn[0], self._get_as_box(arg), self._add_global(descr),
@@ -1156,10 +1157,8 @@ class Specializer(object):
         arg0, arg1, descr = self._get_args()
         lines = []
         self._emit_sync_registers(lines)
-        if not isinstance(arg0, Constant):
-            self._emit_box_by_type(arg0, lines)
-        if not isinstance(arg1, Constant):
-            self._emit_box_by_type(arg1, lines)
+        self._emit_box_by_type(arg0, lines)
+        self._emit_box_by_type(arg1, lines)
         lines.append("self.opimpl_%s(%s, %s, %s, %s)" % (
             self.insn[0], self._get_as_box(arg0), self._get_as_box(arg1),
             self._add_global(descr),
@@ -1334,17 +1333,19 @@ class Specializer(object):
         lines.append("continue")
         return lines
 
-    def emit_unspecialized_return(self):
+    def emit_return(self):
         lines = []
         value, = self._get_args()
-        if not isinstance(value, Constant):
-            self._emit_box_by_type(value, lines)
+        self._emit_box_by_type(value, lines)
         lines.append("try:")
         lines.append("    self.%s(%s)" % (self.methodname, self._get_as_box(value)))
         lines.append("except ChangeFrame: return")
+        lines.append("assert 0, 'unreachable'")
         return lines
-    emit_unspecialized_int_return = emit_unspecialized_return
-    emit_unspecialized_ref_return = emit_unspecialized_return
+    emit_unspecialized_int_return = emit_return
+    emit_unspecialized_ref_return = emit_return
+    emit_specialized_int_return = emit_return
+    emit_specialized_ref_return = emit_return
 
     def emit_unspecialized_live(self):
         lines = []
