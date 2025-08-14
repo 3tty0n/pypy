@@ -1172,6 +1172,21 @@ class Specializer(object):
         return lines
     emit_unspecialized_setfield_vable_r = emit_unspecialized_setfield_vable_i
 
+    def emit_unspecialized_getarrayitem_gc_i_pure(self):
+        lines = []
+        arraybox, indexbox, arraydescr, result = self._get_args_and_res()
+        self._emit_sync_registers(lines)
+        self._emit_box_by_type(arraybox, lines)
+        self._emit_box_by_type(indexbox, lines)
+        lines.append("self.registers_%s[%s] = self.opimpl_%s(%s, %s, %s)" % (
+            result.kind[0], result.index,
+            self.insn[0], self._get_as_box(arraybox), self._get_as_box(indexbox),
+            self._add_global(arraydescr),
+        ))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_getarrayitem_gc_r_pure = emit_unspecialized_getarrayitem_gc_i_pure
+
     def emit_unspecialized_int_copy(self):
         arg0, = self._get_args()
         res = self.insn[self.resindex]
