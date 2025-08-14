@@ -1233,9 +1233,7 @@ continue"""
 
 def test_int_is_true():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
-    insn1 = (
-        'int_is_true', i0, '->', i1
-    )
+    insn1 = ('int_is_true', i0, '->', i1)
     work_list = WorkList({5: insn1, 7: ('int_return', i1)}, pc_to_nextpc={5:7})
     insn_specializer = work_list.specialize_insn(insn1, {i0}, 5)
     newpc = insn_specializer.get_pc()
@@ -1261,3 +1259,11 @@ continue""" % (work_list.OFFSET + 7)
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 
+def test_assert_not_none():
+    i0, i1 = Register('int', 0), Register('int', 1)
+    insn = ('assert_not_none', i0)
+    work_list = WorkList({5: insn, 7: ('int_return', i1)}, pc_to_nextpc={5:7})
+    insn_specializer = work_list.specialize_insn(insn, {i0}, 5)
+    assert insn_specializer.make_code() == """\
+assert bool(i0)
+continue"""

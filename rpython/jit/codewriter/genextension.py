@@ -905,6 +905,11 @@ class Specializer(object):
     def emit_specialized_int_return(self):
         return self.emit_unspecialized_int_return()
 
+    def emit_specialized_assert_not_none(self):
+        arg = self.insn[1]
+        unboxed_arg = self._get_as_unboxed(arg)
+        return ["assert bool(%s)" % (unboxed_arg), "continue"]
+
     def _get_type_prefix(self, arg):
         if isinstance(arg, Constant) or isinstance(arg, Register):
             # TODO: this logic also works for the 'else' case. probably.
