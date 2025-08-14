@@ -80,6 +80,7 @@ def jit_shortcut(self): # test
             try:
                 self.opimpl_int_return(ri23)
             except ChangeFrame: return
+            assert 0, 'unreachable'
         if pc == 116: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([%i22])
             self.pc = 5
             cond = i22 > 4
@@ -104,6 +105,7 @@ def jit_shortcut(self): # test
             try:
                 self.opimpl_int_return(ri23)
             except ChangeFrame: return
+            assert 0, 'unreachable'
         if pc == 120: # ('int_add', %i23, %i22, '->', %i23) frozenset([%i22])
             self.pc = 9
             ri23 = self.registers_i[23]
@@ -130,10 +132,10 @@ def jit_shortcut(self): # test
             continue
         if pc == 123: # ('int_return', %i23) frozenset([%i23, %i22])
             self.pc = 18
-            ri23 = self.registers_i[23]
             try:
                 self.opimpl_int_return(ConstInt(i23))
             except ChangeFrame: return
+            assert 0, 'unreachable'
         assert 0 # unreachable"""
 
 def test_integration_switch():
@@ -198,6 +200,7 @@ def jit_shortcut(self): # test
             try:
                 self.opimpl_int_return(ConstInt(42))
             except ChangeFrame: return
+            assert 0, 'unreachable'
         if pc == 9: # ('-live-',) frozenset([])
             self.pc = 12
             pc = 12
@@ -207,6 +210,7 @@ def jit_shortcut(self): # test
             try:
                 self.opimpl_int_return(ConstInt(12))
             except ChangeFrame: return
+            assert 0, 'unreachable'
         if pc == 14: # ('-live-',) frozenset([])
             self.pc = 17
             pc = 17
@@ -216,6 +220,7 @@ def jit_shortcut(self): # test
             try:
                 self.opimpl_int_return(ConstInt(51))
             except ChangeFrame: return
+            assert 0, 'unreachable'
         if pc == 19: # ('-live-',) frozenset([])
             self.pc = 22
             pc = 22
@@ -225,6 +230,7 @@ def jit_shortcut(self): # test
             try:
                 self.opimpl_int_return(ConstInt(1212))
             except ChangeFrame: return
+            assert 0, 'unreachable'
         if pc == 122: # ('switch', %i22, <SwitchDictDescr {-5: 9, 2: 14, 7: 19}>) frozenset([%i22])
             self.pc = 7
             if i22 == -5:
@@ -243,6 +249,7 @@ def jit_shortcut(self): # test
             try:
                 self.opimpl_int_return(ConstInt(42))
             except ChangeFrame: return
+            assert 0, 'unreachable'
         assert 0 # unreachable"""
 
 @pytest.mark.xfail()
