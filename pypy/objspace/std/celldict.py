@@ -254,14 +254,21 @@ class GlobalCache(object):
 
 @warmup_critical_function
 def LOAD_GLOBAL_cached(self, nameindex):
-    w_value = _LOAD_GLOBAL_cached(self, nameindex)
+    if jit.we_are_jitted():
+        varname = self.getname_u(nameindex)
+        # NB: we don't use the _load_global_fallback function here
+        # intentionally. this reduces the number of levels of calls when
+        # tracing LOAD_GLOBAL, because _load_global is inlined here for the JIT
+        # only
+        w_value = self._load_global(varname)
+    else:
+        w_value = _LOAD_GLOBAL_cached(self, nameindex)
     self.pushvalue(w_value)
 
 @objectmodel.always_inline
 def _LOAD_GLOBAL_cached(self, nameindex):
     pycode = self.pycode
-    if jit.we_are_jitted() or (
-            self.debugdata is not None and
+    if (self.debugdata is not None and
             self.debugdata.w_globals is not pycode.w_globals):
         varname = self.getname_u(nameindex)
         return _load_global_fallback(self, varname)
