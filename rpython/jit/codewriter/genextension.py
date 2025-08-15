@@ -912,7 +912,9 @@ class Specializer(object):
     def emit_specialized_assert_not_none(self):
         arg = self.insn[1]
         unboxed_arg = self._get_as_unboxed(arg)
-        return ["assert bool(%s)" % (unboxed_arg), "continue"]
+        lines = ["assert bool(%s)" % (unboxed_arg)]
+        self._emit_jump(lines)
+        return lines
 
     def _get_type_prefix(self, arg):
         if isinstance(arg, Constant) or isinstance(arg, Register):
@@ -1121,8 +1123,8 @@ class Specializer(object):
         self._emit_box_by_type(arg0, lines)
         box = self._get_as_box(arg0)
         lines.append('if self.metainterp.heapcache.is_class_known(%s):' % box)
-
-        lines.append('    i%d = self.cls_of_box(%s).getint()' % (res.index, box, ))
+        lines.append('    i%d = support.ptr2int(lltype.cast_opaque_ptr(OBJECTPTR, %s.getref_base()).typeptr)' % (
+            res.index, box))
         specializer = self.work_list.specialize_pc(
             self.constant_registers.union({res}), self.work_list.pc_to_nextpc[self.orig_pc])
         lines.append('    pc = %d' % specializer.get_pc())
@@ -1179,7 +1181,6 @@ class Specializer(object):
     def emit_unspecialized_getarrayitem_gc_i_pure(self):
         lines = []
         arraybox, indexbox, arraydescr, result = self._get_args_and_res()
-        self._emit_sync_registers(lines)
         self._emit_box_by_type(arraybox, lines)
         self._emit_box_by_type(indexbox, lines)
         lines.append("self.registers_%s[%s] = self.opimpl_%s(%s, %s, %s)" % (

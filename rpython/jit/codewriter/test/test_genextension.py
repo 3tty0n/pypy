@@ -1133,7 +1133,7 @@ continue"""
     assert s == """\
 rr0 = self.registers_r[0]
 if self.metainterp.heapcache.is_class_known(rr0):
-    i0 = self.cls_of_box(rr0).getint()
+    i0 = support.ptr2int(lltype.cast_opaque_ptr(OBJECTPTR, rr0.getref_base()).typeptr)
     pc = 108
     continue
 i0 = self.opimpl_guard_class(rr0, 5).getint()
@@ -1273,4 +1273,5 @@ def test_assert_not_none():
     insn_specializer = work_list.specialize_insn(insn, {i0}, 5)
     assert insn_specializer.make_code() == """\
 assert bool(i0)
+pc = 108
 continue"""
