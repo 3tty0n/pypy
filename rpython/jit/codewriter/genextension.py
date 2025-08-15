@@ -5,7 +5,7 @@ from rpython.jit.metainterp.history import (Const, ConstInt, ConstPtr,
     ConstFloat, CONST_NULL, getkind, AbstractDescr)
 from rpython.jit.metainterp import support
 from rpython.flowspace.model import Constant
-from rpython.jit.codewriter.flatten import Register, TLabel, Label
+from rpython.jit.codewriter.flatten import Register, TLabel, Label, ListOfKind
 from rpython.jit.codewriter.jitcode import SwitchDictDescr
 from rpython.rtyper.lltypesystem import lltype, llmemory, rstr
 from rpython.rtyper.rclass import OBJECTPTR
@@ -616,7 +616,11 @@ class Specializer(object):
         return isinstance(arg, Label) or isinstance(arg, TLabel)
 
     def _check_all_constant_args(self, args):
-        for arg in args:
+        todo_check = list(args)
+        for arg in todo_check:
+            if isinstance(arg, ListOfKind):
+                todo_check.extend(arg.content)
+                continue
             if (
                     arg not in self.constant_registers and
                     not isinstance(arg, Constant) and
@@ -1372,6 +1376,60 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
     emit_specialized_live = emit_unspecialized_live
+
+    def emit_unspecialized_residual_call_r_r(self):
+        effectinfo = self.insn[-3].get_extra_info()
+        if effectinfo.check_forces_virtual_or_virtualizable() or not effectinfo.check_is_elidable():
+            raise Unsupported
+        lines = []
+        function, listofkindargs, descr = self._get_args()
+        args = listofkindargs.content
+        self._emit_n_ary_if(args, lines)
+        specializer = self.work_list.specialize_insn(
+            self.insn, self.constant_registers.union(set(args)), self.orig_pc)
+        lines.append("    pc = %d" % (specializer.get_pc(), ))
+        lines.append("    continue")
+        boxes = '[' + ", ".join(self._get_as_box(arg) for arg in args) + "]"
+        if isinstance(function, Const):
+            # the target is a constant at jitcode construction time, that means
+            # it will always be a residual call, not an inlining call. thus we
+            # can skip the dictionary lookup and call do_residual_call
+            miframe_method = "do_residual_call"
+        else:
+            miframe_method = "do_residual_or_indirect_call"
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s)" % (
+            miframe_method, self._get_as_box(function),
+            boxes,
+            self._add_global(descr),
+            self.orig_pc))
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_residual_call_r_r(self):
+        effectinfo = self.insn[-3].get_extra_info()
+        if effectinfo.check_forces_virtual_or_virtualizable() or not effectinfo.check_is_elidable():
+            raise Unsupported
+        lines = []
+        function, listofkindargs, descr = self._get_args()
+        args = listofkindargs.content
+        boxes = '[' + ", ".join(self._get_as_box(arg) for arg in args) + "]"
+        if isinstance(function, Const):
+            # the target is a constant at jitcode construction time, that means
+            # it will always be a residual call, not an inlining call. thus we
+            # can skip the dictionary lookup and call do_residual_call
+            miframe_method = "do_residual_call"
+        else:
+            miframe_method = "do_residual_or_indirect_call"
+        # XXX do the call instead
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s)" % (
+            miframe_method, self._get_as_box(function),
+            boxes,
+            self._add_global(descr),
+            self.orig_pc))
+        self._emit_jump(lines)
+        return lines
 
     def _emit_sync_registers(self, lines):
         # we need to sync the registers from the unboxed values to e.g. allow a guard to be created
