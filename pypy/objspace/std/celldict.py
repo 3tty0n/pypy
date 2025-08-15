@@ -253,12 +253,12 @@ class GlobalCache(object):
         return unwrap_cell(space, self.cell)
 
 @warmup_critical_function
-def LOAD_GLOBAL_cached(self, nameindex, next_instr):
-    w_value = _LOAD_GLOBAL_cached(self, nameindex, next_instr)
+def LOAD_GLOBAL_cached(self, nameindex):
+    w_value = _LOAD_GLOBAL_cached(self, nameindex)
     self.pushvalue(w_value)
 
 @objectmodel.always_inline
-def _LOAD_GLOBAL_cached(self, nameindex, next_instr):
+def _LOAD_GLOBAL_cached(self, nameindex):
     pycode = self.pycode
     if jit.we_are_jitted() or (
             self.debugdata is not None and
@@ -301,7 +301,7 @@ def _LOAD_GLOBAL_cached(self, nameindex, next_instr):
 def _load_global_fallback(self, varname):
     return self._load_global(varname)
 
-def STORE_GLOBAL_cached(self, nameindex, next_instr):
+def STORE_GLOBAL_cached(self, nameindex):
     w_newvalue = self.popvalue()
     if jit.we_are_jitted() or self.getdebug() is not None:
         varname = self.getname_u(nameindex)

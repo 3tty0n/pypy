@@ -15,7 +15,7 @@ from pypy.objspace.std.listobject import W_ListObject
 class BaseFrame(PyFrame):
     """These opcodes are always overridden."""
 
-    def LIST_APPEND(self, oparg, next_instr):
+    def LIST_APPEND(self, oparg):
         w = self.popvalue()
         v = self.peekvalue(oparg - 1)
         if type(v) is W_ListObject:
@@ -35,7 +35,7 @@ def _intshortcut(spaceopname):
     int_op = getattr(W_IntObject, 'descr_' + opname)
 
     @func_renamer(funcprefix + spaceopname.upper())
-    def opimpl(self, oparg, next_instr):
+    def opimpl(self):
         space = self.space
         space_op = getattr(space, spaceopname)
 
@@ -61,7 +61,7 @@ int_BINARY_SUBTRACT = warmup_critical_function(_intshortcut('sub'))
 int_INPLACE_SUBTRACT = warmup_critical_function(_intshortcut('inplace_sub'))
 
 
-def list_BINARY_SUBSCR(self, oparg, next_instr):
+def list_BINARY_SUBSCR(self):
     space = self.space
     w_2 = self.popvalue()
     w_1 = self.popvalue()
@@ -85,7 +85,7 @@ def build_frame(space):
         StdObjSpaceFrame.BINARY_SUBTRACT = int_BINARY_SUBTRACT
         StdObjSpaceFrame.INPLACE_SUBTRACT = int_INPLACE_SUBTRACT
     if space.config.objspace.std.optimized_list_getitem:
-        StdObjSpaceFrame.BINARY_SUBSCR = list_BINARY_SUBSCR
+        StdObjSpaceFrame.BINARY_SUBSCR = warmup_critical_function(list_BINARY_SUBSCR)
     from pypy.objspace.std.callmethod import LOOKUP_METHOD, CALL_METHOD
     StdObjSpaceFrame.LOOKUP_METHOD = LOOKUP_METHOD
     StdObjSpaceFrame.CALL_METHOD = CALL_METHOD

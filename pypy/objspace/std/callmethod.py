@@ -22,7 +22,7 @@ from pypy.objspace.std.mapdict import LOOKUP_METHOD_mapdict, \
 # See pypy.objspace.std.objspace for where these functions are used from.
 
 @jit.warmup_critical_function
-def LOOKUP_METHOD(f, nameindex, *ignored):
+def LOOKUP_METHOD(f, nameindex):
     from pypy.objspace.std.typeobject import MutableCell
     #   stack before                 after
     #  --------------    --fast-method----fallback-case------------
@@ -84,7 +84,7 @@ def LOOKUP_METHOD(f, nameindex, *ignored):
 
 @jit.warmup_critical_function
 @jit.unroll_safe
-def CALL_METHOD(f, oparg, *ignored):
+def CALL_METHOD(f, oparg):
     # opargs contains the arg, and kwarg count, excluding the implicit 'self'
     n_args = oparg & 0xff
     n_kwargs = (oparg >> 8) & 0xff

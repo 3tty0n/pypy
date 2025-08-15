@@ -308,18 +308,18 @@ class TestCellCache(object):
         code.w_globals = d
         frame = self.FakeFrame(code, self.FakeBuiltin())
 
-        LOAD_GLOBAL_cached(frame, 0, None)
+        LOAD_GLOBAL_cached(frame, 0)
         assert frame.w_top_of_stack == -17 # went the _load_global route
 
-        LOAD_GLOBAL_cached(frame, 0, None)
+        LOAD_GLOBAL_cached(frame, 0)
         assert frame.w_top_of_stack == 1
 
         d.setitem(w_key, 2)
-        LOAD_GLOBAL_cached(frame, 0, None)
+        LOAD_GLOBAL_cached(frame, 0)
         assert frame.w_top_of_stack == 2
 
         d.setitem(w_key, 6)
-        LOAD_GLOBAL_cached(frame, 0, None)
+        LOAD_GLOBAL_cached(frame, 0)
         assert frame.w_top_of_stack == 6
 
     def test_bytecode_load_works_with_debugdata(self):
@@ -333,10 +333,10 @@ class TestCellCache(object):
         frame.debugdata = self.FakeDebugData()
         frame.debugdata.w_globals = d
 
-        LOAD_GLOBAL_cached(frame, 0, None)
+        LOAD_GLOBAL_cached(frame, 0)
         assert frame.w_top_of_stack == -17 # went the _load_global route
 
-        LOAD_GLOBAL_cached(frame, 0, None)
+        LOAD_GLOBAL_cached(frame, 0)
         assert frame.w_top_of_stack == 1 # works!
 
     def test_bytecode_store(self):
@@ -349,10 +349,10 @@ class TestCellCache(object):
         frame = self.FakeFrame(code, self.FakeBuiltin())
 
         frame.w_top_of_stack = 7
-        STORE_GLOBAL_cached(frame, 0, None)
+        STORE_GLOBAL_cached(frame, 0)
         assert d.getitem(w_key) == 7
 
         frame.getname_u = None # the rest still works due to the cache
         frame.w_top_of_stack = 9
-        STORE_GLOBAL_cached(frame, 0, None)
+        STORE_GLOBAL_cached(frame, 0)
         assert d.getitem(w_key) == 9

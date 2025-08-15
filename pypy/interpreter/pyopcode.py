@@ -23,7 +23,7 @@ from pypy.tool.stdlib_opcode import bytecode_spec
 
 @not_rpython
 def unaryoperation(operationname):
-    def opimpl(self, *ignored):
+    def opimpl(self):
         operation = getattr(self.space, operationname)
         w_1 = self.popvalue()
         w_result = operation(w_1)
@@ -34,7 +34,7 @@ def unaryoperation(operationname):
 
 @not_rpython
 def binaryoperation(operationname):
-    def opimpl(self, *ignored):
+    def opimpl(self):
         operation = getattr(self.space, operationname)
         w_2 = self.popvalue()
         w_1 = self.popvalue()
@@ -218,9 +218,9 @@ class __extend__(pyframe.PyFrame):
             elif opcode == opcodedesc.JUMP_ABSOLUTE.index:
                 return self.jump_absolute(oparg, ec)
             elif opcode == opcodedesc.BREAK_LOOP.index:
-                next_instr = self.BREAK_LOOP(oparg, next_instr)
+                next_instr = self.BREAK_LOOP()
             elif opcode == opcodedesc.CONTINUE_LOOP.index:
-                return self.CONTINUE_LOOP(oparg, next_instr)
+                return self.CONTINUE_LOOP(oparg)
             elif opcode == opcodedesc.FOR_ITER.index:
                 next_instr = self.FOR_ITER(oparg, next_instr)
             elif opcode == opcodedesc.JUMP_FORWARD.index:
@@ -236,167 +236,169 @@ class __extend__(pyframe.PyFrame):
             elif opcode == opcodedesc.POP_JUMP_IF_TRUE.index:
                 next_instr = self.POP_JUMP_IF_TRUE(oparg, next_instr)
             elif opcode == opcodedesc.BINARY_ADD.index:
-                self.BINARY_ADD(oparg, next_instr)
+                self.BINARY_ADD()
             elif opcode == opcodedesc.BINARY_AND.index:
-                self.BINARY_AND(oparg, next_instr)
+                self.BINARY_AND()
             elif opcode == opcodedesc.BINARY_DIVIDE.index:
-                self.BINARY_DIVIDE(oparg, next_instr)
+                self.BINARY_DIVIDE()
             elif opcode == opcodedesc.BINARY_FLOOR_DIVIDE.index:
-                self.BINARY_FLOOR_DIVIDE(oparg, next_instr)
+                self.BINARY_FLOOR_DIVIDE()
             elif opcode == opcodedesc.BINARY_LSHIFT.index:
-                self.BINARY_LSHIFT(oparg, next_instr)
+                self.BINARY_LSHIFT()
             elif opcode == opcodedesc.BINARY_MODULO.index:
-                self.BINARY_MODULO(oparg, next_instr)
+                self.BINARY_MODULO()
             elif opcode == opcodedesc.BINARY_MULTIPLY.index:
-                self.BINARY_MULTIPLY(oparg, next_instr)
+                self.BINARY_MULTIPLY()
             elif opcode == opcodedesc.BINARY_OR.index:
-                self.BINARY_OR(oparg, next_instr)
+                self.BINARY_OR()
             elif opcode == opcodedesc.BINARY_POWER.index:
-                self.BINARY_POWER(oparg, next_instr)
+                self.BINARY_POWER()
             elif opcode == opcodedesc.BINARY_RSHIFT.index:
-                self.BINARY_RSHIFT(oparg, next_instr)
+                self.BINARY_RSHIFT()
             elif opcode == opcodedesc.BINARY_SUBSCR.index:
-                self.BINARY_SUBSCR(oparg, next_instr)
+                self.BINARY_SUBSCR()
             elif opcode == opcodedesc.BINARY_SUBTRACT.index:
-                self.BINARY_SUBTRACT(oparg, next_instr)
+                self.BINARY_SUBTRACT()
             elif opcode == opcodedesc.BINARY_TRUE_DIVIDE.index:
-                self.BINARY_TRUE_DIVIDE(oparg, next_instr)
+                self.BINARY_TRUE_DIVIDE()
             elif opcode == opcodedesc.BINARY_XOR.index:
-                self.BINARY_XOR(oparg, next_instr)
+                self.BINARY_XOR()
             elif opcode == opcodedesc.BUILD_CLASS.index:
-                self.BUILD_CLASS(oparg, next_instr)
+                self.BUILD_CLASS(oparg)
             elif opcode == opcodedesc.BUILD_LIST.index:
-                self.BUILD_LIST(oparg, next_instr)
+                self.BUILD_LIST(oparg)
             elif opcode == opcodedesc.BUILD_LIST_FROM_ARG.index:
-                self.BUILD_LIST_FROM_ARG(oparg, next_instr)
+                self.BUILD_LIST_FROM_ARG()
             elif opcode == opcodedesc.BUILD_MAP.index:
-                self.BUILD_MAP(oparg, next_instr)
+                self.BUILD_MAP(oparg)
             elif opcode == opcodedesc.BUILD_SET.index:
-                self.BUILD_SET(oparg, next_instr)
+                self.BUILD_SET(oparg)
             elif opcode == opcodedesc.BUILD_SLICE.index:
-                self.BUILD_SLICE(oparg, next_instr)
+                self.BUILD_SLICE(oparg)
             elif opcode == opcodedesc.BUILD_TUPLE.index:
-                self.BUILD_TUPLE(oparg, next_instr)
+                self.BUILD_TUPLE(oparg)
             elif opcode == opcodedesc.CALL_FUNCTION.index:
-                self.CALL_FUNCTION(oparg, next_instr)
+                self.CALL_FUNCTION(oparg)
             elif opcode == opcodedesc.CALL_FUNCTION_KW.index:
-                self.CALL_FUNCTION_KW(oparg, next_instr)
+                self.CALL_FUNCTION_KW(oparg)
             elif opcode == opcodedesc.CALL_FUNCTION_VAR.index:
-                self.CALL_FUNCTION_VAR(oparg, next_instr)
+                self.CALL_FUNCTION_VAR(oparg)
             elif opcode == opcodedesc.CALL_FUNCTION_VAR_KW.index:
-                self.CALL_FUNCTION_VAR_KW(oparg, next_instr)
+                self.CALL_FUNCTION_VAR_KW(oparg)
             elif opcode == opcodedesc.CALL_METHOD.index:
-                self.CALL_METHOD(oparg, next_instr)
+                self.CALL_METHOD(oparg)
             elif opcode == opcodedesc.COMPARE_OP.index:
-                self.COMPARE_OP(oparg, next_instr)
+                self.COMPARE_OP(oparg)
             elif opcode == opcodedesc.DELETE_ATTR.index:
-                self.DELETE_ATTR(oparg, next_instr)
+                self.DELETE_ATTR(oparg)
             elif opcode == opcodedesc.DELETE_FAST.index:
-                self.DELETE_FAST(oparg, next_instr)
+                self.DELETE_FAST(oparg)
             elif opcode == opcodedesc.DELETE_GLOBAL.index:
-                self.DELETE_GLOBAL(oparg, next_instr)
+                self.DELETE_GLOBAL(oparg)
             elif opcode == opcodedesc.DELETE_NAME.index:
-                self.DELETE_NAME(oparg, next_instr)
+                self.DELETE_NAME(oparg)
             elif opcode == opcodedesc.DELETE_SLICE_0.index:
-                self.DELETE_SLICE_0(oparg, next_instr)
+                self.DELETE_SLICE_0()
             elif opcode == opcodedesc.DELETE_SLICE_1.index:
-                self.DELETE_SLICE_1(oparg, next_instr)
+                self.DELETE_SLICE_1()
             elif opcode == opcodedesc.DELETE_SLICE_2.index:
-                self.DELETE_SLICE_2(oparg, next_instr)
+                self.DELETE_SLICE_2()
             elif opcode == opcodedesc.DELETE_SLICE_3.index:
-                self.DELETE_SLICE_3(oparg, next_instr)
+                self.DELETE_SLICE_3()
             elif opcode == opcodedesc.DELETE_SUBSCR.index:
-                self.DELETE_SUBSCR(oparg, next_instr)
+                self.DELETE_SUBSCR()
             elif opcode == opcodedesc.DUP_TOP.index:
-                self.DUP_TOP(oparg, next_instr)
+                self.DUP_TOP()
             elif opcode == opcodedesc.DUP_TOPX.index:
-                self.DUP_TOPX(oparg, next_instr)
+                self.DUP_TOPX(oparg)
             elif opcode == opcodedesc.EXEC_STMT.index:
-                self.EXEC_STMT(oparg, next_instr)
+                self.EXEC_STMT()
             elif opcode == opcodedesc.GET_ITER.index:
-                self.GET_ITER(oparg, next_instr)
+                self.GET_ITER()
             elif opcode == opcodedesc.IMPORT_FROM.index:
-                self.IMPORT_FROM(oparg, next_instr)
+                self.IMPORT_FROM(oparg)
             elif opcode == opcodedesc.IMPORT_NAME.index:
-                self.IMPORT_NAME(oparg, next_instr)
+                self.IMPORT_NAME(oparg)
             elif opcode == opcodedesc.IMPORT_STAR.index:
-                self.IMPORT_STAR(oparg, next_instr)
+                self.IMPORT_STAR(oparg)
             elif opcode == opcodedesc.INPLACE_ADD.index:
-                self.INPLACE_ADD(oparg, next_instr)
+                self.INPLACE_ADD()
             elif opcode == opcodedesc.INPLACE_AND.index:
-                self.INPLACE_AND(oparg, next_instr)
+                self.INPLACE_AND()
             elif opcode == opcodedesc.INPLACE_DIVIDE.index:
-                self.INPLACE_DIVIDE(oparg, next_instr)
+                self.INPLACE_DIVIDE()
             elif opcode == opcodedesc.INPLACE_FLOOR_DIVIDE.index:
-                self.INPLACE_FLOOR_DIVIDE(oparg, next_instr)
+                self.INPLACE_FLOOR_DIVIDE()
             elif opcode == opcodedesc.INPLACE_LSHIFT.index:
-                self.INPLACE_LSHIFT(oparg, next_instr)
+                self.INPLACE_LSHIFT()
             elif opcode == opcodedesc.INPLACE_MODULO.index:
-                self.INPLACE_MODULO(oparg, next_instr)
+                self.INPLACE_MODULO()
             elif opcode == opcodedesc.INPLACE_MULTIPLY.index:
-                self.INPLACE_MULTIPLY(oparg, next_instr)
+                self.INPLACE_MULTIPLY()
             elif opcode == opcodedesc.INPLACE_OR.index:
-                self.INPLACE_OR(oparg, next_instr)
+                self.INPLACE_OR()
             elif opcode == opcodedesc.INPLACE_POWER.index:
-                self.INPLACE_POWER(oparg, next_instr)
+                self.INPLACE_POWER()
             elif opcode == opcodedesc.INPLACE_RSHIFT.index:
-                self.INPLACE_RSHIFT(oparg, next_instr)
+                self.INPLACE_RSHIFT()
             elif opcode == opcodedesc.INPLACE_SUBTRACT.index:
-                self.INPLACE_SUBTRACT(oparg, next_instr)
+                self.INPLACE_SUBTRACT()
             elif opcode == opcodedesc.INPLACE_TRUE_DIVIDE.index:
-                self.INPLACE_TRUE_DIVIDE(oparg, next_instr)
+                self.INPLACE_TRUE_DIVIDE()
             elif opcode == opcodedesc.INPLACE_XOR.index:
-                self.INPLACE_XOR(oparg, next_instr)
+                self.INPLACE_XOR()
             elif opcode == opcodedesc.LIST_APPEND.index:
-                self.LIST_APPEND(oparg, next_instr)
+                self.LIST_APPEND(oparg)
             elif opcode == opcodedesc.LOAD_ATTR.index:
-                self.LOAD_ATTR(oparg, next_instr)
+                self.LOAD_ATTR(oparg)
             elif opcode == opcodedesc.LOAD_CLOSURE.index:
-                self.LOAD_CLOSURE(oparg, next_instr)
+                self.LOAD_CLOSURE(oparg)
             elif opcode == opcodedesc.LOAD_CONST.index:
-                self.LOAD_CONST(oparg, next_instr)
+                self.LOAD_CONST(oparg)
             elif opcode == opcodedesc.LOAD_DEREF.index:
-                self.LOAD_DEREF(oparg, next_instr)
+                self.LOAD_DEREF(oparg)
             elif opcode == opcodedesc.LOAD_FAST.index:
-                self.LOAD_FAST(oparg, next_instr)
+                self.LOAD_FAST(oparg)
             elif opcode == opcodedesc.LOAD_GLOBAL.index:
-                self.LOAD_GLOBAL(oparg, next_instr)
+                self.LOAD_GLOBAL(oparg)
             elif opcode == opcodedesc.LOAD_LOCALS.index:
-                self.LOAD_LOCALS(oparg, next_instr)
+                self.LOAD_LOCALS()
             elif opcode == opcodedesc.LOAD_NAME.index:
-                self.LOAD_NAME(oparg, next_instr)
+                self.LOAD_NAME(oparg)
             elif opcode == opcodedesc.LOOKUP_METHOD.index:
-                self.LOOKUP_METHOD(oparg, next_instr)
+                self.LOOKUP_METHOD(oparg)
             elif opcode == opcodedesc.MAKE_CLOSURE.index:
-                self.MAKE_CLOSURE(oparg, next_instr)
+                self.MAKE_CLOSURE(oparg)
             elif opcode == opcodedesc.MAKE_FUNCTION.index:
-                self.MAKE_FUNCTION(oparg, next_instr)
+                self.MAKE_FUNCTION(oparg)
             elif opcode == opcodedesc.MAP_ADD.index:
-                self.MAP_ADD(oparg, next_instr)
+                self.MAP_ADD(oparg)
             elif opcode == opcodedesc.NOP.index:
-                self.NOP(oparg, next_instr)
+                # annotation-time check: if it fails, it means that the decoding
+                # of oparg failed to produce an integer which is annotated as non-neg
+                check_nonneg(oparg)
             elif opcode == opcodedesc.POP_BLOCK.index:
-                self.POP_BLOCK(oparg, next_instr)
+                self.POP_BLOCK()
             elif opcode == opcodedesc.POP_TOP.index:
-                self.POP_TOP(oparg, next_instr)
+                self.POP_TOP()
             elif opcode == opcodedesc.PRINT_EXPR.index:
-                self.PRINT_EXPR(oparg, next_instr)
+                self.PRINT_EXPR()
             elif opcode == opcodedesc.PRINT_ITEM.index:
-                self.PRINT_ITEM(oparg, next_instr)
+                self.PRINT_ITEM()
             elif opcode == opcodedesc.PRINT_ITEM_TO.index:
-                self.PRINT_ITEM_TO(oparg, next_instr)
+                self.PRINT_ITEM_TO()
             elif opcode == opcodedesc.PRINT_NEWLINE.index:
-                self.PRINT_NEWLINE(oparg, next_instr)
+                self.PRINT_NEWLINE()
             elif opcode == opcodedesc.PRINT_NEWLINE_TO.index:
-                self.PRINT_NEWLINE_TO(oparg, next_instr)
+                self.PRINT_NEWLINE_TO()
             elif opcode == opcodedesc.RAISE_VARARGS.index:
-                self.RAISE_VARARGS(oparg, next_instr)
+                self.RAISE_VARARGS(oparg)
             elif opcode == opcodedesc.ROT_FOUR.index:
-                self.ROT_FOUR(oparg, next_instr)
+                self.ROT_FOUR()
             elif opcode == opcodedesc.ROT_THREE.index:
-                self.ROT_THREE(oparg, next_instr)
+                self.ROT_THREE()
             elif opcode == opcodedesc.ROT_TWO.index:
-                self.ROT_TWO(oparg, next_instr)
+                self.ROT_TWO()
             elif opcode == opcodedesc.SETUP_EXCEPT.index:
                 self.SETUP_EXCEPT(oparg, next_instr)
             elif opcode == opcodedesc.SETUP_FINALLY.index:
@@ -406,59 +408,59 @@ class __extend__(pyframe.PyFrame):
             elif opcode == opcodedesc.SETUP_WITH.index:
                 self.SETUP_WITH(oparg, next_instr)
             elif opcode == opcodedesc.SET_ADD.index:
-                self.SET_ADD(oparg, next_instr)
+                self.SET_ADD(oparg)
             elif opcode == opcodedesc.SLICE_0.index:
-                self.SLICE_0(oparg, next_instr)
+                self.SLICE_0()
             elif opcode == opcodedesc.SLICE_1.index:
-                self.SLICE_1(oparg, next_instr)
+                self.SLICE_1()
             elif opcode == opcodedesc.SLICE_2.index:
-                self.SLICE_2(oparg, next_instr)
+                self.SLICE_2()
             elif opcode == opcodedesc.SLICE_3.index:
-                self.SLICE_3(oparg, next_instr)
+                self.SLICE_3()
             elif opcode == opcodedesc.STOP_CODE.index:
-                self.STOP_CODE(oparg, next_instr)
+                self.STOP_CODE()
             elif opcode == opcodedesc.STORE_ATTR.index:
-                self.STORE_ATTR(oparg, next_instr)
+                self.STORE_ATTR(oparg)
             elif opcode == opcodedesc.STORE_DEREF.index:
-                self.STORE_DEREF(oparg, next_instr)
+                self.STORE_DEREF(oparg)
             elif opcode == opcodedesc.STORE_FAST.index:
-                self.STORE_FAST(oparg, next_instr)
+                self.STORE_FAST(oparg)
             elif opcode == opcodedesc.STORE_GLOBAL.index:
-                self.STORE_GLOBAL(oparg, next_instr)
+                self.STORE_GLOBAL(oparg)
             elif opcode == opcodedesc.STORE_MAP.index:
-                self.STORE_MAP(oparg, next_instr)
+                self.STORE_MAP(oparg)
             elif opcode == opcodedesc.STORE_NAME.index:
-                self.STORE_NAME(oparg, next_instr)
+                self.STORE_NAME(oparg)
             elif opcode == opcodedesc.STORE_SLICE_0.index:
-                self.STORE_SLICE_0(oparg, next_instr)
+                self.STORE_SLICE_0()
             elif opcode == opcodedesc.STORE_SLICE_1.index:
-                self.STORE_SLICE_1(oparg, next_instr)
+                self.STORE_SLICE_1()
             elif opcode == opcodedesc.STORE_SLICE_2.index:
-                self.STORE_SLICE_2(oparg, next_instr)
+                self.STORE_SLICE_2()
             elif opcode == opcodedesc.STORE_SLICE_3.index:
-                self.STORE_SLICE_3(oparg, next_instr)
+                self.STORE_SLICE_3()
             elif opcode == opcodedesc.STORE_SUBSCR.index:
-                self.STORE_SUBSCR(oparg, next_instr)
+                self.STORE_SUBSCR()
             elif opcode == opcodedesc.UNARY_CONVERT.index:
-                self.UNARY_CONVERT(oparg, next_instr)
+                self.UNARY_CONVERT()
             elif opcode == opcodedesc.UNARY_INVERT.index:
-                self.UNARY_INVERT(oparg, next_instr)
+                self.UNARY_INVERT()
             elif opcode == opcodedesc.UNARY_NEGATIVE.index:
-                self.UNARY_NEGATIVE(oparg, next_instr)
+                self.UNARY_NEGATIVE()
             elif opcode == opcodedesc.UNARY_NOT.index:
-                self.UNARY_NOT(oparg, next_instr)
+                self.UNARY_NOT()
             elif opcode == opcodedesc.UNARY_POSITIVE.index:
-                self.UNARY_POSITIVE(oparg, next_instr)
+                self.UNARY_POSITIVE()
             elif opcode == opcodedesc.UNPACK_SEQUENCE.index:
-                self.UNPACK_SEQUENCE(oparg, next_instr)
+                self.UNPACK_SEQUENCE(oparg)
             elif opcode == opcodedesc.WITH_CLEANUP.index:
-                self.WITH_CLEANUP(oparg, next_instr)
+                self.WITH_CLEANUP()
             elif opcode == opcodedesc.YIELD_VALUE.index:
-                self.YIELD_VALUE(oparg, next_instr)
+                self.YIELD_VALUE()
             elif opcode == opcodedesc.LOAD_REVDB_VAR.index:
-                self.LOAD_REVDB_VAR(oparg, next_instr)
+                self.LOAD_REVDB_VAR(oparg)
             else:
-                self.MISSING_OPCODE(oparg, next_instr)
+                self.MISSING_OPCODE()
 
             if jit.we_are_jitted():
                 return next_instr
@@ -499,13 +501,8 @@ class __extend__(pyframe.PyFrame):
     ##  See also nestedscope.py for the rest.
     ##
 
-    def NOP(self, oparg, next_instr):
-        # annotation-time check: if it fails, it means that the decoding
-        # of oparg failed to produce an integer which is annotated as non-neg
-        check_nonneg(oparg)
-
     @always_inline
-    def LOAD_FAST(self, varindex, next_instr):
+    def LOAD_FAST(self, varindex):
         # access a local variable directly
         w_value = self.locals_cells_stack_w[varindex]
         if w_value is None:
@@ -519,11 +516,11 @@ class __extend__(pyframe.PyFrame):
                     "local variable '%s' referenced before assignment",
                     varname)
 
-    def LOAD_CONST(self, constindex, next_instr):
+    def LOAD_CONST(self, constindex):
         w_const = self.getconstant_w(constindex)
         self.pushvalue(w_const)
 
-    def STORE_FAST(self, varindex, next_instr):
+    def STORE_FAST(self, varindex):
         w_newvalue = self.popvalue()
         assert w_newvalue is not None
         self.locals_cells_stack_w[varindex] = w_newvalue
@@ -536,7 +533,7 @@ class __extend__(pyframe.PyFrame):
         # is the variable given by index a cell or a free var?
         return index < len(self.pycode.co_cellvars)
 
-    def LOAD_DEREF(self, varindex, next_instr):
+    def LOAD_DEREF(self, varindex):
         # nested scopes: access a variable through its cell object
         cell = self._getcell(varindex)
         try:
@@ -554,27 +551,27 @@ class __extend__(pyframe.PyFrame):
         else:
             self.pushvalue(w_value)
 
-    def STORE_DEREF(self, varindex, next_instr):
+    def STORE_DEREF(self, varindex):
         # nested scopes: access a variable through its cell object
         w_newvalue = self.popvalue()
         cell = self._getcell(varindex)
         cell.set(w_newvalue)
 
-    def LOAD_CLOSURE(self, varindex, next_instr):
+    def LOAD_CLOSURE(self, varindex):
         # nested scopes: access the cell object
         w_value = self._getcell(varindex)
         self.pushvalue(w_value)
 
-    def POP_TOP(self, oparg, next_instr):
+    def POP_TOP(self):
         self.popvalue()
 
-    def ROT_TWO(self, oparg, next_instr):
+    def ROT_TWO(self):
         w_1 = self.popvalue()
         w_2 = self.popvalue()
         self.pushvalue(w_1)
         self.pushvalue(w_2)
 
-    def ROT_THREE(self, oparg, next_instr):
+    def ROT_THREE(self):
         w_1 = self.popvalue()
         w_2 = self.popvalue()
         w_3 = self.popvalue()
@@ -582,7 +579,7 @@ class __extend__(pyframe.PyFrame):
         self.pushvalue(w_3)
         self.pushvalue(w_2)
 
-    def ROT_FOUR(self, oparg, next_instr):
+    def ROT_FOUR(self):
         w_1 = self.popvalue()
         w_2 = self.popvalue()
         w_3 = self.popvalue()
@@ -592,11 +589,11 @@ class __extend__(pyframe.PyFrame):
         self.pushvalue(w_3)
         self.pushvalue(w_2)
 
-    def DUP_TOP(self, oparg, next_instr):
+    def DUP_TOP(self):
         w_1 = self.peekvalue()
         self.pushvalue(w_1)
 
-    def DUP_TOPX(self, itemcount, next_instr):
+    def DUP_TOPX(self, itemcount):
         assert 1 <= itemcount <= 5, "limitation of the current interpreter"
         self.dupvalues(itemcount)
 
@@ -606,7 +603,7 @@ class __extend__(pyframe.PyFrame):
     UNARY_CONVERT  = unaryoperation("repr")
     UNARY_INVERT   = unaryoperation("invert")
 
-    def BINARY_POWER(self, oparg, next_instr):
+    def BINARY_POWER(self):
         w_2 = self.popvalue()
         w_1 = self.popvalue()
         w_result = self.space.pow(w_1, w_2, self.space.w_None)
@@ -627,7 +624,7 @@ class __extend__(pyframe.PyFrame):
     BINARY_XOR = binaryoperation("xor")
     BINARY_OR  = binaryoperation("or_")
 
-    def INPLACE_POWER(self, oparg, next_instr):
+    def INPLACE_POWER(self):
         w_2 = self.popvalue()
         w_1 = self.popvalue()
         w_result = self.space.inplace_pow(w_1, w_2)
@@ -652,18 +649,18 @@ class __extend__(pyframe.PyFrame):
         w_result = self.space.getslice(w_obj, w_start, w_end)
         self.pushvalue(w_result)
 
-    def SLICE_0(self, oparg, next_instr):
+    def SLICE_0(self):
         self.slice(self.space.w_None, self.space.w_None)
 
-    def SLICE_1(self, oparg, next_instr):
+    def SLICE_1(self):
         w_start = self.popvalue()
         self.slice(w_start, self.space.w_None)
 
-    def SLICE_2(self, oparg, next_instr):
+    def SLICE_2(self):
         w_end = self.popvalue()
         self.slice(self.space.w_None, w_end)
 
-    def SLICE_3(self, oparg, next_instr):
+    def SLICE_3(self):
         w_end = self.popvalue()
         w_start = self.popvalue()
         self.slice(w_start, w_end)
@@ -673,18 +670,18 @@ class __extend__(pyframe.PyFrame):
         w_newvalue = self.popvalue()
         self.space.setslice(w_obj, w_start, w_end, w_newvalue)
 
-    def STORE_SLICE_0(self, oparg, next_instr):
+    def STORE_SLICE_0(self):
         self.storeslice(self.space.w_None, self.space.w_None)
 
-    def STORE_SLICE_1(self, oparg, next_instr):
+    def STORE_SLICE_1(self):
         w_start = self.popvalue()
         self.storeslice(w_start, self.space.w_None)
 
-    def STORE_SLICE_2(self, oparg, next_instr):
+    def STORE_SLICE_2(self):
         w_end = self.popvalue()
         self.storeslice(self.space.w_None, w_end)
 
-    def STORE_SLICE_3(self, oparg, next_instr):
+    def STORE_SLICE_3(self):
         w_end = self.popvalue()
         w_start = self.popvalue()
         self.storeslice(w_start, w_end)
@@ -693,48 +690,48 @@ class __extend__(pyframe.PyFrame):
         w_obj = self.popvalue()
         self.space.delslice(w_obj, w_start, w_end)
 
-    def DELETE_SLICE_0(self, oparg, next_instr):
+    def DELETE_SLICE_0(self):
         self.deleteslice(self.space.w_None, self.space.w_None)
 
-    def DELETE_SLICE_1(self, oparg, next_instr):
+    def DELETE_SLICE_1(self):
         w_start = self.popvalue()
         self.deleteslice(w_start, self.space.w_None)
 
-    def DELETE_SLICE_2(self, oparg, next_instr):
+    def DELETE_SLICE_2(self):
         w_end = self.popvalue()
         self.deleteslice(self.space.w_None, w_end)
 
-    def DELETE_SLICE_3(self, oparg, next_instr):
+    def DELETE_SLICE_3(self):
         w_end = self.popvalue()
         w_start = self.popvalue()
         self.deleteslice(w_start, w_end)
 
     @warmup_critical_function
-    def STORE_SUBSCR(self, oparg, next_instr):
+    def STORE_SUBSCR(self):
         "obj[subscr] = newvalue"
         w_subscr = self.popvalue()
         w_obj = self.popvalue()
         w_newvalue = self.popvalue()
         self.space.setitem(w_obj, w_subscr, w_newvalue)
 
-    def DELETE_SUBSCR(self, oparg, next_instr):
+    def DELETE_SUBSCR(self):
         "del obj[subscr]"
         w_subscr = self.popvalue()
         w_obj = self.popvalue()
         self.space.delitem(w_obj, w_subscr)
 
-    def PRINT_EXPR(self, oparg, next_instr):
+    def PRINT_EXPR(self):
         w_expr = self.popvalue()
         print_expr(self.space, w_expr)
 
-    def PRINT_ITEM_TO(self, oparg, next_instr):
+    def PRINT_ITEM_TO(self):
         w_stream = self.popvalue()
         w_item = self.popvalue()
         if self.space.is_w(w_stream, self.space.w_None):
             w_stream = sys_stdout(self.space)   # grumble grumble special cases
         print_item_to(self.space, self._printable_object(w_item), w_stream)
 
-    def PRINT_ITEM(self, oparg, next_instr):
+    def PRINT_ITEM(self):
         w_item = self.popvalue()
         print_item(self.space, self._printable_object(w_item))
 
@@ -744,23 +741,23 @@ class __extend__(pyframe.PyFrame):
             w_obj = space.str(w_obj)
         return w_obj
 
-    def PRINT_NEWLINE_TO(self, oparg, next_instr):
+    def PRINT_NEWLINE_TO(self):
         w_stream = self.popvalue()
         if self.space.is_w(w_stream, self.space.w_None):
             w_stream = sys_stdout(self.space)   # grumble grumble special cases
         print_newline_to(self.space, w_stream)
 
-    def PRINT_NEWLINE(self, oparg, next_instr):
+    def PRINT_NEWLINE(self):
         print_newline(self.space)
 
-    def BREAK_LOOP(self, oparg, next_instr):
+    def BREAK_LOOP(self):
         return self.unrollstack_and_jump(SBreakLoop.singleton)
 
-    def CONTINUE_LOOP(self, startofloop, next_instr):
+    def CONTINUE_LOOP(self, startofloop):
         unroller = SContinueLoop(startofloop)
         return self.unrollstack_and_jump(unroller)
 
-    def RAISE_VARARGS(self, nbargs, next_instr):
+    def RAISE_VARARGS(self, nbargs):
         space = self.space
         if nbargs == 0:
             last_operr = self._exc_info_unroll(space, for_hidden=True)
@@ -790,10 +787,10 @@ class __extend__(pyframe.PyFrame):
             # special 3-arguments raise, no new traceback obj will be attached
             raise RaiseWithExplicitTraceback(operror)
 
-    def LOAD_LOCALS(self, oparg, next_instr):
+    def LOAD_LOCALS(self):
         self.pushvalue(self.getorcreatedebug().w_locals)
 
-    def EXEC_STMT(self, oparg, next_instr):
+    def EXEC_STMT(self):
         w_locals = self.popvalue()
         w_globals = self.popvalue()
         w_prog = self.popvalue()
@@ -816,7 +813,7 @@ class __extend__(pyframe.PyFrame):
         if plain:
             self.setdictscope(w_locals)
 
-    def POP_BLOCK(self, oparg, next_instr):
+    def POP_BLOCK(self):
         block = self.pop_block()
         block.cleanup(self)  # the block knows how to clean up the value stack
 
@@ -844,7 +841,7 @@ class __extend__(pyframe.PyFrame):
             assert w_unroller is not None
             return w_unroller
 
-    def BUILD_CLASS(self, oparg, next_instr):
+    def BUILD_CLASS(self, oparg):
         w_methodsdict = self.popvalue()
         w_bases = self.popvalue()
         w_name = self.popvalue()
@@ -867,13 +864,13 @@ class __extend__(pyframe.PyFrame):
                 e.get_w_value(self.space))
         self.pushvalue(w_newclass)
 
-    def STORE_NAME(self, varindex, next_instr):
+    def STORE_NAME(self, varindex):
         varname = self.getname_u(varindex)
         w_newvalue = self.popvalue()
         self.space.setitem_str(self.getorcreatedebug().w_locals, varname,
                                w_newvalue)
 
-    def DELETE_NAME(self, varindex, next_instr):
+    def DELETE_NAME(self, varindex):
         w_varname = self.getname_w(varindex)
         try:
             self.space.delitem(self.getorcreatedebug().w_locals, w_varname)
@@ -884,13 +881,13 @@ class __extend__(pyframe.PyFrame):
             raise oefmt(self.space.w_NameError, "name %R is not defined",
                         w_varname)
 
-    def UNPACK_SEQUENCE(self, itemcount, next_instr):
+    def UNPACK_SEQUENCE(self, itemcount):
         w_iterable = self.popvalue()
         items = self.space.fixedview_unroll(w_iterable, itemcount)
         self.pushrevvalues(itemcount, items)
 
     @warmup_critical_function
-    def STORE_ATTR(self, nameindex, next_instr):
+    def STORE_ATTR(self, nameindex):
         "obj.attributename = newvalue"
         w_obj = self.popvalue()
         w_newvalue = self.popvalue()
@@ -901,24 +898,24 @@ class __extend__(pyframe.PyFrame):
             w_attributename = self.getname_w(nameindex)
             self.space.setattr(w_obj, w_attributename, w_newvalue)
 
-    def DELETE_ATTR(self, nameindex, next_instr):
+    def DELETE_ATTR(self, nameindex):
         "del obj.attributename"
         w_attributename = self.getname_w(nameindex)
         w_obj = self.popvalue()
         self.space.delattr(w_obj, w_attributename)
 
-    def STORE_GLOBAL(self, nameindex, next_instr):
+    def STORE_GLOBAL(self, nameindex):
         #varname = self.getname_u(nameindex)
         #w_newvalue = self.popvalue()
         #self.space.setitem_str(self.get_w_globals(), varname, w_newvalue)
         from pypy.objspace.std.celldict import STORE_GLOBAL_cached
-        STORE_GLOBAL_cached(self, nameindex, next_instr)
+        STORE_GLOBAL_cached(self, nameindex)
 
-    def DELETE_GLOBAL(self, nameindex, next_instr):
+    def DELETE_GLOBAL(self, nameindex):
         w_varname = self.getname_w(nameindex)
         self.space.delitem(self.get_w_globals(), w_varname)
 
-    def LOAD_NAME(self, nameindex, next_instr):
+    def LOAD_NAME(self, nameindex):
         if self.getorcreatedebug().w_locals is not self.get_w_globals():
             varname = self.getname_u(nameindex)
             w_value = self.space.finditem_str(self.getorcreatedebug().w_locals,
@@ -927,7 +924,7 @@ class __extend__(pyframe.PyFrame):
                 self.pushvalue(w_value)
                 return
         #self.pushvalue(self._load_global(varname))
-        self.LOAD_GLOBAL(nameindex, next_instr)
+        self.LOAD_GLOBAL(nameindex)
 
     @always_inline
     def _load_global(self, varname):
@@ -945,13 +942,13 @@ class __extend__(pyframe.PyFrame):
                     "global name '%s' is not defined", varname)
 
     @always_inline
-    def LOAD_GLOBAL(self, nameindex, next_instr):
+    def LOAD_GLOBAL(self, nameindex):
         #self.pushvalue(self._load_global(self.getname_u(nameindex)))
         #return
         from pypy.objspace.std.celldict import LOAD_GLOBAL_cached
-        LOAD_GLOBAL_cached(self, nameindex, next_instr)
+        LOAD_GLOBAL_cached(self, nameindex)
 
-    def DELETE_FAST(self, varindex, next_instr):
+    def DELETE_FAST(self, varindex):
         if self.locals_cells_stack_w[varindex] is None:
             varname = self.getlocalvarname(varindex)
             raise oefmt(self.space.w_UnboundLocalError,
@@ -959,17 +956,17 @@ class __extend__(pyframe.PyFrame):
                         varname)
         self.locals_cells_stack_w[varindex] = None
 
-    def BUILD_TUPLE(self, itemcount, next_instr):
+    def BUILD_TUPLE(self, itemcount):
         items = self.popvalues(itemcount)
         w_tuple = self.space.newtuple(items)
         self.pushvalue(w_tuple)
 
-    def BUILD_LIST(self, itemcount, next_instr):
+    def BUILD_LIST(self, itemcount):
         items = self.popvalues_mutable(itemcount)
         w_list = self.space.newlist(items)
         self.pushvalue(w_list)
 
-    def BUILD_LIST_FROM_ARG(self, _, next_instr):
+    def BUILD_LIST_FROM_ARG(self):
         space = self.space
         # this is a little dance, because list has to be before the
         # value
@@ -984,7 +981,7 @@ class __extend__(pyframe.PyFrame):
         self.pushvalue(last_val)
 
     @always_inline
-    def LOAD_ATTR(self, nameindex, next_instr):
+    def LOAD_ATTR(self, nameindex):
         "obj.attributename"
         w_obj = self.popvalue()
         if not jit.we_are_jitted():
@@ -1009,7 +1006,7 @@ class __extend__(pyframe.PyFrame):
         return space.newbool(space.exception_match(w_1, w_2))
 
     @warmup_critical_function
-    def COMPARE_OP(self, testnum, next_instr):
+    def COMPARE_OP(self, testnum):
         w_2 = self.popvalue()
         w_1 = self.popvalue()
         if testnum == 0:
@@ -1038,7 +1035,7 @@ class __extend__(pyframe.PyFrame):
             raise BytecodeCorruption("bad COMPARE_OP oparg")
         self.pushvalue(w_result)
 
-    def IMPORT_NAME(self, nameindex, next_instr):
+    def IMPORT_NAME(self, nameindex):
         space = self.space
         w_modulename = self.getname_w(nameindex)
         w_fromlist = self.popvalue()
@@ -1071,13 +1068,13 @@ class __extend__(pyframe.PyFrame):
 
         self.pushvalue(w_obj)
 
-    def IMPORT_STAR(self, oparg, next_instr):
+    def IMPORT_STAR(self, oparg):
         w_module = self.popvalue()
         w_locals = self.getdictscope()
         import_all_from(self.space, w_module, w_locals)
         self.setdictscope(w_locals)
 
-    def IMPORT_FROM(self, nameindex, next_instr):
+    def IMPORT_FROM(self, nameindex):
         w_name = self.getname_w(nameindex)
         w_module = self.peekvalue()
         try:
@@ -1089,7 +1086,7 @@ class __extend__(pyframe.PyFrame):
                         "cannot import name %R", w_name)
         self.pushvalue(w_obj)
 
-    def YIELD_VALUE(self, oparg, next_instr):
+    def YIELD_VALUE(self):
         raise Yield
 
     def _revdb_jump_backward(self, jumpto):
@@ -1140,7 +1137,7 @@ class __extend__(pyframe.PyFrame):
             next_instr += jumpby
         return next_instr
 
-    def GET_ITER(self, oparg, next_instr):
+    def GET_ITER(self):
         w_iterable = self.popvalue()
         w_iterator = self.space.iter(w_iterable)
         self.pushvalue(w_iterator)
@@ -1186,7 +1183,7 @@ class __extend__(pyframe.PyFrame):
         self.lastblock = block
         self.pushvalue(w_result)
 
-    def WITH_CLEANUP(self, oparg, next_instr):
+    def WITH_CLEANUP(self):
         # see comment in END_FINALLY for stack state
         w_unroller = self.popvalue()
         w_exitfunc = self.popvalue()
@@ -1241,7 +1238,7 @@ class __extend__(pyframe.PyFrame):
             w_result = self.space.call_args(w_function, args)
         self.pushvalue(w_result)
 
-    def CALL_FUNCTION(self, oparg, next_instr):
+    def CALL_FUNCTION(self, oparg):
         # XXX start of hack for performance
         if (oparg >> 8) & 0xff == 0:
             # Only positional arguments
@@ -1254,20 +1251,20 @@ class __extend__(pyframe.PyFrame):
             # general case
             self.call_function(oparg)
 
-    def CALL_FUNCTION_VAR(self, oparg, next_instr):
+    def CALL_FUNCTION_VAR(self, oparg):
         w_varargs = self.popvalue()
         self.call_function(oparg, w_varargs)
 
-    def CALL_FUNCTION_KW(self, oparg, next_instr):
+    def CALL_FUNCTION_KW(self, oparg):
         w_varkw = self.popvalue()
         self.call_function(oparg, None, w_varkw)
 
-    def CALL_FUNCTION_VAR_KW(self, oparg, next_instr):
+    def CALL_FUNCTION_VAR_KW(self, oparg):
         w_varkw = self.popvalue()
         w_varargs = self.popvalue()
         self.call_function(oparg, w_varargs, w_varkw)
 
-    def MAKE_FUNCTION(self, numdefaults, next_instr):
+    def MAKE_FUNCTION(self, numdefaults):
         w_codeobj = self.popvalue()
         codeobj = self.space.interp_w(PyCode, w_codeobj)
         defaultarguments = self.popvalues(numdefaults)
@@ -1276,7 +1273,7 @@ class __extend__(pyframe.PyFrame):
         self.pushvalue(fn)
 
     @jit.unroll_safe
-    def MAKE_CLOSURE(self, numdefaults, next_instr):
+    def MAKE_CLOSURE(self, numdefaults):
         w_codeobj = self.popvalue()
         codeobj = self.space.interp_w(pycode.PyCode, w_codeobj)
         w_freevarstuple = self.popvalue()
@@ -1287,7 +1284,7 @@ class __extend__(pyframe.PyFrame):
                                defaultarguments, freevars)
         self.pushvalue(fn)
 
-    def BUILD_SLICE(self, numargs, next_instr):
+    def BUILD_SLICE(self, numargs):
         if numargs == 3:
             w_step = self.popvalue()
         elif numargs == 2:
@@ -1299,30 +1296,27 @@ class __extend__(pyframe.PyFrame):
         w_slice = self.space.newslice(w_start, w_end, w_step)
         self.pushvalue(w_slice)
 
-    def LIST_APPEND(self, oparg, next_instr):
+    def LIST_APPEND(self, oparg):
         w = self.popvalue()
         v = self.peekvalue(oparg - 1)
         self.space.call_method(v, 'append', w)
 
-    def SET_ADD(self, oparg, next_instr):
+    def SET_ADD(self, oparg):
         w_value = self.popvalue()
         w_set = self.peekvalue(oparg - 1)
         self.space.call_method(w_set, 'add', w_value)
 
-    def MAP_ADD(self, oparg, next_instr):
+    def MAP_ADD(self, oparg):
         w_key = self.popvalue()
         w_value = self.popvalue()
         w_dict = self.peekvalue(oparg - 1)
         self.space.setitem(w_dict, w_key, w_value)
 
-    def SET_LINENO(self, lineno, next_instr):
-        pass
-
     # overridden by faster version in the standard object space.
     LOOKUP_METHOD = LOAD_ATTR
     CALL_METHOD = CALL_FUNCTION
 
-    def MISSING_OPCODE(self, oparg, next_instr):
+    def MISSING_OPCODE(self):
         ofs = self.last_instr
         c = self.pycode.co_code[ofs]
         name = self.pycode.co_name
@@ -1331,12 +1325,12 @@ class __extend__(pyframe.PyFrame):
 
     STOP_CODE = MISSING_OPCODE
 
-    def BUILD_MAP(self, itemcount, next_instr):
+    def BUILD_MAP(self, itemcount):
         w_dict = self.space.newdict()
         self.pushvalue(w_dict)
 
     @jit.unroll_safe
-    def BUILD_SET(self, itemcount, next_instr):
+    def BUILD_SET(self, itemcount):
         w_set = self.space.newset()
         for i in range(itemcount-1, -1, -1):
             w_item = self.peekvalue(i)
@@ -1344,7 +1338,7 @@ class __extend__(pyframe.PyFrame):
         self.dropvalues(itemcount)
         self.pushvalue(w_set)
 
-    def STORE_MAP(self, oparg, next_instr):
+    def STORE_MAP(self, oparg):
         w_key = self.popvalue()
         w_value = self.popvalue()
         w_dict = self.peekvalue()
@@ -1356,11 +1350,11 @@ class __extend__(pyframe.PyFrame):
         w_var = load_metavar(oparg)
         self.pushvalue(w_var)
 
-    def LOAD_REVDB_VAR(self, oparg, next_instr):
+    def LOAD_REVDB_VAR(self, oparg):
         if self.space.reverse_debugging:
             self._revdb_load_var(oparg)
         else:
-            self.MISSING_OPCODE(oparg, next_instr)
+            self.MISSING_OPCODE()
 
 
 ### ____________________________________________________________ ###
