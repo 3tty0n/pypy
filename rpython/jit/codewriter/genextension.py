@@ -1180,16 +1180,23 @@ class Specializer(object):
 
     def emit_unspecialized_getarrayitem_gc_i_pure(self):
         lines = []
-        arraybox, indexbox, arraydescr, result = self._get_args_and_res()
-        self._emit_box_by_type(arraybox, lines)
-        self._emit_box_by_type(indexbox, lines)
-        lines.append("self.registers_%s[%s] = self.opimpl_%s(%s, %s, %s)" % (
-            result.kind[0], result.index,
-            self.insn[0], self._get_as_box(arraybox), self._get_as_box(indexbox),
-            self._add_global(arraydescr),
-        ))
-        self._emit_jump(lines)
+        array, index, descr, result = self._get_args_and_res()
+        if isinstance(self.insn[2], Constant):
+            specializer = self.work_list.specialize_insn(
+                self.insn, self.constant_registers.union({index}), self.orig_pc)
+            lines.append("    pc = %d" % (specializer.get_pc()))
+            lines.append("    continue")
+        else:
+            self._emit_sync_registers(lines)
+            self._emit_box_by_type(array, lines)
+            self._emit_box_by_type(index, lines)
+            lines.append("self.registers_%s[%s] = self.opimpl_%s(%s, %s, %s)" % (
+                result.kind[0], result.index,
+                self.insn[0], self._get_as_box(array), self._get_as_box(index),
+                self._add_global(descr)))
+            self._emit_jump(lines)
         return lines
+
     emit_unspecialized_getarrayitem_gc_r_pure = emit_unspecialized_getarrayitem_gc_i_pure
 
     def emit_unspecialized_int_copy(self):
