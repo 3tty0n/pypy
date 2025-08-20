@@ -298,13 +298,13 @@ class __extend__(pyframe.PyFrame):
             elif opcode == opcodedesc.DELETE_NAME.index:
                 self.DELETE_NAME(oparg)
             elif opcode == opcodedesc.DELETE_SLICE_0.index:
-                self.DELETE_SLICE_0(oparg, next_instr)
+                self.DELETE_SLICE_0()
             elif opcode == opcodedesc.DELETE_SLICE_1.index:
-                self.DELETE_SLICE_1(oparg, next_instr)
+                self.DELETE_SLICE_1()
             elif opcode == opcodedesc.DELETE_SLICE_2.index:
-                self.DELETE_SLICE_2(oparg, next_instr)
+                self.DELETE_SLICE_2()
             elif opcode == opcodedesc.DELETE_SLICE_3.index:
-                self.DELETE_SLICE_3(oparg, next_instr)
+                self.DELETE_SLICE_3()
             elif opcode == opcodedesc.DELETE_SUBSCR.index:
                 self.DELETE_SUBSCR()
             elif opcode == opcodedesc.DUP_TOP.index:
@@ -362,7 +362,7 @@ class __extend__(pyframe.PyFrame):
             elif opcode == opcodedesc.LOAD_GLOBAL.index:
                 self.LOAD_GLOBAL(oparg, next_instr)
             elif opcode == opcodedesc.LOAD_LOCALS.index:
-                self.LOAD_LOCALS(oparg, next_instr)
+                self.LOAD_LOCALS()
             elif opcode == opcodedesc.LOAD_NAME.index:
                 self.LOAD_NAME(oparg, next_instr)
             elif opcode == opcodedesc.LOOKUP_METHOD.index:

@@ -15,7 +15,7 @@ from pypy.objspace.std.listobject import W_ListObject
 class BaseFrame(PyFrame):
     """These opcodes are always overridden."""
 
-    def LIST_APPEND(self, oparg, next_instr):
+    def LIST_APPEND(self, oparg):
         w = self.popvalue()
         v = self.peekvalue(oparg - 1)
         if type(v) is W_ListObject:
