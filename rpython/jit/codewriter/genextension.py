@@ -1385,7 +1385,7 @@ class Specializer(object):
         return lines
     emit_specialized_live = emit_unspecialized_live
 
-    def emit_unspecialized_residual_call_r_r(self):
+    def DONT_emit_unspecialized_residual_call_r_r(self):
         effectinfo = self.insn[-3].get_extra_info()
         if effectinfo.check_forces_virtual_or_virtualizable() or not effectinfo.check_is_elidable():
             raise Unsupported
@@ -1414,7 +1414,7 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
 
-    def emit_specialized_residual_call_r_r(self):
+    def DONT_emit_specialized_residual_call_r_r(self):
         effectinfo = self.insn[-3].get_extra_info()
         if effectinfo.check_forces_virtual_or_virtualizable() or not effectinfo.check_is_elidable():
             raise Unsupported
