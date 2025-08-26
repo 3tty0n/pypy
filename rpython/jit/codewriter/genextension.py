@@ -774,6 +774,16 @@ class Specializer(object):
         return lines
     emit_specialized_getarrayitem_gc_r_pure = emit_specialized_getarrayitem_gc_i_pure
 
+    def emit_specialized_arraylen_gc(self):
+        lines = []
+        arg, descr, res = self._get_args_and_res()
+        TYPE, ITEM = _get_ptrtype_itemtype_from_arraydescr(descr)
+        lines.append('%s = len(lltype.cast_opaque_ptr(%s, %s))' % (
+            self._get_as_unboxed(res), self._add_global(TYPE),
+            self._get_as_unboxed(arg)))
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
+        return lines
+
     def emit_specialized_record_quasiimmut_field(self):
         arg, descr1, descr2 = self._get_args()
         lines = []
@@ -1212,6 +1222,17 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
     emit_unspecialized_getarrayitem_gc_r_pure = emit_unspecialized_getarrayitem_gc_i_pure
+
+    def emit_unspecialized_arraylen_gc(self):
+        lines = []
+        array, descr, result = self._get_args_and_res()
+        self._emit_box_by_type(array, lines)
+        lines.append("self.registers_%s[%s] = self.%s(%s, %s)" % (
+            result.kind[0], result.index,
+            self.methodname, self._get_as_box(array),
+            self._add_global(descr)))
+        self._emit_jump(lines)
+        return lines
 
     def emit_unspecialized_int_copy(self):
         arg0, = self._get_args()
