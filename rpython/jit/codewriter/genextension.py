@@ -1379,6 +1379,16 @@ class Specializer(object):
     emit_specialized_int_return = emit_return
     emit_specialized_ref_return = emit_return
 
+    def emit_void_return(self):
+        lines = []
+        lines.append("try:")
+        lines.append("    self.%s()" % (self.methodname))
+        lines.append("except ChangeFrame: return")
+        lines.append("assert 0, 'unreachable'")
+        return lines
+    emit_specialized_void_return = emit_void_return
+    emit_unspecialized_void_return = emit_void_return
+
     def emit_unspecialized_live(self):
         lines = []
         self._emit_jump(lines)
