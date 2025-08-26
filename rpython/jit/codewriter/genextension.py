@@ -671,6 +671,12 @@ class Specializer(object):
     def emit_specialized_int_sub(self):
         return self._emit_specialized_int_binary("-")
 
+    def emit_specialized_int_rshift(self):
+        return self._emit_specialized_int_binary(">>")
+
+    def emit_specialized_int_lshift(self):
+        return self._emit_specialized_int_binary("<<")
+
     def _emit_specialized_int_binary(self, op):
         arg0, arg1, result = self._get_args_and_res()
         lines = ["i%s = %s %s %s" % (result.index, self._get_as_unboxed(arg0),
@@ -1060,6 +1066,8 @@ class Specializer(object):
     emit_unspecialized_int_mul = _emit_unspecialized_binary
     emit_unspecialized_int_or = _emit_unspecialized_binary
     emit_unspecialized_int_and = _emit_unspecialized_binary
+    emit_unspecialized_int_rshift = _emit_unspecialized_binary
+    emit_unspecialized_int_lshift = _emit_unspecialized_binary
 
     def emit_unspecialized_int_invert(self):
         lines = []
