@@ -3675,24 +3675,26 @@ class BasicTests:
         inst_prebuild.cls = cls1
 
         @warmup_critical_function
-        def f(n):
+        def f(n, k):
+            flags_index = 0
             if n > 5:
                 i = Inst()
                 i.cls = cls1
             elif n == -100:
                 i = inst_prebuild
+                flags_index = k
             else:
                 i = Inst()
                 i.cls = cls2
-            if promote(i.cls).flags[0] == 1:
+            if promote(i.cls).flags[flags_index] == 1:
                 return 100
             return 200
-        res = self.interp_operations(f, [3], backendopt=True)
+        res = self.interp_operations(f, [3, 0], backendopt=True)
         assert res == 200
-        res = self.interp_operations(f, [13], backendopt=True)
+        res = self.interp_operations(f, [13, 0], backendopt=True)
         assert res == 100
-        res = self.interp_operations(f, [-100], backendopt=True)
-        assert res == 100
+        res = self.interp_operations(f, [-100, 1], backendopt=True)
+        assert res == 200
 
 
     def test_quasi_immutable(self):
