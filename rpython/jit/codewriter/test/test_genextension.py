@@ -556,6 +556,39 @@ continue""" % (work_list.OFFSET + 7)
     assert next_constant_registers == set()
 
 
+def test_int_invert():
+    i0, i1 = Register('int', 0), Register('int', 1)
+    insn1 = (
+        'int_invert', i0, '->', i1
+    )
+    work_list = WorkList({5: insn1, 7: ('int_return', i1)}, pc_to_nextpc={5:7})
+    insn_specializer = work_list.specialize_insn(insn1, {i0}, 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == work_list.OFFSET + 7
+    s = insn_specializer.make_code()
+    assert s == """i1 = ~i0
+pc = 108
+continue"""
+    next_constant_registers = insn_specializer.get_next_constant_registers()
+    assert next_constant_registers == {i0, i1}
+
+    insn_specializer = work_list.specialize_insn(insn1, set(), 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == 5
+    s = insn_specializer.make_code()
+    assert s == """\
+ri0 = self.registers_i[0]
+if isinstance(ri0, ConstInt):
+    i0 = ri0.getint()
+    pc = %d
+    continue
+else:
+    self.registers_i[1] = self.opimpl_int_invert(ri0)
+pc = 7
+continue""" % (work_list.OFFSET + 7)
+    next_constant_registers = insn_specializer.get_next_constant_registers()
+    assert next_constant_registers == set()
+
 def test_strgetitem():
     r0, i0, i1 = Register('ref', 0), Register('int', 0), Register('int', 1)
     insn1 = ('strgetitem', r0, i0, '->', i1)

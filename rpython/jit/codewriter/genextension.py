@@ -672,12 +672,15 @@ class Specializer(object):
         return self._emit_specialized_int_binary("-")
 
     def _emit_specialized_int_binary(self, op):
-        args = self._get_args()
-        assert len(args) == 2
-        arg0, arg1 = args[0], args[1]
-        result = self.insn[self.resindex]
+        arg0, arg1, result = self._get_args_and_res()
         lines = ["i%s = %s %s %s" % (result.index, self._get_as_unboxed(arg0),
                                      op, self._get_as_unboxed(arg1))]
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_int_invert(self):
+        arg0, result = self._get_args_and_res()
+        lines = ["i%s = ~%s" % (result.index, self._get_as_unboxed(arg0))]
         self._emit_jump(lines)
         return lines
 
@@ -1041,15 +1044,10 @@ class Specializer(object):
 
     def _emit_unspecialized_binary(self):
         lines = []
-        args = self._get_args()
-        assert len(args) == 2
-        arg0, arg1 = args[0], args[1]
-        result = self.insn[self.resindex]
-        self._emit_n_ary_if(args, lines)
-        specializer = self.work_list.specialize_insn(
-            self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
-        lines.append("    pc = %d" % (specializer.get_pc()))
-        lines.append("    continue")
+        arg0, arg1, result = self._get_args_and_res()
+        self._emit_n_ary_if([arg0, arg1], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0, arg1}),
+                        indent='    ', target_pc=self.orig_pc)
         lines.append("else:")
         lines.append("    self.registers_i[%d] = self.%s(%s, %s)" % (
             result.index, self.methodname,
@@ -1062,6 +1060,19 @@ class Specializer(object):
     emit_unspecialized_int_mul = _emit_unspecialized_binary
     emit_unspecialized_int_or = _emit_unspecialized_binary
     emit_unspecialized_int_and = _emit_unspecialized_binary
+
+    def emit_unspecialized_int_invert(self):
+        lines = []
+        arg0, result = self._get_args_and_res()
+        self._emit_n_ary_if([arg0], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0}),
+                        indent='    ', target_pc=self.orig_pc)
+        lines.append("else:")
+        lines.append("    self.registers_i[%d] = self.%s(%s)" % (
+            result.index, self.methodname,
+            self._get_as_box(arg0)))
+        self._emit_jump(lines)
+        return lines
 
     def emit_unspecialized_strgetitem(self):
         lines = []
