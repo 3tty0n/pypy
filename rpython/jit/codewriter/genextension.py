@@ -1002,6 +1002,12 @@ class Specializer(object):
             t = self._get_type_prefix(arg)
             return "r%s%d" % (t, arg.index)
 
+    def _get_as_box_after_sync(self, arg):
+        if not isinstance(arg, Constant) and arg in self.constant_registers:
+            t = self._get_type_prefix(arg)
+            return "self.registers_%s[%d]" % (t, arg.index)
+        return self._get_as_box(arg)
+
     def _emit_unbox_by_type(self, arg, lines, indent=''):
         t = self._get_type_prefix(arg)
         line = ''
@@ -1227,12 +1233,70 @@ class Specializer(object):
         self._emit_box_by_type(arg0, lines)
         self._emit_box_by_type(arg1, lines)
         lines.append("self.opimpl_%s(%s, %s, %s, %s)" % (
-            self.insn[0], self._get_as_box(arg0), self._get_as_box(arg1),
+            self.insn[0], self._get_as_box(arg0), self._get_as_box_after_sync(arg1),
             self._add_global(descr),
             self.orig_pc))
         self._emit_jump(lines)
         return lines
     emit_unspecialized_setfield_vable_r = emit_unspecialized_setfield_vable_i
+
+    def emit_unspecialized_getarrayitem_vable_i(self):
+        arg, index, descr1, descr2, result = self._get_args_and_res()
+        lines = []
+        self._emit_box_by_type(arg, lines)
+        check = self._emit_assignment_return_const_check(index, lines)
+        descrglob1 = self._add_global(descr1)
+        descrglob2 = self._add_global(descr2)
+        if check is None:
+            # the index is constant, we can try the fast path
+            lines.append("res = self._shortcut_getarrayitem_vable(%s, %s, %s, %s)" % (
+                self._get_as_box(arg), self._get_as_unboxed(index), descrglob1, descrglob2))
+            lines.append("if res is not None:")
+            lines.append("    self.registers_%s[%s] = res" % (
+                result.kind[0], result.index))
+            lines.append("else:")
+            indent = '    '
+        else:
+            indent = ''
+        self._emit_sync_registers(lines, indent=indent)
+        lines.append("%sself.registers_%s[%s] = self.%s(%s, %s, %s, %s, %s)" % (
+            indent,
+            result.kind[0], result.index,
+            self.methodname, self._get_as_box(arg), self._get_as_box_after_sync(index),
+            descrglob1, descrglob2,
+            self.orig_pc))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_getarrayitem_vable_r = emit_unspecialized_getarrayitem_vable_i
+
+    def emit_unspecialized_setarrayitem_vable_i(self):
+        arg, index, value, descr1, descr2 = self._get_args()
+        lines = []
+        self._emit_box_by_type(arg, lines)
+        self._emit_box_by_type(value, lines)
+        check = self._emit_assignment_return_const_check(index, lines)
+        descrglob1 = self._add_global(descr1)
+        descrglob2 = self._add_global(descr2)
+        if check is None:
+            # the index is constant, we can try the fast path
+            lines.append("worked = self._shortcut_setarrayitem_vable(%s, %s, %s, %s, %s)" % (
+                self._get_as_box(arg), self._get_as_unboxed(index),
+                self._get_as_box(value), descrglob1, descrglob2))
+            lines.append("if not worked:")
+            indent = '    '
+        else:
+            indent = ''
+        self._emit_sync_registers(lines, indent=indent)
+        lines.append("%sself.%s(%s, %s, %s, %s, %s, %s)" % (
+            indent,
+            self.methodname, self._get_as_box(arg),
+            self._get_as_box_after_sync(index),
+            self._get_as_box_after_sync(value),
+            descrglob1, descrglob2,
+            self.orig_pc))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_setarrayitem_vable_r = emit_unspecialized_setarrayitem_vable_i
 
     def emit_unspecialized_getarrayitem_gc_i_pure(self):
         lines = []
@@ -1511,13 +1575,13 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
 
-    def _emit_sync_registers(self, lines):
+    def _emit_sync_registers(self, lines, indent=''):
         # we need to sync the registers from the unboxed values to e.g. allow a guard to be created
         if not self.constant_registers:
             return
         func, args = _make_register_syncer(self.constant_registers)
         funcname = self._add_global(func)
-        lines.append("%s(self, %s) # %s" % (funcname, ", ".join(args), func.func_name))
+        lines.append("%s%s(self, %s) # %s" % (indent, funcname, ", ".join(args), func.func_name))
 
 
 class Unsupported(Exception):

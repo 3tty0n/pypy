@@ -1199,11 +1199,15 @@ class MIFrame(object):
         # described by arrayfielddescr.  Must only be called for
         # the "standard" virtualizable.
         indexbox = self.implement_guard_value(indexbox, pc)
+        index = indexbox.getint()
+        return self._get_arrayitem_vable_index_unboxed(arrayfielddescr, index)
+
+    def _get_arrayitem_vable_index_unboxed(self, arrayfielddescr, index):
+        # like _get_arrayitem_vable_index, but index is already just an int
         vinfo = self.metainterp.jitdriver_sd.virtualizable_info
         virtualizable_box = self.metainterp.virtualizable_boxes[-1]
         virtualizable = vinfo.unwrap_virtualizable_box(virtualizable_box)
         arrayindex = vinfo.array_field_by_descrs[arrayfielddescr]
-        index = indexbox.getint()
         # Support for negative index: disabled
         # (see codewriter/jtransform.py, _check_no_vable_array).
         #if index < 0:
@@ -2186,6 +2190,75 @@ class MIFrame(object):
                 return self.metainterp.perform_call(jitcode, argboxes)
         # but we should not follow calls to that graph
         return self.do_residual_call(funcbox, argboxes, calldescr, pc)
+
+    # special methods for genextensions
+
+    VIRTUALIZABLE_STATUS_UNKNOWN = '?'
+    NONSTANDARD_VIRTUALIZABLE = 'n'
+    STANDARD_VIRTUALIZABLE = 'v'
+
+    def _nonstandard_virtualizable_quick_check(self, box, fielddescr):
+        # returns True if 'box' is actually not the "standard" virtualizable
+        # that is stored in metainterp.virtualizable_boxes[-1]
+        if self.metainterp.forced_virtualizable is not None:
+            return self.VIRTUALIZABLE_STATUS_UNKNOWN
+        if self.metainterp.heapcache.is_known_nonstandard_virtualizable(box):
+            self.metainterp.staticdata.profiler.count_ops(rop.PTR_EQ, Counters.HEAPCACHED_OPS)
+            return self.NONSTANDARD_VIRTUALIZABLE
+        if (self.metainterp.jitdriver_sd.virtualizable_info is not None or
+            self.metainterp.jitdriver_sd.greenfield_info is not None):
+            standard_box = self.metainterp.virtualizable_boxes[-1]
+            if standard_box is box:
+                return self.STANDARD_VIRTUALIZABLE
+        return self.VIRTUALIZABLE_STATUS_UNKNOWN
+
+    def _shortcut_getarrayitem_vable(self, box, index, fdescr, adescr):
+        """
+        a helper function for the genextension. we are *not* allowed to
+        produce a guard here, neither in _nonstandard_virtualizable nor in
+        _get_arrayitem_vable_index.
+
+        returns None (if we didn't manage to execute the getarrayitem) or a box
+        (if we did)
+        """
+        nonstandardness_status = self._nonstandard_virtualizable_quick_check(box, fdescr)
+        if nonstandardness_status == self.VIRTUALIZABLE_STATUS_UNKNOWN:
+            return None
+        if nonstandardness_status == self.NONSTANDARD_VIRTUALIZABLE:
+            indexbox = ConstInt(index)
+            arraybox = self.opimpl_getfield_gc_r(box, fdescr)
+            if adescr.is_array_of_pointers():
+                return self.opimpl_getarrayitem_gc_r(arraybox, indexbox, adescr)
+            elif adescr.is_array_of_floats():
+                return self.opimpl_getarrayitem_gc_f(arraybox, indexbox, adescr)
+            else:
+                return self.opimpl_getarrayitem_gc_i(arraybox, indexbox, adescr)
+        assert nonstandardness_status == self.STANDARD_VIRTUALIZABLE
+        self.metainterp.check_synchronized_virtualizable()
+        index = self._get_arrayitem_vable_index_unboxed(fdescr, index)
+        return self.metainterp.virtualizable_boxes[index]
+
+    def _shortcut_setarrayitem_vable(self, box, index, valuebox,
+                                   fdescr, adescr):
+        """
+        like _shortcut_getarrayitem_vable but for setarrayitem_vable. we return
+        True or False for success or failure.
+        """
+        import pdb;pdb.set_trace()
+        nonstandardness_status = self._nonstandard_virtualizable_quick_check(box, fdescr)
+        if nonstandardness_status == self.VIRTUALIZABLE_STATUS_UNKNOWN:
+            return False
+        elif nonstandardness_status == self.NONSTANDARD_VIRTUALIZABLE:
+            arraybox = self.opimpl_getfield_gc_r(box, fdescr)
+            indexbox = ConstInt(index)
+            self._opimpl_setarrayitem_gc_any(arraybox, indexbox, valuebox,
+                                             adescr)
+        else:
+            assert nonstandardness_status == self.STANDARD_VIRTUALIZABLE
+            index = self._get_arrayitem_vable_index_unboxed(fdescr, index)
+            self.metainterp.virtualizable_boxes[index] = valuebox
+            self.metainterp.synchronize_virtualizable()
+        return True
 
 # ____________________________________________________________
 

@@ -3767,6 +3767,48 @@ class BasicTests:
         assert res == 55
 
 
+    def test_virtualizable_with_array(self):
+        myjitdriver = JitDriver(greens = [], reds = ['n', 'x', 'frame'],
+                                virtualizables = ['frame'])
+
+        class Frame(object):
+            _virtualizable_ = ['l[*]', 's']
+
+            @warmup_critical_function
+            def __init__(self, l, s):
+                self.l = l
+                self.s = s
+
+        @warmup_critical_function
+        def f(n, a):
+            frame = Frame([a, a+1, a+2, a+3], 0)
+            x = 0
+            while n > 0:
+                myjitdriver.can_enter_jit(frame=frame, n=n, x=x)
+                myjitdriver.jit_merge_point(frame=frame, n=n, x=x)
+                frame.s = promote(frame.s)
+                n -= 1
+                s = frame.s
+                assert s >= 0
+                s = hint(s, promote=True)
+                x += frame.l[s]
+                frame.s += 1
+                s = frame.s
+                assert s >= 0
+                x += frame.l[s]
+                frame.l[s] += 1
+                x += len(frame.l)
+                frame.s -= 1
+            return x
+
+        res = self.meta_interp(f, [10, 1], listops=True)
+        assert res == f(10, 1)
+        self.check_simple_loop(getfield_gc_i=0, getarrayitem_gc_i=0,
+                               getarrayitem_gc_r=0, getfield_gc_r=0)
+        self.check_resops(getfield_gc_r=1, getarrayitem_gc_i=4,
+                          getfield_gc_i=1)
+
+
 class BaseLLtypeTests(BasicTests):
 
 
