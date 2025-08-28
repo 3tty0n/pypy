@@ -2267,6 +2267,9 @@ class MIFrame(object):
         if nonstandardness_status == self.VIRTUALIZABLE_STATUS_UNKNOWN:
             return None
         if nonstandardness_status == self.NONSTANDARD_VIRTUALIZABLE:
+            if fielddescr.is_pointer_field():
+                return self.opimpl_getfield_gc_r(box, fielddescr)
+            assert not fielddescr.is_float_field()
             return self.opimpl_getfield_gc_i(box, fielddescr)
         assert nonstandardness_status == self.STANDARD_VIRTUALIZABLE
         self.metainterp.check_synchronized_virtualizable()
