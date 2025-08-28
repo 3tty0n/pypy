@@ -680,6 +680,24 @@ class Specializer(object):
     def emit_specialized_int_lshift(self):
         return self._emit_specialized_int_binary("<<")
 
+    def emit_specialized_int_ge(self):
+        return self._emit_specialized_int_binary(">=")
+
+    def emit_specialized_int_gt(self):
+        return self._emit_specialized_int_binary(">")
+
+    def emit_specialized_int_le(self):
+        return self._emit_specialized_int_binary("<=")
+
+    def emit_specialized_int_lt(self):
+        return self._emit_specialized_int_binary("<")
+
+    def emit_specialized_int_eq(self):
+        return self._emit_specialized_int_binary("==")
+
+    def emit_specialized_int_ne(self):
+        return self._emit_specialized_int_binary("!=")
+
     def _emit_specialized_int_binary(self, op):
         arg0, arg1, result = self._get_args_and_res()
         lines = ["i%s = %s %s %s" % (result.index, self._get_as_unboxed(arg0),
@@ -1081,6 +1099,12 @@ class Specializer(object):
     emit_unspecialized_int_and = _emit_unspecialized_binary
     emit_unspecialized_int_rshift = _emit_unspecialized_binary
     emit_unspecialized_int_lshift = _emit_unspecialized_binary
+    emit_unspecialized_int_le = _emit_unspecialized_binary
+    emit_unspecialized_int_lt = _emit_unspecialized_binary
+    emit_unspecialized_int_ge = _emit_unspecialized_binary
+    emit_unspecialized_int_gt = _emit_unspecialized_binary
+    emit_unspecialized_int_eq = _emit_unspecialized_binary
+    emit_unspecialized_int_ne = _emit_unspecialized_binary
 
     def emit_unspecialized_int_invert(self):
         lines = []
