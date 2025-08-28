@@ -2247,7 +2247,6 @@ class MIFrame(object):
         like _shortcut_getarrayitem_vable but for setarrayitem_vable. we return
         True or False for success or failure.
         """
-        import pdb;pdb.set_trace()
         nonstandardness_status = self._nonstandard_virtualizable_quick_check(box, fdescr)
         if nonstandardness_status == self.VIRTUALIZABLE_STATUS_UNKNOWN:
             return False
@@ -2261,6 +2260,31 @@ class MIFrame(object):
             index = self._get_arrayitem_vable_index_unboxed(fdescr, index)
             self.metainterp.virtualizable_boxes[index] = valuebox
             self.metainterp.synchronize_virtualizable()
+        return True
+
+    def _shortcut_getfield_vable(self, box, fielddescr):
+        nonstandardness_status = self._nonstandard_virtualizable_quick_check(box, fielddescr)
+        if nonstandardness_status == self.VIRTUALIZABLE_STATUS_UNKNOWN:
+            return None
+        if nonstandardness_status == self.NONSTANDARD_VIRTUALIZABLE:
+            return self.opimpl_getfield_gc_i(box, fielddescr)
+        assert nonstandardness_status == self.STANDARD_VIRTUALIZABLE
+        self.metainterp.check_synchronized_virtualizable()
+        index = self._get_virtualizable_field_index(fielddescr)
+        return self.metainterp.virtualizable_boxes[index]
+
+    def _shortcut_setfield_vable(self, box, valuebox, fielddescr):
+        nonstandardness_status = self._nonstandard_virtualizable_quick_check(box, fielddescr)
+        if nonstandardness_status == self.VIRTUALIZABLE_STATUS_UNKNOWN:
+            return False
+        if nonstandardness_status == self.NONSTANDARD_VIRTUALIZABLE:
+            self._opimpl_setfield_gc_any(box, valuebox, fielddescr)
+        else:
+            assert nonstandardness_status == self.STANDARD_VIRTUALIZABLE
+            index = self._get_virtualizable_field_index(fielddescr)
+            self.metainterp.virtualizable_boxes[index] = valuebox
+            self.metainterp.synchronize_virtualizable()
+            # XXX only the index'th field needs to be synchronized, really
         return True
 
 # ____________________________________________________________

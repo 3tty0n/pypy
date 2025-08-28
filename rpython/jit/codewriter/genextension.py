@@ -1221,11 +1221,22 @@ class Specializer(object):
     def emit_unspecialized_getfield_vable_i(self):
         arg, descr, result = self._get_args_and_res()
         lines = []
-        self._emit_sync_registers(lines)
         self._emit_box_by_type(arg, lines)
-        lines.append("self.registers_%s[%s] = self.opimpl_%s(%s, %s, %s)" % (
-            result.kind[0], result.index,
-            self.insn[0], self._get_as_box(arg), self._add_global(descr),
+        descrglob = self._add_global(descr)
+        if self.constant_registers:
+            lines.append("res = self._shortcut_getfield_vable(%s, %s)" % (
+                self._get_as_box(arg), descrglob))
+            lines.append("if res is not None:")
+            lines.append("    self.registers_%s[%s] = res" % (
+                result.kind[0], result.index))
+            lines.append("else:")
+            indent = '    '
+        else:
+            indent = ''
+        self._emit_sync_registers(lines, indent=indent)
+        lines.append("%sself.registers_%s[%s] = self.%s(%s, %s, %s)" % (
+            indent, result.kind[0], result.index,
+            self.methodname, self._get_as_box(arg), descrglob,
             self.orig_pc))
         self._emit_jump(lines)
         return lines
@@ -1234,13 +1245,23 @@ class Specializer(object):
     def emit_unspecialized_setfield_vable_i(self):
         arg0, arg1, descr = self._get_args()
         lines = []
-        self._emit_sync_registers(lines)
+        descrglob = self._add_global(descr)
         self._emit_box_by_type(arg0, lines)
         self._emit_box_by_type(arg1, lines)
-        lines.append("self.opimpl_%s(%s, %s, %s, %s)" % (
-            self.insn[0], self._get_as_box(arg0), self._get_as_box_after_sync(arg1),
-            self._add_global(descr),
-            self.orig_pc))
+        if self.constant_registers:
+            lines.append("worked = self._shortcut_setfield_vable(%s, %s, %s)" % (
+                self._get_as_box(arg0),
+                self._get_as_box(arg1), descrglob))
+            lines.append("if not worked:")
+            indent = '    '
+        else:
+            indent = ''
+        self._emit_sync_registers(lines, indent=indent)
+        lines.append("%sself.%s(%s, %s, %s, %s)" % (
+            indent, self.methodname,
+            self._get_as_box_after_sync(arg0),
+            self._get_as_box_after_sync(arg1),
+            descrglob, self.orig_pc))
         self._emit_jump(lines)
         return lines
     emit_unspecialized_setfield_vable_r = emit_unspecialized_setfield_vable_i
