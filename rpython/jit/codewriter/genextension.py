@@ -808,15 +808,20 @@ class Specializer(object):
     def emit_specialized_record_quasiimmut_field(self):
         arg, descr1, descr2 = self._get_args()
         lines = []
-        tempvar = self._get_new_temp_variable()
-        self._emit_sync_registers(lines)
-        if isinstance(arg, Constant):
-            lines.append("%s = %s" % (tempvar, self._get_as_box(arg)))
+        descrglob1 = self._add_global(descr1)
+        if self.constant_registers:
+            lines.append("if not self.metainterp.heapcache.is_quasi_immut_known(%s, %s):" % (
+                descrglob1, self._get_as_box(arg)))
+            indent = '    '
+            methname = '_record_quasiimmut_field_no_heapcache'
         else:
-            lines.append("%s = self.registers_r[%s]" % (tempvar, arg.index))
-        lines.append("self.opimpl_record_quasiimmut_field(%s, %s, %s, %s)" % (
-            tempvar,
-            self._add_global(descr1),
+            indent = ''
+            methname = self.methodname
+        self._emit_sync_registers(lines, indent=indent)
+        lines.append("%sself.%s(%s, %s, %s, %s)" % (
+            indent, methname,
+            self._get_as_box_after_sync(arg),
+            descrglob1,
             self._add_global(descr2),
             self.orig_pc
         ))

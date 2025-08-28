@@ -1069,11 +1069,14 @@ class MIFrame(object):
     @arguments("box", "descr", "descr", "orgpc")
     def opimpl_record_quasiimmut_field(self, box, fielddescr,
                                        mutatefielddescr, orgpc):
-        from rpython.jit.metainterp.quasiimmut import QuasiImmutDescr
-        cpu = self.metainterp.cpu
         if self.metainterp.heapcache.is_quasi_immut_known(fielddescr, box):
             self.metainterp.staticdata.profiler.count_ops(rop.QUASIIMMUT_FIELD, Counters.HEAPCACHED_OPS)
             return
+        self._record_quasiimmut_field_no_heapcache(box, fielddescr, mutatefielddescr, orgpc)
+
+    def _record_quasiimmut_field_no_heapcache(self, box, fielddescr, mutatefielddescr, orgpc):
+        from rpython.jit.metainterp.quasiimmut import QuasiImmutDescr
+        cpu = self.metainterp.cpu
         descr = QuasiImmutDescr(cpu, box.getref_base(), fielddescr,
                                 mutatefielddescr)
         self.metainterp.heapcache.quasi_immut_now_known(fielddescr, box)
