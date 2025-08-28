@@ -808,6 +808,7 @@ class Specializer(object):
     def emit_specialized_record_quasiimmut_field(self):
         arg, descr1, descr2 = self._get_args()
         lines = []
+        self._emit_box_by_type(arg, lines)
         descrglob1 = self._add_global(descr1)
         if self.constant_registers:
             lines.append("if not self.metainterp.heapcache.is_quasi_immut_known(%s, %s):" % (
