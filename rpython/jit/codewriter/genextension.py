@@ -578,7 +578,7 @@ class Specializer(object):
 
     def _reset_specializer(self):
         self.name = None
-        self.methoname = None
+        self.methodname = None
         self.resindex = None
         self.tempvarindex = 0
 
