@@ -573,6 +573,9 @@ class Specializer(object):
         self.resindex = len(self.insn) - 1 if '->' in self.insn else None
         self.tempvarindex = 0
 
+    def __repr__(self):
+        return "<Specializer %s %s %s>" % (self.name, self.orig_pc, self.constant_registers)
+
     def _reset_specializer(self):
         self.name = None
         self.methoname = None
