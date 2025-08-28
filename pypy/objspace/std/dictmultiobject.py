@@ -1075,10 +1075,6 @@ class AbstractTypedStrategy(object):
             self.switch_to_object_strategy(w_dict)
             w_dict.setitem(w_key, w_value)
 
-    def setitem_str(self, w_dict, key, w_value):
-        self.switch_to_object_strategy(w_dict)
-        w_dict.setitem(self.space.newtext(key), w_value)
-
     def setdefault(self, w_dict, w_key, w_default):
         if self.is_correct_type(w_key):
             return self.unerase(w_dict.dstorage).setdefault(self.unwrap(w_key),
@@ -1097,9 +1093,6 @@ class AbstractTypedStrategy(object):
 
     def length(self, w_dict):
         return len(self.unerase(w_dict.dstorage))
-
-    def getitem_str(self, w_dict, key):
-        return self.getitem(w_dict, self.space.newtext(key))
 
     def getitem(self, w_dict, w_key):
         space = self.space
