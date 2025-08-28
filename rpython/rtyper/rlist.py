@@ -4,6 +4,7 @@ from rpython.rlib import rgc, jit, types
 from rpython.rlib.jit import warmup_critical_function
 from rpython.rtyper.debug import ll_assert
 from rpython.rlib.objectmodel import malloc_zero_filled, enforceargs, specialize
+from rpython.rlib.objectmodel import always_inline
 from rpython.rlib.signature import signature
 from rpython.rlib.rarithmetic import ovfcheck, widen, r_uint, intmask
 from rpython.rlib.rarithmetic import int_force_ge_zero
@@ -485,6 +486,7 @@ def _ll_zero_or_null(item):
 def _null_of_type(T):
     return T._defl()
 
+@always_inline
 def ll_alloc_and_set(LIST, count, item):
     count = int_force_ge_zero(count)
     if jit.we_are_jitted():
@@ -502,6 +504,7 @@ def _ll_alloc_and_set_nojit(LIST, count, item):
         i += 1
     return l
 
+@always_inline
 def _ll_alloc_and_set_jit(LIST, count, item):
     if _ll_zero_or_null(item):
         # 'item' is zero/null.  Do the list allocation with the
