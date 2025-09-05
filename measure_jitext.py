@@ -7,11 +7,10 @@ import argparse
 BENCHMARKS = [
     'bm_chameleon', 'bm_dulwich_log', 'bm_icbd', 'bm_mako',
     'raytrace-simple', 'scimark', 'spectral-norm', 'spitfire',
-    'telco'
+    'telco', 'bm_gzip', 'bm_krakatau', 'bm_mdp', 'pyxl_bench',
 ]
 
 BENCHMARKS_NOT_RUNNABLE = [
-    'bm_gzip', 'bm_krakatau', 'bm_gzip', 'bm_mdp', 'pyxl_bench',
 ]
 
 COMMANDS = [
