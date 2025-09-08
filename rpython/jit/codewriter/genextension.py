@@ -128,41 +128,41 @@ class GenExtension(object):
         self.jitcode.genext_function.__name__ += "_" + self.jitcode.name
 
     def _make_code(self, index, insn):
-            self._reset_insn()
-            assert not (isinstance(insn[0], Label) or insn[0] == '---')
-            self.insn = insn
-            pc = self.ssarepr._insns_pos[index]
-            nextpc = self.pc_to_nextpc[pc]
-            instruction = self.insns[ord(self.jitcode.code[pc])]
-            self.name, self.argcodes = instruction.split("/")
-            self.methodname = 'opimpl_' + self.name
-            lines, needed_orgpc, needed_label = self._parse_args(index, pc, nextpc)
-            for line in lines:
-                self.code.append("    " + line)
-            meth = getattr(self, "emit_" + self.name, self.emit_default)
-            lines = meth()
-            for line in lines:
-                self.code.append("    " + line)
-            pcs = self.next_possible_pcs(insn, needed_label, nextpc)
-            if len(pcs) == 0:
-                self.code.append("    assert 0 # unreachable")
-                return
-            elif len(pcs) == 1:
-                next_insn = self.pc_to_insn[pcs[0]]
-                goto_target = self._find_actual_jump_target_chain(next_insn, pcs[0])
-                self.code.append("    pc = %s" % goto_target)
-            else:
-                self.code.append("    pc = self.pc")
-                # do the trick
-                prefix = ''
-                for pc in pcs:
-                    next_insn = self.pc_to_insn[pc]
-                    goto_target = self._find_actual_jump_target(next_insn, pc)
-                    self.code.append("    %sif pc == %s: pc = %s" % (prefix, pc, goto_target))
-                    prefix = "el"
-                self.code.append("    else:")
-                self.code.append("        assert 0 # unreachable")
-            self.code.append("    continue")
+        self._reset_insn()
+        assert not (isinstance(insn[0], Label) or insn[0] == '---')
+        self.insn = insn
+        pc = self.ssarepr._insns_pos[index]
+        nextpc = self.pc_to_nextpc[pc]
+        instruction = self.insns[ord(self.jitcode.code[pc])]
+        self.name, self.argcodes = instruction.split("/")
+        self.methodname = 'opimpl_' + self.name
+        lines, needed_orgpc, needed_label = self._parse_args(index, pc, nextpc)
+        for line in lines:
+            self.code.append("    " + line)
+        meth = getattr(self, "emit_" + self.name, self.emit_default)
+        lines = meth()
+        for line in lines:
+            self.code.append("    " + line)
+        pcs = self.next_possible_pcs(insn, needed_label, nextpc)
+        if len(pcs) == 0:
+            self.code.append("    assert 0 # unreachable")
+            return
+        elif len(pcs) == 1:
+            next_insn = self.pc_to_insn[pcs[0]]
+            goto_target = self._find_actual_jump_target_chain(next_insn, pcs[0])
+            self.code.append("    pc = %s" % goto_target)
+        else:
+            self.code.append("    pc = self.pc")
+            # do the trick
+            prefix = ''
+            for pc in pcs:
+                next_insn = self.pc_to_insn[pc]
+                goto_target = self._find_actual_jump_target(next_insn, pc)
+                self.code.append("    %sif pc == %s: pc = %s" % (prefix, pc, goto_target))
+                prefix = "el"
+            self.code.append("    else:")
+            self.code.append("        assert 0 # unreachable")
+        self.code.append("    continue")
 
     def _add_global(self, obj):
         name = "glob%s" % len(self.globals)
