@@ -128,6 +128,17 @@ class MIFrame(object):
             self.registers_r[i] = None
         self.pushed_box = None
 
+    def _const_int(self, value):
+        # call profiler to count up
+        assert isinstance(value, int)
+        self.jitcode._number_const_int += 1
+        return ConstInt(value)
+
+    def _const_ptr(self, value):
+        # call profiler to count up
+        self.jitcode._number_const_ptr += 1
+        return ConstPtr(value)
+
     # ------------------------------
     # Decoding of the JitCode
 
@@ -317,11 +328,11 @@ class MIFrame(object):
             assert isinstance(b1, ConstInt)
             val = b1.getint()
             resvalue = val + c
-            resbox = ConstInt(resvalue)
+            resbox = self._const_int(resvalue)
         else:
             assert isinstance(b1, IntFrontendOp)
             resvalue = b1.getint() + c
-            resbox = self.metainterp._record_helper(rop.INT_ADD, resvalue, None, b1, ConstInt(c))
+            resbox = self.metainterp._record_helper(rop.INT_ADD, resvalue, None, b1, self._const_int(c))
         regs[ord(code[position])] = resbox
         self.pc = position + 1
 
@@ -853,7 +864,7 @@ class MIFrame(object):
             # if 'box' is directly a ConstPtr, bypass the heapcache completely
             resvalue = executor.execute(self.metainterp.cpu, self.metainterp,
                                         rop.GETFIELD_GC_I, fielddescr, box)
-            return ConstInt(resvalue)
+            return self._const_int(resvalue)
         return self._opimpl_getfield_gc_any_pureornot(
                 rop.GETFIELD_GC_I, box, fielddescr, 'i')
 
@@ -1030,7 +1041,7 @@ class MIFrame(object):
         if not we_are_translated():
             from rpython.rtyper.lltypesystem import ll2ctypes
             assert isinstance(c, ConstInt)
-            c = ConstInt(ll2ctypes.lltype2ctypes(c.value))
+            c = self._const_int(ll2ctypes.lltype2ctypes(c.value))
         return c
 
     @arguments("box", "box", "box", "box", "box")
@@ -1151,7 +1162,7 @@ class MIFrame(object):
         mi = self.metainterp
         tokenbox = mi.execute_and_record(rop.GETFIELD_GC_R, token_descr, box)
         condbox = mi.execute_and_record(rop.PTR_NE, None, tokenbox, CONST_NULL)
-        funcbox = ConstInt(rffi.cast(lltype.Signed, vinfo.clear_vable_ptr))
+        funcbox = self._const_int(rffi.cast(lltype.Signed, vinfo.clear_vable_ptr))
         calldescr = vinfo.clear_vable_descr
         self.execute_varargs(rop.COND_CALL, [condbox, funcbox, box],
                              calldescr, False, False)
@@ -1263,7 +1274,7 @@ class MIFrame(object):
         virtualizable = vinfo.unwrap_virtualizable_box(virtualizable_box)
         arrayindex = vinfo.array_field_by_descrs[fdescr]
         result = vinfo.get_array_length(virtualizable, arrayindex)
-        return ConstInt(result)
+        return self._const_int(result)
 
     @arguments("newframe")
     def _opimpl_inline_call1(self, _):
@@ -1319,7 +1330,7 @@ class MIFrame(object):
                     # we solve this with tracing a useless same_as. then we
                     # will run into the tracelimit in this situation.
                     self.metainterp._record_helper(
-                        rop.SAME_AS_I, tracelength, None, ConstInt(tracelength))
+                        rop.SAME_AS_I, tracelength, None, self._const_int(tracelength))
                 else:
                     self.metainterp.trace_length_at_last_tco = tracelength
 
@@ -1429,7 +1440,7 @@ class MIFrame(object):
                           assembler_call=False):
         portal_code = targetjitdriver_sd.mainjitcode
         k = targetjitdriver_sd.portal_runner_adr
-        funcbox = ConstInt(adr2int(k))
+        funcbox = self._const_int(adr2int(k))
         return self.do_residual_call(funcbox, allboxes, portal_code.calldescr, pc,
                                      assembler_call=assembler_call,
                                      assembler_call_jd=targetjitdriver_sd)
@@ -1467,14 +1478,14 @@ class MIFrame(object):
     def opimpl_strhash(self, strbox):
         if isinstance(strbox, ConstPtr):
             h = self.metainterp.cpu.bh_strhash(strbox.getref_base())
-            return ConstInt(h)
+            return self._const_int(h)
         return self.execute(rop.STRHASH, strbox)
 
     @arguments("box")
     def opimpl_unicodehash(self, unicodebox):
         if isinstance(unicodebox, ConstPtr):
             h = self.metainterp.cpu.bh_unicodehash(unicodebox.getref_base())
-            return ConstInt(h)
+            return self._const_int(h)
         return self.execute(rop.UNICODEHASH, unicodebox)
 
     @arguments("box")
@@ -1504,7 +1515,7 @@ class MIFrame(object):
         else:
             constbox = ConstPtr(box.getref_base())
             resbox = self.do_residual_call(funcbox, [box, constbox], descr, orgpc)
-            promoted_box = ConstInt(resbox.getint())
+            promoted_box = self._const_int(resbox.getint())
             # This is GUARD_VALUE because GUARD_TRUE assumes the existance
             # of a label when computing resumepc
             self.metainterp.generate_guard(rop.GUARD_VALUE, resbox,
@@ -1613,8 +1624,8 @@ class MIFrame(object):
         # Note: the logger hides the jd_index argument, so we see in the logs:
         #    debug_merge_point(portal_call_depth, current_call_id, 'location')
         #
-        args = [ConstInt(jd_index), ConstInt(portal_call_depth),
-                ConstInt(current_call_id)] + greenkey
+        args = [self._const_int(jd_index), self._const_int(portal_call_depth),
+                self._const_int(current_call_id)] + greenkey
         metainterp = self.metainterp
         metainterp.history.record(rop.DEBUG_MERGE_POINT, args, None)
         warmrunnerstate = jitdriver_sd.warmstate
@@ -1634,7 +1645,7 @@ class MIFrame(object):
             llexception = jitexc._get_standard_error(metainterp.cpu.rtyper, AssertionError)
 
         # add an unreachable finish that raises an AssertionError
-        exception_box = ConstInt(ptr2int(llexception.typeptr))
+        exception_box = self._const_int(ptr2int(llexception.typeptr))
         sd = metainterp.staticdata
         token = sd.exit_frame_with_exception_descr_ref
         metainterp.history.record1(rop.FINISH, exception_box, None, descr=token)
@@ -1713,7 +1724,7 @@ class MIFrame(object):
         assert exc_value
         assert self.metainterp.class_of_last_exc_is_const
         exc_cls = rclass.ll_cast_to_object(exc_value).typeptr
-        return ConstInt(ptr2int(exc_cls))
+        return self._const_int(ptr2int(exc_cls))
 
     @arguments()
     def opimpl_last_exc_value(self):
@@ -1772,11 +1783,11 @@ class MIFrame(object):
     @arguments()
     def opimpl_current_trace_length(self):
         trace_length = self.metainterp.history.length()
-        return ConstInt(trace_length)
+        return self._const_int(trace_length)
 
     @arguments("box")
     def _opimpl_isconstant(self, box):
-        return ConstInt(isinstance(box, Const))
+        return self._const_int(isinstance(box, Const))
 
     opimpl_int_isconstant = _opimpl_isconstant
     opimpl_ref_isconstant = _opimpl_isconstant
@@ -1784,7 +1795,7 @@ class MIFrame(object):
 
     @arguments("box")
     def _opimpl_isvirtual(self, box):
-        return ConstInt(self.metainterp.heapcache.is_likely_virtual(box))
+        return self._const_int(self.metainterp.heapcache.is_likely_virtual(box))
 
     opimpl_ref_isvirtual = _opimpl_isvirtual
 
@@ -1805,7 +1816,7 @@ class MIFrame(object):
         vrefinfo = metainterp.staticdata.virtualref_info
         obj = box.getref_base()
         vref = vrefinfo.virtual_ref_during_tracing(obj)
-        cindex = history.ConstInt(len(metainterp.virtualref_boxes) // 2)
+        cindex = self._const_int(len(metainterp.virtualref_boxes) // 2)
         resbox = metainterp.history.record2(rop.VIRTUAL_REF, box, cindex, vref)
         self.metainterp.heapcache.new(resbox)
         # Note: we allocate a JIT_VIRTUAL_REF here
@@ -2033,7 +2044,7 @@ class MIFrame(object):
                 opnum1 = rop.CALL_MAY_FORCE_I
                 value = executor.execute_varargs(metainterp.cpu, metainterp,
                                                  opnum1, allboxes, descr)
-                c_result = ConstInt(value)
+                c_result = self._const_int(value)
             elif tp == 'r':
                 opnum1 = rop.CALL_MAY_FORCE_R
                 value = executor.execute_varargs(metainterp.cpu, metainterp,
@@ -2228,7 +2239,7 @@ class MIFrame(object):
         if nonstandardness_status == self.VIRTUALIZABLE_STATUS_UNKNOWN:
             return None
         if nonstandardness_status == self.NONSTANDARD_VIRTUALIZABLE:
-            indexbox = ConstInt(index)
+            indexbox = self._const_int(index)
             arraybox = self.opimpl_getfield_gc_r(box, fdescr)
             if adescr.is_array_of_pointers():
                 return self.opimpl_getarrayitem_gc_r(arraybox, indexbox, adescr)
@@ -2252,7 +2263,7 @@ class MIFrame(object):
             return False
         elif nonstandardness_status == self.NONSTANDARD_VIRTUALIZABLE:
             arraybox = self.opimpl_getfield_gc_r(box, fdescr)
-            indexbox = ConstInt(index)
+            indexbox = self._const_int(index)
             self._opimpl_setarrayitem_gc_any(arraybox, indexbox, valuebox,
                                              adescr)
         else:

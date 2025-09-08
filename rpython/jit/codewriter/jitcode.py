@@ -23,6 +23,9 @@ class JitCode(AbstractDescr):
         self.number_calls = 0
         self.traced_operations = 0
 
+        self._number_const_int = 0
+        self._number_const_ptr = 0
+
     def setup(self, code='', constants_i=[], constants_r=[], constants_f=[],
               num_regs_i=255, num_regs_r=255, num_regs_f=255,
               startpoints=None, alllabels=None,

@@ -158,6 +158,18 @@ class Profiler(BaseProfiler):
             count = self.metainterp_sd.opcode_counters[index]
             debug_print(self.metainterp_sd.opcode_names[index], count)
 
+
+        debug_print("---")
+
+        num_const_int = 0
+
+        for jitcode in self.metainterp_sd.jitcodes:
+            if not isinstance(jitcode, JitCode):
+                continue
+            num_const_int += jitcode._number_const_int
+
+        debug_print("number of ConstInt created:\t%d" % (num_const_int))
+
     def _print_stats(self):
         cnt = self.counters
         tim = self.times
