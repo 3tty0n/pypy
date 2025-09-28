@@ -11,23 +11,12 @@ BENCHMARKS = [
 ]
 
 BENCHMARKS_UNLADEN_SWALLOW = [
-    'bm_ai',
-    'bm_ai',
-    'bm_call_simple',
-    'bm_django',
-    'bm_html5lib',
-    'bm_nbody'
-    'bm_pickle',
-    'bm_regex_compile',
-    'bm_regex_effbot',
-    'bm_regex_v8',
-    'bm_richards',
-    'bm_rietveld',
-    'bm_spambayes',
-    'bm_spitfire',
-    'bm_threading',
-    'bm_unpack_sequence',
+    'bm_django', 'bm_html5lib',
+    'bm_richards', 'bm_rietveld',
+    'bm_spambayes', 'bm_spitfire',
+    'bm_threading', 'bm_unpack_sequence',
 ]
+
 
 COMMANDS = [
     ("pypy-c", "./pypy/goal/pypy-c"),
@@ -53,9 +42,10 @@ def setup_env():
 
 def setup_env_unladen():
     env = os.environ.copy()
-    env["PYTHONPATH"] = ':'.join(['benchmarks/unladen_swallow/lib' + x for x in [
-        'django', 'html5lib', 'lockfile', 'spambayes', 'spitfire'
-    ]])
+    env["PYTHONPATH"] = ':'.join(
+        ['benchmarks/unladen_swallow/lib/' + x for x in [
+            'django', 'html5lib', 'spambayes', 'spitfire', 'lockfile']])
+    env["PYTHONPATH"] = "benchmarks/lib:benchmarks/lib/pytz:" + env["PYTHONPATH"]
     return env
 
 def run():
@@ -80,7 +70,7 @@ def run_unladen_swallow():
     dirname = 'pypylogs'
     if not os.path.exists(dirname):
         os.mkdir(dirname)
-    env = setup_env()
+    env = setup_env_unladen()
     num = parse_args()
     for bm in BENCHMARKS_UNLADEN_SWALLOW:
         for i in range(num):
