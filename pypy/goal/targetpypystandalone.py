@@ -242,7 +242,7 @@ class PyPyTarget(object):
         return pypy_optiondescription
 
     def target(self, driver, args):
-        driver.exe_name = 'pypy-%(backend)s'
+        driver.exe_name = 'pypy-jit-inline-threaded-%(backend)s'
 
         config = driver.config
         parser = self.opt_parser(config)
@@ -340,13 +340,13 @@ class PyPyTarget(object):
         options = make_dict(config)
         wrapstr = 'space.wrap(%r)' % (options)  # import time
         SysModule.interpleveldefs['pypy_translation_info'] = wrapstr
-        
+
         if 'compile' in driver._disabled:
             driver.default_goal = 'source'
         elif config.objspace.usemodules._cffi_backend:
             self.hack_for_cffi_modules(driver)
         else:
-            driver.default_goal = 'compile' 
+            driver.default_goal = 'compile'
         return self.get_entry_point(config)
 
     def hack_for_cffi_modules(self, driver):
@@ -405,4 +405,3 @@ class PyPyTarget(object):
         ns['get_gchooks'] = self.get_gchooks
 
 PyPyTarget().interface(globals())
-

@@ -5,6 +5,7 @@ The rest, dealing with variables in optimized ways, is in nestedscope.py.
 """
 
 from rpython.rlib import jit, rstackovf
+from rpython.rlib.jit import dont_look_inside
 from rpython.rlib.debug import check_nonneg
 from rpython.rlib.objectmodel import (we_are_translated, always_inline,
         dont_inline, not_rpython)
@@ -24,6 +25,7 @@ from pypy.tool.stdlib_opcode import bytecode_spec
 def unaryoperation(operationname):
     def opimpl(self, *ignored):
         operation = getattr(self.space, operationname)
+        operation = dont_look_inside(operation)
         w_1 = self.popvalue()
         w_result = operation(w_1)
         self.pushvalue(w_result)
@@ -35,6 +37,7 @@ def unaryoperation(operationname):
 def binaryoperation(operationname):
     def opimpl(self, *ignored):
         operation = getattr(self.space, operationname)
+        operation = dont_look_inside(operation)
         w_2 = self.popvalue()
         w_1 = self.popvalue()
         w_result = operation(w_1, w_2)
