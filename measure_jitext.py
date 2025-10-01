@@ -12,9 +12,8 @@ BENCHMARKS = [
 
 BENCHMARKS_UNLADEN_SWALLOW = [
     'bm_django', 'bm_html5lib',
-    'bm_richards', 'bm_rietveld',
-    'bm_spambayes', 'bm_spitfire',
-    'bm_threading', 'bm_unpack_sequence',
+    'bm_richards', 'bm_spambayes',
+    'bm_unpack_sequence',
 ]
 
 
@@ -48,41 +47,32 @@ def setup_env_unladen():
     env["PYTHONPATH"] = "benchmarks/lib:benchmarks/lib/pytz:" + env["PYTHONPATH"]
     return env
 
-def run():
+def setup_bm(typ):
+    if typ == 'own':
+        return setup_env(), "benchmarks/own/", BENCHMARKS
+    elif typ == 'unladen_swallow':
+        return setup_env_unladen(), "benchmarks/unladen_swallow/performance/", BENCHMARKS_UNLADEN_SWALLOW
+    else:
+        raise Exception("unreachable path")
+
+def run(typ):
     dirname = 'pypylogs'
     if not os.path.exists(dirname):
         os.mkdir(dirname)
     env = setup_env()
+    env, bm_path, benchmarks = setup_bm(typ)
     num = parse_args()
-    for bm in BENCHMARKS:
+    for bm in benchmarks:
         for i in range(num):
             for exe_name, exe_path in COMMANDS:
                 if not os.path.exists('%s/%s' % (dirname, exe_name)):
                     os.mkdir('%s/%s' % (dirname, exe_name))
                 log_output = '%s/%s/%s_%i.log' % (dirname, exe_name, bm, i+1)
                 env["PYPYLOG"] = "jit-summary:%s" % (log_output)
-                bm_path = "benchmarks/own/%s.py" % (bm)
-                command = [exe_path, bm_path]
-                print("Running %s against %s..." % (exe_name, bm))
-                subprocess.run(command, env=env, stdout=subprocess.DEVNULL)
-
-def run_unladen_swallow():
-    dirname = 'pypylogs'
-    if not os.path.exists(dirname):
-        os.mkdir(dirname)
-    env = setup_env_unladen()
-    num = parse_args()
-    for bm in BENCHMARKS_UNLADEN_SWALLOW:
-        for i in range(num):
-            for exe_name, exe_path in COMMANDS:
-                if not os.path.exists('%s/%s' % (dirname, exe_name)):
-                    os.mkdir('%s/%s' % (dirname, exe_name))
-                log_output = '%s/%s/%s_%i.log' % (dirname, exe_name, bm, i+1)
-                env["PYPYLOG"] = "jit-summary:%s" % (log_output)
-                bm_path = "benchmarks/unladen_swallow/performance/%s.py" % (bm)
-                command = [exe_path,  bm_path]
+                target_path = bm_path + "%s.py" % (bm)
+                command = [exe_path, target_path]
                 print("Running %s against %s..." % (exe_name, bm))
                 subprocess.run(command, env=env, stdout=subprocess.DEVNULL)
 
 if __name__ == '__main__':
-    run_unladen_swallow()
+    run('unladen_swallow')
