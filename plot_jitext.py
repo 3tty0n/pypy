@@ -1,23 +1,34 @@
 import os
 import matplotlib.pyplot as plt
 import pandas as pd
+import argparse
 
 from statistics import geometric_mean, median, variance, mean
 
 BENCHMARKS = [
     'bm_chameleon', 'bm_dulwich_log', 'bm_icbd', 'bm_mako',
     'raytrace-simple', 'scimark', 'spectral-norm', 'spitfire',
-    'telco'
+    'telco', 'bm_gzip', 'bm_krakatau', 'bm_gzip', 'bm_mdp', 'pyxl_bench',
 ]
 
-BENCHMARKS_NOT_RUNNABLE = [
-    'bm_gzip', 'bm_krakatau', 'bm_gzip', 'bm_mdp', 'pyxl_bench',
+BENCHMARKS_UNLADEN_SWALLOW = [
+    'bm_django', 'bm_html5lib',
+    'bm_richards', 'bm_spambayes',
+    'bm_unpack_sequence',
 ]
 
 COMMANDS = [
     ("pypy-c", "./pypy/goal/pypy-c"),
     ("pypy-jit-ext-c", "./pypy/goal/pypy-jit-ext-c")
 ]
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        prog='Measuring the jit summary data'
+    )
+    parser.add_argument('-n', '--number', type=int)
+    args = parser.parse_args()
+    return args.number
 
 def parse_jit_summary(path):
     result = dict()
@@ -32,12 +43,12 @@ def parse_jit_summary(path):
                 result["Tracing"] = time
     return result
 
-def collect_data():
+def collect_data(num):
     dir = "pypylogs/"
     result = {}
     for exe_name, _ in COMMANDS:
         for bm in BENCHMARKS:
-            for i in range(50):
+            for i in range(num):
                 path = dir + exe_name + "/" + bm + "_" + str(i+1) + ".log"
                 jit_summary = parse_jit_summary(path)
                 if exe_name not in result:
@@ -53,9 +64,9 @@ def collect_data():
     return result
 
 
-def measure():
+def measure(num):
 
-    result = collect_data()
+    result = collect_data(num)
 
     output_ave = {}
     output_var = {}
@@ -91,5 +102,6 @@ def plot(output_ave, output_var):
 
 
 if __name__ == '__main__':
-    output_ave, output_var = measure()
+    num = parse_args()
+    output_ave, output_var = measure(num)
     plot(output_ave, output_var)
