@@ -73,7 +73,6 @@ class GenExtension(object):
             last_was_live = insn[0] == '-live-'
 
         self.work_list = WorkList(self.pc_to_insn, self.assembler.label_positions, self.pc_to_nextpc, self.globals)
-        code_per_pc = {}
         for startpc in self.assembler.startpoints:
             spec = self.work_list.specialize_pc(frozenset([]), startpc)
         code_and_spec_per_pc = self.work_list.make_code()
