@@ -1899,14 +1899,17 @@ class MIFrame(object):
         # changes, due to a call or a return.
         staticdata = self.metainterp.staticdata
         try:
+            name = self.jitcode.name
             if self.jitcode.genext_function:
-                name = self.jitcode.name
                 if name not in staticdata.genext_jitcell_counters:
                     staticdata.genext_jitcell_counters[name] = 0
                 staticdata.genext_jitcell_counters[name] += 1
                 staticdata.profiler.count(Counters.FAST_TRACING_FUNCTION_EXECUTIONS)
                 return self.jitcode.genext_function(self)
 
+            if name not in staticdata.genext_slow_counters:
+                staticdata.genext_slow_counters[name] = 0
+            staticdata.genext_slow_counters[name] += 1
             staticdata.profiler.count(Counters.SLOW_TRACING_FUNCTION_EXECUTIONS)
             pc = self.pc
             while True:
@@ -2354,6 +2357,7 @@ class MetaInterpStaticData(object):
         self.opcode_counters = [0] * len(insns)
 
         self.genext_jitcell_counters = {}
+        self.genext_slow_counters = {}
 
     def setup_descrs(self, descrs):
         self.opcode_descrs = descrs
