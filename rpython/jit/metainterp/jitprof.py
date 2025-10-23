@@ -136,6 +136,11 @@ class Profiler(BaseProfiler):
             self._print_jitcode_stats()
         debug_stop("jit-jitcode-stats")
 
+        debug_start("jit-genext-stats")
+        if have_debug_prints():
+            self._print_genext_stats()
+        debug_stop("jit-genext-stats")
+
     def _print_jitcode_stats(self):
         from rpython.jit.codewriter.jitcode import JitCode
 
@@ -151,18 +156,28 @@ class Profiler(BaseProfiler):
             debug_print(jitcode.name, jitcode.bytecodes_counter,
                         jitcode.number_calls, jitcode.traced_operations)
 
-        debug_print("---")
+        debug_print("{jit-jitcode-opcode-names")
 
         # printing opcode names
         for index in range(len(self.metainterp_sd.opcode_names)):
             count = self.metainterp_sd.opcode_counters[index]
             debug_print(self.metainterp_sd.opcode_names[index], count)
 
-        debug_print("---")
+        debug_print("jit-jitcode-opcode-names}")
 
+
+    def _print_genext_stats(self):
+        debug_print("jitcodename,count")
         for jitcode_name in self.metainterp_sd.genext_jitcell_counters:
             count = self.metainterp_sd.genext_jitcell_counters[jitcode_name]
             debug_print("%s,%d" % (jitcode_name, count))
+
+        debug_print("{jit-genext-unspecialized")
+        for jitcode_name in self.metainterp_sd.genext_slow_counters:
+            count = self.metainterp_sd.genext_slow_counters[jitcode_name]
+            debug_print("%s,%d" % (jitcode_name, count))
+        debug_print("jit-genext-unspecialized}")
+
 
     def _print_stats(self):
         cnt = self.counters
