@@ -158,6 +158,12 @@ class Profiler(BaseProfiler):
             count = self.metainterp_sd.opcode_counters[index]
             debug_print(self.metainterp_sd.opcode_names[index], count)
 
+        debug_print("---")
+
+        for jitcode_name in self.metainterp_sd.genext_jitcell_counters:
+            count = self.metainterp_sd.genext_jitcell_counters[jitcode_name]
+            debug_print("%s,%d" % (jitcode_name, count))
+
     def _print_stats(self):
         cnt = self.counters
         tim = self.times
