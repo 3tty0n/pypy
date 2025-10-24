@@ -489,6 +489,7 @@ class __extend__(pyframe.PyFrame):
     def getconstant_w(self, index):
         return self.getcode().co_consts_w[index]
 
+    @warmup_critical_function
     def getname_u(self, index):
         return self.space.text_w(self.getcode().co_names_w[index])
 
@@ -609,7 +610,7 @@ class __extend__(pyframe.PyFrame):
         w_result = self.space.pow(w_1, w_2, self.space.w_None)
         self.pushvalue(w_result)
 
-    BINARY_MULTIPLY = binaryoperation("mul")
+    BINARY_MULTIPLY = warmup_critical_function(binaryoperation("mul"))
     BINARY_TRUE_DIVIDE  = binaryoperation("truediv")
     BINARY_FLOOR_DIVIDE = binaryoperation("floordiv")
     BINARY_DIVIDE       = binaryoperation("div")
@@ -956,11 +957,13 @@ class __extend__(pyframe.PyFrame):
                         varname)
         self.locals_cells_stack_w[varindex] = None
 
+    @jit.warmup_critical_function
     def BUILD_TUPLE(self, itemcount):
         items = self.popvalues(itemcount)
         w_tuple = self.space.newtuple(items)
         self.pushvalue(w_tuple)
 
+    @jit.warmup_critical_function
     def BUILD_LIST(self, itemcount):
         items = self.popvalues_mutable(itemcount)
         w_list = self.space.newlist(items)
@@ -1142,6 +1145,7 @@ class __extend__(pyframe.PyFrame):
         w_iterator = self.space.iter(w_iterable)
         self.pushvalue(w_iterator)
 
+    @jit.warmup_critical_function
     def FOR_ITER(self, jumpby, next_instr):
         w_iterator = self.peekvalue()
         try:
@@ -1238,6 +1242,7 @@ class __extend__(pyframe.PyFrame):
             w_result = self.space.call_args(w_function, args)
         self.pushvalue(w_result)
 
+    @jit.warmup_critical_function
     def CALL_FUNCTION(self, oparg):
         # XXX start of hack for performance
         if (oparg >> 8) & 0xff == 0:

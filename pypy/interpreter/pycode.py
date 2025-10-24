@@ -222,6 +222,7 @@ class PyCode(eval.Code):
         fresh_frame.init_cells()
         return frame.run()
 
+    @jit.warmup_critical_function
     def funcrun_obj(self, func, w_obj, args):
         frame = self.space.createframe(self, func.w_func_globals,
                                   func)
@@ -488,4 +489,3 @@ def _convert_const(space, w_a):
         return space.newfrozenset(elements_w)
     # use id for the rest
     return space.id(w_a)
-
