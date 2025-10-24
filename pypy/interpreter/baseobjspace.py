@@ -43,6 +43,7 @@ class W_Root(object):
     def getdict(self, space):
         return None
 
+    @jit.warmup_critical_function
     def getdictvalue(self, space, attr):
         w_dict = self.getdict(space)
         if w_dict is not None:
@@ -235,6 +236,7 @@ class W_Root(object):
 
     # -------------------------------------------------------------------
 
+    @jit.warmup_critical_function
     def is_w(self, space, w_other):
         return self is w_other
 
@@ -705,7 +707,7 @@ class ObjSpace(object):
         elif self.config.objspace.usemodules._cffi_backend:
             from pypy.module._cffi_backend import copy_includes
             copy_includes.main()
-        
+
         self.getbuiltinmodule('sys')
         self.getbuiltinmodule('imp')
         self.getbuiltinmodule('__builtin__')
@@ -1805,7 +1807,7 @@ class ObjSpace(object):
                 raise oefmt(self.w_TypeError,
                             "argument must be a string without NUL characters")
             return rstring.assert_str0(result)
-            
+
         else:
             return self.bytes0_w(w_obj)
 

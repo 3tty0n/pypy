@@ -652,6 +652,7 @@ class W_TypeObject(W_Root):
     def delweakref(self):
         self._lifeline_ = None
 
+    @warmup_critical_function
     def descr_call(self, space, __args__):
         promote(self)
         # invoke the __new__ of the type
