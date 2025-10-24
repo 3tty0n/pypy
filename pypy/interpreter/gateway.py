@@ -29,6 +29,7 @@ from rpython.tool.sourcetools import func_with_new_name, compile2
 
 from rpython.rlib.signature import signature, finishsigs
 from rpython.rlib import types as sigtypes
+from rpython.rlib.jit import warmup_critical_function
 
 
 # internal non-translatable parts:
@@ -902,6 +903,7 @@ class BuiltinCode2(BuiltinCode):
     _immutable_ = True
     fast_natural_arity = 2
 
+    @warmup_critical_function
     @signature(sigtypes.self(), sigtypes.any(),
                w_root_or_none,
                w_root_or_none,
