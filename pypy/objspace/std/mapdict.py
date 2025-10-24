@@ -500,6 +500,7 @@ class UnboxedPlainAttribute(PlainAttribute):
         self.storageindex = storageindex
         self.listindex = listindex
 
+    @jit.warmup_critical_function
     def storage_needed(self):
         if self.firstunwrapped:
             return self.storageindex + 1

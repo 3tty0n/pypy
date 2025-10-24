@@ -801,6 +801,7 @@ class ObjSpace(object):
     def is_(self, w_one, w_two):
         return self.newbool(self.is_w(w_one, w_two))
 
+    @jit.warmup_critical_function
     def is_w(self, w_one, w_two):
         # done by a method call on w_two (and not on w_one, because of the
         # expected programming style where we say "if x is None" or

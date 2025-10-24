@@ -957,11 +957,13 @@ class __extend__(pyframe.PyFrame):
                         varname)
         self.locals_cells_stack_w[varindex] = None
 
+    @jit.warmup_critical_function
     def BUILD_TUPLE(self, itemcount):
         items = self.popvalues(itemcount)
         w_tuple = self.space.newtuple(items)
         self.pushvalue(w_tuple)
 
+    @jit.warmup_critical_function
     def BUILD_LIST(self, itemcount):
         items = self.popvalues_mutable(itemcount)
         w_list = self.space.newlist(items)

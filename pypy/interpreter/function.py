@@ -69,6 +69,7 @@ class Function(W_Root):
         assert isinstance(w_res, W_Root)
         return w_res
 
+    @jit.warmup_critical_function
     def call_obj_args(self, w_obj, args):
         # delegate activation to code
         w_res = self.getcode().funcrun_obj(self, w_obj, args)
