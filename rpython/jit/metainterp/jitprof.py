@@ -167,17 +167,21 @@ class Profiler(BaseProfiler):
 
 
     def _print_genext_stats(self):
+        debug_print("{jit-genext-specialized")
         debug_print("jitcodename,count")
-        for jitcode_name in self.metainterp_sd.genext_jitcell_counters:
-            count = self.metainterp_sd.genext_jitcell_counters[jitcode_name]
+        counters = self.metainterp_sd.genext_jitcell_counters
+        for jitcode_name in counters:
+            count = counters[jitcode_name]
             debug_print("%s,%d" % (jitcode_name, count))
+        debug_print("jit-genext-specialized}")
 
         debug_print("{jit-genext-unspecialized")
-        for jitcode_name in self.metainterp_sd.genext_slow_counters:
-            count = self.metainterp_sd.genext_slow_counters[jitcode_name]
+        debug_print("jitcodename,count")
+        counters = self.metainterp_sd.genext_slow_counters
+        for jitcode_name in counters:
+            count = counters[jitcode_name]
             debug_print("%s,%d" % (jitcode_name, count))
         debug_print("jit-genext-unspecialized}")
-
 
     def _print_stats(self):
         cnt = self.counters
