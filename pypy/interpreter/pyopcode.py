@@ -609,7 +609,7 @@ class __extend__(pyframe.PyFrame):
         w_result = self.space.pow(w_1, w_2, self.space.w_None)
         self.pushvalue(w_result)
 
-    BINARY_MULTIPLY = binaryoperation("mul")
+    BINARY_MULTIPLY = warmup_critical_function(binaryoperation("mul"))
     BINARY_TRUE_DIVIDE  = binaryoperation("truediv")
     BINARY_FLOOR_DIVIDE = binaryoperation("floordiv")
     BINARY_DIVIDE       = binaryoperation("div")
