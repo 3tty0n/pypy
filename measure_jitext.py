@@ -104,8 +104,8 @@ def run(typ, mode=None):
     env, bm_path, benchmarks = setup_bm(typ)
     num = parse_args()
     for bm in benchmarks:
-        for i in range(num):
-            for exe_name, exe_path in COMMANDS:
+        for exe_name, exe_path in COMMANDS:
+            for i in range(num):
                 log_output = "%s/%s/%s_%s_%i.log" % (
                     this_dir,
                     dirname,
@@ -120,6 +120,8 @@ def run(typ, mode=None):
 
                 target_path = bm_path + "%s.py" % (bm)
                 command = [exe_path, target_path]
+                if bm in ('krakatau', 'icbd'):
+                    command.extend(['-n', '2'])
                 print("Running %s against %s..." % (exe_name, bm))
                 if bm == "bm_icbd":
                     run_icbd(env, exe_path)

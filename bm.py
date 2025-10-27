@@ -1,6 +1,6 @@
 BENCHMARKS = [
     'bm_chameleon', 'bm_dulwich_log', 'bm_icbd', 'bm_mako',
-    'raytrace-simple', 'scimark', 'spectral-norm', 'spitfire',
+    'raytrace-simple', 'spectral-norm', 'spitfire',
     'telco', 'bm_gzip', 'bm_krakatau', 'bm_mdp', 'pyxl_bench',
     'hexiom2', 'eparse', 'json_bench', 'pypy_interp', 'pyflate-fast'
 ]
