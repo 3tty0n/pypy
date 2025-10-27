@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -34,7 +35,7 @@ def collect_data(num, dirname):
     for exe_name, _ in COMMANDS:
         for bm in BENCHMARKS:
             for i in range(num):
-                path = dirname + exe_name + "/" + bm + "_" + str(i+1) + ".log"
+                path = dirname + "/" + exe_name + "_" + bm + "_" + str(i+1) + ".log"
                 jit_summary = parse_jit_summary(path)
                 if exe_name not in result:
                     result[exe_name] = {}
@@ -55,6 +56,7 @@ def measure(num, dirname):
     output_var = {}
     for exe_name, _ in COMMANDS:
         for bm in BENCHMARKS:
+            if bm == 'scimark': continue
             ave = mean(result[exe_name][bm])
             var = variance(result[exe_name][bm])
 
@@ -76,6 +78,9 @@ def plot(output_ave, output_var):
     df_ave = pd.DataFrame(output_ave)
     df_var = pd.DataFrame(output_var)
 
+    print(df_ave)
+    print(df_ave.mean())
+
     fig, axes = plt.subplots(1, 2, gridspec_kw={'width_ratios': [9, 1]})
 
     df_ave.plot.bar(yerr=df_var, ax=axes[0], title='Tracing time', ylabel='time (s)')
@@ -83,6 +88,16 @@ def plot(output_ave, output_var):
 
     plt.tight_layout()
     plt.savefig('pypylogs_tracing_time.pdf')
+
+    fig, ax = plt.subplots()
+
+    new_df_ave = df_ave['pypy-jit-ext-c'] / df_ave['pypy-c']
+
+    new_df_ave.plot.bar(ax=ax, title='Tracing time', ylabel='Relative time (normalized to pypy-c)')
+    ax.axhline(1.0)
+
+    plt.tight_layout()
+    plt.savefig('pypylogs_tracing_time_norm.pdf')
 
 
 if __name__ == '__main__':
