@@ -3,79 +3,130 @@
 import os
 import subprocess
 import argparse
+import sys
 
-BENCHMARKS = [
-    'bm_chameleon', 'bm_dulwich_log', 'bm_icbd', 'bm_mako',
-    'raytrace-simple', 'scimark', 'spectral-norm', 'spitfire',
-    'telco', 'bm_gzip', 'bm_krakatau', 'bm_mdp', 'pyxl_bench',
-    'hexiom2', 'eparse', 'json_bench', 'pypy_interp', 'pyflate-fast'
-]
+from statistics import mean, variance
+from datetime import datetime
 
-BENCHMARKS_UNLADEN_SWALLOW = [
-    'bm_django', 'bm_html5lib',
-    'bm_richards', 'bm_spambayes',
-    'bm_unpack_sequence',
-]
+from bm import BENCHMARKS, BENCHMARKS_UNLADEN_SWALLOW, COMMANDS
+
+this_dir = os.path.abspath(os.path.dirname(__file__))
 
 
-COMMANDS = [
-    ("pypy-c", "./pypy/goal/pypy-c"),
-    ("pypy-jit-ext-c", "./pypy/goal/pypy-jit-ext-c")
-]
+def get_time():
+    now = datetime.now()
+    return now.strftime("%m%d%Y_%H%M")
+
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        prog='Measuring the jit summary data'
-    )
-    parser.add_argument('-n', '--number', type=int)
+    parser = argparse.ArgumentParser(prog="Measuring the jit summary data")
+    parser.add_argument("-n", "--number", type=int)
+    parser.add_argument("-d", "--dir", type=str)
     args = parser.parse_args()
     return args.number
 
+
 def setup_env():
     env = os.environ.copy()
-    env["PYTHONPATH"] = ':'.join(['benchmarks/lib/' + x for x in [
-        'chameleon/src', 'dulwich-0.19.13', 'jinja2', 'pyxl',
-        'monte', 'pytz', 'genshi', 'mako', 'sqlalchemy',
-        'sympy', 'sqlalchemy', 'genshi', 'twisted-trunk/twisted',
-        'pypy'
-    ]])
+    env["PYTHONPATH"] = ":".join(
+        [
+            "benchmarks/lib/" + x
+            for x in [
+                "chameleon/src",
+                "dulwich-0.19.13",
+                "jinja2",
+                "pyxl",
+                "monte",
+                "pytz",
+                "genshi",
+                "mako",
+                "sqlalchemy",
+                "sympy",
+                "sqlalchemy",
+                "genshi",
+                "twisted-trunk/twisted",
+                "pypy",
+            ]
+        ]
+    )
     return env
+
 
 def setup_env_unladen():
     env = os.environ.copy()
-    env["PYTHONPATH"] = ':'.join(
-        ['benchmarks/unladen_swallow/lib/' + x for x in [
-            'django', 'html5lib', 'spambayes', 'spitfire', 'lockfile']])
+    env["PYTHONPATH"] = ":".join(
+        [
+            "benchmarks/unladen_swallow/lib/" + x
+            for x in ["django", "html5lib", "spambayes", "spitfire", "lockfile"]
+        ]
+    )
     env["PYTHONPATH"] = "benchmarks/lib:benchmarks/lib/pytz:" + env["PYTHONPATH"]
     return env
 
+
 def setup_bm(typ):
-    if typ == 'own':
+    if typ == "own":
         return setup_env(), "benchmarks/own/", BENCHMARKS
-    elif typ == 'unladen_swallow':
-        return setup_env_unladen(), "benchmarks/unladen_swallow/performance/", BENCHMARKS_UNLADEN_SWALLOW
+    elif typ == "unladen_swallow":
+        return (
+            setup_env_unladen(),
+            "benchmarks/unladen_swallow/performance/",
+            BENCHMARKS_UNLADEN_SWALLOW,
+        )
     else:
         raise Exception("unreachable path")
 
-def run(typ):
-    dirname = 'pypylogs'
+
+def run_icbd(env, exe_path):
+    env["PYTHONPATH"] = "icbd"
+    os.chdir("benchmarks/own/icbd")
+    command = [
+        "%s/%s" % (this_dir, exe_path),
+        "-m", "icbd.type_analyzer.analyze_all",
+        "-I", "stdlib/python2.5_tiny",
+        "-I", ".",
+        "-E", "icbd/type_analyzer/tests",
+        "-E", "icbd/compiler/benchmarks",
+        "-E", "icbd/compiler/tests",
+        "-I", "stdlib/type_mocks",
+        "-n", "icbd",
+    ]
+    subprocess.run(command, env=env, stdout=subprocess.DEVNULL)
+    os.chdir(this_dir)
+
+
+def run(typ, mode=None):
+    dirname = "pypylogs_%s" % (get_time())
     if not os.path.exists(dirname):
         os.mkdir(dirname)
+
     env = setup_env()
     env, bm_path, benchmarks = setup_bm(typ)
     num = parse_args()
     for bm in benchmarks:
         for i in range(num):
             for exe_name, exe_path in COMMANDS:
-                if not os.path.exists('%s/%s' % (dirname, exe_name)):
-                    os.mkdir('%s/%s' % (dirname, exe_name))
-                log_output = '%s/%s/%s_%i.log' % (dirname, exe_name, bm, i+1)
-                env["PYPYLOG"] = "jit-summary:%s" % (log_output)
+                log_output = "%s/%s/%s_%s_%i.log" % (
+                    this_dir,
+                    dirname,
+                    exe_name,
+                    bm,
+                    i + 1,
+                )
+                if mode == "genext-stats":
+                    env["PYPYLOG"] = "jit-genext-stats:%s" % (log_output)
+                else:
+                    env["PYPYLOG"] = "jit-summary:%s" % (log_output)
+
                 target_path = bm_path + "%s.py" % (bm)
                 command = [exe_path, target_path]
                 print("Running %s against %s..." % (exe_name, bm))
-                subprocess.run(command, env=env, stdout=subprocess.DEVNULL)
+                if bm == "bm_icbd":
+                    run_icbd(env, exe_path)
+                else:
+                    subprocess.run(command, env=env, stdout=subprocess.DEVNULL)
 
-if __name__ == '__main__':
-    run('own')
+
+if __name__ == "__main__":
+    run("own")
     run('unladen_swallow')
