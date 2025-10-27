@@ -500,7 +500,6 @@ class UnboxedPlainAttribute(PlainAttribute):
         self.storageindex = storageindex
         self.listindex = listindex
 
-    @jit.warmup_critical_function
     def storage_needed(self):
         if self.firstunwrapped:
             return self.storageindex + 1
@@ -801,7 +800,6 @@ def _obj_setdict(self, space, w_dict):
     assert flag
 
 class MapdictStorageMixin(object):
-    @jit.warmup_critical_function
     def _get_mapdict_map(self):
         return jit.promote(self.map)
     def _set_mapdict_map(self, map):

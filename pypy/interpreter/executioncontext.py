@@ -139,7 +139,6 @@ class ExecutionContext(object):
             if self.profilefunc:
                 frame.getorcreatedebug().is_being_profiled = True
 
-    @warmup_critical_function
     def return_trace(self, frame, w_retval):
         "Trace the return from a function"
         if self.gettrace() is not None:

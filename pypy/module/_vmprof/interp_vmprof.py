@@ -15,7 +15,6 @@ my_execute_frame = _decorator(PyFrame.execute_frame)
 
 
 class __extend__(PyFrame):
-    @jit.warmup_critical_function
     def execute_frame(self, w_inputvalue=None, operr=None):
         # indirection for the optional arguments
         return my_execute_frame(self, w_inputvalue, operr)
