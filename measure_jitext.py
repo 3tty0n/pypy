@@ -8,6 +8,7 @@ BENCHMARKS = [
     'bm_chameleon', 'bm_dulwich_log', 'bm_icbd', 'bm_mako',
     'raytrace-simple', 'scimark', 'spectral-norm', 'spitfire',
     'telco', 'bm_gzip', 'bm_krakatau', 'bm_mdp', 'pyxl_bench',
+    'hexiom2', 'eparse', 'json_bench', 'pypy_interp', 'pyflate-fast'
 ]
 
 BENCHMARKS_UNLADEN_SWALLOW = [
@@ -34,8 +35,9 @@ def setup_env():
     env = os.environ.copy()
     env["PYTHONPATH"] = ':'.join(['benchmarks/lib/' + x for x in [
         'chameleon/src', 'dulwich-0.19.13', 'jinja2', 'pyxl',
-        'monte', 'monte', 'pytz', 'genshi', 'mako', 'sqlalchemy',
-        'sympy', 'sqlalchemy', 'genshi', 'twisted-trunk/twisted' ,
+        'monte', 'pytz', 'genshi', 'mako', 'sqlalchemy',
+        'sympy', 'sqlalchemy', 'genshi', 'twisted-trunk/twisted',
+        'pypy'
     ]])
     return env
 
@@ -75,4 +77,5 @@ def run(typ):
                 subprocess.run(command, env=env, stdout=subprocess.DEVNULL)
 
 if __name__ == '__main__':
+    run('own')
     run('unladen_swallow')
