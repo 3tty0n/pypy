@@ -14,6 +14,6 @@ BENCHMARKS_UNLADEN_SWALLOW = [
 
 
 COMMANDS = [
-    ("pypy-c", "pypy"),
-    ("pypy-jit-ext-c", "./pypy/goal/pypy-c")
+    ("pypy-c", "./pypy/goal/pypy-c"),
+    ("pypy-jit-ext-c", "./pypy/goal/pypy-jit-ext-c")
 ]
