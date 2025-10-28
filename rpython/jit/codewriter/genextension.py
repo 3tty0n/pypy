@@ -102,11 +102,13 @@ class GenExtension(object):
         self.precode.append("def jit_shortcut(self): # %s" % self.jitcode.name)
         self.precode.append("    pc = self.pc")
         for name in allconsts:
-            assert name[0] in 'ir'
+            assert name[0] in 'irf'
             if name[0] == 'i':
                 default = '0xcafedead'
-            else:
+            elif name[0] == 'r':
                 default = 'lltype.nullptr(llmemory.GCREF.TO)'
+            else: # float
+                default = '0.0'
             self.precode.append("    %s = %s" % (name, default))
         prefix = ""
         for pc in sorted(starting_points):
@@ -557,6 +559,14 @@ def _int_as_str(value, TYPE, add_global):
         return add_global(value)
     return str(val)
 
+
+def _float_as_str(value, TYPE, add_global):
+    val = lltype.cast_primitive(TYPE, value)
+    if isinstance(val, float):
+        return add_global(value)
+    return str(val)
+
+
 class Specializer(object):
     def __init__(self, insn, constant_registers, orig_pc, spec_pc, work_list):
         self.insn = insn
@@ -697,10 +707,54 @@ class Specializer(object):
     def emit_specialized_int_ne(self):
         return self._emit_specialized_int_binary("!=")
 
+    def emit_specialized_float_add(self):
+        return self._emit_specialized_float_binary("+")
+
+    def emit_specialized_float_mul(self):
+        return self._emit_specialized_float_binary("*")
+
+    def emit_specialized_float_sub(self):
+        return self._emit_specialized_float_binary("-")
+
+    def emit_specialized_float_truediv(self):
+        return self._emit_specialized_float_binary("/")
+
+    def emit_specialized_float_ge(self):
+        return self._emit_specialized_float_comparison(">=")
+
+    def emit_specialized_float_gt(self):
+        return self._emit_specialized_float_comparison(">")
+
+    def emit_specialized_float_le(self):
+        return self._emit_specialized_float_comparison("<=")
+
+    def emit_specialized_float_lt(self):
+        return self._emit_specialized_float_comparison("<")
+
+    def emit_specialized_float_eq(self):
+        return self._emit_specialized_float_comparison("==")
+
+    def emit_specialized_float_ne(self):
+        return self._emit_specialized_float_comparison("!=")
+
     def _emit_specialized_int_binary(self, op):
         arg0, arg1, result = self._get_args_and_res()
         lines = ["i%s = %s %s %s" % (result.index, self._get_as_unboxed(arg0),
                                      op, self._get_as_unboxed(arg1))]
+        self._emit_jump(lines)
+        return lines
+
+    def _emit_specialized_float_binary(self, op):
+        arg0, arg1, result = self._get_args_and_res()
+        lines = ["f%s = %s %s %s" % (result.index, self._get_as_unboxed(arg0),
+                                     op, self._get_as_unboxed(arg1))]
+        self._emit_jump(lines)
+        return lines
+
+    def _emit_specialized_float_comparison(self, op):
+        arg0, arg1, result = self._get_args_and_res()
+        lines = ["i%s = int(%s %s %s)" % (result.index, self._get_as_unboxed(arg0),
+                                          op, self._get_as_unboxed(arg1))]
         self._emit_jump(lines)
         return lines
 
@@ -781,6 +835,7 @@ class Specializer(object):
             return lines
         raise Unsupported
     emit_specialized_getfield_gc_r_pure = emit_specialized_getfield_gc_i_pure
+    emit_specialized_getfield_gc_f_pure = emit_specialized_getfield_gc_i_pure
 
     def emit_specialized_getarrayitem_gc_i_pure(self):
         lines = []
@@ -793,6 +848,7 @@ class Specializer(object):
         self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
         return lines
     emit_specialized_getarrayitem_gc_r_pure = emit_specialized_getarrayitem_gc_i_pure
+    emit_specialized_getarrayitem_gc_f_pure = emit_specialized_getarrayitem_gc_i_pure
 
     def emit_specialized_arraylen_gc(self):
         lines = []
@@ -968,7 +1024,7 @@ class Specializer(object):
                 kind = getkind(arg.concretetype)
             else:
                 kind = arg.kind
-            assert kind in ('int', 'ref')
+            assert kind in ('int', 'ref', 'float')
             return kind[0]
         else:
             m = re.search('%([i,r,f])[0-9]+', str(arg))
@@ -982,6 +1038,8 @@ class Specializer(object):
                 return _int_as_str(arg.value, arg.concretetype, self._add_global)
             if kind == 'ref':
                 return "lltype.cast_opaque_ptr(llmemory.GCREF, %s)" % self._add_global(arg.value)
+            if kind == 'float':
+                return _float_as_str(arg.value, arg.concretetype, self._add_global)
             raise Unsupported
         else:
             t = self._get_type_prefix(arg)
@@ -994,6 +1052,8 @@ class Specializer(object):
                 return "ConstInt(%s)" % (_int_as_str(arg.value, arg.concretetype, self._add_global), )
             elif kind == 'ref':
                 return "ConstPtr(lltype.cast_opaque_ptr(llmemory.GCREF, %s))" % self._add_global(arg.value)
+            elif kind == 'float':
+                return "ConstFloat(%s)" % (_float_as_str(arg.value, arg.concretetype, self._add_global), )
             else:
                 assert False
         elif arg in self.constant_registers:
@@ -1001,6 +1061,8 @@ class Specializer(object):
                 return "ConstInt(i%d)" % arg.index
             elif arg.kind == 'ref':
                 return "ConstPtr(r%d)" % arg.index
+            elif arg.kind == 'float':
+                return "ConstFloat(f%d)" % arg.index
             else:
                 assert False
         else:
@@ -1103,6 +1165,19 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
 
+    def _emit_unspecialized_float_binary(self):
+        lines = []
+        arg0, arg1, result = self._get_args_and_res()
+        self._emit_n_ary_if([arg0, arg1], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0, arg1}),
+                        indent='    ', target_pc=self.orig_pc)
+        lines.append("else:")
+        lines.append("    self.registers_f[%d] = self.%s(%s, %s)" % (
+            result.index, self.methodname,
+            self._get_as_box(arg0), self._get_as_box(arg1)))
+        self._emit_jump(lines)
+        return lines
+
     emit_unspecialized_int_add = _emit_unspecialized_binary
     emit_unspecialized_int_sub = _emit_unspecialized_binary
     emit_unspecialized_int_mul = _emit_unspecialized_binary
@@ -1116,6 +1191,43 @@ class Specializer(object):
     emit_unspecialized_int_gt = _emit_unspecialized_binary
     emit_unspecialized_int_eq = _emit_unspecialized_binary
     emit_unspecialized_int_ne = _emit_unspecialized_binary
+
+    emit_unspecialized_float_add = _emit_unspecialized_float_binary
+    emit_unspecialized_float_sub = _emit_unspecialized_float_binary
+    emit_unspecialized_float_mul = _emit_unspecialized_float_binary
+    emit_unspecialized_float_truediv = _emit_unspecialized_float_binary
+    emit_unspecialized_float_lt = _emit_unspecialized_float_binary
+    emit_unspecialized_float_le = _emit_unspecialized_float_binary
+    emit_unspecialized_float_eq = _emit_unspecialized_float_binary
+    emit_unspecialized_float_ne = _emit_unspecialized_float_binary
+    emit_unspecialized_float_gt = _emit_unspecialized_float_binary
+    emit_unspecialized_float_ge = _emit_unspecialized_float_binary
+
+    def emit_unspecialized_float_neg(self):
+        lines = []
+        arg0, result = self._get_args_and_res()
+        self._emit_n_ary_if([arg0], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0}),
+                        indent='    ', target_pc=self.orig_pc)
+        lines.append("else:")
+        lines.append("    self.registers_f[%d] = self.%s(%s)" % (
+            result.index, self.methodname,
+            self._get_as_box(arg0)))
+        self._emit_jump(lines)
+        return lines
+
+    def emit_unspecialized_float_abs(self):
+        lines = []
+        arg0, result = self._get_args_and_res()
+        self._emit_n_ary_if([arg0], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0}),
+                        indent='    ', target_pc=self.orig_pc)
+        lines.append("else:")
+        lines.append("    self.registers_f[%d] = self.%s(%s)" % (
+            result.index, self.methodname,
+            self._get_as_box(arg0)))
+        self._emit_jump(lines)
+        return lines
 
     def emit_unspecialized_int_invert(self):
         lines = []
@@ -1217,6 +1329,7 @@ class Specializer(object):
             return lines
         raise Unsupported
     emit_unspecialized_getfield_gc_r_pure = emit_unspecialized_getfield_gc_i_pure
+    emit_unspecialized_getfield_gc_f_pure = emit_unspecialized_getfield_gc_i_pure
 
     def emit_unspecialized_getfield_vable_i(self):
         arg, descr, result = self._get_args_and_res()
@@ -1241,6 +1354,7 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
     emit_unspecialized_getfield_vable_r = emit_unspecialized_getfield_vable_i
+    emit_unspecialized_getfield_vable_f = emit_unspecialized_getfield_vable_i
 
     def emit_unspecialized_setfield_vable_i(self):
         arg0, arg1, descr = self._get_args()
@@ -1339,6 +1453,7 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
     emit_unspecialized_getarrayitem_gc_r_pure = emit_unspecialized_getarrayitem_gc_i_pure
+    emit_unspecialized_getarrayitem_gc_f_pure = emit_unspecialized_getarrayitem_gc_i_pure
 
     def emit_unspecialized_arraylen_gc(self):
         lines = []
@@ -1361,6 +1476,7 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
     emit_unspecialized_ref_copy = emit_unspecialized_int_copy
+    emit_unspecialized_float_copy = emit_unspecialized_int_copy
 
     def emit_unspecialized_int_between(self):
         args = self._get_args()
@@ -1639,6 +1755,8 @@ def _find_result_cast(RES):
             return 'support.ptr2int('
     elif kind == 'ref':
         return 'lltype.cast_opaque_ptr(llmemory.GCREF, '
+    elif kind == 'float':
+        return '('
     raise Unsupported
 
 def _make_register_syncer(constant_registers, cache={}):
@@ -1654,11 +1772,13 @@ def _make_register_syncer(constant_registers, cache={}):
             val = "ConstInt(i%d)" % reg.index
         elif reg.kind == 'ref':
             val = "ConstPtr(r%d)" % reg.index
+        elif reg.kind == 'float':
+            val = "ConstFloat(f%d)" % reg.index
         else:
             assert 0
         lines.append('    self.registers_%s[%d] = %s' % (reg.kind[0], reg.index, val))
     source = py.code.Source("\n".join(lines))
-    d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr}
+    d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr, "ConstFloat": ConstFloat}
     exec source.compile() in d
     res = objectmodel.dont_inline(d[name])
     cache[key] = res, args
