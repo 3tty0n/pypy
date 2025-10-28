@@ -22,8 +22,9 @@ def parse_args():
     parser = argparse.ArgumentParser(prog="Measuring the jit summary data")
     parser.add_argument("-n", "--number", type=int)
     parser.add_argument("-d", "--dir", type=str)
+    parser.add_argument("-b", "--benchmark", type=str)
     args = parser.parse_args()
-    return args.number, args.dir
+    return args.number, args.dir, args.benchmark
 
 
 def run_icbd(env, exe_path, arg=None):
@@ -49,8 +50,7 @@ def run_icbd(env, exe_path, arg=None):
 WARMUP_NUMBER = 2
 
 
-def run(typ, mode=None):
-    num, dirname = parse_args()
+def run(num, dirname, typ, mode=None):
     if not dirname:
         dirname = "pypylogs_%s" % (get_time())
     if not os.path.exists(dirname):
@@ -96,4 +96,5 @@ def run(typ, mode=None):
 
 
 if __name__ == "__main__":
-    run('own')
+    num, dirname, typ = parse_args()
+    run(num, dirname, typ)

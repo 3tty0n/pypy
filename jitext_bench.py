@@ -7,7 +7,6 @@ BENCHMARKS_OWN_MACRO = [
     "bm_gzip",
     "bm_krakatau",
     "bm_mdp",
-    "bm_gzip",
     "bm_sympy",
     "go",
     "pyxl_bench",
