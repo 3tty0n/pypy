@@ -1,6 +1,9 @@
 import os
 
 BENCHMARKS_OWN_MACRO = [
+    "bm_dulwich_log",
+    "sqlalchemy_declarative",
+    "sqlalchemy_imperative",
     "bm_gzip",
     "bm_krakatau",
     "bm_mdp",
@@ -8,14 +11,13 @@ BENCHMARKS_OWN_MACRO = [
     "bm_sympy",
     "go",
     "pyxl_bench",
-    "json_bench",
     "pypy_interp",
+    "eparse",
     "bm_icbd",
 ]
 
 BENCHMARKS_OWN_MICRO = [
     "bm_chameleon",
-    "bm_dulwich_log",
     "bm_genshi",
     "crypto_pyaes",
     "deltablue",
@@ -26,11 +28,9 @@ BENCHMARKS_OWN_MICRO = [
     "raytrace-simple",
     "spectral-norm",
     "spitfire",
-    "sqlalchemy_declarative",
-    "sqlalchemy_imperative",
     "sqlitesynth",
     "hexiom2",
-    "eparse",
+    "json_bench",
 ]
 
 BENCHMARKS_UNLADEN_SWALLOW = [
