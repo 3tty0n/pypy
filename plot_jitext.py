@@ -6,7 +6,7 @@ import argparse
 
 from statistics import geometric_mean, median, variance, mean
 
-from bm import *
+from jitext_bench import *
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -14,8 +14,9 @@ def parse_args():
     )
     parser.add_argument('-n', '--number', type=int)
     parser.add_argument('-d', '--dir', type=str)
+    parser.add_argument('-b' ,'--benchmark', type=str)
     args = parser.parse_args()
-    return args.number, args.dir
+    return args.number, args.dir, args.benchmark
 
 def parse_jit_summary(path):
     result = dict()
@@ -30,10 +31,10 @@ def parse_jit_summary(path):
                 result["Tracing"] = time
     return result
 
-def collect_data(num, dirname):
+def collect_data(num, dirname, benchmarks):
     result = {}
     for exe_name, _ in COMMANDS:
-        for bm in BENCHMARKS:
+        for bm in benchmarks:
             for i in range(num):
                 path = dirname + "/" + exe_name + "_" + bm + "_" + str(i+1) + ".log"
                 jit_summary = parse_jit_summary(path)
@@ -50,12 +51,12 @@ def collect_data(num, dirname):
     return result
 
 
-def measure(num, dirname):
-    result = collect_data(num, dirname)
+def measure(num, dirname, benchmarks):
+    result = collect_data(num, dirname, benchmarks)
     output_ave = {}
     output_var = {}
     for exe_name, _ in COMMANDS:
-        for bm in BENCHMARKS:
+        for bm in benchmarks:
             if bm == 'scimark': continue
             ave = mean(result[exe_name][bm])
             var = variance(result[exe_name][bm])
@@ -73,7 +74,7 @@ def measure(num, dirname):
 def measure_genext_stats(dirname):
     pass
 
-def plot(output_ave, output_var):
+def plot(output_ave, output_var, dirname):
 
     df_ave = pd.DataFrame(output_ave)
     df_var = pd.DataFrame(output_var)
@@ -84,10 +85,10 @@ def plot(output_ave, output_var):
     fig, axes = plt.subplots(1, 2, gridspec_kw={'width_ratios': [9, 1]})
 
     df_ave.plot.bar(yerr=df_var, ax=axes[0], title='Tracing time', ylabel='time (s)')
-    df_ave.mean().plot.bar(ax=axes[1], ylim=[0, 0.5], title='average')
+    df_ave.mean().plot.bar(ax=axes[1], ylim=[0, 0.9], title='average')
 
     plt.tight_layout()
-    plt.savefig('pypylogs_tracing_time.pdf')
+    plt.savefig('%s_tracing_time.pdf' % (dirname))
 
     fig, ax = plt.subplots()
 
@@ -97,10 +98,11 @@ def plot(output_ave, output_var):
     ax.axhline(1.0)
 
     plt.tight_layout()
-    plt.savefig('pypylogs_tracing_time_norm.pdf')
+    plt.savefig('%s_tracing_time_norm.pdf' % (dirname))
 
 
 if __name__ == '__main__':
-    num, dirname = parse_args()
-    output_ave, output_var = measure(num, dirname)
-    plot(output_ave, output_var)
+    num, dirname, bm_typ = parse_args()
+    benchmarks = setup_bms(bm_typ)
+    output_ave, output_var = measure(num, dirname, benchmarks)
+    plot(output_ave, output_var, dirname)
