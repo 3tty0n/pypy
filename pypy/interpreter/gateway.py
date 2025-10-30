@@ -29,6 +29,7 @@ from rpython.tool.sourcetools import func_with_new_name, compile2
 
 from rpython.rlib.signature import signature, finishsigs
 from rpython.rlib import types as sigtypes
+from rpython.rlib import jit
 
 
 # internal non-translatable parts:
@@ -842,6 +843,7 @@ class BuiltinCodePassThroughArguments1(BuiltinCode):
     _immutable_ = True
     fast_natural_arity = Code.PASSTHROUGHARGS1
 
+    @jit.warmup_critical_function
     def funcrun_obj(self, func, w_obj, args):
         space = func.space
         try:
@@ -860,6 +862,7 @@ class BuiltinCode0(BuiltinCode):
     _immutable_ = True
     fast_natural_arity = 0
 
+    @jit.warmup_critical_function
     def fastcall_0(self, space, w_func):
         try:
             w_result = self.fastfunc_0(space)
@@ -883,6 +886,7 @@ class BuiltinCode1(BuiltinCode):
                w_root_or_none,
                w_root_or_none,
                returns=w_root_or_none)
+    @jit.warmup_critical_function
     def fastcall_1(self, space, w_func, w1):
         try:
             w_result = self.fastfunc_1(space, w1)
@@ -907,6 +911,7 @@ class BuiltinCode2(BuiltinCode):
                w_root_or_none,
                w_root_or_none,
                returns=w_root_or_none)
+    @jit.warmup_critical_function
     def fastcall_2(self, space, w_func, w1, w2):
         try:
             w_result = self.fastfunc_2(space, w1, w2)
@@ -932,6 +937,7 @@ class BuiltinCode3(BuiltinCode):
                w_root_or_none,
                w_root_or_none,
                returns=w_root_or_none)
+    @jit.warmup_critical_function
     def fastcall_3(self, space, func, w1, w2, w3):
         try:
             w_result = self.fastfunc_3(space, w1, w2, w3)
@@ -957,6 +963,7 @@ class BuiltinCode4(BuiltinCode):
                w_root_or_none,
                w_root_or_none,
                returns=w_root_or_none)
+    @jit.warmup_critical_function
     def fastcall_4(self, space, func, w1, w2, w3, w4):
         from rpython.rlib.debug import check_annotation
         try:

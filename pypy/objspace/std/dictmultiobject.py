@@ -195,6 +195,7 @@ class W_DictMultiObject(W_Root):
     def descr_contains(self, space, w_key):
         return space.newbool(self.getitem(w_key) is not None)
 
+    @jit.warmup_critical_function
     def descr_getitem(self, space, w_key):
         w_value = self.getitem(w_key)
         if w_value is not None:
@@ -513,6 +514,7 @@ class DictStrategy(object):
     def getitem(self, w_dict, w_key):
         raise NotImplementedError
 
+    @jit.warmup_critical_function
     def getitem_str(self, w_dict, key):
         return w_dict.getitem(self.space.newtext(key))
 
@@ -1094,6 +1096,7 @@ class AbstractTypedStrategy(object):
     def length(self, w_dict):
         return len(self.unerase(w_dict.dstorage))
 
+    @jit.warmup_critical_function
     def getitem(self, w_dict, w_key):
         space = self.space
         if self.is_correct_type(w_key):
@@ -1255,6 +1258,7 @@ class BytesDictStrategy(AbstractTypedStrategy, DictStrategy):
         assert key is not None
         self.unerase(w_dict.dstorage)[key] = w_value
 
+    @jit.warmup_critical_function
     def getitem(self, w_dict, w_key):
         space = self.space
         # -- This is called extremely often.  Hack for performance --
@@ -1263,6 +1267,7 @@ class BytesDictStrategy(AbstractTypedStrategy, DictStrategy):
         # -- End of performance hack --
         return AbstractTypedStrategy.getitem(self, w_dict, w_key)
 
+    @jit.warmup_critical_function
     def getitem_str(self, w_dict, key):
         assert key is not None
         return self.unerase(w_dict.dstorage).get(key, None)

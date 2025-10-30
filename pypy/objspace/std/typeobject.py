@@ -444,6 +444,7 @@ class W_TypeObject(W_Root):
                 return w_class, w_value
         return None, None
 
+    @warmup_critical_function
     def _lookup_where_all_typeobjects(self, key):
         # like _lookup_where(), but when we know that self.mro_w only
         # contains W_TypeObjects.  (It differs from _lookup_where() mostly
@@ -652,6 +653,7 @@ class W_TypeObject(W_Root):
     def delweakref(self):
         self._lifeline_ = None
 
+    @warmup_critical_function
     def descr_call(self, space, __args__):
         promote(self)
         # invoke the __new__ of the type
@@ -753,6 +755,7 @@ class W_TypeObject(W_Root):
     def iterator_greenkey_printable(self):
         return self.name
 
+    @warmup_critical_function
     def descr_getattribute(self, space, w_name):
         name = space.text_w(w_name)
         w_descr = space.lookup(self, name)
