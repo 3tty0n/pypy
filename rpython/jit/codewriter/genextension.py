@@ -1026,6 +1026,22 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
 
+    def emit_specialized_strlen(self):
+        arg0 = self.insn[1]
+        result = self.insn[self.resindex]
+        lines = ["i%s = len(lltype.cast_opaque_ptr(lltype.Ptr(rstr.STR), r%d).chars)" % (
+            result.index, arg0.index)]
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_unicodelen(self):
+        arg0, = self._get_args()
+        result = self.insn[self.resindex]
+        lines = ["i%s = len(lltype.cast_opaque_ptr(lltype.Ptr(rstr.UNICODE), r%d).chars)" % (
+            result.index, arg0.index)]
+        self._emit_jump(lines)
+        return lines
+
     def _get_type_prefix(self, arg):
         if isinstance(arg, Constant) or isinstance(arg, Register):
             # TODO: this logic also works for the 'else' case. probably.
@@ -1668,6 +1684,36 @@ class Specializer(object):
         return lines
     emit_specialized_void_return = emit_void_return
     emit_unspecialized_void_return = emit_void_return
+
+    def emit_unspecialized_strlen(self):
+        lines = []
+        arg0 = self.insn[1]
+        result = self.insn[self.resindex]
+        self._emit_n_ary_if([arg0], lines)
+        specializer = self.work_list.specialize_insn(
+            self.insn, self.constant_registers.union({arg0}), self.orig_pc)
+        lines.append("    pc = %d" % (specializer.get_pc()))
+        lines.append("    continue")
+        lines.append("else:")
+        lines.append("    self.registers_i[%d] = self.opimpl_strlen(%s)" % (
+            result.index, self._get_as_box(arg0)))
+        self._emit_jump(lines)
+        return lines
+
+    def emit_unspecialized_unicodelen(self):
+        lines = []
+        arg0 = self.insn[1]
+        result = self.insn[self.resindex]
+        self._emit_n_ary_if([arg0], lines)
+        specializer = self.work_list.specialize_insn(
+            self.insn, self.constant_registers.union({arg0}), self.orig_pc)
+        lines.append("    pc = %d" % (specializer.get_pc()))
+        lines.append("    continue")
+        lines.append("else:")
+        lines.append("    self.registers_i[%d] = self.opimpl_unicodelen(%s)" % (
+            result.index, self._get_as_box(arg0)))
+        self._emit_jump(lines)
+        return lines
 
     def emit_unspecialized_live(self):
         lines = []

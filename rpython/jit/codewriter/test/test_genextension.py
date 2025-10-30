@@ -1458,3 +1458,46 @@ def test_float_add():
     assert s == """f2 = f0 + f1
 pc = 108
 continue"""
+
+
+def test_strlen_unicodelen():
+    r0, i1 = Register('ref', 0), Register('int', 1)
+    insn = ('strlen', r0, '->', i1)
+    work_list = WorkList({5: insn, 7: ('void_return',)}, pc_to_nextpc={5: 7})
+    insn_specializer = work_list.specialize_insn(insn, {r0, i1}, 5)
+    s = insn_specializer.make_code()
+    assert s == """i1 = len(lltype.cast_opaque_ptr(lltype.Ptr(rstr.STR), r0).chars)
+pc = 108
+continue"""
+
+    insn_specializer = work_list.specialize_insn(insn, set(), 5)
+    s = insn_specializer.make_code()
+    assert s == """rr0 = self.registers_r[0]
+if isinstance(rr0, ConstPtr):
+    r0 = rr0.getref_base()
+    pc = 109
+    continue
+else:
+    self.registers_i[1] = self.opimpl_strlen(rr0)
+pc = 7
+continue"""
+
+    insn = ('unicodelen', r0, '->', i1)
+    work_list = WorkList({5: insn, 7: ('void_return',)}, pc_to_nextpc={5: 7})
+    insn_specializer = work_list.specialize_insn(insn, {r0, i1}, 5)
+    s = insn_specializer.make_code()
+    assert s == """i1 = len(lltype.cast_opaque_ptr(lltype.Ptr(rstr.UNICODE), r0).chars)
+pc = 108
+continue"""
+
+    insn_specializer = work_list.specialize_insn(insn, set(), 5)
+    s = insn_specializer.make_code()
+    assert s == """rr0 = self.registers_r[0]
+if isinstance(rr0, ConstPtr):
+    r0 = rr0.getref_base()
+    pc = 109
+    continue
+else:
+    self.registers_i[1] = self.opimpl_unicodelen(rr0)
+pc = 7
+continue"""
