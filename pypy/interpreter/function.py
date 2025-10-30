@@ -82,6 +82,7 @@ class Function(W_Root):
             return jit.promote(self.code)
         return self.code
 
+    @jit.warmup_critical_function
     def funccall(self, *args_w): # speed hack
         from pypy.interpreter import gateway
         from pypy.interpreter.pycode import PyCode
@@ -503,6 +504,7 @@ class Method(W_Root):
             pre = "unbound"
         return "%s method %s" % (pre, self.w_function.getname(self.space))
 
+    @jit.warmup_critical_function
     def call_args(self, args):
         space = self.space
         if self.w_instance is not None:

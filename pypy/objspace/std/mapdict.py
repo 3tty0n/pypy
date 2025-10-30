@@ -267,6 +267,7 @@ class Terminator(AbstractAttribute):
     def _read_terminator(self, obj, name, attrkind):
         return None
 
+    @jit.warmup_critical_function
     def _write_terminator(self, obj, name, attrkind, w_value):
         obj._get_mapdict_map().add_attr(obj, name, attrkind, w_value)
         if attrkind == DICT and obj._get_mapdict_map().num_attributes() >= LIMIT_MAP_ATTRIBUTES:
@@ -564,6 +565,7 @@ class UnboxedPlainAttribute(PlainAttribute):
         # more, because allow_unboxing is False
         map.write(obj, self.name, self.attrkind, w_value)
 
+    @jit.warmup_critical_function
     def _switch_map_and_write_storage(self, obj, w_value):
         from rpython.rlib.debug import make_sure_not_resized
         val = self._unbox(w_value)
