@@ -995,10 +995,115 @@ i3 = i0 <= i1 < i2
 pc = 118
 continue"""
 
+def test_int_xor():
+    i0, i1, i2, i3 = Register('int', 0), Register('int', 1), Register('int', 2), Register('int', 3)
+    insn = ('int_xor', i0, i1, '->', i2)
+    pc_to_insn = {5: insn, 17: ('int_add', i0, i1, '->', i2), 6: ('int_return', i3)}
+
+    # unspecialized case
+    # every register is unconstant
+    work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
+    insn_specializer = work_list.specialize_pc(set(), 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == 5
+    s = insn_specializer.make_code()
+    assert s == """\
+ri0 = self.registers_i[0]
+ri1 = self.registers_i[1]
+if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
+    i0 = ri0.getint()
+    i1 = ri1.getint()
+    pc = 117
+    continue
+else:
+    self.registers_i[2] = self.opimpl_int_xor(ri0, ri1)
+pc = 6
+continue"""
+
+    work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
+    insn_specializer = work_list.specialize_pc({i0, i1, i2, i3}, 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == work_list.OFFSET + max(pc_to_insn)
+    s = insn_specializer.make_code()
+    assert s == """\
+i2 = i0 ^ i1
+pc = 118
+continue"""
+
+def test_int_mod():
+    i0, i1, i2, i3 = Register('int', 0), Register('int', 1), Register('int', 2), Register('int', 3)
+    insn = ('int_mod', i0, i1, '->', i2)
+    pc_to_insn = {5: insn, 17: ('int_add', i0, i1, '->', i2), 6: ('int_return', i3)}
+
+    # unspecialized case
+    # every register is unconstant
+    work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
+    insn_specializer = work_list.specialize_pc(set(), 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == 5
+    s = insn_specializer.make_code()
+    assert s == """\
+ri0 = self.registers_i[0]
+ri1 = self.registers_i[1]
+if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
+    i0 = ri0.getint()
+    i1 = ri1.getint()
+    pc = 117
+    continue
+else:
+    self.registers_i[2] = self.opimpl_int_mod(ri0, ri1)
+pc = 6
+continue"""
+
+    work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
+    insn_specializer = work_list.specialize_pc({i0, i1, i2, i3}, 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == work_list.OFFSET + max(pc_to_insn)
+    s = insn_specializer.make_code()
+    assert s == """\
+i2 = i0 % i1
+pc = 118
+continue"""
+
+def test_int_floordiv():
+    i0, i1, i2, i3 = Register('int', 0), Register('int', 1), Register('int', 2), Register('int', 3)
+    insn = ('int_floordiv', i0, i1, '->', i2)
+    pc_to_insn = {5: insn, 17: ('int_add', i0, i1, '->', i2), 6: ('int_return', i3)}
+
+    # unspecialized case
+    # every register is unconstant
+    work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
+    insn_specializer = work_list.specialize_pc(set(), 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == 5
+    s = insn_specializer.make_code()
+    assert s == """\
+ri0 = self.registers_i[0]
+ri1 = self.registers_i[1]
+if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
+    i0 = ri0.getint()
+    i1 = ri1.getint()
+    pc = 117
+    continue
+else:
+    self.registers_i[2] = self.opimpl_int_floordiv(ri0, ri1)
+pc = 6
+continue"""
+
+    work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
+    insn_specializer = work_list.specialize_pc({i0, i1, i2, i3}, 5)
+    newpc = insn_specializer.get_pc()
+    assert newpc == work_list.OFFSET + max(pc_to_insn)
+    s = insn_specializer.make_code()
+    assert s == """\
+i2 = i0 // i1
+pc = 118
+continue"""
+
 def test_int_guard_value():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
     insn = ('int_guard_value', i0)
-    work_list = WorkList({5: insn, 6: ('int_return', 6)}, pc_to_nextpc={5: 6})
+    work_list = WorkList({5: insn, 6: ('int_xor', 6)}, pc_to_nextpc={5: 6})
 
     # specialized case
     insn_specializer = work_list.specialize_insn(insn, {i0}, 5)

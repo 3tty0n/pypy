@@ -707,6 +707,15 @@ class Specializer(object):
     def emit_specialized_int_ne(self):
         return self._emit_specialized_int_binary("!=")
 
+    def emit_specialized_int_xor(self):
+        return self._emit_specialized_int_binary("^")
+
+    def emit_specialized_int_mod(self):
+        return self._emit_specialized_int_binary("%")
+
+    def emit_specialized_int_floordiv(self):
+        return self._emit_specialized_int_binary("//")
+
     def emit_specialized_float_add(self):
         return self._emit_specialized_float_binary("+")
 
@@ -1191,6 +1200,9 @@ class Specializer(object):
     emit_unspecialized_int_gt = _emit_unspecialized_binary
     emit_unspecialized_int_eq = _emit_unspecialized_binary
     emit_unspecialized_int_ne = _emit_unspecialized_binary
+    emit_unspecialized_int_xor = _emit_unspecialized_binary
+    emit_unspecialized_int_mod = _emit_unspecialized_binary
+    emit_unspecialized_int_floordiv = _emit_unspecialized_binary
 
     emit_unspecialized_float_add = _emit_unspecialized_float_binary
     emit_unspecialized_float_sub = _emit_unspecialized_float_binary
