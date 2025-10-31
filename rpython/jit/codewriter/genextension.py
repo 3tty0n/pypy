@@ -5,7 +5,8 @@ from rpython.jit.metainterp.history import (Const, ConstInt, ConstPtr,
     ConstFloat, CONST_NULL, getkind, AbstractDescr)
 from rpython.jit.metainterp import support
 from rpython.flowspace.model import Constant
-from rpython.jit.codewriter.flatten import Register, TLabel, Label, ListOfKind
+from rpython.jit.codewriter.flatten import (
+    Register, TLabel, Label, ListOfKind, IndirectCallTargets)
 from rpython.jit.codewriter.jitcode import SwitchDictDescr
 from rpython.rtyper.lltypesystem import lltype, llmemory, rstr
 from rpython.rtyper.rclass import OBJECTPTR
@@ -1876,59 +1877,128 @@ class Specializer(object):
         return lines
     emit_specialized_live = emit_unspecialized_live
 
-    def DONT_emit_unspecialized_residual_call_r_r(self):
-        effectinfo = self.insn[-3].get_extra_info()
-        if effectinfo.check_forces_virtual_or_virtualizable() or not effectinfo.check_is_elidable():
+    def _prepare_residual_call(self):
+        args = list(self._get_args())
+        descr = args[-1]
+        effectinfo = descr.get_extra_info()
+        if (effectinfo.check_forces_virtual_or_virtualizable() or
+            not effectinfo.check_is_elidable()):
             raise Unsupported
+        function = args[0]
+        middle = args[1:-1]
+        list_args = []
+        extra_args = []
+        for item in middle:
+            if isinstance(item, ListOfKind):
+                list_args.append(item)
+            else:
+                extra_args.append(item)
+        for item in extra_args:
+            if not isinstance(item, IndirectCallTargets):
+                raise Unsupported
+        flat_args = []
+        for lst in list_args:
+            flat_args.extend(lst.content)
+        descrglob = self._add_global(descr)
+        register_args = [arg for arg in [function] + flat_args
+                         if isinstance(arg, Register)]
+        nonconst_register_args = [arg for arg in register_args
+                                  if arg not in self.constant_registers]
+        return (function, flat_args, descrglob,
+                register_args, nonconst_register_args)
+
+    def _emit_residual_call_body(self, funcbox_expr, boxes_expr, descrglob,
+                                 sync_reg, indent=''):
         lines = []
-        function, listofkindargs, descr = self._get_args()
-        args = listofkindargs.content
-        self._emit_n_ary_if(args, lines)
-        specializer = self.work_list.specialize_insn(
-            self.insn, self.constant_registers.union(set(args)), self.orig_pc)
-        lines.append("    pc = %d" % (specializer.get_pc(), ))
-        lines.append("    continue")
-        boxes = '[' + ", ".join(self._get_as_box(arg) for arg in args) + "]"
-        if isinstance(function, Const):
-            # the target is a constant at jitcode construction time, that means
-            # it will always be a residual call, not an inlining call. thus we
-            # can skip the dictionary lookup and call do_residual_call
-            miframe_method = "do_residual_call"
+        if sync_reg:
+            self._emit_sync_registers(lines, indent=indent)
+
+        if isinstance(funcbox_expr, Const):
+            call_target = "self.do_residual_call_or_indirect"
         else:
-            miframe_method = "do_residual_or_indirect_call"
-        self._emit_sync_registers(lines)
-        lines.append("self.%s(%s, %s, %s, %s)" % (
-            miframe_method, self._get_as_box(function),
-            boxes,
-            self._add_global(descr),
-            self.orig_pc))
-        self._emit_jump(lines)
+            call_target = "self.do_residual_call"
+
+        call_expr = "%s(%s, %s, %s, %s)" % (
+            call_target, funcbox_expr, boxes_expr, descrglob, self.orig_pc)
+        res = self.insn[self.resindex] if self.resindex is not None else None
+        if res is not None:
+            boxvar = self._get_new_temp_variable()
+            lines.append("%s%s = %s" % (indent, boxvar, call_expr))
+            lines.append("%s%s = %s.%s()" % (
+                indent, self._get_as_unboxed(res), boxvar,
+                _get_primval_by_kind(res.kind)))
+            if sync_reg:
+                lines.append("%sself.registers_%s[%s] = %s" % (
+                    indent, res.kind[0], res.index, boxvar))
+                next_consts = self.constant_registers - {res}
+            else:
+                next_consts = self.constant_registers.union({res})
+        else:
+            lines.append("%s%s" % (indent, call_expr))
+            next_consts = self.constant_registers
+        self._emit_jump(lines, constant_registers=next_consts, indent=indent)
         return lines
 
-    def DONT_emit_specialized_residual_call_r_r(self):
-        effectinfo = self.insn[-3].get_extra_info()
-        if effectinfo.check_forces_virtual_or_virtualizable() or not effectinfo.check_is_elidable():
-            raise Unsupported
+    def _emit_unspecialized_residual_call_common(self):
+        (function, flat_args, descrglob, register_args, nonconst_register_args) \
+            = self._prepare_residual_call()
         lines = []
-        function, listofkindargs, descr = self._get_args()
-        args = listofkindargs.content
-        boxes = '[' + ", ".join(self._get_as_box(arg) for arg in args) + "]"
-        if isinstance(function, Const):
-            # the target is a constant at jitcode construction time, that means
-            # it will always be a residual call, not an inlining call. thus we
-            # can skip the dictionary lookup and call do_residual_call
-            miframe_method = "do_residual_call"
-        else:
-            miframe_method = "do_residual_or_indirect_call"
-        # XXX do the call instead
-        self._emit_sync_registers(lines)
-        lines.append("self.%s(%s, %s, %s, %s)" % (
-            miframe_method, self._get_as_box(function),
-            boxes,
-            self._add_global(descr),
-            self.orig_pc))
-        self._emit_jump(lines)
-        return lines
+        indent = ''
+        if nonconst_register_args:
+            self._emit_n_ary_if(nonconst_register_args, lines)
+            specializer = self.work_list.specialize_insn(
+                self.insn,
+                self.constant_registers.union(set(register_args)),
+                self.orig_pc)
+            lines.append("    pc = %d" % specializer.get_pc())
+            lines.append("    continue")
+            lines.append("else:")
+            indent = '    '
+        for arg in [function] + flat_args:
+            self._emit_box_by_type(arg, lines, indent=indent)
+        funcbox = self._get_as_box_after_sync(function)
+        box_items = [self._get_as_box_after_sync(arg) for arg in flat_args]
+        boxes_expr = '[' + ', '.join(box_items) + ']' if box_items else '[]'
+        return lines + self._emit_residual_call_body(
+            funcbox, boxes_expr, descrglob, sync_reg=True, indent=indent)
+
+    def _emit_specialized_residual_call_common(self):
+        function, flat_args, descrglob, _, _ = self._prepare_residual_call()
+        funcbox_expr = self._get_as_box(function)
+        box_items = [self._get_as_box(arg) for arg in flat_args]
+        boxes_expr = '[' + ', '.join(box_items) + ']' if box_items else '[]'
+        return self._emit_residual_call_body(
+            funcbox_expr, boxes_expr, descrglob, sync_reg=False)
+
+    def emit_unspecialized_residual_call_r_r(self):
+        return self._emit_unspecialized_residual_call_common()
+
+    emit_unspecialized_residual_call_r_i = emit_unspecialized_residual_call_r_r
+    emit_unspecialized_residual_call_r_f = emit_unspecialized_residual_call_r_r
+    emit_unspecialized_residual_call_r_v = emit_unspecialized_residual_call_r_r
+    emit_unspecialized_residual_call_ir_i = emit_unspecialized_residual_call_r_r
+    emit_unspecialized_residual_call_ir_r = emit_unspecialized_residual_call_r_r
+    emit_unspecialized_residual_call_ir_f = emit_unspecialized_residual_call_r_r
+    emit_unspecialized_residual_call_ir_v = emit_unspecialized_residual_call_r_r
+    emit_unspecialized_residual_call_irf_i = emit_unspecialized_residual_call_r_r
+    emit_unspecialized_residual_call_irf_r = emit_unspecialized_residual_call_r_r
+    emit_unspecialized_residual_call_irf_f = emit_unspecialized_residual_call_r_r
+    emit_unspecialized_residual_call_irf_v = emit_unspecialized_residual_call_r_r
+
+    def emit_specialized_residual_call_r_r(self):
+        return self._emit_specialized_residual_call_common()
+
+    emit_specialized_residual_call_r_i = emit_specialized_residual_call_r_r
+    emit_specialized_residual_call_r_f = emit_specialized_residual_call_r_r
+    emit_specialized_residual_call_r_v = emit_specialized_residual_call_r_r
+    emit_specialized_residual_call_ir_i = emit_specialized_residual_call_r_r
+    emit_specialized_residual_call_ir_r = emit_specialized_residual_call_r_r
+    emit_specialized_residual_call_ir_f = emit_specialized_residual_call_r_r
+    emit_specialized_residual_call_ir_v = emit_specialized_residual_call_r_r
+    emit_specialized_residual_call_irf_i = emit_specialized_residual_call_r_r
+    emit_specialized_residual_call_irf_r = emit_specialized_residual_call_r_r
+    emit_specialized_residual_call_irf_f = emit_specialized_residual_call_r_r
+    emit_specialized_residual_call_irf_v = emit_specialized_residual_call_r_r
 
     def _emit_sync_registers(self, lines, indent=''):
         # we need to sync the registers from the unboxed values to e.g. allow a guard to be created

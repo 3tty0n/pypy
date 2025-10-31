@@ -1,8 +1,13 @@
+import re
+
 from rpython.flowspace.model import Constant
 from rpython.jit.codewriter.jitcode import SwitchDictDescr
-from rpython.jit.codewriter.flatten import SSARepr, Label, TLabel, Register
+from rpython.jit.codewriter.flatten import (
+    SSARepr, Label, TLabel, Register, ListOfKind)
 from rpython.jit.codewriter.assembler import Assembler, AssemblerError
+from rpython.jit.codewriter.effectinfo import EffectInfo
 from rpython.rtyper.lltypesystem import lltype, llmemory
+from rpython.jit.metainterp.history import AbstractDescr
 from rpython.jit.codewriter.genextension import WorkList
 
 import pytest
@@ -1501,3 +1506,42 @@ else:
     self.registers_i[1] = self.opimpl_unicodelen(rr0)
 pc = 7
 continue"""
+
+
+def test_residual_call():
+    class FakeCallDescr(AbstractDescr):
+        def __init__(self, effectinfo):
+            self.effectinfo = effectinfo
+
+        def get_extra_info(self):
+            return self.effectinfo
+
+    effectinfo = EffectInfo([], [], [], [], [], [],
+                            extraeffect=EffectInfo.EF_ELIDABLE_CAN_RAISE)
+    descr = FakeCallDescr(effectinfo)
+    i0, i1 = Register('int', 0), Register('int', 1)
+    func = Constant(llmemory.NULL, llmemory.GCREF)
+    insn = ('residual_call_ir_i', func,
+            ListOfKind('int', [i0]), ListOfKind('ref', []), descr, '->', i1)
+    work_list = WorkList({5: insn, 7: ('int_return', i1)}, pc_to_nextpc={5: 7})
+    insn_specializer = work_list.specialize_insn(insn, {i0, i1}, 5)
+    s = insn_specializer.make_code()
+    assert s == """v0 = self.do_residual_call(ConstPtr(lltype.cast_opaque_ptr(llmemory.GCREF, glob1)), [ConstInt(i0)], glob0, 5)
+i1 = v0.getint()
+pc = 108
+continue"""
+
+    insn_specializer = work_list.specialize_insn(insn, set(), 5)
+    s = insn_specializer.make_code()
+    assert s == """ri0 = self.registers_i[0]
+if isinstance(ri0, ConstInt):
+    i0 = ri0.getint()
+    pc = 109
+    continue
+else:
+    ri0 = self.registers_i[0]
+    v0 = self.do_residual_call(ConstPtr(lltype.cast_opaque_ptr(llmemory.GCREF, glob3)), [ri0], glob2, 5)
+    i1 = v0.getint()
+    self.registers_i[1] = v0
+    pc = 7
+    continue"""
