@@ -859,6 +859,39 @@ class Specializer(object):
     emit_specialized_getarrayitem_gc_r_pure = emit_specialized_getarrayitem_gc_i_pure
     emit_specialized_getarrayitem_gc_f_pure = emit_specialized_getarrayitem_gc_i_pure
 
+    def emit_specialized_getfield_gc_i(self):
+        arg, descr = self._get_args()
+        res = self.insn[self.resindex]
+        boxvar = self._get_new_temp_variable()
+        descrglob = self._add_global(descr)
+        lines = []
+        lines.append("%s = self.%s(%s, %s)" % (
+            boxvar, self.methodname, self._get_as_box(arg), descrglob))
+        lines.append("%s = %s.%s()" % (
+            self._get_as_unboxed(res), boxvar, _get_primval_by_kind(res.kind)))
+        lines.append("self.registers_%s[%s] = %s" % (
+            res.kind[0], res.index, boxvar,))
+        next_consts = self.constant_registers - {res}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+    emit_specialized_getfield_gc_r = emit_specialized_getfield_gc_i
+    emit_specialized_getfield_gc_f = emit_specialized_getfield_gc_i
+
+    def emit_specialized_setfield_gc_i(self):
+        arg0, arg1, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box(arg0),
+            self._get_as_box(arg1),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_specialized_setfield_gc_r = emit_specialized_setfield_gc_i
+    emit_specialized_setfield_gc_f = emit_specialized_setfield_gc_i
+
     def emit_specialized_arraylen_gc(self):
         lines = []
         arg, descr, res = self._get_args_and_res()
@@ -1397,6 +1430,47 @@ class Specializer(object):
     emit_unspecialized_getfield_gc_r_pure = emit_unspecialized_getfield_gc_i_pure
     emit_unspecialized_getfield_gc_f_pure = emit_unspecialized_getfield_gc_i_pure
 
+    def _emit_unspecialized_getfield_gc_common(self):
+        arg, descr, res = self._get_args_and_res()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_box_by_type(arg, lines)
+        self._emit_sync_registers(lines)
+        lines.append("self.registers_%s[%s] = self.%s(%s, %s)" % (
+            res.kind[0], res.index, self.methodname,
+            self._get_as_box_after_sync(arg), descrglob))
+        next_consts = self.constant_registers
+        if res in next_consts:
+            next_consts = next_consts - {res}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+
+    emit_unspecialized_getfield_gc_i = _emit_unspecialized_getfield_gc_common
+    emit_unspecialized_getfield_gc_r = _emit_unspecialized_getfield_gc_common
+    emit_unspecialized_getfield_gc_f = _emit_unspecialized_getfield_gc_common
+
+    def emit_unspecialized_setfield_gc_i(self):
+        arg0, arg1, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_box_by_type(arg0, lines)
+        self._emit_box_by_type(arg1, lines)
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box_after_sync(arg0),
+            self._get_as_box_after_sync(arg1),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_setfield_gc_r = emit_unspecialized_setfield_gc_i
+    emit_unspecialized_setfield_gc_f = emit_unspecialized_setfield_gc_i
+
+    def emit_unspecialized_getfield_gc_i_pure(self):
+        if not self.insn[2].is_always_pure():
+            raise Unsupported
+        return self._emit_unspecialized_getfield_gc_common()
+
     def emit_unspecialized_getfield_vable_i(self):
         arg, descr, result = self._get_args_and_res()
         lines = []
@@ -1879,3 +1953,9 @@ def _make_register_syncer(constant_registers, cache={}):
     res = objectmodel.dont_inline(d[name])
     cache[key] = res, args
     return res, args
+
+def _get_primval_by_kind(kind):
+    if kind == 'int': return 'getint'
+    elif kind == 'ref': return 'getref_base'
+    elif kind == 'float': return 'getfloat'
+    else: assert 0, "unreachable path"
