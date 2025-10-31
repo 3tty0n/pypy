@@ -947,6 +947,29 @@ class Specializer(object):
         return lines
     emit_specialized_ref_copy = emit_specialized_int_copy
 
+    def emit_specialized_int_pop(self):
+        lines = []
+        res = self.insn[self.resindex]
+        boxvar = self._get_new_temp_variable()
+        lines.append("%s = self.%s()" % (boxvar, self.methodname))
+        lines.append("%s = %s.%s()" % (
+            self._get_as_unboxed(res), boxvar, _get_primval_by_kind(res.kind)))
+        lines.append("self.registers_%s[%s] = %s" % (
+            res.kind[0], res.index, boxvar))
+        next_consts = self.constant_registers - {res}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+    emit_specialized_ref_pop = emit_specialized_int_pop
+    emit_specialized_float_pop = emit_specialized_int_pop
+
+    def emit_specialized_int_push(self):
+        arg, = self._get_args()
+        lines = ["self.%s(%s)" % (self.methodname, self._get_as_box(arg))]
+        self._emit_jump(lines)
+        return lines
+    emit_specialized_ref_push = emit_specialized_int_push
+    emit_specialized_float_push = emit_specialized_int_push
+
     def emit_specialized_int_between(self):
         arg0, arg1, arg2 = self._get_args()
         lines = []
@@ -1617,6 +1640,26 @@ class Specializer(object):
         return lines
     emit_unspecialized_ref_copy = emit_unspecialized_int_copy
     emit_unspecialized_float_copy = emit_unspecialized_int_copy
+
+    def emit_unspecialized_int_pop(self):
+        res = self.insn[self.resindex]
+        lines = []
+        lines.append("self.registers_%s[%s] = self.%s()" % (res.kind[0], res.index, self.methodname))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_ref_pop = emit_unspecialized_int_pop
+    emit_unspecialized_float_pop = emit_unspecialized_int_pop
+
+    def emit_unspecialized_int_push(self):
+        lines = []
+        arg0, = self._get_args()
+        cond = self._emit_assignment_return_const_check(arg0, lines)
+        assert cond is not None
+        lines.append("self.%s(%s)" % (self.methodname, self._get_as_box(arg0)))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_ref_push = emit_unspecialized_int_push
+    emit_unspecialized_float_push = emit_unspecialized_int_push
 
     def emit_unspecialized_int_between(self):
         args = self._get_args()
