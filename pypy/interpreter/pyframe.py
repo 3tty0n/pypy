@@ -245,6 +245,7 @@ class PyFrame(W_Root):
             self.locals_cells_stack_w[index] = outer_func.closure[i]
             index += 1
 
+    @warmup_critical_function
     def run(self):
         """Start this frame's execution."""
         if self.getcode().co_flags & pycode.CO_GENERATOR:
