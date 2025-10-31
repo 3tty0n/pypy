@@ -489,6 +489,7 @@ class __extend__(pyframe.PyFrame):
     def getconstant_w(self, index):
         return self.getcode().co_consts_w[index]
 
+    @warmup_critical_function
     def getname_u(self, index):
         return self.space.text_w(self.getcode().co_names_w[index])
 

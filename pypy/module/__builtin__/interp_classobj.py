@@ -122,6 +122,7 @@ class W_ClassObject(W_Root):
             return w_value
         return space.call_function(w_descr_get, w_value, space.w_None, self)
 
+    @jit.warmup_critical_function
     def descr_setattr(self, space, w_attr, w_value):
         name = space.text_w(w_attr)
         if name and name[0] == "_":
@@ -360,6 +361,7 @@ class W_InstanceObject(W_Root):
                 return self.w_class
         return self.getattr(space, name)
 
+    @jit.warmup_critical_function
     def descr_setattr(self, space, w_name, w_value):
         name = space.text_w(w_name)
         w_meth = self.getattr_from_class(space, '__setattr__')
