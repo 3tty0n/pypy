@@ -894,6 +894,18 @@ class Specializer(object):
         return lines
     emit_unspecialized_record_quasiimmut_field = emit_specialized_record_quasiimmut_field
 
+    def emit_specialized_int_neg(self):
+        arg0, result = self._get_args_and_res()
+        lines = ["i%s = -%s" % (result.index, self._get_as_unboxed(arg0))]
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_int_abs(self):
+        arg0, result = self._get_args_and_res()
+        lines = ["i%s = abs(%s)" % (result.index, self._get_as_unboxed(arg0))]
+        self._emit_jump(lines)
+        return lines
+
     def emit_specialized_int_copy(self):
         arg0, = self._get_args()
         res = self.insn[self.resindex]
@@ -1230,6 +1242,32 @@ class Specializer(object):
     emit_unspecialized_float_ne = _emit_unspecialized_float_binary
     emit_unspecialized_float_gt = _emit_unspecialized_float_binary
     emit_unspecialized_float_ge = _emit_unspecialized_float_binary
+
+    def emit_unspecialized_int_neg(self):
+        lines = []
+        arg0, result = self._get_args_and_res()
+        self._emit_n_ary_if([arg0], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0}),
+                        indent='    ', target_pc=self.orig_pc)
+        lines.append("else:")
+        lines.append("    self.registers_i[%d] = self.%s(%s)" % (
+            result.index, self.methodname,
+            self._get_as_box(arg0)))
+        self._emit_jump(lines, indent='    ')
+        return lines
+
+    def emit_unspecialized_int_abs(self):
+        lines = []
+        arg0, result = self._get_args_and_res()
+        self._emit_n_ary_if([arg0], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0}),
+                        indent='    ', target_pc=self.orig_pc)
+        lines.append("else:")
+        lines.append("    self.registers_i[%d] = self.%s(%s)" % (
+            result.index, self.methodname,
+            self._get_as_box(arg0)))
+        self._emit_jump(lines, indent='    ')
+        return lines
 
     def emit_unspecialized_float_neg(self):
         lines = []
