@@ -43,6 +43,7 @@ class W_Root(object):
     def getdict(self, space):
         return None
 
+    @jit.warmup_critical_function
     def getdictvalue(self, space, attr):
         w_dict = self.getdict(space)
         if w_dict is not None:
