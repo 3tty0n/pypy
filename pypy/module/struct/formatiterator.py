@@ -120,6 +120,7 @@ class PackFormatIterator(FormatIterator):
 
 
 class UnpackFormatIterator(FormatIterator):
+    @jit.warmup_critical_function
     def __init__(self, space, buf):
         self.space = space
         self.buf = buf
