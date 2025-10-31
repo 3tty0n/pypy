@@ -7,6 +7,7 @@ The format table for standard sizes and alignments.
 
 import struct
 
+from rpython.rlib import jit
 from rpython.rlib.objectmodel import specialize
 from rpython.rlib.rarithmetic import r_uint, r_longlong, r_ulonglong
 from rpython.rlib.rstruct import ieee
@@ -191,7 +192,7 @@ def make_int_packer(size, signed, _memo={}):
         if pack_fastpath(TYPE)(fmtiter, value):
             return
         #
-        pos = fmtiter.pos + size - 1        
+        pos = fmtiter.pos + size - 1
         if fmtiter.bigendian:
             for i in unroll_revrange_size:
                 x = (value >> (8*i)) & 0xff
@@ -336,6 +337,7 @@ def make_int_unpacker(size, signed, _memo={}):
     unroll_range_size = unrolling_iterable(range(size))
     TYPE = get_rffi_int_type(size, signed)
 
+    @jit.warmup_critical_function
     @specialize.argtype(0)
     def unpack_int_fastpath_maybe(fmtiter):
         if fmtiter.bigendian != native_is_bigendian or not native_is_ieee754:
@@ -350,6 +352,7 @@ def make_int_unpacker(size, signed, _memo={}):
         fmtiter.appendobj(intvalue)
         return True
 
+    @jit.warmup_critical_function
     @specialize.argtype(0)
     def unpack_int(fmtiter):
         if unpack_int_fastpath_maybe(fmtiter):
