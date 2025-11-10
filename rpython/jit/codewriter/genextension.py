@@ -860,38 +860,71 @@ class Specializer(object):
     emit_specialized_getarrayitem_gc_r_pure = emit_specialized_getarrayitem_gc_i_pure
     emit_specialized_getarrayitem_gc_f_pure = emit_specialized_getarrayitem_gc_i_pure
 
-    def emit_specialized_getfield_gc_i(self):
-        arg, descr = self._get_args()
-        res = self.insn[self.resindex]
-        boxvar = self._get_new_temp_variable()
-        descrglob = self._add_global(descr)
+    def emit_specialized_getarrayitem_gc_i(self):
         lines = []
-        lines.append("%s = self.%s(%s, %s)" % (
-            boxvar, self.methodname, self._get_as_box(arg), descrglob))
-        lines.append("%s = %s.%s()" % (
-            self._get_as_unboxed(res), boxvar, _get_primval_by_kind(res.kind)))
-        lines.append("self.registers_%s[%s] = %s" % (
-            res.kind[0], res.index, boxvar,))
-        next_consts = self.constant_registers - {res}
-        self._emit_jump(lines, constant_registers=next_consts)
+        arg, index, descr, res = self._get_args_and_res()
+        TYPE, ITEM = _get_ptrtype_itemtype_from_arraydescr(descr)
+        resultcast = _find_result_cast(ITEM)
+        if not descr.is_always_pure():
+            self._emit_sync_registers(lines)
+        lines.append("%s = %slltype.cast_opaque_ptr(%s, %s)[%s])" % (
+            self._get_as_unboxed(res), resultcast, self._add_global(TYPE), self._get_as_unboxed(arg),
+            self._get_as_unboxed(index)))
+        constant_registers = self.constant_registers
+        if not descr.is_always_pure():
+            constant_registers = constant_registers - {res}
+            self._emit_sync_registers(lines)
+        self._emit_jump(lines, constant_registers=constant_registers)
         return lines
-    emit_specialized_getfield_gc_r = emit_specialized_getfield_gc_i
-    emit_specialized_getfield_gc_f = emit_specialized_getfield_gc_i
+    emit_specialized_getarrayitem_gc_r = emit_specialized_getarrayitem_gc_i
+    emit_specialized_getarrayitem_gc_f = emit_specialized_getarrayitem_gc_i
 
-    def emit_specialized_setfield_gc_i(self):
-        arg0, arg1, descr = self._get_args()
-        descrglob = self._add_global(descr)
+    def emit_specialized_setarrayitem_gc_i(self):
+        arg, index, value, descr = self._get_args()
+        _, ITEM = _get_ptrtype_itemtype_from_arraydescr(descr)
+        valuetype = _find_result_cast(ITEM)
         lines = []
+        lines.append("%s %s)[%s] = %s" % (
+            valuetype, self._get_as_unboxed(arg),
+            self._get_as_unboxed(index), self._get_as_unboxed(value)
+        ))
         self._emit_sync_registers(lines)
-        lines.append("self.%s(%s, %s, %s)" % (
-            self.methodname,
-            self._get_as_box(arg0),
-            self._get_as_box(arg1),
-            descrglob))
-        self._emit_jump(lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers - {arg})
         return lines
-    emit_specialized_setfield_gc_r = emit_specialized_setfield_gc_i
-    emit_specialized_setfield_gc_f = emit_specialized_setfield_gc_i
+    emit_specialized_setarrayitem_gc_r = emit_specialized_setarrayitem_gc_i
+    emit_specialized_setarrayitem_gc_f = emit_specialized_setarrayitem_gc_i
+
+    def emit_specialized_getarrayitem_raw_i(self):
+        lines = []
+        arg, index, descr, res = self._get_args_and_res()
+        TYPE, ITEM = _get_ptrtype_itemtype_from_arraydescr(descr)
+        resultcast = _find_result_cast(ITEM)
+        if not descr.is_always_pure():
+            self._emit_sync_registers(lines)
+        lines.append("%s = %s%s.value[%s])" % (
+            self._get_as_unboxed(res), resultcast,
+            self._add_global(arg), self._get_as_unboxed(index)))
+        constant_registers = self.constant_registers
+        if not descr.is_always_pure():
+            constant_registers = constant_registers - {res}
+            self._emit_sync_registers(lines)
+        self._emit_jump(lines, constant_registers=constant_registers)
+        return lines
+    emit_specialized_getarrayitem_raw_f = emit_specialized_getarrayitem_raw_i
+
+    def emit_specialized_setarrayitem_raw_i(self):
+        arg, index, value, descr = self._get_args()
+        _, ITEM = _get_ptrtype_itemtype_from_arraydescr(descr)
+        valuetype = _find_result_cast(ITEM)
+        lines = []
+        lines.append("%s.value[%s] = %s" % (
+            self._add_global(arg),
+            self._get_as_unboxed(index), self._get_as_unboxed(value)
+        ))
+        self._emit_sync_registers(lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers - {arg})
+        return lines
+    emit_specialized_setarrayitem_raw_f = emit_specialized_setarrayitem_raw_i
 
     def emit_specialized_arraylen_gc(self):
         lines = []
@@ -1438,22 +1471,6 @@ class Specializer(object):
         lines.append('continue')
         return lines
 
-    def emit_unspecialized_getfield_gc_i_pure(self):
-        if self.insn[2].is_always_pure():
-            arg, descr, result = self._get_args_and_res()
-            lines = []
-            self._emit_n_ary_if([arg], lines)
-            self._emit_jump(lines, constant_registers=self.constant_registers.union({arg}),
-                            indent='    ', target_pc=self.orig_pc)
-            lines.append("self.registers_%s[%s] = self.opimpl_%s(%s, %s)" % (
-                result.kind[0], result.index,
-                self.insn[0], self._get_as_box(arg), self._add_global(descr)))
-            self._emit_jump(lines)
-            return lines
-        raise Unsupported
-    emit_unspecialized_getfield_gc_r_pure = emit_unspecialized_getfield_gc_i_pure
-    emit_unspecialized_getfield_gc_f_pure = emit_unspecialized_getfield_gc_i_pure
-
     def _emit_unspecialized_getfield_gc_common(self):
         arg, descr, res = self._get_args_and_res()
         descrglob = self._add_global(descr)
@@ -1500,19 +1517,9 @@ class Specializer(object):
         lines = []
         self._emit_box_by_type(arg, lines)
         descrglob = self._add_global(descr)
-        if self.constant_registers:
-            lines.append("res = self._shortcut_getfield_vable(%s, %s)" % (
-                self._get_as_box(arg), descrglob))
-            lines.append("if res is not None:")
-            lines.append("    self.registers_%s[%s] = res" % (
-                result.kind[0], result.index))
-            lines.append("else:")
-            indent = '    '
-        else:
-            indent = ''
-        self._emit_sync_registers(lines, indent=indent)
-        lines.append("%sself.registers_%s[%s] = self.%s(%s, %s, %s)" % (
-            indent, result.kind[0], result.index,
+        self._emit_sync_registers(lines)
+        lines.append("self.registers_%s[%s] = self.%s(%s, %s, %s)" % (
+            result.kind[0], result.index,
             self.methodname, self._get_as_box(arg), descrglob,
             self.orig_pc))
         self._emit_jump(lines)
@@ -1526,17 +1533,9 @@ class Specializer(object):
         descrglob = self._add_global(descr)
         self._emit_box_by_type(arg0, lines)
         self._emit_box_by_type(arg1, lines)
-        if self.constant_registers:
-            lines.append("worked = self._shortcut_setfield_vable(%s, %s, %s)" % (
-                self._get_as_box(arg0),
-                self._get_as_box(arg1), descrglob))
-            lines.append("if not worked:")
-            indent = '    '
-        else:
-            indent = ''
-        self._emit_sync_registers(lines, indent=indent)
-        lines.append("%sself.%s(%s, %s, %s, %s)" % (
-            indent, self.methodname,
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s)" % (
+            self.methodname,
             self._get_as_box_after_sync(arg0),
             self._get_as_box_after_sync(arg1),
             descrglob, self.orig_pc))
@@ -1548,25 +1547,14 @@ class Specializer(object):
         arg, index, descr1, descr2, result = self._get_args_and_res()
         lines = []
         self._emit_box_by_type(arg, lines)
+        self._emit_box_by_type(index, lines)
         check = self._emit_assignment_return_const_check(index, lines)
         descrglob1 = self._add_global(descr1)
         descrglob2 = self._add_global(descr2)
-        if check is None:
-            # the index is constant, we can try the fast path
-            lines.append("res = self._shortcut_getarrayitem_vable(%s, %s, %s, %s)" % (
-                self._get_as_box(arg), self._get_as_unboxed(index), descrglob1, descrglob2))
-            lines.append("if res is not None:")
-            lines.append("    self.registers_%s[%s] = res" % (
-                result.kind[0], result.index))
-            lines.append("else:")
-            indent = '    '
-        else:
-            indent = ''
-        self._emit_sync_registers(lines, indent=indent)
-        lines.append("%sself.registers_%s[%s] = self.%s(%s, %s, %s, %s, %s)" % (
-            indent,
+        self._emit_sync_registers(lines)
+        lines.append("self.registers_%s[%s] = self.%s(%s, %s, %s, %s, %s)" % (
             result.kind[0], result.index,
-            self.methodname, self._get_as_box(arg), self._get_as_box_after_sync(index),
+            self.methodname, self._get_as_box_after_sync(arg), self._get_as_box_after_sync(index),
             descrglob1, descrglob2,
             self.orig_pc))
         self._emit_jump(lines)
@@ -1577,25 +1565,15 @@ class Specializer(object):
         arg, index, value, descr1, descr2 = self._get_args()
         lines = []
         self._emit_box_by_type(arg, lines)
+        self._emit_box_by_type(index, lines)
         self._emit_box_by_type(value, lines)
-        check = self._emit_assignment_return_const_check(index, lines)
         descrglob1 = self._add_global(descr1)
         descrglob2 = self._add_global(descr2)
-        if check is None:
-            # the index is constant, we can try the fast path
-            lines.append("worked = self._shortcut_setarrayitem_vable(%s, %s, %s, %s, %s)" % (
-                self._get_as_box(arg), self._get_as_unboxed(index),
-                self._get_as_box(value), descrglob1, descrglob2))
-            lines.append("if not worked:")
-            indent = '    '
-        else:
-            indent = ''
-        self._emit_sync_registers(lines, indent=indent)
-        lines.append("%sself.%s(%s, %s, %s, %s, %s, %s)" % (
-            indent,
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s, %s, %s)" % (
             self.methodname, self._get_as_box(arg),
-            self._get_as_box_after_sync(index),
-            self._get_as_box_after_sync(value),
+            self._get_as_box(index),
+            self._get_as_box(value),
             descrglob1, descrglob2,
             self.orig_pc))
         self._emit_jump(lines)
@@ -1618,6 +1596,82 @@ class Specializer(object):
         return lines
     emit_unspecialized_getarrayitem_gc_r_pure = emit_unspecialized_getarrayitem_gc_i_pure
     emit_unspecialized_getarrayitem_gc_f_pure = emit_unspecialized_getarrayitem_gc_i_pure
+
+    def emit_unspecialized_getarrayitem_gc_i(self):
+        lines = []
+        array, index, descr, result = self._get_args_and_res()
+        self._emit_n_ary_if([array, index], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({array, index}),
+                        indent='    ', target_pc=self.orig_pc)
+        self._emit_box_by_type(array, lines)
+        self._emit_box_by_type(index, lines)
+        lines.append("self.registers_%s[%s] = self.%s(%s, %s, %s)" % (
+            result.kind[0], result.index,
+            self.methodname, self._get_as_box(array), self._get_as_box(index),
+            self._add_global(descr)))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_getarrayitem_gc_r = emit_unspecialized_getarrayitem_gc_i
+    emit_unspecialized_getarrayitem_gc_f = emit_unspecialized_getarrayitem_gc_i
+
+    def emit_unspecialized_setarrayitem_gc_i(self):
+        arg0, arg1, arg2, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_n_ary_if([arg0, arg1, arg2], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0, arg1, arg2}),
+                        indent='    ', target_pc=self.orig_pc)
+        self._emit_box_by_type(arg0, lines)
+        self._emit_box_by_type(arg1, lines)
+        self._emit_box_by_type(arg2, lines)
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box_after_sync(arg0),
+            self._get_as_box_after_sync(arg1),
+            self._get_as_box_after_sync(arg2),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_setarrayitem_gc_r = emit_unspecialized_setarrayitem_gc_i
+    emit_unspecialized_setarrayitem_gc_f = emit_unspecialized_setarrayitem_gc_i
+
+    def emit_unspecialized_getarrayitem_raw_i(self):
+        lines = []
+        array, index, descr, result = self._get_args_and_res()
+        self._emit_n_ary_if([array, index], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({array, index}),
+                        indent='    ', target_pc=self.orig_pc)
+        self._emit_box_by_type(array, lines)
+        self._emit_box_by_type(index, lines)
+        lines.append("self.registers_%s[%s] = self.%s(%s, %s, %s)" % (
+            result.kind[0], result.index,
+            self.methodname, self._get_as_box(array), self._get_as_box(index),
+            self._add_global(descr)))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_getarrayitem_raw_f = emit_unspecialized_getarrayitem_raw_i
+
+    def emit_unspecialized_setarrayitem_raw_i(self):
+        arg0, arg1, arg2, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_n_ary_if([arg0, arg1, arg2], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0, arg1, arg2}),
+                        indent='    ', target_pc=self.orig_pc)
+        self._emit_box_by_type(arg0, lines)
+        self._emit_box_by_type(arg1, lines)
+        self._emit_box_by_type(arg2, lines)
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box_after_sync(arg0),
+            self._get_as_box_after_sync(arg1),
+            self._get_as_box_after_sync(arg2),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_setarrayitem_raw_f = emit_unspecialized_setarrayitem_raw_i
 
     def emit_unspecialized_arraylen_gc(self):
         lines = []
