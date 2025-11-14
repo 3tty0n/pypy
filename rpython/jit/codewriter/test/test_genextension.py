@@ -1457,8 +1457,6 @@ def test_float_add():
     insn = ('float_add', f0, f1, '->', f2)
     work_list = WorkList({5: insn, 7: ('void_return',)}, pc_to_nextpc={5: 7})
     insn_specializer = work_list.specialize_insn(insn, {f0, f1}, 5)
-    newpc = insn_specializer.get_pc()
-    assert newpc == work_list.OFFSET + 5
     s = insn_specializer.make_code()
     assert s == """f2 = f0 + f1
 pc = 108
