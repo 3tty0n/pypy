@@ -57,7 +57,7 @@ class Assembler(object):
         translation_config = getattr(config, "translation", None)
         genextension = getattr(translation_config, "genextension", None)
         if genextension and ssarepr.genextension:
-            GenExtension(self, ssarepr, jitcode).generate()
+            GenExtension(self, ssarepr, jitcode).generate(use_direct_ops=True)
         return jitcode
 
     def setup(self, name):

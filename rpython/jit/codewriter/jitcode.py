@@ -19,6 +19,7 @@ class JitCode(AbstractDescr):
         self._called_from = called_from   # debugging
         self._ssarepr     = None          # debugging
         self.genext_function = None
+        self.genext_trace_builder = None  # for direct ResOperation generation
         self.bytecodes_counter = 0
         self.number_calls = 0
         self.traced_operations = 0

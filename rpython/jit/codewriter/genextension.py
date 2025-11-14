@@ -4,6 +4,7 @@ import collections
 from rpython.jit.metainterp.history import (Const, ConstInt, ConstPtr,
     ConstFloat, CONST_NULL, getkind, AbstractDescr)
 from rpython.jit.metainterp import support
+from rpython.jit.metainterp.resoperation import ResOperation, rop
 from rpython.flowspace.model import Constant
 from rpython.jit.codewriter.flatten import (
     Register, TLabel, Label, ListOfKind, IndirectCallTargets)
@@ -11,6 +12,51 @@ from rpython.jit.codewriter.jitcode import SwitchDictDescr
 from rpython.rtyper.lltypesystem import lltype, llmemory, rstr
 from rpython.rtyper.rclass import OBJECTPTR
 from rpython.rlib import objectmodel
+
+
+class DirectTraceBuilder(object):
+    """Builds ResOperations directly instead of generating and executing code"""
+
+    def __init__(self, jitcode, work_list, pc_to_nextpc, globals_dict):
+        self.jitcode = jitcode
+        self.work_list = work_list
+        self.pc_to_nextpc = pc_to_nextpc
+        self.globals_dict = globals_dict
+
+    def run(self, miframe):
+        """Execute the specialized trace by directly building ResOperations"""
+        pc = miframe.pc
+        metainterp = miframe.metainterp
+
+        # Track which registers have constant values (unboxed)
+        unboxed_values = {}  # Register -> Python value
+
+        while True:
+            # Get the specializer for this pc
+            spec = self.work_list.get_specializer_at_pc(pc)
+
+            if spec is None:
+                # No specialization available, fall back to interpreter
+                miframe.pc = pc
+                return None
+
+            # Execute the specialized operation
+            result = spec.execute_direct(miframe, unboxed_values, self.globals_dict)
+
+            if result is None:
+                # Fallback to interpreter needed
+                miframe.pc = pc
+                return None
+
+            next_pc, new_unboxed = result
+            unboxed_values.update(new_unboxed)
+
+            if next_pc == -1:
+                # Trace complete
+                return True
+
+            pc = next_pc
+
 
 class GenExtension(object):
     def __init__(self, assembler, ssarepr, jitcode):
@@ -39,7 +85,7 @@ class GenExtension(object):
         self.returncode = None
         self.returnindex = None
 
-    def generate(self):
+    def generate(self, use_direct_ops=True):
         from rpython.jit.codewriter.flatten import Label
         from rpython.jit.codewriter.jitcode import JitCode
         from rpython.jit.metainterp.pyjitpl import ChangeFrame
@@ -121,13 +167,23 @@ class GenExtension(object):
         for line in self.code:
             allcode.append(" " * 8 + line)
         self.jitcode._genext_source = "\n".join(allcode)
-        d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr, "ConstFloat": ConstFloat, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
-             "lltype": lltype, "rstr": rstr, 'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR, 'support': support}
-        d.update(self.globals)
-        source = py.code.Source(self.jitcode._genext_source)
-        exec source.compile() in d
-        self.jitcode.genext_function = d['jit_shortcut']
-        self.jitcode.genext_function.__name__ += "_" + self.jitcode.name
+
+        if use_direct_ops:
+            # Use direct ResOperation generation instead of code generation
+            trace_builder = DirectTraceBuilder(self.jitcode, self.work_list,
+                                               self.pc_to_nextpc, self.globals)
+            self.jitcode.genext_trace_builder = trace_builder
+            self.jitcode.genext_function = None  # Mark that we're using direct ops
+        else:
+            # Original approach: generate and compile code
+            d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr, "ConstFloat": ConstFloat, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
+                 "lltype": lltype, "rstr": rstr, 'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR, 'support': support}
+            d.update(self.globals)
+            source = py.code.Source(self.jitcode._genext_source)
+            exec source.compile() in d
+            self.jitcode.genext_function = d['jit_shortcut']
+            self.jitcode.genext_function.__name__ += "_" + self.jitcode.name
+            self.jitcode.genext_trace_builder = None
 
     def _make_code(self, index, insn):
         self._reset_insn()
@@ -550,6 +606,17 @@ class WorkList(object):
             code_and_spec_per_pc[spec.spec_pc] = spec.make_code(), spec
         return code_and_spec_per_pc
 
+    def get_specializer_at_pc(self, pc):
+        """Get the specializer for a given PC, if one exists"""
+        # Search through all specializers to find one with matching spec_pc
+        for key, spec in self.specialize_instruction.iteritems():
+            if spec.spec_pc == pc:
+                return spec
+        # Try to find an unspecialized version at this PC
+        if pc in self.orig_pc_to_insn:
+            return self.specialize_pc(frozenset([]), pc)
+        return None
+
 
 def _int_as_str(value, TYPE, add_global):
     if isinstance(TYPE, lltype.Ptr):
@@ -585,6 +652,152 @@ class Specializer(object):
 
     def __repr__(self):
         return "<Specializer %s %s %s>" % (self.name, self.orig_pc, self.constant_registers)
+
+    def execute_direct(self, miframe, unboxed_values, globals_dict):
+        """
+        Execute this operation directly by recording ResOperations.
+        Returns (next_pc, new_unboxed_dict) or None for fallback.
+        """
+        metainterp = miframe.metainterp
+        args = self._get_args()
+
+        # Check if we can use specialized path
+        if self._check_all_constant_args(args):
+            # All arguments are constant, use specialized execution
+            return self._execute_specialized(miframe, unboxed_values, globals_dict)
+        else:
+            # Need to check at runtime if args became constant
+            return self._execute_unspecialized(miframe, unboxed_values, globals_dict)
+
+    def _execute_specialized(self, miframe, unboxed_values, globals_dict):
+        """Execute specialized version - all args are constants"""
+        metainterp = miframe.metainterp
+
+        # Dispatch to operation-specific handler
+        handler_name = "_direct_specialized_" + self.name
+        handler = getattr(self, handler_name, None)
+
+        if handler is not None:
+            return handler(miframe, unboxed_values, globals_dict)
+
+        # No direct handler available, fallback to interpreter
+        return None
+
+    def _execute_unspecialized(self, miframe, unboxed_values, globals_dict):
+        """Execute unspecialized version with runtime checks"""
+        # Check if register values are actually constants at runtime
+        args = self._get_args()
+        newly_constant = []
+
+        for arg in args:
+            if isinstance(arg, Register):
+                if arg.kind == 'int':
+                    regval = miframe.registers_i[arg.index]
+                    if isinstance(regval, ConstInt):
+                        unboxed_values[arg] = regval.getint()
+                        newly_constant.append(arg)
+                elif arg.kind == 'ref':
+                    regval = miframe.registers_r[arg.index]
+                    if isinstance(regval, ConstPtr):
+                        unboxed_values[arg] = regval.getref()
+                        newly_constant.append(arg)
+                elif arg.kind == 'float':
+                    regval = miframe.registers_f[arg.index]
+                    if isinstance(regval, ConstFloat):
+                        unboxed_values[arg] = regval.getfloat()
+                        newly_constant.append(arg)
+
+        # If we discovered new constants, jump to specialized version
+        if newly_constant:
+            new_consts = self.constant_registers.union(set(newly_constant))
+            new_spec = self.work_list.specialize_insn(self.insn, new_consts, self.orig_pc)
+            return new_spec.spec_pc, unboxed_values
+
+        # Otherwise fallback to interpreter
+        return None
+
+    # Helper for binary int operations
+    def _direct_int_binary_op(self, miframe, unboxed_values, opnum, python_op):
+        """Generic helper for binary int operations"""
+        arg0, arg1, result = self._get_args_and_res()
+        metainterp = miframe.metainterp
+
+        # Get unboxed values
+        val0 = unboxed_values.get(arg0)
+        val1 = unboxed_values.get(arg1)
+
+        if val0 is None or val1 is None:
+            return None  # Fallback
+
+        # Perform the operation
+        result_val = python_op(val0, val1)
+
+        # Record the operation
+        box0 = ConstInt(val0)
+        box1 = ConstInt(val1)
+        resbox = metainterp.execute_and_record(opnum, None, box0, box1)
+
+        # Update unboxed values
+        new_unboxed = {result: result_val}
+
+        # Get next PC
+        next_pc = self.work_list.pc_to_nextpc[self.orig_pc]
+        next_consts = self.constant_registers.union({result})
+        next_insn = self.work_list.orig_pc_to_insn[next_pc]
+        next_insn, next_consts, next_pc = self.work_list._shortcut_live_and_goto(
+            next_insn, next_consts, next_pc)
+        next_spec = self.work_list.specialize_pc(next_consts, next_pc)
+
+        return next_spec.spec_pc, new_unboxed
+
+    # Specialized operation handlers
+    def _direct_specialized_int_add(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_ADD, lambda a, b: a + b)
+
+    def _direct_specialized_int_sub(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_SUB, lambda a, b: a - b)
+
+    def _direct_specialized_int_mul(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_MUL, lambda a, b: a * b)
+
+    def _direct_specialized_int_floordiv(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_FLOORDIV, lambda a, b: a // b)
+
+    def _direct_specialized_int_mod(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_MOD, lambda a, b: a % b)
+
+    def _direct_specialized_int_and(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_AND, lambda a, b: a & b)
+
+    def _direct_specialized_int_or(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_OR, lambda a, b: a | b)
+
+    def _direct_specialized_int_xor(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_XOR, lambda a, b: a ^ b)
+
+    def _direct_specialized_int_lshift(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_LSHIFT, lambda a, b: a << b)
+
+    def _direct_specialized_int_rshift(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_RSHIFT, lambda a, b: a >> b)
+
+    def _direct_specialized_int_lt(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_LT, lambda a, b: int(a < b))
+
+    def _direct_specialized_int_le(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_LE, lambda a, b: int(a <= b))
+
+    def _direct_specialized_int_eq(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_EQ, lambda a, b: int(a == b))
+
+    def _direct_specialized_int_ne(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_NE, lambda a, b: int(a != b))
+
+    def _direct_specialized_int_gt(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_GT, lambda a, b: int(a > b))
+
+    def _direct_specialized_int_ge(self, miframe, unboxed_values, globals_dict):
+        return self._direct_int_binary_op(miframe, unboxed_values, rop.INT_GE, lambda a, b: int(a >= b))
 
     def _reset_specializer(self):
         self.name = None

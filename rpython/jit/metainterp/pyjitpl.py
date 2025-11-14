@@ -1900,7 +1900,18 @@ class MIFrame(object):
         staticdata = self.metainterp.staticdata
         try:
             name = self.jitcode.name
-            if self.jitcode.genext_function:
+            if self.jitcode.genext_trace_builder:
+                # Use direct ResOperation generation
+                if name not in staticdata.genext_jitcell_counters:
+                    staticdata.genext_jitcell_counters[name] = 0
+                staticdata.genext_jitcell_counters[name] += 1
+                staticdata.profiler.count(Counters.FAST_TRACING_FUNCTION_EXECUTIONS)
+                result = self.jitcode.genext_trace_builder.run(self)
+                if result is not None:
+                    return result
+                # Fallthrough to regular interpreter if trace builder returned None
+            elif self.jitcode.genext_function:
+                # Use old code generation approach
                 if name not in staticdata.genext_jitcell_counters:
                     staticdata.genext_jitcell_counters[name] = 0
                 staticdata.genext_jitcell_counters[name] += 1
