@@ -88,6 +88,7 @@ class FormatIterator(object):
 class CalcSizeFormatIterator(FormatIterator):
     totalsize = 0
 
+    @jit.warmup_critical_function
     def operate(self, fmtdesc, repetitions):
         try:
             size = ovfcheck(fmtdesc.size * repetitions)
