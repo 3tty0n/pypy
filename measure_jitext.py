@@ -23,8 +23,9 @@ def parse_args():
     parser.add_argument("-n", "--number", type=int)
     parser.add_argument("-d", "--dir", type=str)
     parser.add_argument("-b", "--benchmark", type=str)
+    parser.add_argument("--mode", type=str)
     args = parser.parse_args()
-    return args.number, args.dir, args.benchmark
+    return args.number, args.dir, args.benchmark, args.mode
 
 
 def run_icbd(env, exe_path, arg=None):
@@ -79,7 +80,7 @@ def run(num, dirname, typ, mode=None):
                     )
 
                     if mode == "genext-stats":
-                        env["PYPYLOG"] = "jit-genext-stats:%s" % (log_output)
+                        env["PYPYLOG"] = "jit-genext:%s" % (log_output)
                     else:
                         env["PYPYLOG"] = "jit-summary:%s" % (log_output)
 
@@ -96,5 +97,5 @@ def run(num, dirname, typ, mode=None):
 
 
 if __name__ == "__main__":
-    num, dirname, typ = parse_args()
-    run(num, dirname, typ)
+    num, dirname, typ, mode = parse_args()
+    run(num, dirname, typ, mode)
