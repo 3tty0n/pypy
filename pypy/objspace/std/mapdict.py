@@ -800,7 +800,6 @@ def _obj_setdict(self, space, w_dict):
     assert flag
 
 class MapdictStorageMixin(object):
-    @jit.warmup_critical_function
     def _get_mapdict_map(self):
         return jit.promote(self.map)
     def _set_mapdict_map(self, map):
@@ -873,7 +872,6 @@ def _make_storage_mixin_size_n(n=SUBCLASSES_NUM_FIELDS):
     rangenmin1 = unroll.unrolling_iterable(range(nmin1))
     valnmin1 = "_value%s" % nmin1
     class subcls(object):
-        @jit.warmup_critical_function
         def _get_mapdict_map(self):
             return jit.promote(self.map)
         def _set_mapdict_map(self, map):
