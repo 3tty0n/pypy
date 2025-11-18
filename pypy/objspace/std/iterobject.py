@@ -78,7 +78,7 @@ class W_SeqIterObject(W_AbstractSeqIterObject):
 class W_FastListIterObject(W_AbstractSeqIterObject):
     """Sequence iterator specialized for lists."""
 
-    @warmup_critical_function
+    #@warmup_critical_function
     def descr_next(self, space):
         from pypy.objspace.std.listobject import W_ListObject
         w_seq = self.w_seq

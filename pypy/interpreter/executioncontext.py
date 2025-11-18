@@ -76,7 +76,7 @@ class ExecutionContext(object):
         frame.f_backref = self.topframeref
         self.topframeref = jit.virtual_ref(frame)
 
-    @warmup_critical_function
+    #@warmup_critical_function
     def leave(self, frame, w_exitvalue, got_exception):
         try:
             if self.profilefunc:
@@ -131,7 +131,7 @@ class ExecutionContext(object):
         else:
             self._trace(frame, 'c_exception', w_exc)
 
-    @warmup_critical_function
+    #@warmup_critical_function
     def call_trace(self, frame):
         "Trace the call of a function"
         if self.gettrace() is not None or self.profilefunc is not None:
@@ -139,7 +139,7 @@ class ExecutionContext(object):
             if self.profilefunc:
                 frame.getorcreatedebug().is_being_profiled = True
 
-    @warmup_critical_function
+    #@warmup_critical_function
     def return_trace(self, frame, w_retval):
         "Trace the return from a function"
         if self.gettrace() is not None:

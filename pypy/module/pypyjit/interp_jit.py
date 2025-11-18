@@ -76,7 +76,7 @@ pypyjitdriver = PyPyJitDriver(get_printable_location = get_printable_location,
 
 class __extend__(PyFrame):
 
-    @warmup_critical_function
+    #@warmup_critical_function
     def jump_absolute(self, jumpto, ec):
         if we_are_jitted():
             #

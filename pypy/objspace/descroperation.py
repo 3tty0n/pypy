@@ -221,7 +221,7 @@ class DescrOperation(object):
         w_descr = space.lookup(w_obj, '__getattribute__')
         return space._handle_getattribute(w_descr, w_obj, w_name)
 
-    @jit.warmup_critical_function
+    #@jit.warmup_critical_function
     def _handle_getattribute(space, w_descr, w_obj, w_name):
         try:
             if w_descr is None:   # obscure case

@@ -892,7 +892,7 @@ def _make_storage_mixin_size_n(n=SUBCLASSES_NUM_FIELDS):
             erased = getattr(self, valnmin1)
             return unerase_list(erased)
 
-        @jit.warmup_critical_function
+        #@jit.warmup_critical_function
         def _mapdict_read_storage(self, storageindex):
             assert storageindex >= 0
             if storageindex < nmin1:

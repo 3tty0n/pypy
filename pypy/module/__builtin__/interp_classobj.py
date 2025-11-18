@@ -122,7 +122,7 @@ class W_ClassObject(W_Root):
             return w_value
         return space.call_function(w_descr_get, w_value, space.w_None, self)
 
-    @jit.warmup_critical_function
+    #@jit.warmup_critical_function
     def descr_setattr(self, space, w_attr, w_value):
         name = space.text_w(w_attr)
         if name and name[0] == "_":

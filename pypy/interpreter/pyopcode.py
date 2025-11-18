@@ -610,15 +610,15 @@ class __extend__(pyframe.PyFrame):
         w_result = self.space.pow(w_1, w_2, self.space.w_None)
         self.pushvalue(w_result)
 
-    BINARY_MULTIPLY = warmup_critical_function(binaryoperation("mul"))
+    BINARY_MULTIPLY = binaryoperation("mul")
     BINARY_TRUE_DIVIDE  = binaryoperation("truediv")
     BINARY_FLOOR_DIVIDE = binaryoperation("floordiv")
     BINARY_DIVIDE       = binaryoperation("div")
     # XXX BINARY_DIVIDE must fall back to BINARY_TRUE_DIVIDE with -Qnew
     BINARY_MODULO       = binaryoperation("mod")
-    BINARY_ADD      = warmup_critical_function(binaryoperation("add"))
-    BINARY_SUBTRACT = warmup_critical_function(binaryoperation("sub"))
-    BINARY_SUBSCR   = warmup_critical_function(binaryoperation("getitem"))
+    BINARY_ADD      = binaryoperation("add")
+    BINARY_SUBTRACT = binaryoperation("sub")
+    BINARY_SUBSCR   = binaryoperation("getitem")
     BINARY_LSHIFT   = binaryoperation("lshift")
     BINARY_RSHIFT   = binaryoperation("rshift")
     BINARY_AND = binaryoperation("and_")
@@ -707,7 +707,7 @@ class __extend__(pyframe.PyFrame):
         w_start = self.popvalue()
         self.deleteslice(w_start, w_end)
 
-    @warmup_critical_function
+    #@warmup_critical_function
     def STORE_SUBSCR(self):
         "obj[subscr] = newvalue"
         w_subscr = self.popvalue()
