@@ -160,7 +160,6 @@ class DescrOperation(object):
             w_impl = space.get(w_descr, w_obj)
             return space.call_args(w_impl, args)
 
-    @jit.warmup_critical_function
     def get_and_call_function(space, w_descr, w_obj, *args_w):
         typ = type(w_descr)
         # a special case for performance and to avoid infinite recursion
