@@ -1239,6 +1239,7 @@ class __extend__(pyframe.PyFrame):
             w_result = self.space.call_args(w_function, args)
         self.pushvalue(w_result)
 
+    @warmup_critical_function
     def CALL_FUNCTION(self, oparg):
         # XXX start of hack for performance
         if (oparg >> 8) & 0xff == 0:

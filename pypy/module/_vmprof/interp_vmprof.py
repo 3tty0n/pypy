@@ -6,6 +6,8 @@ from pypy.interpreter.baseobjspace import W_Root
 from rpython.rlib import rvmprof, jit
 from pypy.interpreter.error import oefmt
 
+from rpython.rlib.jit import warmup_critical_function
+
 # ____________________________________________________________
 
 
@@ -15,6 +17,7 @@ my_execute_frame = _decorator(PyFrame.execute_frame)
 
 
 class __extend__(PyFrame):
+    @warmup_critical_function
     def execute_frame(self, w_inputvalue=None, operr=None):
         # indirection for the optional arguments
         return my_execute_frame(self, w_inputvalue, operr)

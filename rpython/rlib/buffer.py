@@ -137,6 +137,7 @@ class RawBuffer(Buffer):
     """
     _immutable_ = True
 
+    @jit.warmup_critical_function
     @specialize.ll_and_arg(1)
     def typed_read(self, TP, byte_offset):
         """

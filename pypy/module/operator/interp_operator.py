@@ -2,6 +2,8 @@ from pypy.interpreter.error import OperationError, oefmt
 from pypy.interpreter.gateway import unwrap_spec
 from pypy.module.__builtin__.interp_classobj import W_InstanceObject
 
+from rpython.rlib.jit import warmup_critical_function
+
 
 def index(space, w_a):
     return space.index(w_a)
@@ -42,6 +44,7 @@ def div(space, w_a, w_b):
     'div(a, b) -- Same as a / b when __future__.division is no in effect'
     return space.div(w_a, w_b)
 
+@warmup_critical_function
 def eq(space, w_a, w_b):
     'eq(a, b) -- Same as a==b'
     return space.eq(w_a, w_b)

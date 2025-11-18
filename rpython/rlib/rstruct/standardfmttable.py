@@ -338,6 +338,7 @@ def make_int_unpacker(size, signed, _memo={}):
     unroll_range_size = unrolling_iterable(range(size))
     TYPE = get_rffi_int_type(size, signed)
 
+    @warmup_critical_function
     @specialize.argtype(0)
     def unpack_int_fastpath_maybe(fmtiter):
         if fmtiter.bigendian != native_is_bigendian or not native_is_ieee754:
