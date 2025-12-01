@@ -67,7 +67,7 @@ class Profiler(BaseProfiler):
     def start(self):
         self.starttime = self.timer()
         self.t1 = self.starttime
-        self.times = [0, 0]
+        self.times = [0, 0, 0, 0, 0]  # TRACING, BACKEND, RESUME_DATA, INTERPRETATION, OPTIMIZATION
         self.counters = [0] * (Counters.ncounters - _CPU_LINES)
         self.calls = 0
         self.current = []
@@ -101,6 +101,15 @@ class Profiler(BaseProfiler):
 
     def start_backend(self):   self._start(Counters.BACKEND)
     def end_backend(self):     self._end  (Counters.BACKEND)
+
+    def start_resume_data(self): self._start(Counters.RESUME_DATA)
+    def end_resume_data(self):   self._end(Counters.RESUME_DATA)
+
+    def start_interpretation(self): self._start(Counters.INTERPRETATION)
+    def end_interpretation(self):   self._end(Counters.INTERPRETATION)
+
+    def start_optimization(self): self._start(Counters.OPTIMIZATION)
+    def end_optimization(self):   self._end(Counters.OPTIMIZATION)
 
     def count(self, kind, inc=1):
         self.counters[kind] += inc
@@ -187,8 +196,21 @@ class Profiler(BaseProfiler):
         cnt = self.counters
         tim = self.times
         calls = self.calls
-        self._print_line_time("Tracing", cnt[Counters.TRACING],
+        # Calculate total tracing time
+        total_tracing = (tim[Counters.TRACING] +
+                        tim[Counters.INTERPRETATION] +
+                        tim[Counters.OPTIMIZATION] +
+                        tim[Counters.RESUME_DATA])
+        self._print_line_time("Tracing (total)", cnt[Counters.TRACING],
+                              total_tracing)
+        self._print_line_time("  Overhead (gaps between timers)", cnt[Counters.TRACING],
                               tim[Counters.TRACING])
+        self._print_line_time("  Interpretation of jitcode", cnt[Counters.INTERPRETATION],
+                              tim[Counters.INTERPRETATION])
+        self._print_line_time("  Optimization", cnt[Counters.OPTIMIZATION],
+                              tim[Counters.OPTIMIZATION])
+        self._print_line_time("  Resume Data (guard snapshots)", cnt[Counters.RESUME_DATA],
+                              tim[Counters.RESUME_DATA])
         self._print_line_time("Backend", cnt[Counters.BACKEND],
                               tim[Counters.BACKEND])
         line = "TOTAL:      \t\t%f" % (self.tk - self.starttime, )

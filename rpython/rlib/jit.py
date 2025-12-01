@@ -1419,6 +1419,9 @@ class Counters(object):
     counters="""
     TRACING
     BACKEND
+    RESUME_DATA
+    INTERPRETATION
+    OPTIMIZATION
     OPS
     HEAPCACHED_OPS
     RECORDED_OPS
@@ -1445,7 +1448,7 @@ class Counters(object):
     TOTAL_COMPILED_BRIDGES
     TOTAL_FREED_LOOPS
     TOTAL_FREED_BRIDGES
-    """ 
+    """
 
     counter_names = []
 

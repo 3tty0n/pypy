@@ -2711,10 +2711,14 @@ class MetaInterp(object):
             saved_pc = frame.pc
             if resumepc >= 0:
                 frame.pc = resumepc
+
+        self.staticdata.profiler.start_resume_data()
         self.history.trace.capture_resumedata(
             self.framestack, virtualizable_boxes,
             self.virtualref_boxes,
             after_residual_call)
+        self.staticdata.profiler.end_resume_data()
+
         if self.framestack:
             self.framestack[-1].pc = saved_pc
 
@@ -3002,7 +3006,11 @@ class MetaInterp(object):
         self.seen_loop_header_for_jdindex = -1
         try:
             self.create_empty_history(original_boxes[num_green_args:])
-            self.interpret()
+            self.staticdata.profiler.start_interpretation()
+            try:
+                self.interpret()
+            finally:
+                self.staticdata.profiler.end_interpretation()
         except SwitchToBlackhole as stb:
             self.run_blackhole_interp_to_cancel_tracing(stb)
         assert False, "should always raise"
@@ -3039,7 +3047,11 @@ class MetaInterp(object):
         self.prepare_resume_from_failure(deadframe, inputargs, resumedescr, excdata)
         if self.resumekey_original_loop_token is None:   # very rare case
             raise SwitchToBlackhole(Counters.ABORT_BRIDGE)
-        self.interpret()
+        self.staticdata.profiler.start_interpretation()
+        try:
+            self.interpret()
+        finally:
+            self.staticdata.profiler.end_interpretation()
         assert False, "should always raise"
 
     def run_blackhole_interp_to_cancel_tracing(self, stb):
