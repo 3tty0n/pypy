@@ -52,10 +52,6 @@ WARMUP_NUMBER = 2
 
 
 def run(num, dirname, typ, mode=None):
-    if not dirname:
-        dirname = "pypylogs_%s" % (get_time())
-    if not os.path.exists(dirname):
-        os.mkdir(dirname)
 
     bm_path = setup_bm_path(typ)
     benchmarks = setup_bms(typ)
@@ -98,4 +94,15 @@ def run(num, dirname, typ, mode=None):
 
 if __name__ == "__main__":
     num, dirname, typ, mode = parse_args()
-    run(num, dirname, typ, mode)
+    if not dirname:
+        dirname = "pypylogs_%s" % (get_time())
+    if not os.path.exists(dirname):
+        os.mkdir(dirname)
+    if typ == "all":
+        for typ in ("own-micro", "own-macro", "unladen"):
+            run(num, dirname, typ, mode)
+    elif typ == "macro-all":
+        for typ in ("own-macro", "unladen"):
+            run(num, dirname, typ, mode)
+    else:
+        run(num, dirname, typ, mode)
