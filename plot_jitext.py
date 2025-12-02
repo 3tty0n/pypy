@@ -167,7 +167,7 @@ def plot(output_ave, output_var, dirname):
         if row == 0:
             ax1.legend(fontsize=10, framealpha=0.9, loc='upper right')
         # Rotate x-labels if they're long
-        ax1.tick_params(axis='x', rotation=45)
+        ax1.tick_params(axis='x', rotation=90)
 
         ax2 = plt.subplot(n_metrics, 4, row * 4 + 2)
         df_ave.mean().plot.bar(ax=ax2, legend=False, color=colors, width=0.7)
@@ -176,7 +176,7 @@ def plot(output_ave, output_var, dirname):
         ax2.set_xlabel('')
         ax2.tick_params(axis='both', labelsize=10)
         ax2.grid(axis='y', alpha=0.3, linestyle='--')
-        ax2.tick_params(axis='x', rotation=45)
+        ax2.tick_params(axis='x', rotation=90)
 
         # Normalized values plot (right side)
         new_df_ave = df_ave['pypy-jit-ext-c'] / df_ave['pypy-c']
@@ -196,7 +196,7 @@ def plot(output_ave, output_var, dirname):
         ax3.tick_params(axis='both', labelsize=10)
         ax3.grid(axis='y', alpha=0.3, linestyle='--')
         ax3.axhline(1.0, color='#e74c3c', linestyle='--', linewidth=2, alpha=0.8, label='Baseline')
-        ax3.tick_params(axis='x', rotation=45)
+        ax3.tick_params(axis='x', rotation=90)
         # Add shading for better/worse regions
         ax3.axhspan(0, 1, alpha=0.05, color='green', zorder=0)
         ax3.axhspan(1, ax3.get_ylim()[1], alpha=0.05, color='red', zorder=0)
@@ -251,7 +251,6 @@ def plot(output_ave, output_var, dirname):
 
 if __name__ == '__main__':
     args = parse_args()
-
-    benchmarks = setup_bms(args.benchmark)
+    benchmarks = setup_bms_plot(args.benchmark)
     output_ave, output_var = measure(args.number, args.dir, benchmarks)
     plot(output_ave, output_var, args.dir)
