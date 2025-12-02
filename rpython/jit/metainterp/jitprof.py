@@ -199,18 +199,17 @@ class Profiler(BaseProfiler):
         # Calculate total tracing time
         total_tracing = (tim[Counters.TRACING] +
                         tim[Counters.INTERPRETATION] +
-                        tim[Counters.OPTIMIZATION] +
                         tim[Counters.RESUME_DATA])
         self._print_line_time("Tracing (total)", cnt[Counters.TRACING],
                               total_tracing)
-        self._print_line_time("  Overhead (gaps between timers)", cnt[Counters.TRACING],
+        self._print_line_time("  Overhead", cnt[Counters.TRACING],
                               tim[Counters.TRACING])
-        self._print_line_time("  Interpretation of jitcode", cnt[Counters.INTERPRETATION],
+        self._print_line_time("  Interpretation", cnt[Counters.INTERPRETATION],
                               tim[Counters.INTERPRETATION])
-        self._print_line_time("  Optimization", cnt[Counters.OPTIMIZATION],
-                              tim[Counters.OPTIMIZATION])
-        self._print_line_time("  Resume Data (guard snapshots)", cnt[Counters.RESUME_DATA],
+        self._print_line_time("  Resume data", cnt[Counters.RESUME_DATA],
                               tim[Counters.RESUME_DATA])
+        self._print_line_time("Optimization", cnt[Counters.OPTIMIZATION],
+                              tim[Counters.OPTIMIZATION])
         self._print_line_time("Backend", cnt[Counters.BACKEND],
                               tim[Counters.BACKEND])
         line = "TOTAL:      \t\t%f" % (self.tk - self.starttime, )
