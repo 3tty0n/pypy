@@ -45,10 +45,22 @@ def parse_jit_summary(path):
             line = f.readline().rstrip()
             if not line:
                 break
-            if line.startswith("Tracing:"):
+            if line.startswith("Tracing (total):"):
                 items = line.split('\t')
                 time = float(items[-1])
-                result["Tracing"] = time
+                result["Tracing (total)"] = time
+            elif line.startswith("  Interpretation:"):
+                items = line.split('\t')
+                time = float(items[-1])
+                result["Interpretation"] = time
+            elif line.startswith("  Resume data"):
+                items = line.split('\t')
+                time = float(items[-1])
+                result["Resume Data"] = time
+            elif line.startswith("Optimization:"):
+                items = line.split('\t')
+                time = float(items[-1])
+                result["Optimization"] = time
             elif line.startswith("Backend:"):
                 items = line.split('\t')
                 time = float(items[-1])
@@ -61,7 +73,7 @@ def parse_jit_summary(path):
 
 def collect_data(num, dirname, benchmarks):
     result = {}
-    metrics = ["Tracing", "Backend", "TOTAL"]
+    metrics = ["Tracing (total)", "Interpretation", "Resume Data", "Optimization", "Backend", "TOTAL"]
 
     for exe_name, _ in COMMANDS:
         for bm in benchmarks:
@@ -86,7 +98,7 @@ def collect_data(num, dirname, benchmarks):
 
 def measure(num, dirname, benchmarks):
     result = collect_data(num, dirname, benchmarks)
-    metrics = ["Tracing", "Backend", "TOTAL"]
+    metrics = ["Tracing (total)", "Interpretation", "Resume Data", "Optimization", "Backend", "TOTAL"]
     output_ave = {metric: {} for metric in metrics}
     output_var = {metric: {} for metric in metrics}
 
@@ -115,135 +127,152 @@ def measure(num, dirname, benchmarks):
     return output_ave, output_var
 
 
-def plot(output_ave, output_var, dirname):
-    metrics = ["Tracing", "Backend", "TOTAL"]
+def plot_stacked_bars(output_ave, output_var, dirname, include_opt_in_tracing):
+    """
+    Create stacked bar charts.
 
-    # Filter out empty metrics
-    available_metrics = [m for m in metrics if m in output_ave and output_ave[m]]
-    n_metrics = len(available_metrics)
-
-    if n_metrics == 0:
-        print("No data to plot")
-        return
-
+    Args:
+        output_ave: Average data
+        output_var: Variance data
+        dirname: Output directory name
+        include_opt_in_tracing: If True, include Optimization in Tracing bar (bug version)
+                                 If False, show Optimization separately (correct version)
+    """
     # Set style for better visuals
     plt.style.use('seaborn-v0_8-darkgrid')
 
-    # Create a large figure with subplots: n_metrics rows, 4 columns
-    # Each row: [absolute bar | absolute mean | normalized bar | normalized geomean]
-    fig = plt.figure(figsize=(22, 5.5 * n_metrics))
+    # Get all benchmarks from the data
+    benchmarks = list(output_ave.get("Interpretation", {}).get("pypy-c", {}).keys())
+    benchmarks = [bm for bm in benchmarks if bm != 'scimark']
+
+    if not benchmarks:
+        print("No benchmark data available")
+        return
+
+    # Prepare data for stacking
+    exe_names = ['pypy-c', 'pypy-jit-ext-c']
+
+    # Create figure with 2 rows: one for each executable
+    fig, axes = plt.subplots(2, 1, figsize=(max(12, len(benchmarks) * 0.8), 10))
     fig.patch.set_facecolor('white')
 
-    for idx, metric in enumerate(available_metrics):
-        df_ave = pd.DataFrame(output_ave[metric])
-        df_var = pd.DataFrame(output_var[metric])
+    # Define colors for each component
+    colors = {
+        'Interpretation': '#3498db',      # Blue
+        'Resume Data': '#9b59b6',         # Purple
+        'Optimization': '#e67e22',        # Orange
+        'Backend': '#e74c3c'              # Red
+    }
 
-        print(f"\n=== {metric} ===")
-        print(df_ave)
-        print(f"\nArithmetic Mean ({metric}):")
-        print(df_ave.mean())
+    for idx, exe_name in enumerate(exe_names):
+        ax = axes[idx]
 
-        # Calculate ratio of arithmetic means
-        mean_pypy_c = df_ave['pypy-c'].mean()
-        mean_pypy_jit_ext_c = df_ave['pypy-jit-ext-c'].mean()
-        ratio_of_means = mean_pypy_jit_ext_c / mean_pypy_c
-        print(f"\nRatio of Arithmetic Means ({metric}):")
-        print(f"pypy-jit-ext-c / pypy-c: {ratio_of_means:.6f}")
+        # Prepare data for this executable
+        interpretation_data = []
+        resume_data = []
+        optimization_data = []
+        backend_data = []
 
-        row = idx
+        for bm in benchmarks:
+            interp = output_ave.get("Interpretation", {}).get(exe_name, {}).get(bm, 0)
+            resume = output_ave.get("Resume Data", {}).get(exe_name, {}).get(bm, 0)
+            opt = output_ave.get("Optimization", {}).get(exe_name, {}).get(bm, 0)
+            backend = output_ave.get("Backend", {}).get(exe_name, {}).get(bm, 0)
 
-        # Define colors
-        colors = ['#3498db', '#e74c3c']  # Blue for pypy-c, Red for pypy-jit-ext-c
+            interpretation_data.append(interp)
+            resume_data.append(resume)
+            optimization_data.append(opt)
+            backend_data.append(backend)
 
-        # Absolute values plot (left side)
-        ax1 = plt.subplot(n_metrics, 4, row * 4 + 1)
-        df_ave.plot.bar(yerr=df_var, ax=ax1, legend=(row == 0),
-                       color=colors, width=0.8, capsize=4, error_kw={'linewidth': 1.5})
-        ax1.set_title(f'{metric} time', fontsize=14, fontweight='bold', pad=10)
-        ax1.set_ylabel('Time (s)', fontsize=12, fontweight='bold')
-        ax1.set_xlabel('')
-        ax1.tick_params(axis='both', labelsize=10)
-        ax1.grid(axis='y', alpha=0.3, linestyle='--')
-        if row == 0:
-            ax1.legend(fontsize=10, framealpha=0.9, loc='upper right')
-        # Rotate x-labels if they're long
-        ax1.tick_params(axis='x', rotation=90)
+        x = np.arange(len(benchmarks))
+        width = 0.6
 
-        ax2 = plt.subplot(n_metrics, 4, row * 4 + 2)
-        df_ave.mean().plot.bar(ax=ax2, legend=False, color=colors, width=0.7)
-        ax2.set_title('Mean', fontsize=14, fontweight='bold', pad=10)
-        ax2.set_ylabel('Time (s)', fontsize=12, fontweight='bold')
-        ax2.set_xlabel('')
-        ax2.tick_params(axis='both', labelsize=10)
-        ax2.grid(axis='y', alpha=0.3, linestyle='--')
-        ax2.tick_params(axis='x', rotation=90)
+        if include_opt_in_tracing:
+            # Version 1 (bug): Optimization included in Tracing
+            # Stack order: Interpretation + Resume Data + Optimization, then Backend
+            p1 = ax.bar(x, interpretation_data, width, label='Interpretation',
+                       color=colors['Interpretation'])
+            p2 = ax.bar(x, resume_data, width, bottom=interpretation_data,
+                       label='Resume Data', color=colors['Resume Data'])
 
-        # Normalized values plot (right side)
-        new_df_ave = df_ave['pypy-jit-ext-c'] / df_ave['pypy-c']
-        geomean_normalized = geometric_mean(new_df_ave.values)
+            # Add Optimization on top of Resume Data
+            bottom_for_opt = np.array(interpretation_data) + np.array(resume_data)
+            p3 = ax.bar(x, optimization_data, width, bottom=bottom_for_opt,
+                       label='Optimization (in Tracing)', color=colors['Optimization'])
 
-        print(f"\nGeometric Mean ({metric}, normalized):")
-        if pd.notna(geomean_normalized):
-            print(f"pypy-jit-ext-c / pypy-c: {geomean_normalized:.6f}")
+            # Backend on top of everything
+            bottom_for_backend = bottom_for_opt + np.array(optimization_data)
+            p4 = ax.bar(x, backend_data, width, bottom=bottom_for_backend,
+                       label='Backend', color=colors['Backend'])
+
+            title_suffix = " (Bug: Optimization in Tracing)"
         else:
-            print(f"pypy-jit-ext-c / pypy-c: N/A (no valid data)")
+            # Version 2 (correct): Optimization separate
+            # Stack order: Interpretation + Resume Data, then Optimization, then Backend
+            p1 = ax.bar(x, interpretation_data, width, label='Interpretation',
+                       color=colors['Interpretation'])
+            p2 = ax.bar(x, resume_data, width, bottom=interpretation_data,
+                       label='Resume Data', color=colors['Resume Data'])
 
-        ax3 = plt.subplot(n_metrics, 4, row * 4 + 3)
-        new_df_ave.plot.bar(ax=ax3, legend=False, color='#2ecc71', width=0.8)
-        ax3.set_title(f'{metric} time (normalized)', fontsize=14, fontweight='bold', pad=10)
-        ax3.set_ylabel('Relative time (pypy-jit-ext-c / pypy-c)', fontsize=11, fontweight='bold')
-        ax3.set_xlabel('')
-        ax3.tick_params(axis='both', labelsize=10)
-        ax3.grid(axis='y', alpha=0.3, linestyle='--')
-        ax3.axhline(1.0, color='#e74c3c', linestyle='--', linewidth=2, alpha=0.8, label='Baseline')
-        ax3.tick_params(axis='x', rotation=90)
-        # Add shading for better/worse regions
-        ax3.axhspan(0, 1, alpha=0.05, color='green', zorder=0)
-        ax3.axhspan(1, ax3.get_ylim()[1], alpha=0.05, color='red', zorder=0)
+            # Backend after tracing components
+            bottom_for_opt = np.array(interpretation_data) + np.array(resume_data)
+            p3 = ax.bar(x, optimization_data, width, bottom=bottom_for_opt,
+                       label='Optimization', color=colors['Optimization'])
 
-        ax4 = plt.subplot(n_metrics, 4, row * 4 + 4)
-        if pd.notna(geomean_normalized):
-            # Show both geomean and ratio of means
-            x_pos = [0, 1]
-            values = [geomean_normalized, ratio_of_means]
-            labels = ['Geomean', 'Ratio of\nMeans']
-            bar_colors = ['#9b59b6', '#f39c12']  # Purple and orange
-            bars = ax4.bar(x_pos, values, color=bar_colors, width=0.7,
-                          edgecolor='black', linewidth=1.5)
-            ax4.axhline(1.0, color='#e74c3c', linestyle='--', linewidth=2, alpha=0.8)
-            y_max = max(2.0, max(values) * 1.15)
-            ax4.set_ylim([min(0, min(values) * 0.9), y_max])
-            ax4.set_ylabel('Relative time', fontsize=12, fontweight='bold')
-            ax4.set_title('Summary', fontsize=14, fontweight='bold', pad=10)
-            ax4.set_xticks(x_pos)
-            ax4.set_xticklabels(labels, fontsize=10, fontweight='bold')
-            ax4.tick_params(axis='y', labelsize=10)
-            ax4.grid(axis='y', alpha=0.3, linestyle='--')
-            # Add shading for better/worse regions
-            ax4.axhspan(0, 1, alpha=0.05, color='green', zorder=0)
-            ax4.axhspan(1, y_max, alpha=0.05, color='red', zorder=0)
-            # Add value labels with background
-            for i, v in enumerate(values):
-                # Determine if value is better (< 1) or worse (> 1)
-                color = 'green' if v < 1.0 else 'red' if v > 1.0 else 'black'
-                ax4.text(i, v, f'{v:.4f}',
-                        ha='center', va='bottom', fontweight='bold', fontsize=11,
-                        color=color,
-                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
-                                 edgecolor=color, alpha=0.8))
-        else:
-            ax4.set_title('Summary (N/A)', fontsize=14, fontweight='bold', pad=10)
-            ax4.text(0.5, 0.5, 'No valid data', ha='center', va='center',
-                    transform=ax4.transAxes, fontsize=12, fontweight='bold')
+            # Backend on top
+            bottom_for_backend = bottom_for_opt + np.array(optimization_data)
+            p4 = ax.bar(x, backend_data, width, bottom=bottom_for_backend,
+                       label='Backend', color=colors['Backend'])
+
+            title_suffix = " (Correct: Optimization Separate)"
+
+        ax.set_ylabel('Time (s)', fontsize=12, fontweight='bold')
+        ax.set_title(f'{exe_name}{title_suffix}', fontsize=14, fontweight='bold', pad=10)
+        ax.set_xticks(x)
+        ax.set_xticklabels(benchmarks, rotation=90, ha='right')
+        ax.legend(loc='upper left', fontsize=9, framealpha=0.9)
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
+
+        # Print statistics
+        total_interp = sum(interpretation_data)
+        total_resume = sum(resume_data)
+        total_opt = sum(optimization_data)
+        total_backend = sum(backend_data)
+        total_all = total_interp + total_resume + total_opt + total_backend
+
+        print(f"\n=== {exe_name} ===")
+        print(f"Interpretation:  {total_interp:.6f} s ({100*total_interp/total_all:.2f}%)")
+        print(f"Resume Data:     {total_resume:.6f} s ({100*total_resume/total_all:.2f}%)")
+        print(f"Optimization:    {total_opt:.6f} s ({100*total_opt/total_all:.2f}%)")
+        print(f"Backend:         {total_backend:.6f} s ({100*total_backend/total_all:.2f}%)")
+        print(f"Total:           {total_all:.6f} s")
 
     # Add overall title
-    fig.suptitle('PyPy JIT Performance Metrics Comparison',
-                 fontsize=18, fontweight='bold', y=0.995)
+    version_label = "WITH Optimization in Tracing (Bug)" if include_opt_in_tracing else "WITHOUT Optimization in Tracing (Correct)"
+    fig.suptitle(f'PyPy JIT Component Breakdown - {version_label}',
+                 fontsize=16, fontweight='bold', y=0.995)
 
-    plt.tight_layout(rect=[0, 0, 1, 0.99])  # Adjust for suptitle
-    filename = f'{dirname}_all_metrics.pdf'
+    plt.tight_layout(rect=[0, 0, 1, 0.98])
+
+    suffix = "_with_opt" if include_opt_in_tracing else "_without_opt"
+    filename = f'{dirname}_stacked_bars{suffix}.pdf'
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     print(f"\nSaved: {filename}")
+
+    plt.close()
+
+
+def plot(output_ave, output_var, dirname):
+    """Generate both versions of stacked bar charts"""
+    print("\n" + "="*80)
+    print("Generating Version 1: Optimization INCLUDED in Tracing (Bug)")
+    print("="*80)
+    plot_stacked_bars(output_ave, output_var, dirname, include_opt_in_tracing=True)
+
+    print("\n" + "="*80)
+    print("Generating Version 2: Optimization SEPARATE from Tracing (Correct)")
+    print("="*80)
+    plot_stacked_bars(output_ave, output_var, dirname, include_opt_in_tracing=False)
 
     # Reset style to default after plotting
     plt.style.use('default')
