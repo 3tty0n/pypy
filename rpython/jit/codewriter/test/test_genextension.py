@@ -9,11 +9,25 @@ from rpython.jit.codewriter.effectinfo import EffectInfo
 from rpython.rtyper.lltypesystem import lltype, llmemory
 from rpython.jit.metainterp.history import AbstractDescr
 from rpython.jit.codewriter.genextension import WorkList
+from rpython.config import translationoption
+from rpython.config.translationoption import get_combined_translation_config
 
 import pytest
 
 
-def test_assemble_loop():
+@pytest.fixture
+def enable_genextension(request):
+    config = get_combined_translation_config(translating=True)
+    config.translation.genextension = True
+    old_config = translationoption._GLOBAL_TRANSLATIONCONFIG
+    translationoption._GLOBAL_TRANSLATIONCONFIG = config
+    def cleanup():
+        translationoption._GLOBAL_TRANSLATIONCONFIG = old_config
+    request.addfinalizer(cleanup)
+    return config
+
+
+def test_assemble_loop(enable_genextension):
     ssarepr = SSARepr("test", genextension=True)
     i0, i1 = Register('int', 0x16), Register('int', 0x17)
     ssarepr.insns = [
@@ -143,7 +157,7 @@ def jit_shortcut(self): # test
             assert 0, 'unreachable'
         assert 0 # unreachable"""
 
-def test_integration_switch():
+def test_integration_switch(enable_genextension):
     ssarepr = SSARepr("test", genextension=True)
     i0 = Register('int', 0x16)
     switchdescr = SwitchDictDescr()
@@ -258,7 +272,7 @@ def jit_shortcut(self): # test
         assert 0 # unreachable"""
 
 @pytest.mark.xfail()
-def test_skip_jump_to_live():
+def test_skip_jump_to_live(enable_genextension):
     ssarepr = SSARepr("test", genextension=True)
     i0, i1 = Register('int', 0x0), Register('int', 0x1)
     ssarepr.insns = [
@@ -321,7 +335,7 @@ def jit_shortcut(self): # test
 
 
 @pytest.mark.xfail()
-def test_skip_conditional_jump():
+def test_skip_conditional_jump(enable_genextension):
     ssarepr = SSARepr("test", genextension=True)
     i0, i1 = Register('int', 0x0), Register('int', 0x1)
     ssarepr.insns = [
@@ -399,7 +413,7 @@ def jit_shortcut(self): # test
 
 
 @pytest.mark.xfail()
-def test_skip_chained_jump_1():
+def test_skip_chained_jump_1(enable_genextension):
     ssarepr = SSARepr("test", genextension=True)
     i0, i1 = Register('int', 0x0), Register('int', 0x1)
     ssarepr.insns = [
