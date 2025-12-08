@@ -41,6 +41,24 @@ class EmptyProfiler(BaseProfiler):
     def end_backend(self):
         pass
 
+    def start_interpretation(self):
+        pass
+
+    def end_interpretation(self):
+        pass
+
+    def start_optimization(self):
+        pass
+
+    def end_optimization(self):
+        pass
+
+    def start_resume_data(self):
+        pass
+
+    def end_resume_data(self):
+        pass
+
     def count(self, kind, inc=1):
         pass
 
