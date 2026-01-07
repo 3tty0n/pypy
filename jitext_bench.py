@@ -28,7 +28,7 @@ BENCHMARKS_OWN_MICRO = [
     "nbody_modified",
     "raytrace-simple",
     "spectral-norm",
-    "hexiom2",
+    #"hexiom2",
     "json_bench",
 ]
 
