@@ -47,6 +47,7 @@ TAGMASK = 0x3
 TAGSHIFT = 2
 
 INIT_SIZE = 4096
+SNAPSHOT_INIT_SIZE = 2048  # Initial size for snapshot buffers
 
 # XXX todos left:
 # - SnapshotIterator is very inefficient
@@ -484,9 +485,12 @@ class Trace(BaseTrace):
         self._bigints = []
         self._bigints_dict = {}
         self._floats = []
-        self._snapshot_data = []
-        self._snapshot_array_data = []
-        self.append_snapshot_array_data_int(0) # all 0-length arrays get index 0
+        # Pre-allocate snapshot buffers with position tracking for efficiency
+        self._snapshot_data = ['\x00'] * SNAPSHOT_INIT_SIZE
+        self._snapshot_data_pos = 0
+        self._snapshot_array_data = ['\x00'] * SNAPSHOT_INIT_SIZE
+        self._snapshot_array_data_pos = 0
+        self._append_snapshot_array_data_int(0) # all 0-length arrays get index 0
         if not we_are_translated() and isinstance(max_num_inputargs, list): # old api for tests
             self.inputargs = max_num_inputargs
             for i, box in enumerate(max_num_inputargs):
@@ -509,6 +513,12 @@ class Trace(BaseTrace):
 
     def _double_ops(self):
         self._ops = self._ops + ['\x00'] * len(self._ops)
+
+    def _double_snapshot_data(self):
+        self._snapshot_data = self._snapshot_data + ['\x00'] * len(self._snapshot_data)
+
+    def _double_snapshot_array_data(self):
+        self._snapshot_array_data = self._snapshot_array_data + ['\x00'] * len(self._snapshot_array_data)
 
     def append_byte(self, c):
         assert 0 <= c < 256
@@ -553,8 +563,8 @@ class Trace(BaseTrace):
         debug_print("trace length:", self._pos)
         debug_print(" number operations:", self._count)
         debug_print(" total snapshots:", self._total_snapshots)
-        debug_print(" snapshot data:", len(self._snapshot_data))
-        debug_print(" snapshot array data:", len(self._snapshot_array_data))
+        debug_print(" snapshot data:", self._snapshot_data_pos)
+        debug_print(" snapshot array data:", self._snapshot_array_data_pos)
         debug_print(" bigint consts: ", self._consts_bigint, len(self._bigints))
         debug_print(" float consts: ", self._consts_float, len(self._floats))
         debug_print(" ref consts: ", self._consts_ptr, self._consts_ptr_nodict,  len(self._refs))
@@ -565,7 +575,7 @@ class Trace(BaseTrace):
         return self._pos
 
     def cut_point(self):
-        return self._pos, self._count, self._index, len(self._snapshot_data), len(self._snapshot_array_data)
+        return self._pos, self._count, self._index, self._snapshot_data_pos, self._snapshot_array_data_pos
 
     def cut_at(self, end):
         self._pos = end[0]
@@ -573,6 +583,8 @@ class Trace(BaseTrace):
         index = end[2]
         assert index >= 0
         self._index = index
+        self._snapshot_data_pos = end[3]
+        self._snapshot_array_data_pos = end[4]
 
     def cut_trace_from(self, (start, count, index, x, y), inputargs):
         return CutTrace(self, start, count, index, inputargs)
@@ -728,27 +740,71 @@ class Trace(BaseTrace):
     def new_array(self, lgt):
         if lgt == 0:
             return 0
-        res = len(self._snapshot_array_data)
+        res = self._snapshot_array_data_pos
         self.append_snapshot_array_data_int(lgt)
         return res
 
     def _add_box_to_storage(self, box):
         self.append_snapshot_array_data_int(self._encode(box))
 
-    def append_snapshot_array_data_int(self, i):
+    def _append_snapshot_array_data_int(self, i):
+        """Write varint to snapshot_array_data using pre-allocated buffer."""
         if not MIN_VALUE <= i <= MAX_VALUE:
             self.tag_overflow = True
             i = 0
-        encode_varint_signed(i, self._snapshot_array_data)
+        # Ensure buffer has space for max 4 bytes
+        if self._snapshot_array_data_pos + 4 > len(self._snapshot_array_data):
+            self._double_snapshot_array_data()
+        buf = self._snapshot_array_data
+        pos = self._snapshot_array_data_pos
+        flag = bool(not (-2**14 <= i < 2 ** 14)) << 7
+        buf[pos] = chr((i & 0b1111111) | flag)
+        pos += 1
+        i >>= 7
+        buf[pos] = chr(i & 0xff)
+        pos += 1
+        if flag:
+            i >>= 8
+            buf[pos] = chr(i & 0xff)
+            pos += 1
+            i >>= 8
+            buf[pos] = chr(i & 0xff)
+            pos += 1
+        self._snapshot_array_data_pos = pos
 
-    def append_snapshot_data_int(self, i):
+    # Alias for compatibility
+    append_snapshot_array_data_int = _append_snapshot_array_data_int
+
+    def _append_snapshot_data_int(self, i):
+        """Write varint to snapshot_data using pre-allocated buffer."""
         if not MIN_VALUE <= i <= MAX_VALUE:
             self.tag_overflow = True
             i = 0
-        encode_varint_signed(i, self._snapshot_data)
+        # Ensure buffer has space for max 4 bytes
+        if self._snapshot_data_pos + 4 > len(self._snapshot_data):
+            self._double_snapshot_data()
+        buf = self._snapshot_data
+        pos = self._snapshot_data_pos
+        flag = bool(not (-2**14 <= i < 2 ** 14)) << 7
+        buf[pos] = chr((i & 0b1111111) | flag)
+        pos += 1
+        i >>= 7
+        buf[pos] = chr(i & 0xff)
+        pos += 1
+        if flag:
+            i >>= 8
+            buf[pos] = chr(i & 0xff)
+            pos += 1
+            i >>= 8
+            buf[pos] = chr(i & 0xff)
+            pos += 1
+        self._snapshot_data_pos = pos
+
+    # Alias for compatibility
+    append_snapshot_data_int = _append_snapshot_data_int
 
     def _encode_snapshot(self, index, pc, array, is_last=False):
-        res = len(self._snapshot_data)
+        res = self._snapshot_data_pos
         self.append_snapshot_data_int(index)
         self.append_snapshot_data_int(pc)
         # arrays are indexes into self._snapshot_data
@@ -768,7 +824,7 @@ class Trace(BaseTrace):
         self._total_snapshots += 1
         array = frame.get_list_of_active_boxes(False, self.new_array, self._add_box_to_storage,
                 after_residual_call=after_residual_call)
-        s = len(self._snapshot_data)
+        s = self._snapshot_data_pos
         vable_array = self._list_of_boxes_virtualizable(vable_boxes)
         vref_array = self._list_of_boxes(vref_boxes)
         self.append_snapshot_data_int(vable_array)
@@ -786,7 +842,7 @@ class Trace(BaseTrace):
 
     def create_empty_top_snapshot(self, vable_boxes, vref_boxes):
         self._total_snapshots += 1
-        s = len(self._snapshot_data)
+        s = self._snapshot_data_pos
         array = self._list_of_boxes([])
         vable_array = self._list_of_boxes_virtualizable(vable_boxes)
         vref_array = self._list_of_boxes(vref_boxes)
@@ -810,10 +866,12 @@ class Trace(BaseTrace):
         return self._encode_snapshot(frame.jitcode.index, frame.pc, array, is_last=is_last)
 
     def snapshot_add_prev(self, prev):
-        assert self._snapshot_data[-2] == '}' # SNAPSHOT_PREV_NEEDS_PATCHING
-        assert self._snapshot_data[-1] == '\xff'
-        self._snapshot_data.pop()
-        self._snapshot_data.pop()
+        # Check that we're patching SNAPSHOT_PREV_NEEDS_PATCHING (-3 encoded as 2 bytes)
+        pos = self._snapshot_data_pos
+        assert self._snapshot_data[pos - 2] == '}' # SNAPSHOT_PREV_NEEDS_PATCHING
+        assert self._snapshot_data[pos - 1] == '\xff'
+        # Instead of pop(), just decrement position to "remove" the 2 bytes
+        self._snapshot_data_pos = pos - 2
         self.append_snapshot_data_int(prev)
 
     def capture_resumedata(self, framestack, virtualizable_boxes, virtualref_boxes, after_residual_call=False):
