@@ -5,6 +5,11 @@ from rpython.jit.metainterp.resoperation import rop, OpHelpers
 from rpython.jit.metainterp.executor import constant_from_op
 from rpython.rlib.rarithmetic import r_uint32, r_uint
 from rpython.rlib.objectmodel import always_inline, specialize
+import os
+
+# Set to True to enable verification mode (slower but validates fast-path correctness)
+# Can also be enabled via environment variable PYPY_HEAPCACHE_VERIFY=1
+HEAPCACHE_VERIFY_FASTPATH = os.environ.get('PYPY_HEAPCACHE_VERIFY', '') == '1'
 
 """ A big note: we don't do heap caches on Consts, because it used
 to be done with the identity of the Const instance. This gives very wonky
@@ -158,6 +163,11 @@ class HeapCache(object):
         # use the other, older version number.
         self.head_version = r_uint(0)
         self.likely_virtual_version = r_uint(0)
+        # Profiling counters for heapcache costs analysis
+        self._count_invalidate_calls = 0
+        self._count_fastpath_skips = 0
+        self._count_mark_escaped = 0
+        self._count_clear_caches = 0
         self.reset()
 
     def reset(self):
@@ -209,17 +219,69 @@ class HeapCache(object):
             ref_frontend_op._heapc_deps = None
 
     def invalidate_caches_varargs(self, opnum, descr, argboxes):
+        self._count_invalidate_calls += 1
+        if self._is_pure_int_op(opnum):
+            if HEAPCACHE_VERIFY_FASTPATH:
+                self._verify_pure_int_op_invariants(opnum, argboxes)
+            self._count_fastpath_skips += 1
+            return
         self.mark_escaped_varargs(opnum, descr, argboxes)
+        self._count_mark_escaped += 1
         if self.clear_caches_not_necessary(opnum, descr):
             return
+        self._count_clear_caches += 1
         self.clear_caches_varargs(opnum, descr, argboxes)
 
     @specialize.arg(1)
     def invalidate_caches(self, opnum, descr, *argboxes):
+        self._count_invalidate_calls += 1
+        if self._is_pure_int_op(opnum):
+            if HEAPCACHE_VERIFY_FASTPATH:
+                self._verify_pure_int_op_invariants_tuple(opnum, argboxes)
+            self._count_fastpath_skips += 1
+            return
         self.mark_escaped(opnum, descr, *argboxes)
+        self._count_mark_escaped += 1
         if self.clear_caches_not_necessary(opnum, descr):
             return
+        self._count_clear_caches += 1
         self.clear_caches(opnum, descr, *argboxes)
+
+    @always_inline
+    def _is_pure_int_op(self, opnum):
+        """Check if opnum is a pure integer/float operation with no heap effects."""
+        # The ALWAYS_PURE range includes pure int/float ops, but also some
+        # pointer ops and heap-reading ops that we must NOT skip
+        if not (rop._ALWAYS_PURE_FIRST <= opnum <= rop._ALWAYS_PURE_LAST):
+            return False
+        # Exclude pointer operations - they may have RefFrontendOp args
+        if (opnum == rop.PTR_EQ or opnum == rop.PTR_NE or
+            opnum == rop.INSTANCE_PTR_EQ or opnum == rop.INSTANCE_PTR_NE or
+            opnum == rop.CAST_PTR_TO_INT or opnum == rop.CAST_INT_TO_PTR or
+            opnum == rop.NURSERY_PTR_INCREMENT or opnum == rop.SAME_AS_R):
+            return False
+        # Exclude heap-reading operations - they access GC objects
+        if (opnum == rop.ARRAYLEN_GC or opnum == rop.STRLEN or
+            opnum == rop.STRGETITEM or
+            opnum == rop.GETARRAYITEM_GC_PURE_I or
+            opnum == rop.GETARRAYITEM_GC_PURE_F or
+            opnum == rop.GETARRAYITEM_GC_PURE_R or
+            opnum == rop.UNICODELEN or opnum == rop.UNICODEGETITEM or
+            opnum == rop.LOAD_FROM_GC_TABLE):
+            return False
+        return True
+
+    def _verify_pure_int_op_invariants(self, opnum, argboxes):
+        for box in argboxes:
+            if isinstance(box, RefFrontendOp):
+                raise AssertionError(
+                    "Pure int op %d has RefFrontendOp arg - _is_pure_int_op is wrong!" % opnum)
+
+    def _verify_pure_int_op_invariants_tuple(self, opnum, argboxes):
+        for box in argboxes:
+            if isinstance(box, RefFrontendOp):
+                raise AssertionError(
+                    "Pure int op %d has RefFrontendOp arg - _is_pure_int_op is wrong!" % opnum)
 
     def _escape_from_write(self, box, fieldbox):
         if self.is_unescaped(box) and self.is_unescaped(fieldbox):
@@ -637,3 +699,23 @@ class HeapCache(object):
         self.loop_invariant_descr = descr
         self.loop_invariant_arg0int = allboxes[0].getint()
         self.loop_invariant_result = res
+
+    def get_heapcache_stats(self):
+        """Return profiling stats for heapcache costs analysis.
+        - invalidate_calls: total calls to invalidate_caches
+        - fastpath_skips: calls that took the fast path (pure int ops)
+        - mark_escaped: calls that ran mark_escaped
+        - clear_caches: calls that ran clear_caches
+        """
+        return {
+            'invalidate_calls': self._count_invalidate_calls,
+            'fastpath_skips': self._count_fastpath_skips,
+            'mark_escaped': self._count_mark_escaped,
+            'clear_caches': self._count_clear_caches,
+        }
+
+    def reset_heapcache_stats(self):
+        self._count_invalidate_calls = 0
+        self._count_fastpath_skips = 0
+        self._count_mark_escaped = 0
+        self._count_clear_caches = 0
