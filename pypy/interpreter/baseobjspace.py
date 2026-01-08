@@ -236,6 +236,7 @@ class W_Root(object):
 
     # -------------------------------------------------------------------
 
+    @jit.warmup_critical_function
     def is_w(self, space, w_other):
         return self is w_other
 

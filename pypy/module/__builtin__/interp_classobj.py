@@ -90,6 +90,7 @@ class W_ClassObject(W_Root):
         return False
 
     @jit.unroll_safe
+    @jit.warmup_critical_function
     def lookup(self, space, attr):
         # returns w_value or interplevel None
         w_result = space.finditem_str(self.w_dict, attr)
@@ -313,6 +314,7 @@ class W_InstanceObject(W_Root):
             raise oefmt(space.w_TypeError, "__class__ must be set to a class")
         self.w_class = w_class
 
+    @jit.warmup_critical_function
     def getattr_from_class(self, space, name):
         # Look up w_name in the class dict, and call its __get__.
         # This method ignores the instance dict and the __getattr__.
@@ -326,6 +328,7 @@ class W_InstanceObject(W_Root):
             return w_value
         return space.call_function(w_descr_get, w_value, self, self.w_class)
 
+    @jit.warmup_critical_function
     def getattr(self, space, name, exc=True):
         # Normal getattr rules: look up w_name in the instance dict,
         # in the class dict, and then via a call to __getatttr__.
@@ -353,6 +356,7 @@ class W_InstanceObject(W_Root):
             return None
 
     @unwrap_spec(name='text')
+    @jit.warmup_critical_function
     def descr_getattribute(self, space, name):
         if len(name) >= 8 and name[0] == '_':
             if name == "__dict__":

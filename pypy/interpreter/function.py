@@ -82,6 +82,7 @@ class Function(W_Root):
             return jit.promote(self.code)
         return self.code
 
+    @jit.warmup_critical_function
     def funccall(self, *args_w): # speed hack
         from pypy.interpreter import gateway
         from pypy.interpreter.pycode import PyCode
@@ -461,6 +462,7 @@ class Function(W_Root):
         return w_res
 
 
+@jit.warmup_critical_function
 def descr_function_get(space, w_function, w_obj, w_cls=None):
     """functionobject.__get__(obj[, type]) -> method"""
     # this is not defined as a method on Function because it's generally
