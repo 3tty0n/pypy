@@ -11,6 +11,15 @@ from rpython.jit.codewriter.jitcode import SwitchDictDescr
 from rpython.rtyper.lltypesystem import lltype, llmemory, rstr
 from rpython.rtyper.rclass import OBJECTPTR
 from rpython.rlib import objectmodel
+from rpython.jit.codewriter.genextprof import (
+    SLOWPATH_PROFILE_ENABLED, get_profiler, classify_opcode,
+    REASON_NO_UNSPEC_METHOD, REASON_NO_SPEC_METHOD,
+    REASON_UNSUPPORTED_SPEC, REASON_UNSUPPORTED_UNSPEC,
+    REASON_SPEC_RETURNED_NONE, REASON_UNSPEC_RETURNED_NONE,
+    REASON_IS_CALL, REASON_IS_GUARD, REASON_IS_MEMORY_OP,
+    REASON_HAS_LABEL_ARG, REASON_IS_LIVE_OP, REASON_NEWFRAME,
+    REASON_FAST_PATH
+)
 
 HEAPCACHE_SKIP_OPS = frozenset([
     # Integer binary operations
@@ -575,7 +584,11 @@ class WorkList(object):
         code_and_spec_per_pc = {}
         while self.todo:
             spec = self.todo.popleft()
-            code_and_spec_per_pc[spec.spec_pc] = spec.make_code(), spec
+            if SLOWPATH_PROFILE_ENABLED:
+                code = spec.make_code_with_profiling()
+            else:
+                code = spec.make_code()
+            code_and_spec_per_pc[spec.spec_pc] = code, spec
         return code_and_spec_per_pc
 
 
@@ -651,6 +664,60 @@ class Specializer(object):
                 return self._make_code_unspecialized()
             return self._make_code_specialized()
         except Unsupported:
+            return None
+
+    def make_code_with_profiling(self):
+        profiler = get_profiler()
+        opname = self.name.strip('-')
+        args = self._get_args()
+
+        category = classify_opcode(self.name)
+        if category == REASON_IS_LIVE_OP:
+            return None
+
+        has_spec = hasattr(self, "emit_specialized_" + opname)
+        has_unspec = hasattr(self, "emit_unspecialized_" + opname)
+        profiler.record_method_info(opname, has_spec, has_unspec)
+
+        try:
+            if not self._check_all_constant_args(args):
+                # Non-constant args path
+                if not has_unspec:
+                    # Determine more specific reason
+                    if category:
+                        profiler.record_codegen(opname, category)
+                    else:
+                        profiler.record_codegen(opname, REASON_NO_UNSPEC_METHOD)
+                    return None
+                result = self._make_code_unspecialized()
+                if result is None:
+                    profiler.record_codegen(opname, REASON_UNSPEC_RETURNED_NONE)
+                else:
+                    profiler.record_codegen(opname, REASON_FAST_PATH)
+                return result
+            else:
+                if has_spec:
+                    try:
+                        result = self._make_code_specialized()
+                        if result is None:
+                            profiler.record_codegen(opname, REASON_SPEC_RETURNED_NONE)
+                        else:
+                            profiler.record_codegen(opname, REASON_FAST_PATH)
+                        return result
+                    except Unsupported:
+                        profiler.record_codegen(opname, REASON_UNSUPPORTED_SPEC)
+                        return None
+                else:
+                    if category:
+                        profiler.record_codegen(opname, category)
+                    else:
+                        profiler.record_codegen(opname, REASON_NO_SPEC_METHOD)
+                    return None
+        except Unsupported:
+            if self._check_all_constant_args(args):
+                profiler.record_codegen(opname, REASON_UNSUPPORTED_SPEC)
+            else:
+                profiler.record_codegen(opname, REASON_UNSUPPORTED_UNSPEC)
             return None
 
     def _is_label(self, arg):
@@ -1192,6 +1259,10 @@ class Specializer(object):
         lines = []
         self._emit_jump(lines, label_pc)
         return lines
+
+    # Unspecialized goto - label is always a compile-time constant,
+    # but this provides robustness for edge cases
+    emit_unspecialized_goto = emit_specialized_goto
 
     def emit_specialized_goto_if_not_absolute(self, name, symbol_fmt):
         if symbol_fmt == '':
