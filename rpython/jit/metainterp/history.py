@@ -771,6 +771,38 @@ class History(object):
         op = self._make_op(pos, value)
         return op
 
+    def record0_int(self, opnum, intvalue, descr=None):
+        pos = self.trace.record_op0(opnum, descr)
+        return IntFrontendOp(pos, intvalue)
+
+    def record1_int(self, opnum, argbox1, intvalue, descr=None):
+        pos = self.trace.record_op1(opnum, argbox1, descr)
+        return IntFrontendOp(pos, intvalue)
+
+    def record2_int(self, opnum, argbox1, argbox2, intvalue, descr=None):
+        pos = self.trace.record_op2(opnum, argbox1, argbox2, descr)
+        return IntFrontendOp(pos, intvalue)
+
+    def record3_int(self, opnum, argbox1, argbox2, argbox3, intvalue, descr=None):
+        pos = self.trace.record_op3(opnum, argbox1, argbox2, argbox3, descr)
+        return IntFrontendOp(pos, intvalue)
+
+    def record1_float(self, opnum, argbox1, floatvalue, descr=None):
+        pos = self.trace.record_op1(opnum, argbox1, descr)
+        return FloatFrontendOp(pos, floatvalue)
+
+    def record2_float(self, opnum, argbox1, argbox2, floatvalue, descr=None):
+        pos = self.trace.record_op2(opnum, argbox1, argbox2, descr)
+        return FloatFrontendOp(pos, floatvalue)
+
+    def record1_ref(self, opnum, argbox1, refvalue, descr=None):
+        pos = self.trace.record_op1(opnum, argbox1, descr)
+        return RefFrontendOp(pos, refvalue)
+
+    def record2_ref(self, opnum, argbox1, argbox2, refvalue, descr=None):
+        pos = self.trace.record_op2(opnum, argbox1, argbox2, descr)
+        return RefFrontendOp(pos, refvalue)
+
     @specialize.argtype(2)
     def _make_op(self, pos, value):
         if value is None:

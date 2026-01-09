@@ -12,6 +12,31 @@ from rpython.rtyper.lltypesystem import lltype, llmemory, rstr
 from rpython.rtyper.rclass import OBJECTPTR
 from rpython.rlib import objectmodel
 
+HEAPCACHE_SKIP_OPS = frozenset([
+    # Integer binary operations
+    'int_add', 'int_sub', 'int_mul', 'int_floordiv', 'int_mod',
+    'int_and', 'int_or', 'int_xor', 'int_rshift', 'int_lshift',
+    'uint_rshift', 'uint_mul_high',
+    # Integer comparisons
+    'int_lt', 'int_le', 'int_eq', 'int_ne', 'int_gt', 'int_ge',
+    'uint_lt', 'uint_le', 'uint_gt', 'uint_ge',
+    # Integer unary operations
+    'int_neg', 'int_invert', 'int_is_true', 'int_is_zero',
+    'int_force_ge_zero', 'int_signext',
+    # Float binary operations
+    'float_add', 'float_sub', 'float_mul', 'float_truediv',
+    # Float comparisons
+    'float_lt', 'float_le', 'float_eq', 'float_ne', 'float_gt', 'float_ge',
+    # Float unary operations
+    'float_neg', 'float_abs',
+    # Cast operations (int <-> float)
+    'cast_float_to_int', 'cast_int_to_float',
+    'cast_float_to_singlefloat', 'cast_singlefloat_to_float',
+])
+
+def can_skip_heapcache(opname):
+    return opname in HEAPCACHE_SKIP_OPS
+
 class GenExtension(object):
     def __init__(self, assembler, ssarepr, jitcode):
         self.assembler = assembler
@@ -121,8 +146,11 @@ class GenExtension(object):
         for line in self.code:
             allcode.append(" " * 8 + line)
         self.jitcode._genext_source = "\n".join(allcode)
+        # Import rop for opnum constants used in type-specialized recording
+        from rpython.jit.metainterp.resoperation import rop
         d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr, "ConstFloat": ConstFloat, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
-             "lltype": lltype, "rstr": rstr, 'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR, 'support': support}
+             "lltype": lltype, "rstr": rstr, 'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR, 'support': support,
+             'rop': rop}
         d.update(self.globals)
         source = py.code.Source(self.jitcode._genext_source)
         exec source.compile() in d
@@ -773,6 +801,168 @@ class Specializer(object):
         lines = ["i%s = ~%s" % (result.index, self._get_as_unboxed(arg0))]
         self._emit_jump(lines)
         return lines
+
+    def _emit_unspecialized_int_binary_fast(self, rop_name, py_op):
+        """Generate fast-path code for integer binary ops with non-constant args."""
+        arg0, arg1, result = self._get_args_and_res()
+        lines = []
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        box1 = self._get_as_box_after_sync(arg1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
+        lines.append("_res = _v0 %s _v1" % py_op)
+        lines.append("# fast-path recording, skip heapcache")
+        lines.append("_op = self.metainterp.history.record2_int(rop.%s, %s, %s, _res)" % (
+            rop_name, box0, box1))
+        lines.append("self.registers_i[%d] = _op" % result.index)
+        lines.append("i%d = _res" % result.index)
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+
+    def _emit_unspecialized_int_comparison_fast(self, rop_name, py_op):
+        """Generate fast-path code for integer comparison ops."""
+        arg0, arg1, result = self._get_args_and_res()
+        lines = []
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        box1 = self._get_as_box_after_sync(arg1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
+        lines.append("_res = int(_v0 %s _v1)" % py_op)
+        lines.append("# fast-path recording, skip heapcache")
+        lines.append("_op = self.metainterp.history.record2_int(rop.%s, %s, %s, _res)" % (
+            rop_name, box0, box1))
+        lines.append("self.registers_i[%d] = _op" % result.index)
+        lines.append("i%d = _res" % result.index)
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+
+    def _emit_unspecialized_float_binary_fast(self, rop_name, py_op):
+        """Generate fast-path code for float binary ops."""
+        arg0, arg1, result = self._get_args_and_res()
+        lines = []
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        box1 = self._get_as_box_after_sync(arg1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
+        lines.append("_res = _v0 %s _v1" % py_op)
+        lines.append("# fast-path recording, skip heapcache")
+        lines.append("_op = self.metainterp.history.record2_float(rop.%s, %s, %s, _res)" % (
+            rop_name, box0, box1))
+        lines.append("self.registers_f[%d] = _op" % result.index)
+        lines.append("f%d = _res" % result.index)
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+
+    def _emit_unspecialized_float_comparison_fast(self, rop_name, py_op):
+        """Generate fast-path code for float comparison ops (returns int)."""
+        arg0, arg1, result = self._get_args_and_res()
+        lines = []
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        box1 = self._get_as_box_after_sync(arg1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
+        lines.append("_res = int(_v0 %s _v1)" % py_op)
+        lines.append("# fast-path recording, skip heapcache")
+        lines.append("_op = self.metainterp.history.record2_int(rop.%s, %s, %s, _res)" % (
+            rop_name, box0, box1))
+        lines.append("self.registers_i[%d] = _op" % result.index)
+        lines.append("i%d = _res" % result.index)
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+
+    def _get_as_unboxed_after_sync(self, arg):
+        """Get unboxed value after sync - handles constant registers properly."""
+        if isinstance(arg, Constant):
+            return self._get_as_unboxed(arg)
+        if arg in self.constant_registers:
+            return self._get_as_unboxed(arg)
+        t = self._get_type_prefix(arg)
+        if t == 'i':
+            return "self.registers_i[%d].getint()" % arg.index
+        elif t == 'f':
+            return "self.registers_f[%d].getfloatstorage()" % arg.index
+        else:
+            return "self.registers_r[%d].getref_base()" % arg.index
+
+    def emit_unspecialized_int_add(self):
+        return self._emit_unspecialized_int_binary_fast("INT_ADD", "+")
+
+    def emit_unspecialized_int_sub(self):
+        return self._emit_unspecialized_int_binary_fast("INT_SUB", "-")
+
+    def emit_unspecialized_int_mul(self):
+        return self._emit_unspecialized_int_binary_fast("INT_MUL", "*")
+
+    def emit_unspecialized_int_and(self):
+        return self._emit_unspecialized_int_binary_fast("INT_AND", "&")
+
+    def emit_unspecialized_int_or(self):
+        return self._emit_unspecialized_int_binary_fast("INT_OR", "|")
+
+    def emit_unspecialized_int_xor(self):
+        return self._emit_unspecialized_int_binary_fast("INT_XOR", "^")
+
+    def emit_unspecialized_int_lshift(self):
+        return self._emit_unspecialized_int_binary_fast("INT_LSHIFT", "<<")
+
+    def emit_unspecialized_int_rshift(self):
+        return self._emit_unspecialized_int_binary_fast("INT_RSHIFT", ">>")
+
+    def emit_unspecialized_int_lt(self):
+        return self._emit_unspecialized_int_comparison_fast("INT_LT", "<")
+
+    def emit_unspecialized_int_le(self):
+        return self._emit_unspecialized_int_comparison_fast("INT_LE", "<=")
+
+    def emit_unspecialized_int_eq(self):
+        return self._emit_unspecialized_int_comparison_fast("INT_EQ", "==")
+
+    def emit_unspecialized_int_ne(self):
+        return self._emit_unspecialized_int_comparison_fast("INT_NE", "!=")
+
+    def emit_unspecialized_int_gt(self):
+        return self._emit_unspecialized_int_comparison_fast("INT_GT", ">")
+
+    def emit_unspecialized_int_ge(self):
+        return self._emit_unspecialized_int_comparison_fast("INT_GE", ">=")
+
+    def emit_unspecialized_float_add(self):
+        return self._emit_unspecialized_float_binary_fast("FLOAT_ADD", "+")
+
+    def emit_unspecialized_float_sub(self):
+        return self._emit_unspecialized_float_binary_fast("FLOAT_SUB", "-")
+
+    def emit_unspecialized_float_mul(self):
+        return self._emit_unspecialized_float_binary_fast("FLOAT_MUL", "*")
+
+    def emit_unspecialized_float_truediv(self):
+        return self._emit_unspecialized_float_binary_fast("FLOAT_TRUEDIV", "/")
+
+    def emit_unspecialized_float_lt(self):
+        return self._emit_unspecialized_float_comparison_fast("FLOAT_LT", "<")
+
+    def emit_unspecialized_float_le(self):
+        return self._emit_unspecialized_float_comparison_fast("FLOAT_LE", "<=")
+
+    def emit_unspecialized_float_eq(self):
+        return self._emit_unspecialized_float_comparison_fast("FLOAT_EQ", "==")
+
+    def emit_unspecialized_float_ne(self):
+        return self._emit_unspecialized_float_comparison_fast("FLOAT_NE", "!=")
+
+    def emit_unspecialized_float_gt(self):
+        return self._emit_unspecialized_float_comparison_fast("FLOAT_GT", ">")
+
+    def emit_unspecialized_float_ge(self):
+        return self._emit_unspecialized_float_comparison_fast("FLOAT_GE", ">=")
 
     def _emit_jump(self, lines, target_pc=-1, constant_registers=None, indent=''):
         if target_pc == -1:
