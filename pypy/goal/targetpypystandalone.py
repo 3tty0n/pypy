@@ -243,6 +243,10 @@ class PyPyTarget(object):
 
     def target(self, driver, args):
         driver.exe_name = 'pypy-jit-ext-%(backend)s'
+        exe_name = os.getenv('PYPY_EXE_NAME')
+        if exe_name:
+            driver.exe_name = exe_name + '-%(backend)s'
+        print('exe_name:', driver.exe_name)
 
         config = driver.config
         parser = self.opt_parser(config)
