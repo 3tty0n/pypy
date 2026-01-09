@@ -1260,9 +1260,9 @@ class Specializer(object):
         self._emit_jump(lines, label_pc)
         return lines
 
-    # Unspecialized goto - label is always a compile-time constant,
-    # but this provides robustness for edge cases
-    emit_unspecialized_goto = emit_specialized_goto
+    def emit_unspecialized_goto(self):
+        target = self.get_target_pc(self.insn[1])
+        return ["pc = %d" % target]
 
     def emit_specialized_goto_if_not_absolute(self, name, symbol_fmt):
         if symbol_fmt == '':
