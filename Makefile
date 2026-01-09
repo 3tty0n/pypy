@@ -57,7 +57,15 @@ endif
 	@echo "===================================================================="
 	@echo
 	@sleep 5
-	cd pypy/goal && PYPY_EXE_NAME=pypy $(RUNINTERP) ../../rpython/bin/rpython $(JOBS) -Ojit --no-gen-extension targetpypystandalone.py
+	cd pypy/goal && PYPY_EXE_NAME=pypy $(RUNINTERP) ../../rpython/bin/rpython $(JOBS) -Ojit --no-gen-extension --no-heapcache-genext-fastpath targetpypystandalone.py
+
+
+pypy-c-heapcache:
+	cd pypy/goal && PYPY_EXE_NAME=pypy-heapcache $(RUNINTERP) ../../rpython/bin/rpython $(JOBS) -Ojit --no-gen-extension --heapcache-genext-fastpath targetpypystandalone.py
+
+
+pypy-jit-ext-c-no-heapcache:
+	cd pypy/goal && PYPY_EXE_NAME=pypy-jit-ext-no-heapcache $(RUNINTERP) ../../rpython/bin/rpython $(JOBS) -Ojit --gen-extension --no-heapcache-genext-fastpath targetpypystandalone.py
 
 
 cffi_imports: pypy-c

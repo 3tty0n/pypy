@@ -149,7 +149,7 @@ class FieldUpdater(object):
 
 
 class HeapCache(object):
-    def __init__(self):
+    def __init__(self, genext_fastpath_enabled=True):
         # Works with flags stored on RefFrontendOp._heapc_flags.
         # There are two ways to do a global resetting of these flags:
         # reset() and reset_keep_likely_virtual().  The basic idea is
@@ -163,6 +163,8 @@ class HeapCache(object):
         # use the other, older version number.
         self.head_version = r_uint(0)
         self.likely_virtual_version = r_uint(0)
+        # Flag to enable/disable genextension-specific fast-path for pure int ops
+        self.genext_fastpath_enabled = genext_fastpath_enabled
         # Profiling counters for heapcache costs analysis
         self._count_invalidate_calls = 0
         self._count_fastpath_skips = 0
@@ -220,7 +222,7 @@ class HeapCache(object):
 
     def invalidate_caches_varargs(self, opnum, descr, argboxes):
         self._count_invalidate_calls += 1
-        if self._is_pure_int_op(opnum):
+        if self.genext_fastpath_enabled and self._is_pure_int_op(opnum):
             if HEAPCACHE_VERIFY_FASTPATH:
                 self._verify_pure_int_op_invariants(opnum, argboxes)
             self._count_fastpath_skips += 1
@@ -235,7 +237,7 @@ class HeapCache(object):
     @specialize.arg(1)
     def invalidate_caches(self, opnum, descr, *argboxes):
         self._count_invalidate_calls += 1
-        if self._is_pure_int_op(opnum):
+        if self.genext_fastpath_enabled and self._is_pure_int_op(opnum):
             if HEAPCACHE_VERIFY_FASTPATH:
                 self._verify_pure_int_op_invariants_tuple(opnum, argboxes)
             self._count_fastpath_skips += 1

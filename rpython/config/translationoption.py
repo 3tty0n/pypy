@@ -134,6 +134,10 @@ translation_optiondescription = OptionDescription(
     BoolOption("genextension", "generate JIT extension by specializing the tracer",
                default=True,
                cmdline="--gen-extension"),
+    BoolOption("heapcache_genext_fastpath",
+               "enable heapcache fast-path for pure int ops (tailored for genextension)",
+               default=True,
+               cmdline="--heapcache-genext-fastpath"),
     # misc
     BoolOption("verbose", "Print extra information", default=False,
                cmdline="--verbose"),
