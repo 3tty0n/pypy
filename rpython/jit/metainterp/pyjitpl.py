@@ -27,8 +27,36 @@ from rpython.rlib.objectmodel import we_are_translated, specialize, always_inlin
 from rpython.rlib.unroll import unrolling_iterable
 from rpython.rtyper.lltypesystem import lltype, rffi, llmemory
 from rpython.rtyper import rclass
+import os
 
 SIZE_LIVE_OP = OFFSET_SIZE + 1
+
+SKIP_HEAPCACHE_PURE_INT = os.environ.get('PYPY_SKIP_HEAPCACHE_PURE_INT', '') == '1'
+FAST_INT_RECORD = os.environ.get('PYPY_FAST_INT_RECORD', '') == '1'
+
+class PyjitplCounters(object):
+    _record_helper_calls = 0
+    _record_int_binop_calls = 0
+    _heapcache_skipped = 0
+    _heapcache_called = 0
+
+    @staticmethod
+    def reset():
+        PyjitplCounters._record_helper_calls = 0
+        PyjitplCounters._record_int_binop_calls = 0
+        PyjitplCounters._heapcache_skipped = 0
+        PyjitplCounters._heapcache_called = 0
+
+    @staticmethod
+    def report():
+        if not we_are_translated():
+            total = PyjitplCounters._record_helper_calls + PyjitplCounters._record_int_binop_calls
+            if total > 0:
+                debug_print("PYJITPL_COUNTERS: record_helper=%d record_int_binop=%d heapcache_skipped=%d heapcache_called=%d" % (
+                    PyjitplCounters._record_helper_calls,
+                    PyjitplCounters._record_int_binop_calls,
+                    PyjitplCounters._heapcache_skipped,
+                    PyjitplCounters._heapcache_called))
 
 CONST_0      = ConstInt(0)
 CONST_1      = ConstInt(1)
@@ -297,11 +325,6 @@ class MIFrame(object):
     def special_int_add(self, position):
         from rpython.jit.metainterp.blackhole import signedord
         from rpython.jit.metainterp.history import IntFrontendOp
-        # bit of a micro-optimization: int_add with a constant argument is one
-        # of the most common opcodes in PyPy, and this way we
-        # - allocate one ConstInt fewer in the (common) non-recorded case
-        # - don't wrap and unwrap
-        # - only check one of the arguments for constness
         assert position >= 0
         code = self.bytecode
         position += 1
@@ -321,7 +344,10 @@ class MIFrame(object):
         else:
             assert isinstance(b1, IntFrontendOp)
             resvalue = b1.getint() + c
-            resbox = self.metainterp._record_helper(rop.INT_ADD, resvalue, None, b1, ConstInt(c))
+            if FAST_INT_RECORD:
+                resbox = self.metainterp._record_int_binop(rop.INT_ADD, resvalue, b1, ConstInt(c))
+            else:
+                resbox = self.metainterp._record_helper(rop.INT_ADD, resvalue, None, b1, ConstInt(c))
         regs[ord(code[position])] = resbox
         self.pc = position + 1
 
@@ -2785,10 +2811,17 @@ class MetaInterp(object):
 
     @specialize.arg(1)
     def _record_helper(self, opnum, resvalue, descr, *argboxes):
-        # record the operation
+        if not we_are_translated():
+            PyjitplCounters._record_helper_calls += 1
         profiler = self.staticdata.profiler
         profiler.count_ops(opnum, Counters.RECORDED_OPS)
-        self.heapcache.invalidate_caches(opnum, descr, *argboxes)
+        if SKIP_HEAPCACHE_PURE_INT and self.heapcache._is_pure_int_op(opnum):
+            if not we_are_translated():
+                PyjitplCounters._heapcache_skipped += 1
+        else:
+            if not we_are_translated():
+                PyjitplCounters._heapcache_called += 1
+            self.heapcache.invalidate_caches(opnum, descr, *argboxes)
         if self.framestack:
             self.framestack[-1].jitcode.traced_operations += 1
 
@@ -2810,6 +2843,39 @@ class MetaInterp(object):
         self.attach_debug_info(op)
         if op.type != 'v':
             return op
+
+    @always_inline
+    def _record_int_binop(self, opnum, resvalue, b1, b2):
+        if not we_are_translated():
+            PyjitplCounters._record_int_binop_calls += 1
+        profiler = self.staticdata.profiler
+        profiler.count_ops(opnum, Counters.RECORDED_OPS)
+        if self.framestack:
+            self.framestack[-1].jitcode.traced_operations += 1
+        op = self.history.record2_int(opnum, b1, b2, resvalue)
+        return op
+
+    @always_inline
+    def _record_int_unop(self, opnum, resvalue, b1):
+        if not we_are_translated():
+            PyjitplCounters._record_int_binop_calls += 1
+        profiler = self.staticdata.profiler
+        profiler.count_ops(opnum, Counters.RECORDED_OPS)
+        if self.framestack:
+            self.framestack[-1].jitcode.traced_operations += 1
+        op = self.history.record1_int(opnum, b1, resvalue)
+        return op
+
+    @always_inline
+    def _record_float_binop(self, opnum, resvalue, b1, b2):
+        if not we_are_translated():
+            PyjitplCounters._record_int_binop_calls += 1
+        profiler = self.staticdata.profiler
+        profiler.count_ops(opnum, Counters.RECORDED_OPS)
+        if self.framestack:
+            self.framestack[-1].jitcode.traced_operations += 1
+        op = self.history.record2_float(opnum, b1, b2, resvalue)
+        return op
 
     def execute_new_with_vtable(self, descr):
         resbox = self.execute_and_record(rop.NEW_WITH_VTABLE, descr)

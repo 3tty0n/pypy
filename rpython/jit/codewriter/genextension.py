@@ -1031,6 +1031,64 @@ class Specializer(object):
     def emit_unspecialized_float_ge(self):
         return self._emit_unspecialized_float_comparison_fast("FLOAT_GE", ">=")
 
+    def _emit_unspecialized_int_unary_fast(self, rop_name, py_op):
+        arg0, result = self._get_args_and_res()
+        lines = []
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_res = %s_v0" % py_op)
+        lines.append("_op = self.metainterp.history.record1_int(rop.%s, %s, _res)" % (
+            rop_name, box0))
+        lines.append("self.registers_i[%d] = _op" % result.index)
+        lines.append("i%d = _res" % result.index)
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+
+    def _emit_unspecialized_float_unary_fast(self, rop_name, py_op):
+        arg0, result = self._get_args_and_res()
+        lines = []
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_res = %s_v0" % py_op)
+        lines.append("_op = self.metainterp.history.record1_float(rop.%s, %s, _res)" % (
+            rop_name, box0))
+        lines.append("self.registers_f[%d] = _op" % result.index)
+        lines.append("f%d = _res" % result.index)
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+
+    def _emit_unspecialized_int_is_true_fast(self):
+        arg0, result = self._get_args_and_res()
+        lines = []
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_res = int(bool(_v0))")
+        lines.append("_op = self.metainterp.history.record1_int(rop.INT_IS_TRUE, %s, _res)" % box0)
+        lines.append("self.registers_i[%d] = _op" % result.index)
+        lines.append("i%d = _res" % result.index)
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+
+    def _emit_unspecialized_int_is_zero_fast(self):
+        arg0, result = self._get_args_and_res()
+        lines = []
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_res = int(_v0 == 0)")
+        lines.append("_op = self.metainterp.history.record1_int(rop.INT_IS_ZERO, %s, _res)" % box0)
+        lines.append("self.registers_i[%d] = _op" % result.index)
+        lines.append("i%d = _res" % result.index)
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+
     def _emit_jump(self, lines, target_pc=-1, constant_registers=None, indent=''):
         if target_pc == -1:
             target_pc = self.work_list.pc_to_nextpc[self.orig_pc]
@@ -1562,68 +1620,46 @@ class Specializer(object):
     emit_unspecialized_float_ge = _emit_unspecialized_float_binary
 
     def emit_unspecialized_int_neg(self):
-        lines = []
-        arg0, result = self._get_args_and_res()
-        self._emit_n_ary_if([arg0], lines)
-        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0}),
-                        indent='    ', target_pc=self.orig_pc)
-        lines.append("else:")
-        lines.append("    self.registers_i[%d] = self.%s(%s)" % (
-            result.index, self.methodname,
-            self._get_as_box(arg0)))
-        self._emit_jump(lines, indent='    ')
-        return lines
-
-    def emit_unspecialized_int_abs(self):
-        lines = []
-        arg0, result = self._get_args_and_res()
-        self._emit_n_ary_if([arg0], lines)
-        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0}),
-                        indent='    ', target_pc=self.orig_pc)
-        lines.append("else:")
-        lines.append("    self.registers_i[%d] = self.%s(%s)" % (
-            result.index, self.methodname,
-            self._get_as_box(arg0)))
-        self._emit_jump(lines, indent='    ')
-        return lines
-
-    def emit_unspecialized_float_neg(self):
-        lines = []
-        arg0, result = self._get_args_and_res()
-        self._emit_n_ary_if([arg0], lines)
-        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0}),
-                        indent='    ', target_pc=self.orig_pc)
-        lines.append("else:")
-        lines.append("    self.registers_f[%d] = self.%s(%s)" % (
-            result.index, self.methodname,
-            self._get_as_box(arg0)))
-        self._emit_jump(lines)
-        return lines
-
-    def emit_unspecialized_float_abs(self):
-        lines = []
-        arg0, result = self._get_args_and_res()
-        self._emit_n_ary_if([arg0], lines)
-        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0}),
-                        indent='    ', target_pc=self.orig_pc)
-        lines.append("else:")
-        lines.append("    self.registers_f[%d] = self.%s(%s)" % (
-            result.index, self.methodname,
-            self._get_as_box(arg0)))
-        self._emit_jump(lines)
-        return lines
+        return self._emit_unspecialized_int_unary_fast("INT_NEG", "-")
 
     def emit_unspecialized_int_invert(self):
-        lines = []
+        return self._emit_unspecialized_int_unary_fast("INT_INVERT", "~")
+
+    def emit_unspecialized_int_is_true(self):
+        return self._emit_unspecialized_int_is_true_fast()
+
+    def emit_unspecialized_int_is_zero(self):
+        return self._emit_unspecialized_int_is_zero_fast()
+
+    def emit_unspecialized_float_neg(self):
+        return self._emit_unspecialized_float_unary_fast("FLOAT_NEG", "-")
+
+    def emit_unspecialized_float_abs(self):
         arg0, result = self._get_args_and_res()
-        self._emit_n_ary_if([arg0], lines)
-        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0}),
-                        indent='    ', target_pc=self.orig_pc)
-        lines.append("else:")
-        lines.append("    self.registers_i[%d] = self.%s(%s)" % (
-            result.index, self.methodname,
-            self._get_as_box(arg0)))
-        self._emit_jump(lines)
+        lines = []
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_res = abs(_v0)")
+        lines.append("_op = self.metainterp.history.record1_float(rop.FLOAT_ABS, %s, _res)" % box0)
+        lines.append("self.registers_f[%d] = _op" % result.index)
+        lines.append("f%d = _res" % result.index)
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+
+    def emit_unspecialized_int_force_ge_zero(self):
+        arg0, result = self._get_args_and_res()
+        lines = []
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_res = _v0 if _v0 >= 0 else 0")
+        lines.append("_op = self.metainterp.history.record1_int(rop.INT_FORCE_GE_ZERO, %s, _res)" % box0)
+        lines.append("self.registers_i[%d] = _op" % result.index)
+        lines.append("i%d = _res" % result.index)
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
         return lines
 
     def emit_unspecialized_strgetitem(self):
@@ -1663,21 +1699,6 @@ class Specializer(object):
 
     emit_unspecialized_int_guard_value = emit_unspecialized_guard_value
     emit_unspecialized_ref_guard_value = emit_unspecialized_guard_value
-
-    def emit_unspecialized_int_is_true(self):
-        args = self._get_args()
-        res = self.insn[self.resindex]
-        arg, = self._get_args()
-        result = self.insn[self.resindex]
-        lines = []
-        self._emit_n_ary_if([arg], lines)
-        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg}),
-                        indent='    ', target_pc=self.orig_pc)
-        lines.append("self.registers_%s[%s] = self.opimpl_%s(%s)" % (
-            result.kind[0], result.index,
-            self.insn[0], self._get_as_box(arg)))
-        self._emit_jump(lines)
-        return lines
 
     def emit_unspecialized_guard_class(self):
         arg0 = self.insn[1]
