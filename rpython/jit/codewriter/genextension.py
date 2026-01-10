@@ -1483,10 +1483,10 @@ class Specializer(object):
             return "r%s%d" % (t, arg.index)
 
     def _get_as_box_after_sync(self, arg):
-        if not isinstance(arg, Constant) and arg in self.constant_registers:
-            t = self._get_type_prefix(arg)
-            return "self.registers_%s[%d]" % (t, arg.index)
-        return self._get_as_box(arg)
+        if isinstance(arg, Constant):
+            return self._get_as_box(arg)
+        t = self._get_type_prefix(arg)
+        return "self.registers_%s[%d]" % (t, arg.index)
 
     def _emit_unbox_by_type(self, arg, lines, indent=''):
         t = self._get_type_prefix(arg)
@@ -1644,20 +1644,6 @@ class Specializer(object):
         lines.append("_op = self.metainterp.history.record1_float(rop.FLOAT_ABS, %s, _res)" % box0)
         lines.append("self.registers_f[%d] = _op" % result.index)
         lines.append("f%d = _res" % result.index)
-        next_consts = self.constant_registers - {result}
-        self._emit_jump(lines, constant_registers=next_consts)
-        return lines
-
-    def emit_unspecialized_int_force_ge_zero(self):
-        arg0, result = self._get_args_and_res()
-        lines = []
-        self._emit_sync_registers(lines)
-        box0 = self._get_as_box_after_sync(arg0)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
-        lines.append("_res = _v0 if _v0 >= 0 else 0")
-        lines.append("_op = self.metainterp.history.record1_int(rop.INT_FORCE_GE_ZERO, %s, _res)" % box0)
-        lines.append("self.registers_i[%d] = _op" % result.index)
-        lines.append("i%d = _res" % result.index)
         next_consts = self.constant_registers - {result}
         self._emit_jump(lines, constant_registers=next_consts)
         return lines
