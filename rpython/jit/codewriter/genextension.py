@@ -1127,6 +1127,22 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
 
+    def emit_specialized_int_is_zero(self):
+        arg, = self._get_args()
+        result = self.insn[self.resindex]
+        # Constant folding: if arg is a constant, evaluate at compile time
+        val = self._get_constant_int_value(arg)
+        if val is not None:
+            lines = ["i%s = %d" % (result.index, int(val == 0))]
+            self._emit_jump(lines)
+            return lines
+        lines = ["i%s = int(%s == 0)" % (
+            result.index,
+            self._get_as_unboxed(arg)
+        )]
+        self._emit_jump(lines)
+        return lines
+
     def emit_specialized_guard_class(self):
         lines = ['# guard_class, argument is already constant']
         arg, = self._get_args()
@@ -1146,6 +1162,8 @@ class Specializer(object):
             self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
             return lines
         raise Unsupported
+    emit_specialized_getfield_raw_r = emit_specialized_getfield_raw_i
+    emit_specialized_getfield_raw_f = emit_specialized_getfield_raw_i
 
     def emit_specialized_getfield_gc_i_pure(self):
         if self.insn[2].is_always_pure():
@@ -1174,6 +1192,19 @@ class Specializer(object):
         return lines
     emit_specialized_getarrayitem_gc_r_pure = emit_specialized_getarrayitem_gc_i_pure
     emit_specialized_getarrayitem_gc_f_pure = emit_specialized_getarrayitem_gc_i_pure
+
+    def emit_specialized_getarrayitem_raw_i_pure(self):
+        lines = []
+        arg, index, descr, res = self._get_args_and_res()
+        TYPE, ITEM = _get_ptrtype_itemtype_from_arraydescr(descr)
+        resultcast = _find_result_cast(ITEM)
+        lines.append('%s = %sllmemory.cast_adr_to_ptr(support.int2adr(i%s), %s)[%s])' % (
+            self._get_as_unboxed(res), resultcast, arg.index, self._add_global(TYPE),
+            self._get_as_unboxed(index)))
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
+        return lines
+    emit_specialized_getarrayitem_raw_r_pure = emit_specialized_getarrayitem_raw_i_pure
+    emit_specialized_getarrayitem_raw_f_pure = emit_specialized_getarrayitem_raw_i_pure
 
     def emit_specialized_getfield_gc_i(self):
         arg, descr = self._get_args()
@@ -1427,6 +1458,14 @@ class Specializer(object):
         result = self.insn[self.resindex]
         lines = ["i%s = len(lltype.cast_opaque_ptr(lltype.Ptr(rstr.UNICODE), r%d).chars)" % (
             result.index, arg0.index)]
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_unicodegetitem(self):
+        arg0, arg1 = self._get_args()
+        result = self.insn[self.resindex]
+        lines = ["i%s = ord(lltype.cast_opaque_ptr(lltype.Ptr(rstr.UNICODE), r%d).chars[%s])" % (
+            result.index, arg0.index, self._get_as_unboxed(arg1))]
         self._emit_jump(lines)
         return lines
 
@@ -2039,23 +2078,64 @@ class Specializer(object):
         lines.append("continue")
         return lines
 
+    def _emit_goto_if_not_int_comparison_fast(self, rop_name, py_op):
+        """Generate fast-path code for goto_if_not_int_* that skips heapcache."""
+        lines = []
+        _, arg0, arg1, arg2 = self.insn  # left, right, label
+
+        target_pc = self.get_target_pc(arg2)
+
+        # Handle constant folding case
+        self._emit_n_ary_if([arg0, arg1], lines)
+        specializer = self.work_list.specialize_insn(
+            self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
+        lines.append("    pc = %d" % (specializer.get_pc(),))
+        lines.append("    continue")
+
+        # Fast-path: compute comparison and record directly, skip heapcache
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        box1 = self._get_as_box_after_sync(arg1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
+        lines.append("_cond = int(_v0 %s _v1)" % py_op)
+        lines.append("# fast-path: record comparison directly, skip heapcache")
+        lines.append("condbox = self.metainterp.history.record2_int(rop.%s, %s, %s, _cond)" % (
+            rop_name, box0, box1))
+
+        # Call opimpl_goto_if_not for guard generation
+        lines.append("self.opimpl_goto_if_not(condbox, %d, %d, replace=False)" % (target_pc, self.orig_pc))
+        lines.append("pc = self.pc")
+        lines.append("if pc == %s:" % (target_pc,))
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers, target_pc)
+        lines.append("    pc = %s" % (specializer.spec_pc,))
+        lines.append("else:")
+        next_pc = self.work_list.pc_to_nextpc[self.orig_pc]
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers, next_pc)
+        lines.append("    assert self.pc == %s" % (specializer.orig_pc,))
+        lines.append("    pc = %s" % (specializer.spec_pc,))
+        lines.append("continue")
+        return lines
+
     def emit_unspecialized_goto_if_not_int_lt(self):
-        return self.emit_unspecialized_goto_if_not_comparison("int_lt", "<")
+        return self._emit_goto_if_not_int_comparison_fast("INT_LT", "<")
 
     def emit_unspecialized_goto_if_not_int_gt(self):
-        return self.emit_unspecialized_goto_if_not_comparison("int_gt", ">")
+        return self._emit_goto_if_not_int_comparison_fast("INT_GT", ">")
 
     def emit_unspecialized_goto_if_not_int_le(self):
-        return self.emit_unspecialized_goto_if_not_comparison("int_le", "<=")
+        return self._emit_goto_if_not_int_comparison_fast("INT_LE", "<=")
 
     def emit_unspecialized_goto_if_not_int_ge(self):
-        return self.emit_unspecialized_goto_if_not_comparison("int_ge", ">=")
+        return self._emit_goto_if_not_int_comparison_fast("INT_GE", ">=")
 
     def emit_unspecialized_goto_if_not_int_ne(self):
-        return self.emit_unspecialized_goto_if_not_comparison("int_ne", "!=")
+        return self._emit_goto_if_not_int_comparison_fast("INT_NE", "!=")
 
     def emit_unspecialized_goto_if_not_int_eq(self):
-        return self.emit_unspecialized_goto_if_not_comparison("int_eq", "==")
+        return self._emit_goto_if_not_int_comparison_fast("INT_EQ", "==")
 
     def emit_unspecialized_switch(self):
         lines = []
