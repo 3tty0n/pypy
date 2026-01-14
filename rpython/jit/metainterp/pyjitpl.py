@@ -2545,6 +2545,12 @@ class MetaInterp(object):
 
         self.box_names_memo = {}
 
+        # Batched profiler counting for fast-path operations
+        # Instead of calling profiler.count_ops() for every operation,
+        # we batch counts and flush them at strategic points (guards, end of trace)
+        self._batched_ops_count = 0
+        self._batched_recorded_ops_count = 0
+
         self.aborted_tracing_jitdriver = None
         self.aborted_tracing_greenkey = None
 
@@ -2553,6 +2559,30 @@ class MetaInterp(object):
         # AssertionError)
         self.force_finish_trace = force_finish_trace
         self.trace_length_at_last_tco = -1
+
+    @always_inline
+    def batch_op_count(self):
+        """Batch an operation count instead of calling profiler directly.
+
+        This is used by fast-path recording methods to avoid the overhead
+        of calling profiler.count_ops() for every operation. Counts are
+        flushed at strategic points (guards, end of trace).
+        """
+        self._batched_ops_count += 1
+        self._batched_recorded_ops_count += 1
+
+    def flush_batched_counts(self):
+        """Flush batched operation counts to the profiler.
+
+        Called before guards and at end of trace to ensure accurate counting.
+        """
+        profiler = self.staticdata.profiler
+        if self._batched_ops_count > 0:
+            profiler.count(Counters.OPS, self._batched_ops_count)
+            self._batched_ops_count = 0
+        if self._batched_recorded_ops_count > 0:
+            profiler.count(Counters.RECORDED_OPS, self._batched_recorded_ops_count)
+            self._batched_recorded_ops_count = 0
 
     def retrace_needed(self, trace, exported_state):
         self.partial_trace = trace
@@ -2699,6 +2729,8 @@ class MetaInterp(object):
             raise AssertionError
 
     def generate_guard(self, opnum, box=None, extraarg=None, resumepc=-1):
+        # Flush batched counts before guard to ensure accurate profiling
+        self.flush_batched_counts()
         if isinstance(box, Const):    # no need for a guard
             return
         if opnum == rop.GUARD_EXCEPTION:
@@ -2848,8 +2880,8 @@ class MetaInterp(object):
     def _record_int_binop(self, opnum, resvalue, b1, b2):
         if not we_are_translated():
             PyjitplCounters._record_int_binop_calls += 1
-        profiler = self.staticdata.profiler
-        profiler.count_ops(opnum, Counters.RECORDED_OPS)
+        # Use batched counting instead of calling profiler directly
+        self.batch_op_count()
         if self.framestack:
             self.framestack[-1].jitcode.traced_operations += 1
         op = self.history.record2_int(opnum, b1, b2, resvalue)
@@ -2859,8 +2891,8 @@ class MetaInterp(object):
     def _record_int_unop(self, opnum, resvalue, b1):
         if not we_are_translated():
             PyjitplCounters._record_int_binop_calls += 1
-        profiler = self.staticdata.profiler
-        profiler.count_ops(opnum, Counters.RECORDED_OPS)
+        # Use batched counting instead of calling profiler directly
+        self.batch_op_count()
         if self.framestack:
             self.framestack[-1].jitcode.traced_operations += 1
         op = self.history.record1_int(opnum, b1, resvalue)
@@ -2870,8 +2902,8 @@ class MetaInterp(object):
     def _record_float_binop(self, opnum, resvalue, b1, b2):
         if not we_are_translated():
             PyjitplCounters._record_int_binop_calls += 1
-        profiler = self.staticdata.profiler
-        profiler.count_ops(opnum, Counters.RECORDED_OPS)
+        # Use batched counting instead of calling profiler directly
+        self.batch_op_count()
         if self.framestack:
             self.framestack[-1].jitcode.traced_operations += 1
         op = self.history.record2_float(opnum, b1, b2, resvalue)
@@ -3060,6 +3092,7 @@ class MetaInterp(object):
             original_boxes = self.initialize_original_boxes(jitdriver_sd, *args)
             return self._compile_and_run_once(original_boxes)
         finally:
+            self.flush_batched_counts()  # Flush before end_tracing
             self.staticdata.profiler.end_tracing()
             debug_stop('jit-tracing')
 
@@ -3101,6 +3134,7 @@ class MetaInterp(object):
             self.run_blackhole_interp_to_cancel_tracing(stb)
         finally:
             self.resumekey_original_loop_token = None
+            self.flush_batched_counts()  # Flush before end_tracing
             self.staticdata.profiler.end_tracing()
             debug_stop('jit-tracing')
 

@@ -157,9 +157,10 @@ class GenExtension(object):
         self.jitcode._genext_source = "\n".join(allcode)
         # Import rop for opnum constants used in type-specialized recording
         from rpython.jit.metainterp.resoperation import rop
+        from rpython.rlib.rarithmetic import ovfcheck
         d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr, "ConstFloat": ConstFloat, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
              "lltype": lltype, "rstr": rstr, 'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR, 'support': support,
-             'rop': rop}
+             'rop': rop, 'ovfcheck': ovfcheck}
         d.update(self.globals)
         source = py.code.Source(self.jitcode._genext_source)
         exec source.compile() in d
@@ -2136,6 +2137,62 @@ class Specializer(object):
 
     def emit_unspecialized_goto_if_not_int_eq(self):
         return self._emit_goto_if_not_int_comparison_fast("INT_EQ", "==")
+
+    def _emit_int_ovf_fast(self, rop_name, py_op):
+        lines = []
+        _, label, arg0, arg1, _, result = self.insn
+
+        target_pc = self.get_target_pc(label)
+
+        self._emit_n_ary_if([arg0, arg1], lines)
+        specializer = self.work_list.specialize_insn(
+            self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
+        lines.append("    pc = %d" % (specializer.get_pc(),))
+        lines.append("    continue")
+
+        # Fast-path: compute with overflow check, record directly, skip heapcache
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        box1 = self._get_as_box_after_sync(arg1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
+
+        lines.append("self.metainterp.ovf_flag = False")
+        lines.append("try:")
+        lines.append("    _res = ovfcheck(_v0 %s _v1)" % py_op)
+        lines.append("except OverflowError:")
+        lines.append("    self.metainterp.ovf_flag = True")
+        lines.append("    _res = 0")
+
+        lines.append("# fast-path: record overflow op directly, skip heapcache")
+        lines.append("_op = self.metainterp.history.record2_int(rop.%s, %s, %s, _res)" % (
+            rop_name, box0, box1))
+        lines.append("self.registers_i[%d] = _op" % result.index)
+        lines.append("i%d = _res" % result.index)
+
+        lines.append("self.handle_possible_overflow_error(%d, %d, _op)" % (target_pc, self.orig_pc))
+        lines.append("pc = self.pc")
+        lines.append("if pc == %s:" % (target_pc,))
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers - {result}, target_pc)
+        lines.append("    pc = %s" % (specializer.spec_pc,))
+        lines.append("else:")
+        next_pc = self.work_list.pc_to_nextpc[self.orig_pc]
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers - {result}, next_pc)
+        lines.append("    assert self.pc == %s" % (specializer.orig_pc,))
+        lines.append("    pc = %s" % (specializer.spec_pc,))
+        lines.append("continue")
+        return lines
+
+    def emit_unspecialized_int_add_jump_if_ovf(self):
+        return self._emit_int_ovf_fast("INT_ADD_OVF", "+")
+
+    def emit_unspecialized_int_sub_jump_if_ovf(self):
+        return self._emit_int_ovf_fast("INT_SUB_OVF", "-")
+
+    def emit_unspecialized_int_mul_jump_if_ovf(self):
+        return self._emit_int_ovf_fast("INT_MUL_OVF", "*")
 
     def emit_unspecialized_switch(self):
         lines = []
