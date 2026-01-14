@@ -2171,8 +2171,7 @@ class Specializer(object):
         lines.append("i%d = _res" % result.index)
 
         lines.append("self.handle_possible_overflow_error(%d, %d, _op)" % (target_pc, self.orig_pc))
-        lines.append("pc = self.pc")
-        lines.append("if pc == %s:" % (target_pc,))
+        lines.append("if self.metainterp.ovf_flag:")
         specializer = self.work_list.specialize_pc(
             self.constant_registers - {result}, target_pc)
         lines.append("    pc = %s" % (specializer.spec_pc,))
@@ -2180,7 +2179,6 @@ class Specializer(object):
         next_pc = self.work_list.pc_to_nextpc[self.orig_pc]
         specializer = self.work_list.specialize_pc(
             self.constant_registers - {result}, next_pc)
-        lines.append("    assert self.pc == %s" % (specializer.orig_pc,))
         lines.append("    pc = %s" % (specializer.spec_pc,))
         lines.append("continue")
         return lines
