@@ -7,6 +7,9 @@ and other performance metrics for PyPy benchmarks.
 """
 
 import os
+import re
+import sys
+import matplotlib
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
@@ -15,6 +18,499 @@ import argparse
 from statistics import geometric_mean, median, variance, mean
 
 from jitext_bench import *
+
+def collect_paper_data(log_dir):
+    """Collect jit-summary data from all logs, grouped by benchmark and variant.
+
+    Returns dict: {benchmark: {'baseline': [list of dicts], 'genext': [list of dicts]}}
+    """
+    from collections import defaultdict
+    data = defaultdict(lambda: {'baseline': [], 'genext': []})
+    for fname in sorted(os.listdir(log_dir)):
+        if not fname.endswith('.log'):
+            continue
+        path = os.path.join(log_dir, fname)
+        if fname.startswith('pypy-jit-ext-c_'):
+            variant = 'genext'
+            rest = fname[len('pypy-jit-ext-c_'):]
+        elif fname.startswith('pypy-c_'):
+            variant = 'baseline'
+            rest = fname[len('pypy-c_'):]
+        else:
+            continue
+        m = re.match(r'^(.+)_(\d+)\.log$', rest)
+        if not m:
+            continue
+        benchmark = m.group(1)
+        summary = parse_jit_summary(path)
+        if summary and 'Tracing (total)' in summary:
+            data[benchmark][variant].append(summary)
+    return dict(data)
+
+
+def plot_paper(log_dir, output_file):
+    """Generate a two-panel publication-quality figure for the paper."""
+    data = collect_paper_data(log_dir)
+
+    # Filter to benchmarks that have both variants with sufficient runs
+    benchmarks = []
+    for bm, variants in sorted(data.items()):
+        if len(variants['baseline']) >= 3 and len(variants['genext']) >= 3:
+            benchmarks.append(bm)
+
+    if not benchmarks:
+        print("Error: no benchmarks found with both baseline and genext data")
+        sys.exit(1)
+
+    # Compute medians for each benchmark
+    stats = {}
+    for bm in benchmarks:
+        bm_stats = {}
+        for variant in ('baseline', 'genext'):
+            runs = data[bm][variant]
+            bm_stats[variant] = {
+                'interp': np.median([r['Interpretation'] for r in runs]),
+                'resume': np.median([r['Resume data'] for r in runs]),
+                'optim': np.median([r['Optimization'] for r in runs]),
+                'backend': np.median([r['Backend'] for r in runs]),
+                'tracing': np.median([r['Tracing (total)'] for r in runs]),
+                'ops': np.median([r.get('ops', 0) for r in runs]),
+                'recorded_ops': np.median([r.get('recorded ops', 0) for r in runs]),
+                'opt_ops': np.median([r.get('opt ops', 0) for r in runs]),
+            }
+            # IQR for total compilation time (for error bars)
+            total_compile = sorted([r['Tracing (total)'] + r['Optimization'] + r['Backend'] for r in runs])
+            bm_stats[variant]['compile_q25'] = np.percentile(total_compile, 25)
+            bm_stats[variant]['compile_q75'] = np.percentile(total_compile, 75)
+            bm_stats[variant]['compile_median'] = np.median(total_compile)
+            # TOTAL time (includes everything)
+            total_vals = sorted([r['TOTAL'] for r in runs if 'TOTAL' in r])
+            if total_vals:
+                bm_stats[variant]['total'] = np.median(total_vals)
+                bm_stats[variant]['total_q25'] = np.percentile(total_vals, 25)
+                bm_stats[variant]['total_q75'] = np.percentile(total_vals, 75)
+            else:
+                bm_stats[variant]['total'] = 0
+                bm_stats[variant]['total_q25'] = 0
+                bm_stats[variant]['total_q75'] = 0
+        stats[bm] = bm_stats
+
+    # Sort benchmarks by baseline total tracing time (ascending)
+    benchmarks.sort(key=lambda bm: stats[bm]['baseline']['tracing'])
+
+    # Compute geometric mean ratios
+    ratios = {k: [] for k in ('tracing', 'interp', 'resume', 'optim', 'backend', 'ops', 'recorded', 'opt')}
+    for bm in benchmarks:
+        b = stats[bm]['baseline']
+        g = stats[bm]['genext']
+        for key, bk, gk in [
+            ('tracing', 'tracing', 'tracing'), ('interp', 'interp', 'interp'),
+            ('resume', 'resume', 'resume'), ('optim', 'optim', 'optim'),
+            ('backend', 'backend', 'backend'), ('ops', 'ops', 'ops'),
+            ('recorded', 'recorded_ops', 'recorded_ops'), ('opt', 'opt_ops', 'opt_ops'),
+        ]:
+            if b[bk] > 0:
+                ratios[key].append(g[gk] / b[bk])
+
+    def geomean(vals):
+        return np.exp(np.mean(np.log(vals))) if vals else float('nan')
+
+    gm = {k: geomean(v) for k, v in ratios.items()}
+
+    print(f"Geometric mean ratios (GenExt / baseline):")
+    print(f"  Tracing total: {gm['tracing']:.2f}")
+    print(f"  Interpretation: {gm['interp']:.2f}")
+    print(f"  Resume data: {gm['resume']:.2f}")
+    print(f"  Optimization: {gm['optim']:.2f}")
+    print(f"  Backend: {gm['backend']:.2f}")
+    print(f"  Total ops: {gm['ops']:.2f}")
+    print(f"  Recorded ops: {gm['recorded']:.2f}")
+    print(f"  Opt ops: {gm['opt']:.2f}")
+
+    # Categorize benchmarks by baseline compilation time
+    # (interp + resume + optim + backend)
+    def compile_time(bm):
+        b = stats[bm]['baseline']
+        return b['interp'] + b['resume'] + b['optim'] + b['backend']
+
+    small = [bm for bm in benchmarks if compile_time(bm) < 0.1]
+    medium = [bm for bm in benchmarks if 0.1 <= compile_time(bm) < 1.0]
+    large = [bm for bm in benchmarks if compile_time(bm) >= 1.0]
+
+    print(f"\nBenchmark categories: {len(small)} small, {len(medium)} medium, {len(large)} large")
+
+    # Compute per-run normalized TOTAL ratios for IQR error bars
+    for bm in benchmarks:
+        baseline_runs = data[bm]['baseline']
+        genext_runs = data[bm]['genext']
+        b_median_total = stats[bm]['baseline']['total']
+        if b_median_total > 0:
+            norm_ratios = sorted([r['TOTAL'] / b_median_total for r in genext_runs if 'TOTAL' in r])
+        else:
+            norm_ratios = [0]
+        stats[bm]['norm_total_median'] = np.median(norm_ratios)
+        stats[bm]['norm_total_q25'] = np.percentile(norm_ratios, 25)
+        stats[bm]['norm_total_q75'] = np.percentile(norm_ratios, 75)
+
+    # Publication styling
+    def apply_paper_style():
+        matplotlib.rcParams.update({
+            'font.family': 'serif',
+            'font.size': 8,
+            'axes.labelsize': 8,
+            'axes.titlesize': 9,
+            'xtick.labelsize': 7,
+            'ytick.labelsize': 7,
+            'legend.fontsize': 7,
+            'figure.dpi': 300,
+            'savefig.dpi': 300,
+            'axes.linewidth': 0.5,
+            'xtick.major.width': 0.5,
+            'ytick.major.width': 0.5,
+            'lines.linewidth': 0.5,
+        })
+
+    colors = {
+        'interp': '#4878CF',   # blue
+        'resume': '#6ACC65',   # green
+        'optim': '#D65F5F',    # red
+        'backend': '#B47CC7',  # purple
+    }
+
+    n = len(benchmarks)
+    ns, nm, nl = len(small), len(medium), len(large)
+    short_names = [bm.replace('bm_', '').replace('_', ' ') for bm in benchmarks]
+    x = np.arange(n)
+    bar_width = 0.35
+
+    # Derive output filenames from the base
+    base, ext = os.path.splitext(output_file)
+    file_a = f'{base}_a{ext}'
+    file_b = f'{base}_b{ext}'
+
+    # ===== Figure (a): Compilation time breakdown by category =====
+    apply_paper_style()
+
+    fig_a, axes_a = plt.subplots(1, 3, figsize=(7.0, 2.3),
+                                  gridspec_kw={'width_ratios': [ns, nm, nl], 'wspace': 0.25})
+
+    def plot_abs_panel(ax, bms, title_suffix, show_legend=False, show_ylabel=True):
+        nb = len(bms)
+        if nb == 0:
+            ax.set_visible(False)
+            return
+        xb = np.arange(nb)
+        for variant, offset in [('baseline', -bar_width/2), ('genext', bar_width/2)]:
+            interp_vals = [stats[bm][variant]['interp'] for bm in bms]
+            resume_vals = [stats[bm][variant]['resume'] for bm in bms]
+            optim_vals = [stats[bm][variant]['optim'] for bm in bms]
+            backend_vals = [stats[bm][variant]['backend'] for bm in bms]
+
+            bottom = np.zeros(nb)
+            for phase, vals, color in [
+                ('Interpretation', interp_vals, colors['interp']),
+                ('Resume data', resume_vals, colors['resume']),
+                ('Optimization', optim_vals, colors['optim']),
+                ('Backend', backend_vals, colors['backend']),
+            ]:
+                label = phase if (variant == 'baseline' and show_legend) else None
+                ax.bar(xb + offset, vals, bar_width, bottom=bottom,
+                       color=color, label=label, edgecolor='white', linewidth=0.3)
+                bottom += np.array(vals)
+
+            medians = [stats[bm][variant]['compile_median'] for bm in bms]
+            err_lo = [max(0, medians[i] - stats[bm][variant]['compile_q25']) for i, bm in enumerate(bms)]
+            err_hi = [max(0, stats[bm][variant]['compile_q75'] - medians[i]) for i, bm in enumerate(bms)]
+            ax.errorbar(xb + offset, bottom, yerr=[err_lo, err_hi],
+                        fmt='none', ecolor='black', elinewidth=0.4, capsize=1.5, capthick=0.4)
+
+        names = [bm.replace('bm_', '').replace('_', ' ') for bm in bms]
+        ax.set_xticks(xb)
+        ax.set_xticklabels(names, rotation=45, ha='right', fontsize=5.5)
+        ax.set_title(title_suffix, fontsize=8, pad=2)
+        if show_ylabel:
+            ax.set_ylabel('Compilation time (s)')
+        ax.set_xlim(-0.5, nb - 0.5)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+    plot_abs_panel(axes_a[0], small, f'Small ({ns})', show_legend=True, show_ylabel=True)
+    plot_abs_panel(axes_a[1], medium, f'Medium ({nm})', show_ylabel=False)
+    plot_abs_panel(axes_a[2], large, f'Large ({nl})', show_ylabel=False)
+
+    handles, labels = axes_a[0].get_legend_handles_labels()
+    fig_a.legend(handles, labels, loc='upper center', ncol=4, frameon=False,
+                 fontsize=6, bbox_to_anchor=(0.5, 1.02))
+    fig_a.suptitle('Compilation time breakdown: Baseline (left) vs GenExt (right)',
+                   fontsize=9, y=1.08)
+
+    fig_a.savefig(file_a, bbox_inches='tight', pad_inches=0.05)
+    plt.close(fig_a)
+    print(f"  (a) saved to {file_a}")
+
+    # ===== Figure (b): Combined normalized tracing + TOTAL time =====
+    apply_paper_style()
+
+    fig_b, (ax_norm, ax_total) = plt.subplots(2, 1, figsize=(7.0, 4.2),
+                                               gridspec_kw={'hspace': 0.30})
+
+    # --- Panel (a) top: Normalized tracing time ---
+    norm_interp = []
+    norm_resume = []
+    norm_overhead = []
+    for bm in benchmarks:
+        b = stats[bm]['baseline']
+        g = stats[bm]['genext']
+        bt = b['tracing']
+        if bt > 0:
+            gi = g['interp'] / bt
+            gr = g['resume'] / bt
+            gt = g['tracing'] / bt
+            norm_interp.append(gi)
+            norm_resume.append(gr)
+            norm_overhead.append(gt - gi - gr)
+        else:
+            norm_interp.append(0)
+            norm_resume.append(0)
+            norm_overhead.append(0)
+
+    # Append geomean bar
+    gm_tracing = gm['tracing']
+    gm_interp_val = geomean(norm_interp)
+    gm_resume_val = geomean(norm_resume)
+    gm_overhead_val = gm_tracing - gm_interp_val - gm_resume_val
+
+    # x positions: benchmarks + gap + geomean
+    x_gap = 1.0  # gap before geomean bar
+    x_gm = n + x_gap
+    x_all = np.append(x, x_gm)
+    norm_interp_all = norm_interp + [gm_interp_val]
+    norm_resume_all = norm_resume + [gm_resume_val]
+    norm_overhead_all = norm_overhead + [gm_overhead_val]
+    n_all = len(x_all)
+
+    bottom_norm = np.zeros(n_all)
+    ax_norm.bar(x_all, norm_interp_all, 0.6, bottom=bottom_norm,
+                color=colors['interp'], label='Interpretation', edgecolor='white', linewidth=0.3)
+    bottom_norm += np.array(norm_interp_all)
+    ax_norm.bar(x_all, norm_resume_all, 0.6, bottom=bottom_norm,
+                color=colors['resume'], label='Resume data', edgecolor='white', linewidth=0.3)
+    bottom_norm += np.array(norm_resume_all)
+    ax_norm.bar(x_all, norm_overhead_all, 0.6, bottom=bottom_norm,
+                color='#999999', label='Overhead', edgecolor='white', linewidth=0.3)
+
+    ax_norm.axhline(y=1.0, color='black', linestyle='--', linewidth=0.5, zorder=5)
+    ax_norm.text(0.01, 1.0, 'baseline', fontsize=5.5, ha='left', va='bottom',
+                 color='black', transform=ax_norm.get_yaxis_transform())
+
+    # Annotate geomean value on top of the bar
+    ax_norm.text(x_gm, bottom_norm[-1] + 0.03, f'{gm_tracing:.2f}',
+                 fontsize=6, fontweight='bold', ha='center', va='bottom', color='black')
+
+    # Separator line before geomean
+    sep_x = n + x_gap / 2 - 0.5
+    ax_norm.axvline(x=sep_x, color='gray', linestyle=':', linewidth=0.5)
+
+    ax_norm.set_xticks(x_all)
+    ax_norm.set_xticklabels([])  # No x-labels on top panel
+    ax_norm.set_ylabel('Norm. tracing time')
+    ax_norm.set_title('(a) Tracing time', fontsize=8, pad=4)
+    ax_norm.legend(ncol=3, loc='lower left', frameon=True, fontsize=5.5,
+                    edgecolor='#cccccc', fancybox=False)
+    ax_norm.set_xlim(-0.5, x_gm + 0.5)
+    ax_norm.set_ylim(0, max(bottom_norm) * 1.15)
+    ax_norm.spines['top'].set_visible(False)
+    ax_norm.spines['right'].set_visible(False)
+
+    # --- Panel (b) bottom: Normalized TOTAL time ---
+    norm_total = [stats[bm]['norm_total_median'] for bm in benchmarks]
+    err_lo = [stats[bm]['norm_total_median'] - stats[bm]['norm_total_q25'] for bm in benchmarks]
+    err_hi = [stats[bm]['norm_total_q75'] - stats[bm]['norm_total_median'] for bm in benchmarks]
+    err_lo = [max(0, e) for e in err_lo]
+    err_hi = [max(0, e) for e in err_hi]
+
+    # Compute TOTAL geomean
+    total_ratios = [v for v in norm_total if v > 0]
+    gm_total = np.exp(np.mean(np.log(total_ratios))) if total_ratios else float('nan')
+
+    # Append geomean bar
+    norm_total_all = norm_total + [gm_total]
+    err_lo_all = err_lo + [0]
+    err_hi_all = err_hi + [0]
+
+    bar_colors = ['#6ACC65' if v <= 1.0 else '#D65F5F' for v in norm_total_all]
+    ax_total.bar(x_all, norm_total_all, 0.6, color=bar_colors, edgecolor='white', linewidth=0.3)
+    ax_total.errorbar(x_all, norm_total_all, yerr=[err_lo_all, err_hi_all],
+                      fmt='none', ecolor='black', elinewidth=0.4, capsize=1.5, capthick=0.4)
+
+    # Baseline reference line
+    ax_total.axhline(y=1.0, color='black', linestyle='--', linewidth=0.5, zorder=5)
+    ax_total.text(0.01, 1.01, 'baseline', fontsize=5.5, ha='left', va='bottom',
+                  color='black', transform=ax_total.get_yaxis_transform())
+
+    # Annotate geomean value on top of the bar
+    ax_total.text(x_gm, gm_total + 0.02, f'{gm_total:.2f}',
+                  fontsize=6, fontweight='bold', ha='center', va='bottom', color='black')
+
+    # Separator line before geomean
+    ax_total.axvline(x=sep_x, color='gray', linestyle=':', linewidth=0.5)
+
+    short_names_all = short_names + ['geomean']
+    ax_total.set_xticks(x_all)
+    ax_total.set_xticklabels(short_names_all, rotation=45, ha='right', fontsize=5.5)
+    ax_total.set_ylabel('Norm. total time')
+    ax_total.set_title('(b) Total execution time', fontsize=8, pad=4)
+    ax_total.set_xlim(-0.5, x_gm + 0.5)
+    y_max = max(max(v + e for v, e in zip(norm_total_all, err_hi_all)) * 1.05, 1.05)
+    y_min = min(min(v - e for v, e in zip(norm_total_all, err_lo_all)) * 0.95, 0.95)
+    ax_total.set_ylim(y_min, y_max)
+    ax_total.spines['top'].set_visible(False)
+    ax_total.spines['right'].set_visible(False)
+
+    fig_b.savefig(file_b, bbox_inches='tight', pad_inches=0.05)
+    plt.close(fig_b)
+    print(f"  (b) saved to {file_b}")
+
+    # ===== Figure (c): Normalized trace lengths =====
+    apply_paper_style()
+    file_c = f'{base}_c{ext}'
+
+    fig_c, ax_trace = plt.subplots(1, 1, figsize=(7.0, 2.3))
+
+    # Compute normalized trace length ratios (genext / baseline)
+    norm_ops = []
+    norm_recorded = []
+    norm_opt = []
+    for bm in benchmarks:
+        b = stats[bm]['baseline']
+        g = stats[bm]['genext']
+        norm_ops.append(g['ops'] / b['ops'] if b['ops'] > 0 else 0)
+        norm_recorded.append(g['recorded_ops'] / b['recorded_ops'] if b['recorded_ops'] > 0 else 0)
+        norm_opt.append(g['opt_ops'] / b['opt_ops'] if b['opt_ops'] > 0 else 0)
+
+    # Compute geometric means
+    valid_ops = [r for r in norm_ops if r > 0]
+    valid_rec = [r for r in norm_recorded if r > 0]
+    valid_opt = [r for r in norm_opt if r > 0]
+    gm_ops = geomean(valid_ops)
+    gm_rec = geomean(valid_rec)
+    gm_opt_ops = geomean(valid_opt)
+
+    # Append geomean bars
+    x_gm_c = n + x_gap
+    x_all_c = np.append(x, x_gm_c)
+    norm_ops_all = norm_ops + [gm_ops]
+    norm_recorded_all = norm_recorded + [gm_rec]
+    norm_opt_all = norm_opt + [gm_opt_ops]
+
+    n_all_c = len(x_all_c)
+    bar_w = 0.25
+    colors_trace = {
+        'ops': '#2ecc71',       # green
+        'recorded': '#3498db',  # blue
+        'opt': '#9b59b6',       # purple
+    }
+
+    ax_trace.bar(x_all_c - bar_w, norm_ops_all, bar_w,
+                 color=colors_trace['ops'], label='Total ops',
+                 edgecolor='white', linewidth=0.3)
+    ax_trace.bar(x_all_c, norm_recorded_all, bar_w,
+                 color=colors_trace['recorded'], label='Recorded ops',
+                 edgecolor='white', linewidth=0.3)
+    ax_trace.bar(x_all_c + bar_w, norm_opt_all, bar_w,
+                 color=colors_trace['opt'], label='Optimized ops',
+                 edgecolor='white', linewidth=0.3)
+
+    ax_trace.axhline(y=1.0, color='black', linestyle='--', linewidth=0.5, zorder=5)
+    ax_trace.text(0.01, 1.0, 'baseline', fontsize=5.5, ha='left', va='bottom',
+                  color='black', transform=ax_trace.get_yaxis_transform())
+
+    # Separator line before geomean
+    sep_x_c = n + x_gap / 2 - 0.5
+    ax_trace.axvline(x=sep_x_c, color='gray', linestyle=':', linewidth=0.5)
+
+    short_names_all_c = short_names + ['geomean']
+    ax_trace.set_xticks(x_all_c)
+    ax_trace.set_xticklabels(short_names_all_c, rotation=45, ha='right', fontsize=5.5)
+    ax_trace.set_ylabel('Norm. operation count')
+    ax_trace.set_title('(c) Trace length (GenExt / Baseline)', fontsize=8, pad=4)
+    ax_trace.legend(ncol=3, loc='upper right', frameon=True, fontsize=5.5,
+                    edgecolor='#cccccc', fancybox=False)
+    ax_trace.set_xlim(-0.5, x_gm_c + 0.5)
+    all_vals = norm_ops_all + norm_recorded_all + norm_opt_all
+    ax_trace.set_ylim(0, max(all_vals) * 1.15)
+    ax_trace.spines['top'].set_visible(False)
+    ax_trace.spines['right'].set_visible(False)
+
+    fig_c.savefig(file_c, bbox_inches='tight', pad_inches=0.05)
+    plt.close(fig_c)
+    print(f"  (c) saved to {file_c}")
+
+    # ===== Figure (d): Absolute TOTAL time, small/medium/large split =====
+    apply_paper_style()
+    file_d = f'{base}_d{ext}'
+
+    fig_d, axes_d = plt.subplots(1, 3, figsize=(7.0, 2.8),
+                                  gridspec_kw={'width_ratios': [ns, nm, nl], 'wspace': 0.25})
+
+    def plot_total_panel(ax, bms, title_suffix, show_ylabel=True):
+        nb = len(bms)
+        if nb == 0:
+            ax.set_visible(False)
+            return
+        xb = np.arange(nb)
+        bw = 0.35
+
+        baseline_vals = [stats[bm]['baseline']['total'] for bm in bms]
+        genext_vals = [stats[bm]['genext']['total'] for bm in bms]
+
+        ax.bar(xb - bw/2, baseline_vals, bw, color='#AAAAAA',
+               label='Baseline', edgecolor='white', linewidth=0.3)
+        ax.bar(xb + bw/2, genext_vals, bw, color='#4878CF',
+               label='GenExt', edgecolor='white', linewidth=0.3)
+
+        # IQR error bars
+        for variant, offset, vals in [('baseline', -bw/2, baseline_vals),
+                                       ('genext', bw/2, genext_vals)]:
+            q25 = [stats[bm][variant]['total_q25'] for bm in bms]
+            q75 = [stats[bm][variant]['total_q75'] for bm in bms]
+            med = [stats[bm][variant]['total'] for bm in bms]
+            err_lo = [max(0, med[i] - q25[i]) for i in range(nb)]
+            err_hi = [max(0, q75[i] - med[i]) for i in range(nb)]
+            ax.errorbar(xb + offset, med, yerr=[err_lo, err_hi],
+                        fmt='none', ecolor='black', elinewidth=0.4, capsize=1.5, capthick=0.4)
+
+        names = [bm.replace('bm_', '').replace('_', ' ') for bm in bms]
+        ax.set_xticks(xb)
+        ax.set_xticklabels(names, rotation=45, ha='right', fontsize=5.5)
+        ax.set_title(title_suffix, fontsize=8, pad=4)
+        if show_ylabel:
+            ax.set_ylabel('TOTAL time (s)')
+        ax.set_xlim(-0.5, nb - 0.5)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+    plot_total_panel(axes_d[0], small, f'Small ({ns})', show_ylabel=True)
+    plot_total_panel(axes_d[1], medium, f'Medium ({nm})', show_ylabel=False)
+    plot_total_panel(axes_d[2], large, f'Large ({nl})', show_ylabel=False)
+
+    handles, labels_d = axes_d[0].get_legend_handles_labels()
+    fig_d.legend(handles, labels_d, loc='upper center', ncol=2, frameon=False,
+                 fontsize=6, bbox_to_anchor=(0.5, 1.0))
+    fig_d.suptitle('Absolute TOTAL time: Baseline vs GenExt',
+                   fontsize=9, y=1.05)
+
+    fig_d.savefig(file_d, bbox_inches='tight', pad_inches=0.05)
+    plt.close(fig_d)
+    print(f"  (d) saved to {file_d}")
+
+    print(f"\n  {n} benchmarks ({ns} small, {nm} medium, {nl} large)")
+    print(f"  Geomean tracing ratio: {gm_tracing:.2f}")
+    print(f"  Geomean TOTAL ratio: {gm_total:.2f}")
+    print(f"  Geomean ops ratio: {gm_ops:.2f}")
+    print(f"  Geomean recorded ops ratio: {gm_rec:.2f}")
+    print(f"  Geomean opt ops ratio: {gm_opt_ops:.2f}")
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -29,12 +525,16 @@ Examples:
   %(prog)s -n 5 -d my_benchmark_logs -b own
         """
     )
-    parser.add_argument('-n', '--number', type=int, required=True,
+    parser.add_argument('-n', '--number', type=int,
                         help='Number of benchmark iterations')
     parser.add_argument('-d', '--dir', type=str, required=True,
                         help='Directory containing benchmark log files')
-    parser.add_argument('-b', '--benchmark', type=str, required=True,
+    parser.add_argument('-b', '--benchmark', type=str,
                         help='Benchmark type (own, own-macro, own-micro)')
+    parser.add_argument('--paper', action='store_true',
+                        help='Generate publication-quality two-panel figure for the paper')
+    parser.add_argument('-o', '--output', type=str,
+                        help='Output file path (used with --paper)')
     args = parser.parse_args()
     return args
 
@@ -840,6 +1340,13 @@ def create_comparison_page(output_ave, output_var, benchmarks, subset_name, colo
 
 if __name__ == '__main__':
     args = parse_args()
-    benchmarks = setup_bms_plot(args.benchmark)
-    output_ave, output_var = measure(args.number, args.dir, benchmarks)
-    plot(output_ave, output_var, args.dir)
+    if args.paper:
+        output_file = args.output if args.output else 'paper_figure.pdf'
+        plot_paper(args.dir, output_file)
+    else:
+        if not args.number or not args.benchmark:
+            print("Error: -n and -b are required for non-paper mode")
+            sys.exit(1)
+        benchmarks = setup_bms_plot(args.benchmark)
+        output_ave, output_var = measure(args.number, args.dir, benchmarks)
+        plot(output_ave, output_var, args.dir)
