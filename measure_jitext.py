@@ -48,7 +48,7 @@ def run_icbd(env, exe_path, arg=None):
     os.chdir(this_dir)
 
 
-WARMUP_NUMBER = 2
+WARMUP_NUMBER = 0
 
 
 def run(num, dirname, typ, mode=None):
@@ -89,6 +89,7 @@ def run(num, dirname, typ, mode=None):
                         command.append("--benchmark=xml")
                     elif bm == "bm_sympy":
                         command.append("--benchmark=str")
+                    command.extend(["-n", "1"])
                     subprocess.run(command, env=env, stdout=subprocess.DEVNULL)
 
 
