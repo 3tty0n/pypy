@@ -188,6 +188,49 @@ class GenExtension(object):
         self.jitcode.genext_function = d['jit_shortcut']
         self.jitcode.genext_function.__name__ += "_" + self.jitcode.name
         self._generate_capture_function()
+        self._classify_pure_arithmetic()
+        if self.jitcode.genext_is_pure_arithmetic:
+            self._generate_compile_function()
+
+    def _classify_pure_arithmetic(self):
+        """Classify whether this jitcode consists only of pure arithmetic.
+
+        A pure arithmetic jitcode contains only integer/float arithmetic
+        operations, comparisons, and control flow. No heap accesses, no
+        calls, no guards. Traces from these jitcodes are eligible for the
+        fast compilation path that skips the optimizer entirely.
+        """
+        from rpython.jit.codewriter.flatten import Label as FLabel
+        CONTROL_OPS = frozenset([
+            '-live-', 'goto', 'int_return', 'float_return', 'void_return',
+            'int_copy', 'float_copy',
+        ])
+        for insn in self.ssarepr.insns:
+            if isinstance(insn[0], FLabel) or insn[0] == '---':
+                continue
+            opname = insn[0]
+            if opname in HEAPCACHE_SKIP_OPS:
+                continue
+            if opname in CONTROL_OPS:
+                continue
+            if opname.startswith('goto_if_not_'):
+                continue
+            # Any non-pure operation: calls, guards, heap ops
+            self.jitcode.genext_is_pure_arithmetic = False
+            return
+        self.jitcode.genext_is_pure_arithmetic = True
+
+    def _generate_compile_function(self):
+        """Generate a specialized compile-function stub for pure arithmetic jitcodes.
+
+        For now this records that the jitcode is eligible for the fast
+        compilation path; the actual x86 emit function is set to None
+        (the backend falls back to normal regalloc). A future step will
+        generate a frame-slot-based x86 emitter here.
+        """
+        # The attribute is already set to None on JitCode by default.
+        # This method is the extension point for the backend fast path.
+        pass
 
     def _generate_capture_function(self):
         """Generate a specialized get_list_of_active_boxes replacement.

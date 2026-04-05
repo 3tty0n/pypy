@@ -20,6 +20,8 @@ class JitCode(AbstractDescr):
         self._ssarepr     = None          # debugging
         self.genext_function = None
         self.genext_capture = None
+        self.genext_is_pure_arithmetic = False
+        self.genext_compile_function = None
         self.bytecodes_counter = 0
         self.number_calls = 0
         self.traced_operations = 0

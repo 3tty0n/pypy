@@ -432,6 +432,7 @@ class JitCellToken(AbstractDescr):
 
     target_tokens = None
     failed_states = None
+    genext_compile_function = None
     retraced_count = 0
     invalidated = False
     outermost_jitdriver_sd = None

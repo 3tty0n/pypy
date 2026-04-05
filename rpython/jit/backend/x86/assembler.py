@@ -531,23 +531,40 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
             operations = self._inject_debugging_code(looptoken, operations,
                                                      'e', number)
 
-        regalloc = RegAlloc(self, self.cpu.translate_support_code)
-        #
-        allgcrefs = []
-        operations = regalloc.prepare_loop(inputargs, operations,
-                                           looptoken, allgcrefs)
-        self.reserve_gcref_table(allgcrefs)
-        functionpos = self.mc.get_relative_pos()
-        self._call_header_with_stack_check()
-        self._check_frame_depth_debug(self.mc)
-        looppos = self.mc.get_relative_pos()
-        frame_depth_no_fixed_size = self._assemble(regalloc, inputargs,
-                                                   operations)
-        self.update_frame_depth(frame_depth_no_fixed_size + JITFRAME_FIXED_SIZE)
-        #
-        size_excluding_failure_stuff = self.mc.get_relative_pos()
-        self.write_pending_failure_recoveries(regalloc)
-        full_size = self.mc.get_relative_pos()
+        # Check for a GenExtension-generated compile function (pure arithmetic
+        # fast path: no regalloc, no GC rewrite).
+        genext_compile_fn = looptoken.genext_compile_function
+        if genext_compile_fn is not None:
+            self.reserve_gcref_table([])
+            functionpos = self.mc.get_relative_pos()
+            self._call_header_with_stack_check()
+            self._check_frame_depth_debug(self.mc)
+            looppos = self.mc.get_relative_pos()
+            frame_depth_no_fixed_size = genext_compile_fn(
+                self, inputargs, operations)
+            self.update_frame_depth(
+                frame_depth_no_fixed_size + JITFRAME_FIXED_SIZE)
+            size_excluding_failure_stuff = self.mc.get_relative_pos()
+            full_size = self.mc.get_relative_pos()
+        else:
+            regalloc = RegAlloc(self, self.cpu.translate_support_code)
+            #
+            allgcrefs = []
+            operations = regalloc.prepare_loop(inputargs, operations,
+                                               looptoken, allgcrefs)
+            self.reserve_gcref_table(allgcrefs)
+            functionpos = self.mc.get_relative_pos()
+            self._call_header_with_stack_check()
+            self._check_frame_depth_debug(self.mc)
+            looppos = self.mc.get_relative_pos()
+            frame_depth_no_fixed_size = self._assemble(regalloc, inputargs,
+                                                       operations)
+            self.update_frame_depth(
+                frame_depth_no_fixed_size + JITFRAME_FIXED_SIZE)
+            #
+            size_excluding_failure_stuff = self.mc.get_relative_pos()
+            self.write_pending_failure_recoveries(regalloc)
+            full_size = self.mc.get_relative_pos()
         #
         rawstart = self.materialize_loop(looptoken)
         self.patch_gcref_table(looptoken, rawstart)
