@@ -226,6 +226,12 @@ class MIFrame(object):
         else:
             # there needs to be a live instruction before
             pc = self.pc - SIZE_LIVE_OP
+        # Fast path: use genext-specialized capture if available. It switches
+        # on pc and pushes exactly the live registers via add_box_to_storage,
+        # bypassing LivenessIterator bitset decoding.
+        genext_capture = self.jitcode.genext_capture
+        if genext_capture is not None:
+            return genext_capture(self, pc, new_array, add_box_to_storage)
         assert ord(self.jitcode.code[pc]) == self.metainterp.staticdata.op_live
         if not we_are_translated():
             assert pc in self.jitcode._startpoints
