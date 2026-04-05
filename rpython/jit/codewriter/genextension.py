@@ -46,6 +46,28 @@ HEAPCACHE_SKIP_OPS = frozenset([
 def can_skip_heapcache(opname):
     return opname in HEAPCACHE_SKIP_OPS
 
+
+# Binding time classification for GenExtension's Specializer.
+#
+# Each register at a given program point has a binding time describing what
+# the generated code knows about its value and how it is represented.
+#
+#   BT_STATIC          - compile-time constant propagated by the specializer;
+#                        materialized as an unboxed local (e.g. `i0`). This
+#                        is exactly membership in `constant_registers`.
+#
+#   BT_DYNAMIC_BOXED   - value is dynamic at translation time and the current
+#                        representation is a Box (FrontendOp/Const) living in
+#                        `self.registers_i[N]` (or _r/_f).
+#
+#   BT_DYNAMIC_UNBOXED - value is dynamic but only its *trace position* is
+#                        known. No Box is allocated; the raw value and the
+#                        position are held in unboxed locals. Used by the
+#                        unboxed-MIFrame code path (Phase 3).
+BT_STATIC          = 0
+BT_DYNAMIC_BOXED   = 1
+BT_DYNAMIC_UNBOXED = 2
+
 class GenExtension(object):
     def __init__(self, assembler, ssarepr, jitcode):
         self.assembler = assembler
@@ -659,12 +681,19 @@ def _float_as_str(value, TYPE, add_global):
 
 
 class Specializer(object):
-    def __init__(self, insn, constant_registers, orig_pc, spec_pc, work_list):
+    def __init__(self, insn, constant_registers, orig_pc, spec_pc, work_list,
+                 unboxed_registers=None):
         self.insn = insn
         self.constant_registers = constant_registers
+        # Registers whose value is dynamic but whose trace position is tracked
+        # in unboxed locals (no Box allocated). Disjoint from constant_registers.
+        # Populated only by the unboxed-MIFrame code path; normally empty.
+        if unboxed_registers is None:
+            unboxed_registers = frozenset()
+        self.unboxed_registers = unboxed_registers
         self.orig_pc = orig_pc
         self.spec_pc = spec_pc
-        if not constant_registers: # not specialized
+        if not constant_registers and not unboxed_registers: # not specialized
             assert orig_pc == spec_pc
         self.work_list = work_list
 
@@ -672,6 +701,47 @@ class Specializer(object):
         self.methodname = "opimpl_" + self.name
         self.resindex = len(self.insn) - 1 if '->' in self.insn else None
         self.tempvarindex = 0
+
+    # -- Binding time analysis -------------------------------------------------
+    #
+    # Classify each insn argument so downstream code generation can decide
+    # whether to read an unboxed local, a boxed register slot, or a tracked
+    # trace position. Constant IR operands (Constant(...)) are always static.
+    def get_binding_time(self, arg):
+        if isinstance(arg, Constant):
+            return BT_STATIC
+        if arg in self.constant_registers:
+            return BT_STATIC
+        if arg in self.unboxed_registers:
+            return BT_DYNAMIC_UNBOXED
+        return BT_DYNAMIC_BOXED
+
+    def is_static(self, arg):
+        return self.get_binding_time(arg) == BT_STATIC
+
+    def is_dynamic(self, arg):
+        return self.get_binding_time(arg) != BT_STATIC
+
+    def get_next_binding_times(self):
+        """Propagate binding times across this insn to produce the
+        (constant_registers, unboxed_registers) sets at the next PC.
+
+        The rules mirror `get_next_constant_registers` but also preserve
+        BT_DYNAMIC_UNBOXED classifications for registers that are not
+        overwritten by this instruction.
+        """
+        consts = self.constant_registers
+        unboxed = self.unboxed_registers
+        if self.resindex is None:
+            return consts, unboxed
+        result = self.insn[self.resindex]
+        args = self._get_args()
+        # If every argument is static, the result is also static.
+        if self._check_all_constant_args(args):
+            return consts.union({result}), unboxed - {result}
+        # Dynamic result: by default it becomes BT_DYNAMIC_BOXED, which
+        # means removing the result register from both specialized sets.
+        return consts - {result}, unboxed - {result}
 
     def __repr__(self):
         return "<Specializer %s %s %s>" % (self.name, self.orig_pc, self.constant_registers)

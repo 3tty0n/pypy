@@ -8,7 +8,8 @@ from rpython.jit.codewriter.assembler import Assembler, AssemblerError
 from rpython.jit.codewriter.effectinfo import EffectInfo
 from rpython.rtyper.lltypesystem import lltype, llmemory
 from rpython.jit.metainterp.history import AbstractDescr
-from rpython.jit.codewriter.genextension import WorkList
+from rpython.jit.codewriter.genextension import (
+    WorkList, BT_STATIC, BT_DYNAMIC_BOXED, BT_DYNAMIC_UNBOXED)
 from rpython.config import translationoption
 from rpython.config.translationoption import get_combined_translation_config
 
@@ -1570,6 +1571,39 @@ else:
     self.registers_i[1] = v0
     pc = 7
     continue"""
+
+
+def test_binding_time_classification():
+    """get_binding_time classifies Constants and registers as static/dynamic."""
+    i0 = Register('int', 0)
+    i1 = Register('int', 1)
+    i2 = Register('int', 2)
+    insn = ('int_add', i0, i1, '->', i2)
+    work_list = WorkList({5: insn, 7: ('int_return', i2)}, pc_to_nextpc={5: 7})
+    # i0 is static (in constant_registers), i1 is dynamic.
+    spec = work_list.specialize_insn(insn, {i0}, 5)
+    assert spec.get_binding_time(i0) == BT_STATIC
+    assert spec.get_binding_time(i1) == BT_DYNAMIC_BOXED
+    assert spec.get_binding_time(Constant(7, lltype.Signed)) == BT_STATIC
+    assert spec.is_static(i0)
+    assert spec.is_dynamic(i1)
+    # Dynamic input ⇒ dynamic result: i2 is removed from constant_registers.
+    next_consts, next_unboxed = spec.get_next_binding_times()
+    assert i2 not in next_consts
+    assert i2 not in next_unboxed
+
+
+def test_binding_time_propagation_all_static():
+    """When every argument is static, the result becomes static too."""
+    i0 = Register('int', 0)
+    i1 = Register('int', 1)
+    i2 = Register('int', 2)
+    insn = ('int_add', i0, i1, '->', i2)
+    work_list = WorkList({5: insn, 7: ('int_return', i2)}, pc_to_nextpc={5: 7})
+    spec = work_list.specialize_insn(insn, {i0, i1}, 5)
+    next_consts, next_unboxed = spec.get_next_binding_times()
+    assert i2 in next_consts
+    assert not next_unboxed
 
 
 def test_genext_capture_function(enable_genextension):
