@@ -1654,6 +1654,21 @@ def test_genext_capture_function(enable_genextension):
     assert collected2[1] is frame.registers_i[1]
 
 
+def test_record_int_by_position():
+    """record*_int_by_position records using raw trace positions and
+    returns an int position instead of a FrontendOp box."""
+    from rpython.jit.metainterp.history import History
+    from rpython.jit.metainterp.resoperation import rop
+    history = History(4, None)
+    history.set_inputargs([])
+    # Feed raw input positions (0, 1 as if they were inputargs).
+    pos_b = history.record2_int_by_position(rop.INT_ADD, 0, 1, 42)
+    assert isinstance(pos_b, int)
+    pos_c = history.record1_int_by_position(rop.INT_INVERT, pos_b, -43)
+    assert isinstance(pos_c, int)
+    assert pos_c != pos_b
+
+
 def test_genext_capture_no_live_instructions(enable_genextension):
     """Jitcodes without -live- instructions don't get a capture function."""
     ssarepr = SSARepr("test_no_live", genextension=True)

@@ -98,6 +98,17 @@ class MIFrame(object):
         self.registers_i = None
         self.registers_r = None
         self.registers_f = None
+        # Parallel unboxed storage for int/float/ref registers, used by
+        # GenExtension. Holds (value, trace_position) pairs so pure
+        # arithmetic can flow without allocating FrontendOp boxes until a
+        # materialization point (guard, opimpl call). `raw_positions_*[idx]
+        # == -1` means "no tracked position" (e.g. a compile-time constant).
+        self.raw_values_i = None
+        self.raw_positions_i = None
+        self.raw_values_f = None
+        self.raw_positions_f = None
+        self.raw_values_r = None
+        self.raw_positions_r = None
 
     def setup(self, jitcode, greenkey=None):
         # if not translated, fill the registers with MissingValue()
@@ -113,10 +124,23 @@ class MIFrame(object):
         num_regs_and_consts_f = jitcode.num_regs_and_consts_f()
         if num_regs_and_consts_i:
             self.registers_i = self.copy_constants(self.registers_i, jitcode.constants_i, jitcode.num_regs_i(), ConstInt)
+            # Allocate parallel unboxed arrays sized to match registers_i.
+            n = len(self.registers_i)
+            if self.raw_values_i is None or len(self.raw_values_i) < n:
+                self.raw_values_i = [0] * n
+                self.raw_positions_i = [-1] * n
         if num_regs_and_consts_r:
             self.registers_r = self.copy_constants(self.registers_r, jitcode.constants_r, jitcode.num_regs_r(), ConstPtrJitCode)
+            n = len(self.registers_r)
+            if self.raw_values_r is None or len(self.raw_values_r) < n:
+                self.raw_values_r = [lltype.nullptr(llmemory.GCREF.TO)] * n
+                self.raw_positions_r = [-1] * n
         if num_regs_and_consts_f:
             self.registers_f = self.copy_constants(self.registers_f, jitcode.constants_f, jitcode.num_regs_f(), ConstFloat)
+            n = len(self.registers_f)
+            if self.raw_values_f is None or len(self.raw_values_f) < n:
+                self.raw_values_f = [longlong.ZEROF] * n
+                self.raw_positions_f = [-1] * n
         self._result_argcode = 'v'
         # for resume.py operation
         self.parent_snapshot = -1
@@ -147,6 +171,67 @@ class MIFrame(object):
                 registers[targetindex] = ConstClass(constants[i])
                 targetindex += 1
         return registers
+
+    def write_int_unboxed(self, index, value, position):
+        """Store a dynamic int register in unboxed form.
+
+        `value` is the concrete int; `position` is the trace index that
+        produced it (or -1 for values with no tracked position, like
+        fresh constants). The boxed slot `registers_i[index]` is left
+        intact so that code paths that still read it (opimpls, the
+        generic interpreter) continue to work.
+        """
+        self.raw_values_i[index] = value
+        self.raw_positions_i[index] = position
+
+    def write_float_unboxed(self, index, value, position):
+        """Store a dynamic float register in unboxed form (value is a
+        longlong.FLOATSTORAGE)."""
+        self.raw_values_f[index] = value
+        self.raw_positions_f[index] = position
+
+    def write_ref_unboxed(self, index, value, position):
+        """Store a dynamic ref register in unboxed form (value is a GCREF)."""
+        self.raw_values_r[index] = value
+        self.raw_positions_r[index] = position
+
+    def materialize_int(self, index):
+        """Ensure `registers_i[index]` contains a Box that reflects the
+        value stored in the unboxed arrays.
+
+        If a tracked trace position is present, build an IntFrontendOp
+        at that position; otherwise wrap the raw value in a ConstInt.
+        """
+        pos = self.raw_positions_i[index]
+        value = self.raw_values_i[index]
+        if pos >= 0:
+            box = history.IntFrontendOp(pos, value)
+        else:
+            box = ConstInt(value)
+        self.registers_i[index] = box
+        return box
+
+    def materialize_float(self, index):
+        """Same as materialize_int but for float registers."""
+        pos = self.raw_positions_f[index]
+        value = self.raw_values_f[index]
+        if pos >= 0:
+            box = history.FloatFrontendOp(pos, value)
+        else:
+            box = history.ConstFloat(value)
+        self.registers_f[index] = box
+        return box
+
+    def materialize_ref(self, index):
+        """Same as materialize_int but for ref registers."""
+        pos = self.raw_positions_r[index]
+        value = self.raw_values_r[index]
+        if pos >= 0:
+            box = history.RefFrontendOp(pos, value)
+        else:
+            box = history.ConstPtr(value)
+        self.registers_r[index] = box
+        return box
 
     def cleanup_registers(self):
         # To avoid keeping references alive, this cleans up the registers_r.

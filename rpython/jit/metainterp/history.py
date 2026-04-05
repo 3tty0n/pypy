@@ -787,6 +787,38 @@ class History(object):
         pos = self.trace.record_op3(opnum, argbox1, argbox2, argbox3, descr)
         return IntFrontendOp(pos, intvalue)
 
+    def record1_int_by_position(self, opnum, pos1, intvalue, descr=None):
+        """Record a unary int op taking a raw trace position (not a Box).
+
+        Returns only the new trace position; the value is not wrapped in a
+        FrontendOp. The caller tracks `intvalue` in an unboxed local.
+        """
+        return self.trace.record_op1_by_position(opnum, pos1, descr)
+
+    def record2_int_by_position(self, opnum, pos1, pos2, intvalue, descr=None):
+        """Record a binary int op taking two raw trace positions.
+
+        Returns only the new trace position; the value is not wrapped in a
+        FrontendOp. The caller tracks `intvalue` in an unboxed local.
+        """
+        return self.trace.record_op2_by_position(opnum, pos1, pos2, descr)
+
+    def record1_float_by_position(self, opnum, pos1, floatvalue, descr=None):
+        """Position-only recording for a unary float op."""
+        return self.trace.record_op1_by_position(opnum, pos1, descr)
+
+    def record2_float_by_position(self, opnum, pos1, pos2, floatvalue, descr=None):
+        """Position-only recording for a binary float op."""
+        return self.trace.record_op2_by_position(opnum, pos1, pos2, descr)
+
+    def record1_ref_by_position(self, opnum, pos1, refvalue, descr=None):
+        """Position-only recording for a unary ref op."""
+        return self.trace.record_op1_by_position(opnum, pos1, descr)
+
+    def record2_ref_by_position(self, opnum, pos1, pos2, refvalue, descr=None):
+        """Position-only recording for a binary ref op."""
+        return self.trace.record_op2_by_position(opnum, pos1, pos2, descr)
+
     def record1_float(self, opnum, argbox1, floatvalue, descr=None):
         pos = self.trace.record_op1(opnum, argbox1, descr)
         return FloatFrontendOp(pos, floatvalue)
