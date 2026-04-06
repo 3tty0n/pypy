@@ -57,28 +57,36 @@ def run(num, dirname, typ, mode=None):
     benchmarks = setup_bms(typ)
     for bm in benchmarks:
         for exe_name, exe_path in COMMANDS:
-            print("Running %s against %s..." % (exe_name, bm))
-            for i in range(num + WARMUP_NUMBER):
+            print("Warming up %s against %s..." % (exe_name, bm))
+            for _ in range(WARMUP_NUMBER):
                 env = setup_env(typ)
-
-                if i < WARMUP_NUMBER:
-                    env["PYTHONDONTWRITEBYTECODE"] = "1"
-                    env["CCACHE_DISABLE"] = "1"
+                env["PYTHONDONTWRITEBYTECODE"] = "1"
+                target_path = bm_path + "%s.py" % (bm)
+                command = [exe_path, target_path]
+                if bm == "bm_icbd":
+                    run_icbd(env, exe_path)
                 else:
-                    env.pop("PYTHONDONTWRITEBYTECODE", None)
-                    env.pop("CCACHE_DISABLE", None)
-                    log_output = "%s/%s/%s_%s_%i.log" % (
-                        this_dir,
-                        dirname,
-                        exe_name,
-                        bm,
-                        i + 1 - WARMUP_NUMBER,
-                    )
+                    if bm == "bm_genshi":
+                        command.append("--benchmark=xml")
+                    elif bm == "bm_sympy":
+                        command.append("--benchmark=str")
+                    subprocess.run(command, env=env, stdout=subprocess.DEVNULL)
 
-                    if mode == "genext-stats":
-                        env["PYPYLOG"] = "jit-genext:%s" % (log_output)
-                    else:
-                        env["PYPYLOG"] = "jit-summary:%s" % (log_output)
+        for i in range(1, num + 1):
+            for exe_name, exe_path in COMMANDS:
+                print("Running %s against %s [%d/%d]..." % (exe_name, bm, i, num))
+                env = setup_env(typ)
+                log_output = "%s/%s/%s_%s_%i.log" % (
+                    this_dir,
+                    dirname,
+                    exe_name,
+                    bm,
+                    i,
+                )
+                if mode == "genext-stats":
+                    env["PYPYLOG"] = "jit-genext:%s" % (log_output)
+                else:
+                    env["PYPYLOG"] = "jit-summary:%s" % (log_output)
 
                 target_path = bm_path + "%s.py" % (bm)
                 command = [exe_path, target_path]
