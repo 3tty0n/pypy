@@ -1606,54 +1606,6 @@ def test_binding_time_propagation_all_static():
     assert not next_unboxed
 
 
-def test_genext_capture_function(enable_genextension):
-    """genext_capture switches on pc and pushes exactly the live registers,
-    producing the same output as the generic LivenessIterator-based path."""
-    from rpython.jit.metainterp.history import ConstInt, CONST_NULL
-    ssarepr = SSARepr("test_capture", genextension=True)
-    i0 = Register('int', 0)
-    i1 = Register('int', 1)
-    r0 = Register('ref', 0)
-    ssarepr.insns = [
-        (Label('L1'),),
-        ('-live-', i0, i1, r0),
-        ('int_add', i1, i0, '->', i1),
-        ('-live-', i0, i1),
-        ('int_return', i1),
-    ]
-    assembler = Assembler()
-    jitcode = assembler.assemble(ssarepr, num_regs={'int': 2, 'ref': 1})
-    assert jitcode.genext_capture is not None
-
-    class FakeFrame(object):
-        def __init__(self):
-            self.registers_i = [ConstInt(10), ConstInt(20)]
-            self.registers_r = [CONST_NULL]
-            self.registers_f = []
-
-    frame = FakeFrame()
-    live_pcs = sorted(assembler.liveness.keys())
-
-    # First -live- PC: live = {i0, i1, r0}
-    collected = []
-    def new_array(n):
-        return n
-    result = jitcode.genext_capture(
-        frame, live_pcs[0], new_array, collected.append)
-    assert result == 3
-    assert collected[0] is frame.registers_i[0]
-    assert collected[1] is frame.registers_i[1]
-    assert collected[2] is frame.registers_r[0]
-
-    # Second -live- PC: live = {i0, i1}
-    collected2 = []
-    result2 = jitcode.genext_capture(
-        frame, live_pcs[1], new_array, collected2.append)
-    assert result2 == 2
-    assert collected2[0] is frame.registers_i[0]
-    assert collected2[1] is frame.registers_i[1]
-
-
 def test_record_int_by_position():
     """record*_int_by_position records using raw trace positions and
     returns an int position instead of a FrontendOp box."""
@@ -1667,16 +1619,3 @@ def test_record_int_by_position():
     pos_c = history.record1_int_by_position(rop.INT_INVERT, pos_b, -43)
     assert isinstance(pos_c, int)
     assert pos_c != pos_b
-
-
-def test_genext_capture_no_live_instructions(enable_genextension):
-    """Jitcodes without -live- instructions don't get a capture function."""
-    ssarepr = SSARepr("test_no_live", genextension=True)
-    i0, i1 = Register('int', 0), Register('int', 1)
-    ssarepr.insns = [
-        ('int_add', i1, i0, '->', i1),
-        ('int_return', i1),
-    ]
-    assembler = Assembler()
-    jitcode = assembler.assemble(ssarepr, num_regs={'int': 2, 'ref': 1})
-    assert jitcode.genext_capture is None

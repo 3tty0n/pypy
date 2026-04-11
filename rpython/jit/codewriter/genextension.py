@@ -220,66 +220,6 @@ class GenExtension(object):
             return
         self.jitcode.genext_is_pure_arithmetic = True
 
-    def _generate_compile_function(self):
-        """Generate a specialized compile-function stub for pure arithmetic jitcodes.
-
-        For now this records that the jitcode is eligible for the fast
-        compilation path; the actual x86 emit function is set to None
-        (the backend falls back to normal regalloc). A future step will
-        generate a frame-slot-based x86 emitter here.
-        """
-        # The attribute is already set to None on JitCode by default.
-        # This method is the extension point for the backend fast path.
-        pass
-
-    def _generate_capture_function(self):
-        """Generate a specialized get_list_of_active_boxes replacement.
-
-        Instead of decoding liveness bitsets at runtime via LivenessIterator,
-        this generates one function per jitcode that switches on the PC of
-        the -live- instruction and directly calls add_box_to_storage for
-        each known-live register, in the order expected by the generic
-        path (ints, then refs, then floats, each by ascending index).
-        """
-        liveness = self.assembler.liveness
-        if not liveness:
-            return
-        lines = []
-        lines.append(
-            "def genext_capture(frame, pc, new_array, add_box_to_storage):"
-            " # %s" % self.jitcode.name)
-        first = True
-        for live_pc in sorted(liveness.keys()):
-            live_i, live_r, live_f = liveness[live_pc]
-            indices_i = sorted([ord(c) for c in live_i])
-            indices_r = sorted([ord(c) for c in live_r])
-            indices_f = sorted([ord(c) for c in live_f])
-            total = len(indices_i) + len(indices_r) + len(indices_f)
-            keyword = "if" if first else "elif"
-            lines.append("    %s pc == %d:" % (keyword, live_pc))
-            lines.append("        storage = new_array(%d)" % total)
-            for idx in indices_i:
-                lines.append(
-                    "        add_box_to_storage(frame.registers_i[%d])" % idx)
-            for idx in indices_r:
-                lines.append(
-                    "        add_box_to_storage(frame.registers_r[%d])" % idx)
-            for idx in indices_f:
-                lines.append(
-                    "        add_box_to_storage(frame.registers_f[%d])" % idx)
-            lines.append("        return storage")
-            first = False
-        lines.append("    else:")
-        lines.append("        assert 0, 'genext_capture: unknown pc'")
-        lines.append("        return new_array(0)")
-        source_text = "\n".join(lines)
-        self.jitcode._genext_capture_source = source_text
-        source = py.code.Source(source_text)
-        d = {}
-        exec source.compile() in d
-        self.jitcode.genext_capture = d['genext_capture']
-        self.jitcode.genext_capture.__name__ += "_" + self.jitcode.name
-
     def _make_code(self, index, insn):
         self._reset_insn()
         assert not (isinstance(insn[0], Label) or insn[0] == '---')
