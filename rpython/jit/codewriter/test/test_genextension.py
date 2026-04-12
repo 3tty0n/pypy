@@ -8,8 +8,7 @@ from rpython.jit.codewriter.assembler import Assembler, AssemblerError
 from rpython.jit.codewriter.effectinfo import EffectInfo
 from rpython.rtyper.lltypesystem import lltype, llmemory
 from rpython.jit.metainterp.history import AbstractDescr
-from rpython.jit.codewriter.genextension import (
-    WorkList, BT_STATIC, BT_DYNAMIC_BOXED, BT_DYNAMIC_UNBOXED)
+from rpython.jit.codewriter.genextension import WorkList
 from rpython.config import translationoption
 from rpython.config.translationoption import get_combined_translation_config
 
@@ -1573,6 +1572,39 @@ else:
     continue"""
 
 
+<<<<<<< HEAD
+def test_binding_time_classification():
+    """get_binding_time classifies Constants and registers as static/dynamic."""
+    i0 = Register('int', 0)
+    i1 = Register('int', 1)
+    i2 = Register('int', 2)
+    insn = ('int_add', i0, i1, '->', i2)
+    work_list = WorkList({5: insn, 7: ('int_return', i2)}, pc_to_nextpc={5: 7})
+    # i0 is static (in constant_registers), i1 is dynamic.
+    spec = work_list.specialize_insn(insn, {i0}, 5)
+    assert spec.get_binding_time(i0) == BT_STATIC
+    assert spec.get_binding_time(i1) == BT_DYNAMIC_BOXED
+    assert spec.get_binding_time(Constant(7, lltype.Signed)) == BT_STATIC
+    assert spec.is_static(i0)
+    assert spec.is_dynamic(i1)
+    # Dynamic input ⇒ dynamic result: i2 is removed from constant_registers.
+    next_consts, next_unboxed = spec.get_next_binding_times()
+    assert i2 not in next_consts
+    assert i2 not in next_unboxed
+
+
+def test_binding_time_propagation_all_static():
+    """When every argument is static, the result becomes static too."""
+    i0 = Register('int', 0)
+    i1 = Register('int', 1)
+    i2 = Register('int', 2)
+    insn = ('int_add', i0, i1, '->', i2)
+    work_list = WorkList({5: insn, 7: ('int_return', i2)}, pc_to_nextpc={5: 7})
+    spec = work_list.specialize_insn(insn, {i0, i1}, 5)
+    next_consts, next_unboxed = spec.get_next_binding_times()
+    assert i2 in next_consts
+    assert not next_unboxed
+||||||| parent of 0363be1c96 (Revert "WIP: Add binding time analysis framework to Specializer")
 def test_binding_time_classification():
     """get_binding_time classifies Constants and registers as static/dynamic."""
     i0 = Register('int', 0)
@@ -1606,16 +1638,49 @@ def test_binding_time_propagation_all_static():
     assert not next_unboxed
 
 
-def test_record_int_by_position():
-    """record*_int_by_position records using raw trace positions and
-    returns an int position instead of a FrontendOp box."""
-    from rpython.jit.metainterp.history import History
-    from rpython.jit.metainterp.resoperation import rop
-    history = History(4, None)
-    history.set_inputargs([])
-    # Feed raw input positions (0, 1 as if they were inputargs).
-    pos_b = history.record2_int_by_position(rop.INT_ADD, 0, 1, 42)
-    assert isinstance(pos_b, int)
-    pos_c = history.record1_int_by_position(rop.INT_INVERT, pos_b, -43)
-    assert isinstance(pos_c, int)
-    assert pos_c != pos_b
+def test_genext_capture_function(enable_genextension):
+    """genext_capture switches on pc and pushes exactly the live registers,
+    producing the same output as the generic LivenessIterator-based path."""
+    from rpython.jit.metainterp.history import ConstInt, CONST_NULL
+    ssarepr = SSARepr("test_capture", genextension=True)
+    i0 = Register('int', 0)
+    i1 = Register('int', 1)
+    r0 = Register('ref', 0)
+    ssarepr.insns = [
+        (Label('L1'),),
+        ('-live-', i0, i1, r0),
+        ('int_add', i1, i0, '->', i1),
+        ('-live-', i0, i1),
+        ('int_return', i1),
+    ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 2, 'ref': 1})
+    assert jitcode.genext_capture is not None
+
+    class FakeFrame(object):
+        def __init__(self):
+            self.registers_i = [ConstInt(10), ConstInt(20)]
+            self.registers_r = [CONST_NULL]
+            self.registers_f = []
+
+    frame = FakeFrame()
+    live_pcs = sorted(assembler.liveness.keys())
+
+    # First -live- PC: live = {i0, i1, r0}
+    collected = []
+    def new_array(n):
+        return n
+    result = jitcode.genext_capture(
+        frame, live_pcs[0], new_array, collected.append)
+    assert result == 3
+    assert collected[0] is frame.registers_i[0]
+    assert collected[1] is frame.registers_i[1]
+    assert collected[2] is frame.registers_r[0]
+
+    # Second -live- PC: live = {i0, i1}
+    collected2 = []
+    result2 = jitcode.genext_capture(
+        frame, live_pcs[1], new_array, collected2.append)
+    assert result2 == 2
+    assert collected2[0] is frame.registers_i[0]
+    assert collected2[1] is frame.registers_i[1]
