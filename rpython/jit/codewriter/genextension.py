@@ -166,8 +166,6 @@ class GenExtension(object):
         self.jitcode.genext_function = d['jit_shortcut']
         self.jitcode.genext_function.__name__ += "_" + self.jitcode.name
         self._classify_pure_arithmetic()
-        if self.jitcode.genext_is_pure_arithmetic:
-            self._generate_compile_function()
 
     def _classify_pure_arithmetic(self):
         """Classify whether this jitcode consists only of pure arithmetic.
