@@ -165,7 +165,6 @@ class GenExtension(object):
         exec source.compile() in d
         self.jitcode.genext_function = d['jit_shortcut']
         self.jitcode.genext_function.__name__ += "_" + self.jitcode.name
-        self._generate_capture_function()
         self._classify_pure_arithmetic()
         if self.jitcode.genext_is_pure_arithmetic:
             self._generate_compile_function()
