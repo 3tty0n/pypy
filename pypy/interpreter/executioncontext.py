@@ -76,7 +76,7 @@ class ExecutionContext(object):
         frame.f_backref = self.topframeref
         self.topframeref = jit.virtual_ref(frame)
 
-    #@warmup_critical_function
+    @warmup_critical_function
     def leave(self, frame, w_exitvalue, got_exception):
         try:
             if self.profilefunc:

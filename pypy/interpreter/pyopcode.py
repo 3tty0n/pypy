@@ -107,6 +107,7 @@ class __extend__(pyframe.PyFrame):
         operr = OperationError(w_type, w_value)
         return self.handle_operation_error(ec, operr)
 
+    @warmup_critical_function
     def handle_operation_error(self, ec, operr, attach_tb=True):
         if attach_tb:
             if 1:
