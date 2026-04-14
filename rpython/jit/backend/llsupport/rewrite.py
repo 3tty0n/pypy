@@ -93,9 +93,12 @@ class GcRewriterAssembler(object):
     def get_box_replacement(self, op, allow_none=False):
         if allow_none and op is None:
             return None # for failargs
-        while op.get_forwarded():
-            op = op.get_forwarded()
-        return op
+        # Do not follow Info forwards; Info is not a box.
+        while True:
+            nxt = op.get_forwarded()
+            if nxt is None or nxt.is_info_class:
+                return op
+            op = nxt
 
     def emit_op(self, op):
         op = self.get_box_replacement(op)

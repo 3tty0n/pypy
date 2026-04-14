@@ -440,6 +440,9 @@ class JitCellToken(AbstractDescr):
     target_tokens = None
     failed_states = None
     retraced_count = 0
+    # Bridges compiled with this cell token as original loop. Used as a
+    # polymorphism signal by hot_bridge_promotion. Issue #5146.
+    bridge_count = 0
     invalidated = False
     outermost_jitdriver_sd = None
     # and more data specified by the backend when the loop is compiled

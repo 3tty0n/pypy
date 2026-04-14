@@ -12,7 +12,8 @@ from rpython.jit.metainterp.optimizeopt.vstring import StrPtrInfo
 from rpython.jit.metainterp.optimizeopt.virtualstate import (
     VirtualStateConstructor, VirtualStatesCantMatch)
 from .util import get_box_replacement
-from rpython.jit.metainterp.resoperation import rop, ResOperation, GuardResOp
+from rpython.jit.metainterp.resoperation import (
+    rop, ResOperation, GuardResOp, AbstractResOpOrInputArg)
 from rpython.jit.metainterp import compile
 from rpython.rlib.debug import debug_print, debug_start, debug_stop,\
      have_debug_prints
@@ -154,6 +155,7 @@ class UnrollOptimizer(Optimizer):
         except InvalidLoop:
             # inlining short preamble failed, jump to preamble
             self.jump_to_preamble(celltoken, end_jump)
+            self._deep_clean_newops()
             return (UnrollInfo(target_token, label_op, extra_same_as,
                                self.quasi_immutable_deps),
                     self._newoperations)
@@ -169,6 +171,7 @@ class UnrollOptimizer(Optimizer):
 
         if new_virtual_state is not None:
             self.jump_to_preamble(celltoken, end_jump)
+            self._deep_clean_newops()
             return (UnrollInfo(target_token, label_op, extra_same_as,
                                self.quasi_immutable_deps),
                     self._newoperations)
@@ -176,12 +179,15 @@ class UnrollOptimizer(Optimizer):
         self.optunroll.disable_retracing_if_max_retrace_guards(
             self._newoperations, target_token)
 
+        self._clean_optimization_info(self._newoperations)
+
         return (UnrollInfo(target_token, label_op, extra_same_as,
                            self.quasi_immutable_deps),
                 self._newoperations)
 
     def optimize_bridge(self, trace, runtime_boxes, call_pure_results,
-                        inline_short_preamble, box_names_memo, resumestorage):
+                        inline_short_preamble, box_names_memo, resumestorage,
+                        prefer_loop_over_bridge=False):
         from rpython.jit.metainterp.optimizeopt.bridgeopt import deserialize_optimizer_knowledge
         frontend_inputargs = trace.inputargs
         trace = trace.get_iter()
@@ -197,43 +203,77 @@ class UnrollOptimizer(Optimizer):
         assert isinstance(cell_token, JitCellToken)
         if not inline_short_preamble or len(cell_token.target_tokens) == 1:
             self.jump_to_preamble(cell_token, jump_op)
+            self._deep_clean_newops()
             return info, self._newoperations[:]
         # force all the information that does not go to the short
         # preamble at all
         self.flush()
         for a in jump_op.getarglist():
             self.force_box_for_end_of_preamble(a)
+        snap_len = len(self._newoperations)  # issue #5146
         try:
             vs = self.optunroll.jump_to_existing_trace(jump_op, None, runtime_boxes,
                                              force_boxes=False)
         except InvalidLoop:
+            del self._newoperations[snap_len:]
             self.jump_to_preamble(cell_token, jump_op)
+            self._deep_clean_newops()
             return info, self._newoperations[:]
-        if vs is None:
-            return info, self._newoperations[:]
-        warmrunnerdescr = self.metainterp_sd.warmrunnerdesc
-        limit = warmrunnerdescr.memory_manager.retrace_limit
-        if cell_token.retraced_count < limit:
-            cell_token.retraced_count += 1
-            debug_print('Retracing (%d/%d)' % (cell_token.retraced_count, limit))
         else:
-            # Try forcing boxes to avoid jumping to the preamble
-            try:
-                vs = self.optunroll.jump_to_existing_trace(jump_op, None, runtime_boxes,
-                                                 force_boxes=True)
-            except InvalidLoop:
-                pass
             if vs is None:
+                self._deep_clean_newops()
                 return info, self._newoperations[:]
-            debug_print("Retrace count reached, jumping to preamble")
-            self.jump_to_preamble(cell_token, jump_op)
-            return info, self._newoperations[:]
+            warmrunnerdescr = self.metainterp_sd.warmrunnerdesc
+            limit = warmrunnerdescr.memory_manager.retrace_limit
+            if cell_token.retraced_count < limit:
+                cell_token.retraced_count += 1
+                debug_print('Retracing (%d/%d)' % (cell_token.retraced_count, limit))
+            else:
+                # Try forcing boxes to avoid jumping to the preamble
+                try:
+                    vs = self.optunroll.jump_to_existing_trace(jump_op, None, runtime_boxes,
+                                                     force_boxes=True)
+                except InvalidLoop:
+                    pass
+                if vs is None:
+                    self._deep_clean_newops()
+                    return info, self._newoperations[:]
+                debug_print("Retrace count reached, jumping to preamble")
+                self.jump_to_preamble(cell_token, jump_op)
+                self._deep_clean_newops()
+                return info, self._newoperations[:]
         exported_state = self.optunroll.export_state(info.jump_op.getarglist(),
                                            info.inputargs, runtime_boxes,
                                            box_names_memo)
         exported_state.quasi_immutable_deps = self.quasi_immutable_deps
         self._clean_optimization_info(self._newoperations)
         return exported_state, self._newoperations
+
+    def _deep_clean_newops(self):
+        # Like _clean_optimization_info but also strips Info forwards from
+        # op args/failargs.  Needed on early-return paths that skip
+        # export_state: the backend's GcRewriter does not stop at Info
+        # instances (unlike the optimizer's get_box_replacement), so any
+        # leaked _forwarded=Info causes a fatal SettingForwardedOnAbstractValue.
+        self._clean_optimization_info(self._newoperations)
+        for op in self._newoperations:
+            for i in range(op.numargs()):
+                arg = op.getarg(i)
+                if not isinstance(arg, AbstractResOpOrInputArg):
+                    continue
+                fwd = arg.get_forwarded()
+                if fwd is not None and fwd.is_info_class:
+                    arg.set_forwarded(None)
+            if op.is_guard():
+                failargs = op.getfailargs()
+                if failargs is None:
+                    continue
+                for a in failargs:
+                    if a is None or not isinstance(a, AbstractResOpOrInputArg):
+                        continue
+                    fwd = a.get_forwarded()
+                    if fwd is not None and fwd.is_info_class:
+                        a.set_forwarded(None)
 
     def jump_to_preamble(self, cell_token, jump_op):
         assert cell_token.target_tokens[0].virtual_state is None

@@ -578,6 +578,7 @@ PARAMETER_DOCS = {
     'enable_opts': 'INTERNAL USE ONLY (MAY NOT WORK OR LEAD TO CRASHES): '
                    'optimizations to enable, or all = %s' % ENABLE_ALL_OPTS,
     'max_unroll_recursion': 'how many levels deep to unroll a recursive function',
+    'enable_hot_bridge_promotion': 'promote per-value guard_value bridges to full loop variants (0=off, 1=on)',
     'vec': 'turn on the vectorization optimization (vecopt). ' \
            'Supports x86 (SSE 4.1), powerpc (SVX), s390x SIMD',
     'vec_cost': 'threshold for which traces to bail. Unpacking increases the counter,'\
@@ -599,6 +600,7 @@ PARAMETERS = {'threshold': 1039, # just above 1024, prime
               'disable_unrolling': 200,
               'enable_opts': 'all',
               'max_unroll_recursion': 7,
+              'enable_hot_bridge_promotion': 0,
               'vec': 0,
               'vec_all': 0,
               'vec_cost': 0,

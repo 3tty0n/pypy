@@ -3103,6 +3103,59 @@ class BasicTests:
                     assert len(cell.target_tokens) <= 4
             assert cnt == 1
 
+    def test_hot_bridge_promotion_5146(self):
+        # Reproduces the pattern of PyPy issue #5146: when the same
+        # per-value guard_value fires hot for multiple distinct values
+        # (here: promote(obj.v) with three Obj instances), the default
+        # behavior keeps attaching slow bridges.
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        obj1 = Obj(1)
+        obj2 = Obj(2)
+        obj3 = Obj(3)
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                v = promote(obj.v)
+                total += v + i
+                i += 1
+            return total
+
+        def run(enable, n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 5)
+            set_param(None, 'enable_hot_bridge_promotion', enable)
+            hot_loop(obj1, n)
+            hot_loop(obj2, n)
+            return hot_loop(obj3, n)
+
+        # Baseline: all three use the same peeled loop + two bridges.
+        res = self.meta_interp(run, [0, 50])
+        assert res == run(0, 50)
+        tokens = get_stats().get_all_jitcell_tokens()
+        baseline = max(len(t.target_tokens) for t in tokens if t.target_tokens)
+
+        # With flag on: obj3's bridge is promoted to a new peeled-loop
+        # variant (obj2 was the first bridge, so its descr has
+        # bridge_compile_count >= 1 when obj3 arrives).
+        res = self.meta_interp(run, [1, 50])
+        assert res == run(1, 50)
+        tokens = get_stats().get_all_jitcell_tokens()
+        with_promotion = max(len(t.target_tokens) for t in tokens if t.target_tokens)
+
+        assert with_promotion > baseline, (
+            "enable_hot_bridge_promotion should add at least one target_token: "
+            "baseline=%d, with_promotion=%d" % (baseline, with_promotion))
+
     def test_frame_finished_during_retrace(self):
         class Base(object):
             pass

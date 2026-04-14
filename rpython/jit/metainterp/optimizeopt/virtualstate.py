@@ -147,8 +147,12 @@ class AbstractVirtualStructStateInfo(AbstractVirtualStateInfo):
         assert len(other.fielddescrs) == len(other.fieldstate)
         if runtime_box is not None:
             opinfo = getptrinfo(box)
-            assert opinfo.is_virtual()
-            assert isinstance(opinfo, AbstractStructPtrInfo)
+            if opinfo is None or not opinfo.is_virtual():
+                raise VirtualStatesCantMatch(
+                    "runtime struct box is no longer virtual")
+            if not isinstance(opinfo, AbstractStructPtrInfo):
+                raise VirtualStatesCantMatch(
+                    "runtime struct box has unexpected opinfo type")
         else:
             opinfo = None
 
@@ -215,6 +219,18 @@ class VirtualStateInfo(AbstractVirtualStructStateInfo):
         return (isinstance(other, VirtualStateInfo) and
                 self.known_class.same_constant(other.known_class))
 
+    def _generate_guards(self, other, box, runtime_box, state):
+        if runtime_box is not None:
+            if not runtime_box.nonnull():
+                raise VirtualStatesCantMatch(
+                    "runtime box is null, cannot match virtual struct")
+            runtime_cls = state.cpu.cls_of_box(runtime_box)
+            if not self.known_class.same_constant(runtime_cls):
+                raise VirtualStatesCantMatch(
+                    "runtime class does not match virtual known_class")
+        AbstractVirtualStructStateInfo._generate_guards(
+            self, other, box, runtime_box, state)
+
 
     def debug_header(self, indent):
         debug_print(indent + 'VirtualStateInfo(%d):' % self.position)
@@ -250,7 +266,9 @@ class VArrayStateInfo(AbstractVirtualStateInfo):
         for i in range(len(self.fieldstate)):
             if runtime_box is not None:
                 opinfo = getptrinfo(box)
-                assert isinstance(opinfo, ArrayPtrInfo)
+                if not isinstance(opinfo, ArrayPtrInfo):
+                    raise VirtualStatesCantMatch(
+                        "runtime array box has unexpected opinfo type")
                 fieldbox = opinfo._items[i]
                 fieldbox_runtime = state.get_runtime_item(runtime_box,
                                             self.arraydescr, i)
@@ -307,7 +325,9 @@ class VArrayStructStateInfo(AbstractVirtualStateInfo):
         fieldbox_runtime = None
         if box is not None:
             opinfo = getptrinfo(box)
-            assert isinstance(opinfo, ArrayPtrInfo)
+            if not isinstance(opinfo, ArrayPtrInfo):
+                raise VirtualStatesCantMatch(
+                    "runtime array-struct box has unexpected opinfo type")
         else:
             opinfo = None
         for i in range(self.length):

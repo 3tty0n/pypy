@@ -11,10 +11,10 @@ from rpython.rlib.jit import JitDebugInfo, Counters, dont_look_inside
 from rpython.rlib.rjitlog import rjitlog as jl
 
 from rpython.jit.metainterp.resoperation import (
-    ResOperation, rop, get_deep_immutable_oplist, OpHelpers, InputArgInt,
-    InputArgRef, InputArgFloat)
+    ResOperation, rop, get_deep_immutable_oplist, OpHelpers,
+    AbstractResOpOrInputArg, InputArgInt, InputArgRef, InputArgFloat)
 from rpython.jit.metainterp.history import (TreeLoop, JitCellToken,
-    TargetToken, AbstractFailDescr, ConstInt)
+    TargetToken, AbstractFailDescr, Const, ConstInt)
 from rpython.jit.metainterp import history, jitexc
 from rpython.jit.metainterp.optimize import InvalidLoop
 from rpython.jit.metainterp.resume import (
@@ -101,13 +101,17 @@ class BridgeCompileData(CompileData):
     """
     def __init__(self, trace, runtime_boxes, resumestorage=None,
                  call_pure_results=None, enable_opts=None,
-                 inline_short_preamble=False):
+                 inline_short_preamble=False,
+                 prefer_loop_over_bridge=False):
         self.trace = trace
         self.runtime_boxes = runtime_boxes
         self.call_pure_results = call_pure_results
         self.enable_opts = enable_opts
         self.inline_short_preamble = inline_short_preamble
         self.resumestorage = resumestorage
+        # Plumbed to optimize_bridge: route InvalidLoop into retrace.
+        # Issue #5146.
+        self.prefer_loop_over_bridge = prefer_loop_over_bridge
 
     def optimize(self, metainterp_sd, jitdriver_sd, optimizations):
         from rpython.jit.metainterp.optimizeopt.unroll import UnrollOptimizer
@@ -117,7 +121,8 @@ class BridgeCompileData(CompileData):
                                    self.call_pure_results,
                                    self.inline_short_preamble,
                                    self.box_names_memo,
-                                   self.resumestorage)
+                                   self.resumestorage,
+                                   self.prefer_loop_over_bridge)
 
 class UnrolledLoopData(CompileData):
     """ This represents label() ops jump with extra info that's from the
@@ -210,6 +215,33 @@ def record_loop_or_bridge(metainterp_sd, loop):
     loop.original_jitcell_token = None
     if not we_are_translated():
         loop._looptoken_number = original_jitcell_token.number
+
+def _strip_info_forwards_from_ops(inputargs, operations):
+    # Clear any _forwarded that points to an optimizer Info instance on
+    # every box reachable from inputargs, op results, and op args/failargs.
+    # Safe to call just before the backend: Info forwards have no meaning
+    # at the backend layer, and op-to-op forwards (replacement chains) are
+    # left intact.
+    def _strip(box):
+        if box is None or isinstance(box, Const):
+            return
+        if not isinstance(box, AbstractResOpOrInputArg):
+            return
+        fwd = box.get_forwarded()
+        if fwd is not None and fwd.is_info_class:
+            box.set_forwarded(None)
+    for arg in inputargs:
+        _strip(arg)
+    for op in operations:
+        _strip(op)
+        for i in range(op.numargs()):
+            _strip(op.getarg(i))
+        if op.is_guard():
+            failargs = op.getfailargs()
+            if failargs is not None:
+                for a in failargs:
+                    _strip(a)
+
 
 # ____________________________________________________________
 
@@ -396,9 +428,12 @@ def compile_retrace(metainterp, greenkey, start,
 def get_box_replacement(op, allow_none=False):
     if allow_none and op is None:
         return None # for failargs
-    while op.get_forwarded():
-        op = op.get_forwarded()
-    return op
+    # Do not follow Info forwards; Info is not a box.
+    while True:
+        nxt = op.get_forwarded()
+        if nxt is None or nxt.is_info_class:
+            return op
+        op = nxt
 
 def emit_op(lst, op):
     op = get_box_replacement(op)
@@ -798,12 +833,16 @@ class AbstractResumeGuardDescr(ResumeDescr):
         # We managed to create a bridge.  Attach the new operations
         # to the corresponding guard_op and compile from there
         assert metainterp.resumekey_original_loop_token is not None
+        # Polymorphism signal for hot_bridge_promotion. Tracked on the
+        # cell_token so cascading bridges share the count. Issue #5146.
+        metainterp.resumekey_original_loop_token.bridge_count += 1
         new_loop.original_jitcell_token = metainterp.resumekey_original_loop_token
         inputargs = new_loop.inputargs
         if not we_are_translated():
             self._debug_subinputargs = new_loop.inputargs
             self._debug_suboperations = new_loop.operations
         propagate_original_jitcell_token(new_loop)
+        _strip_info_forwards_from_ops(inputargs, new_loop.operations)
         send_bridge_to_backend(metainterp.jitdriver_sd, metainterp.staticdata,
                                self, inputargs, new_loop.operations,
                                new_loop.original_jitcell_token,
@@ -1057,7 +1096,9 @@ def compile_trace(metainterp, resumekey, runtime_boxes, ends_with_jump=False):
         data = BridgeCompileData(trace, runtime_boxes, resumestorage,
                                  call_pure_results=call_pure_results,
                                  enable_opts=enable_opts,
-                                 inline_short_preamble=inline_short_preamble)
+                                 inline_short_preamble=inline_short_preamble,
+                                 prefer_loop_over_bridge=
+                                     metainterp.prefer_loop_over_bridge)
     else:
         data = SimpleCompileData(trace, resumestorage,
                                  call_pure_results=call_pure_results,

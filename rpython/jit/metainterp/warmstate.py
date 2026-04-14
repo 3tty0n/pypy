@@ -229,6 +229,7 @@ class BaseJitCell(object):
 
 
 class WarmEnterState(object):
+    enable_hot_bridge_promotion = False
 
     def __init__(self, warmrunnerdesc, jitdriver_sd):
         "NOT_RPYTHON"
@@ -318,6 +319,9 @@ class WarmEnterState(object):
         if self.warmrunnerdesc:
             if self.warmrunnerdesc.memory_manager:
                 self.warmrunnerdesc.memory_manager.max_unroll_recursion = value
+
+    def set_param_enable_hot_bridge_promotion(self, value):
+        self.enable_hot_bridge_promotion = bool(value)
 
     def set_param_vec(self, ivalue):
         self.vec = bool(ivalue)

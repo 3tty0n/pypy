@@ -2418,6 +2418,9 @@ class MetaInterp(object):
         self.forced_virtualizable = None
         self.partial_trace = None
         self.retracing_from = (-1, -1, -1, -1, -1)
+        # Signal from handle_guard_failure to optimize_bridge: on
+        # InvalidLoop, route to retrace instead of jumping to preamble.
+        self.prefer_loop_over_bridge = False
         self.call_pure_results = args_dict()
         self.heapcache = HeapCache()
 
@@ -2916,9 +2919,16 @@ class MetaInterp(object):
         self.staticdata.profiler.start_tracing()
         key = resumedescr.get_resumestorage()
         assert isinstance(key, compile.ResumeGuardDescr)
-        # store the resumekey.wref_original_loop_token() on 'self' to make
-        # sure that it stays alive as long as this MetaInterp
         self.resumekey_original_loop_token = resumedescr.rd_loop_token.loop_token_wref()
+        # Promote only on the 2nd+ distinct value of a per-value
+        # guard_value (cell_token.bridge_count >= 1) to skip transient
+        # polymorphism. Issue #5146.
+        if self.jitdriver_sd.warmstate.enable_hot_bridge_promotion:
+            typetag = resumedescr.status & compile.AbstractResumeGuardDescr.ST_TYPE_MASK
+            cell_token = self.resumekey_original_loop_token
+            if (typetag != 0 and cell_token is not None
+                    and cell_token.bridge_count >= 1):
+                self.prefer_loop_over_bridge = True
         if self.resumekey_original_loop_token is None:
             raise compile.giveup() # should be rare
         self.staticdata.try_to_free_some_loops()
