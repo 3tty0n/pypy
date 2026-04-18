@@ -134,6 +134,77 @@ JC_TEMPORARY       = 0x04
 JC_TRACING_OCCURRED= 0x08
 JC_FORCE_FINISH    = 0x10
 
+class TTStats(object):
+    """Counters for TraceTree (warmstate only; dump() is host-side)."""
+    def __init__(self):
+        self.signatures_computed = 0
+        self.hint_based_signatures = 0
+        self.auto_signatures = 0
+        self.unique_signatures_seen = 0
+        self.seen = {}
+        self.specializations_created = 0
+        self.dispatch_events = 0
+        self.dispatch_hits = 0
+        self.dispatch_misses = 0
+        self.admission_rejections = 0
+        self.megamorphic_fallbacks = 0
+        self.bridge_promotions_same_shape = 0
+        self.bridge_promotions_new_shape = 0
+        self.greenkeys_total = 0
+        self.greenkeys_in_tt_mode = 0
+        self.activation_events = 0
+
+    def note_signature(self, sig):
+        self.signatures_computed += 1
+        self.hint_based_signatures += 1
+        if sig not in self.seen:
+            self.seen[sig] = 1
+            self.unique_signatures_seen += 1
+
+    def note_signature_fast(self, sig):
+        self.signatures_computed += 1
+        self.hint_based_signatures += 1
+    note_signature_fast._always_inline_ = True
+
+    def dump(self):
+        return (
+            "tracetree stats:\n"
+            "  signatures computed:        %d\n"
+            "  unique signatures seen:     %d\n"
+            "  hint-based signatures:      %d\n"
+            "  auto-detected signatures:   %d\n"
+            "  specializations created:    %d\n"
+            "  dispatch events:            %d  (hits %d, misses %d)\n"
+            "  admission rejections:       %d\n"
+            "  megamorphic fallbacks:      %d\n"
+            "  bridge promotions same:     %d\n"
+            "  bridge promotions new shape: %d\n"
+            "  greenkeys total:            %d\n"
+            "  greenkeys in TT mode:       %d\n"
+            "  activation events:          %d\n"
+        ) % (self.signatures_computed, self.unique_signatures_seen,
+             self.hint_based_signatures, self.auto_signatures,
+             self.specializations_created,
+             self.dispatch_hits + self.dispatch_misses,
+             self.dispatch_hits, self.dispatch_misses,
+             self.admission_rejections, self.megamorphic_fallbacks,
+             self.bridge_promotions_same_shape,
+             self.bridge_promotions_new_shape,
+             self.greenkeys_total, self.greenkeys_in_tt_mode,
+             self.activation_events)
+
+
+class TTCellState(object):
+    """Lazy per-greenkey TraceTree state (shape lists, pending sig, counters)."""
+    shape_sigs = None
+    shape_tokens = None
+    pending_shape_sig = r_uint(0)
+    pending_shape_set = False
+    multi_mode = False
+    miss_count = 0
+    megamorphic = False
+
+
 class BaseJitCell(object):
     """Subclasses of BaseJitCell are used in tandem with the single
     JitCounter instance to record places in the JIT-tracked user program
@@ -187,6 +258,62 @@ class BaseJitCell(object):
     flags = 0     # JC_xxx flags
     wref_procedure_token = None
     next = None
+    tt_state = None
+
+    def tt_lookup(self, sig):
+        # Inlined into maybe_compile_and_run's hot dispatch path to avoid
+        # method-call overhead on every JIT entry.
+        s = self.tt_state
+        if s is None or s.shape_sigs is None:
+            return None
+        sigs = s.shape_sigs
+        tokens = s.shape_tokens
+        i = 0
+        n = len(sigs)
+        while i < n:
+            if sigs[i] == sig:
+                ref = tokens[i]
+                token = ref()
+                if token is not None and not token.invalidated:
+                    return token
+                return None
+            i += 1
+        return None
+    tt_lookup._always_inline_ = True
+
+    def tt_register(self, sig, token):
+        s = self.tt_state
+        if s is None:
+            s = TTCellState()
+            self.tt_state = s
+        if s.shape_sigs is None:
+            s.shape_sigs = []
+            s.shape_tokens = []
+        sigs = s.shape_sigs
+        tokens = s.shape_tokens
+        i = 0
+        n = len(sigs)
+        while i < n:
+            if sigs[i] == sig:
+                tokens[i] = weakref.ref(token)
+                return False    # replaced, not a new slot
+            i += 1
+        sigs.append(sig)
+        tokens.append(weakref.ref(token))
+        return True
+
+    def tt_count(self):
+        s = self.tt_state
+        if s is None or s.shape_sigs is None:
+            return 0
+        return len(s.shape_sigs)
+
+    def tt_ensure_state(self):
+        s = self.tt_state
+        if s is None:
+            s = TTCellState()
+            self.tt_state = s
+        return s
 
     def get_procedure_token(self):
         if self.wref_procedure_token is not None:
@@ -230,11 +357,17 @@ class BaseJitCell(object):
 
 class WarmEnterState(object):
     enable_hot_bridge_promotion = False
+    enable_adaptive_bridge = False
+    adaptive_bridge_lazy_threshold = 50
+    enable_tracetree = False
+    tracetree_max_specializations = 4
+    tracetree_activation_threshold = 1
 
     def __init__(self, warmrunnerdesc, jitdriver_sd):
         "NOT_RPYTHON"
         self.warmrunnerdesc = warmrunnerdesc
         self.jitdriver_sd = jitdriver_sd
+        self.tt_stats = TTStats()
         if warmrunnerdesc is not None:       # for tests
             self.cpu = warmrunnerdesc.cpu
         try:
@@ -323,6 +456,33 @@ class WarmEnterState(object):
     def set_param_enable_hot_bridge_promotion(self, value):
         self.enable_hot_bridge_promotion = bool(value)
 
+    def set_param_enable_adaptive_bridge(self, value):
+        # Adaptive Bridge Compilation Strategy (stages 1-2 + HBP, gated on
+        # this single flag for benchmarking the combined effect).
+        self.enable_adaptive_bridge = bool(value)
+        if value and self.warmrunnerdesc is not None:
+            mm = self.warmrunnerdesc.memory_manager
+            if mm is not None and mm.retrace_limit == 0:
+                mm.retrace_limit = 5
+
+    def set_param_adaptive_bridge_lazy_threshold(self, value):
+        if value < 0:
+            raise ValueError
+        self.adaptive_bridge_lazy_threshold = value
+
+    def set_param_enable_tracetree(self, value):
+        self.enable_tracetree = bool(value)
+
+    def set_param_tracetree_max_specializations(self, value):
+        if value < 1:
+            raise ValueError
+        self.tracetree_max_specializations = value
+
+    def set_param_tracetree_activation_threshold(self, value):
+        if value < 0:
+            raise ValueError
+        self.tracetree_activation_threshold = value
+
     def set_param_vec(self, ivalue):
         self.vec = bool(ivalue)
 
@@ -343,13 +503,31 @@ class WarmEnterState(object):
     def attach_procedure_to_interp(self, greenkey, procedure_token):
         cell = self.JitCell.ensure_jit_cell_at_key(greenkey)
         old_token = cell.get_procedure_token()
+        # Capture JC_TEMPORARY before set_procedure_token clears it.
+        # A JC_TEMPORARY old_token is a compile_tmp_callback stub that
+        # has no specialization to preserve - existing CALL_ASSEMBLER
+        # sites already reference the stub and must be redirected to
+        # the real token, even when TT is registering a new shape.
+        old_is_tmp = bool(cell.flags & JC_TEMPORARY)
+        tt_state = cell.tt_state
+        tt_pending = tt_state is not None and tt_state.pending_shape_set
         cell.set_procedure_token(procedure_token)
-        if old_token is not None:
+        if old_token is not None and (not tt_pending or old_is_tmp):
             self.cpu.redirect_call_assembler(old_token, procedure_token)
             # procedure_token is also kept alive by any loop that used
             # to point to old_token.  Actually freeing old_token early
             # is a pointless optimization (it is tiny).
             old_token.record_jump_to(procedure_token)
+        if tt_pending:
+            sig = tt_state.pending_shape_sig
+            added = cell.tt_register(sig, procedure_token)
+            tt_state.pending_shape_set = False
+            if added:
+                self.tt_stats.specializations_created += 1
+                if old_token is not None and not old_is_tmp:
+                    self.tt_stats.bridge_promotions_new_shape += 1
+            else:
+                self.tt_stats.bridge_promotions_same_shape += 1
 
     # ----------
 
@@ -387,6 +565,13 @@ class WarmEnterState(object):
         cpu = self.cpu
         jitcounter = self.warmrunnerdesc.jitcounter
         result_type = jitdriver_sd.result_type
+        _shape_spec = getattr(jitdriver_sd, 'shape_spec', None) or []
+        _tt_shape_entries = unrolling_iterable(
+            [(num_green_args + red_index, extractor)
+             for red_index, extractor in _shape_spec])
+        _tt_has_shape = bool(_shape_spec)
+        _tt_stats = self.tt_stats
+        _warmstate = self
 
         def execute_assembler(loop_token, *args):
             # Call the backend to run the 'looptoken' with the given
@@ -426,6 +611,16 @@ class WarmEnterState(object):
             fail_descr.handle_fail(deadframe, metainterp_sd, jitdriver_sd)
             assert 0, "should have raised"
 
+        def tt_compute_sig(*args):
+            sig = r_uint(1469598103934665603)
+            for args_index, extractor in _tt_shape_entries:
+                v = extractor(args[args_index])
+                sig = (sig ^ r_uint(v)) * r_uint(1099511628211)
+            if sig == r_uint(0):
+                sig = r_uint(1)
+            return sig
+        tt_compute_sig._always_inline_ = True
+
         def bound_reached(hash, cell, *args):
             from rpython.jit.metainterp.pyjitpl import MetaInterp
             if not confirm_enter_jit(*args):
@@ -437,6 +632,13 @@ class WarmEnterState(object):
             if cell is None:
                 cell = JitCell(*greenargs)
                 jitcounter.install_new_cell(hash, cell)
+                _tt_stats.greenkeys_total += 1
+            if _tt_has_shape and _warmstate.enable_tracetree:
+                sig = tt_compute_sig(*args)
+                s = cell.tt_ensure_state()
+                s.pending_shape_sig = sig
+                s.pending_shape_set = True
+                _tt_stats.note_signature(sig)
             # start tracing
             metainterp = MetaInterp(
                 metainterp_sd, jitdriver_sd,
@@ -446,6 +648,9 @@ class WarmEnterState(object):
                 metainterp.compile_and_run_once(jitdriver_sd, *args)
             finally:
                 cell.flags &= ~JC_TRACING
+                s = cell.tt_state
+                if s is not None:
+                    s.pending_shape_set = False
 
         def maybe_compile_and_run(increment_threshold, *args):
             """Entry point to the JIT.  Called at the point with the
@@ -502,6 +707,47 @@ class WarmEnterState(object):
                 # has been freed
                 jitcounter.cleanup_chain(hash)
                 return
+            if _tt_has_shape and _warmstate.enable_tracetree:
+                sig = tt_compute_sig(*args)
+                s = cell.tt_state
+                if (s is not None and not s.multi_mode
+                        and s.shape_sigs is not None
+                        and len(s.shape_sigs) == 1
+                        and s.shape_sigs[0] == sig):
+                    _tt_stats.note_signature_fast(sig)
+                    _tt_stats.dispatch_hits += 1
+                    # procedure_token already correct
+                else:
+                    matched = cell.tt_lookup(sig)
+                    if matched is not None:
+                        _tt_stats.note_signature_fast(sig)
+                        _tt_stats.dispatch_hits += 1
+                        procedure_token = matched
+                    else:
+                        _tt_stats.note_signature(sig)
+                        _tt_stats.dispatch_misses += 1
+                        s = cell.tt_ensure_state()
+                        s.miss_count += 1
+                        thresh = _warmstate.tracetree_activation_threshold
+                        promote = (s.miss_count >= thresh)
+                        admit = (not s.megamorphic and
+                                 cell.tt_count() <
+                                 _warmstate.tracetree_max_specializations)
+                        if promote and admit:
+                            if not s.multi_mode:
+                                s.multi_mode = True
+                                _tt_stats.greenkeys_in_tt_mode += 1
+                                _tt_stats.activation_events += 1
+                            s.pending_shape_sig = sig
+                            s.pending_shape_set = True
+                            if jitcounter.tick(hash, increment_threshold):
+                                bound_reached(hash, cell, *args)
+                            return
+                        if promote and not admit:
+                            _tt_stats.admission_rejections += 1
+                            if cell.tt_count() > 0:
+                                _tt_stats.megamorphic_fallbacks += 1
+                            s.megamorphic = True
             if not confirm_enter_jit(*args):
                 return
             # extract and unspecialize the red arguments to pass to

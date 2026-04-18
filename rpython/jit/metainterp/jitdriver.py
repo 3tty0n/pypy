@@ -12,6 +12,7 @@ class JitDriverStaticData(object):
     #    self.num_green_args    ... rpython.jit.metainterp.warmspot
     #    self.num_red_args      ... rpython.jit.metainterp.warmspot
     #    self.red_args_types    ... rpython.jit.metainterp.warmspot
+    #    self.shape_spec        ... rpython.jit.metainterp.warmspot  (TraceTree)
     #    self.result_type       ... rpython.jit.metainterp.warmspot
     #    self.virtualizable_info... rpython.jit.metainterp.warmspot
     #    self.greenfield_info   ... rpython.jit.metainterp.warmspot

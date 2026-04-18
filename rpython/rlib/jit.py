@@ -579,6 +579,11 @@ PARAMETER_DOCS = {
                    'optimizations to enable, or all = %s' % ENABLE_ALL_OPTS,
     'max_unroll_recursion': 'how many levels deep to unroll a recursive function',
     'enable_hot_bridge_promotion': 'promote per-value guard_value bridges to full loop variants (0=off, 1=on)',
+    'enable_adaptive_bridge': 'adaptive bridge strategy: lazy-defer compilation then promote to loop on threshold (0=off, 1=on). Implies enable_hot_bridge_promotion semantics for stage 3.',
+    'adaptive_bridge_lazy_threshold': 'number of guard failures before adaptive-bridge stage-1 lets compilation proceed',
+    'enable_tracetree': 'TraceTree: one loop per red-arg shape per greenkey (0=off, 1=on); needs shapes= on the JitDriver',
+    'tracetree_max_specializations': 'max distinct shape specializations per greenkey before megamorphic fallback',
+    'tracetree_activation_threshold': 'dispatch misses before polyvariant mode (0 = always on when enable_tracetree=1)',
     'vec': 'turn on the vectorization optimization (vecopt). ' \
            'Supports x86 (SSE 4.1), powerpc (SVX), s390x SIMD',
     'vec_cost': 'threshold for which traces to bail. Unpacking increases the counter,'\
@@ -601,6 +606,11 @@ PARAMETERS = {'threshold': 1039, # just above 1024, prime
               'enable_opts': 'all',
               'max_unroll_recursion': 7,
               'enable_hot_bridge_promotion': 0,
+              'enable_adaptive_bridge': 0,
+              'adaptive_bridge_lazy_threshold': 50,
+              'enable_tracetree': 0,
+              'tracetree_max_specializations': 4,
+              'tracetree_activation_threshold': 1,
               'vec': 0,
               'vec_all': 0,
               'vec_cost': 0,
@@ -628,7 +638,8 @@ class JitDriver(object):
                  get_printable_location=None, confirm_enter_jit=None,
                  can_never_inline=None, should_unroll_one_iteration=None,
                  name='jitdriver', check_untranslated=True, vectorize=False,
-                 get_unique_id=None, is_recursive=False, get_location=None):
+                 get_unique_id=None, is_recursive=False, get_location=None,
+                 shapes=None):
         """get_location:
               The return value is designed to provide enough information to express the
               state of an interpreter when invoking jit_merge_point.
@@ -693,6 +704,20 @@ class JitDriver(object):
         self.check_untranslated = check_untranslated
         self.is_recursive = is_recursive
         self.vec = vectorize
+        if shapes is None:
+            self.shapes = []
+        else:
+            self.shapes = list(shapes)
+            for entry in self.shapes:
+                if not (isinstance(entry, tuple) and len(entry) == 2):
+                    raise TypeError("shapes entries must be (red_name, extractor) tuples")
+                red_name, extractor = entry
+                if red_name not in self.reds:
+                    raise ValueError(
+                        "shape red_name %r is not in reds=%r" %
+                        (red_name, self.reds))
+                if not callable(extractor):
+                    raise TypeError("shape extractor must be callable")
 
     def _freeze_(self):
         return True

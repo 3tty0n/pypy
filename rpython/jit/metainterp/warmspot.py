@@ -204,6 +204,11 @@ def find_force_quasi_immutable(graphs):
 def get_stats():
     return pyjitpl._warmrunnerdesc.stats
 
+def get_tracetree_stats(jitdriver_index=0):
+    """NOT_RPYTHON"""
+    jd = pyjitpl._warmrunnerdesc.jitdrivers_sd[jitdriver_index]
+    return jd.warmstate.tt_stats
+
 def reset_stats():
     pyjitpl._warmrunnerdesc.stats.clear()
 
@@ -664,6 +669,20 @@ class WarmRunnerDesc(object):
         jd.red_args_types = [history.getkind(v.concretetype) for v in reds_v]
         jd.num_green_args = len(jd._green_args_spec)
         jd.num_red_args = len(jd.red_args_types)
+        # TraceTree shape specification: resolve the driver-level
+        # [(red_name, attr_path), ...] into [(red_index, attr_path), ...]
+        # so the warmstate dispatch hook can index reds_v directly.
+        shape_spec = []
+        driver_shapes = getattr(jd.jitdriver, 'shapes', None) or []
+        driver_reds = list(getattr(jd.jitdriver, 'reds', []) or [])
+        for red_name, attr_path in driver_shapes:
+            if red_name not in driver_reds:
+                raise Exception(
+                    "JitDriver shape references unknown red %r (reds=%r)"
+                    % (red_name, driver_reds))
+            red_index = driver_reds.index(red_name)
+            shape_spec.append((red_index, attr_path))
+        jd.shape_spec = shape_spec
         RESTYPE = graph.getreturnvar().concretetype
         jd._JIT_ENTER_FUNCTYPE = lltype.FuncType(ALLARGS, lltype.Void)
         jd._PTR_JIT_ENTER_FUNCTYPE = lltype.Ptr(jd._JIT_ENTER_FUNCTYPE)

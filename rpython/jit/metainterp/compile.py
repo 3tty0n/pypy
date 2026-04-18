@@ -715,9 +715,14 @@ class ResumeDescr(AbstractFailDescr):
         return self
 
 class AbstractResumeGuardDescr(ResumeDescr):
-    _attrs_ = ('status',)
+    _attrs_ = ('status', 'rd_fail_count')
 
     status = r_uint(0)
+    # Adaptive bridge stage-1: per-descr failure counter. Counts every
+    # visit to handle_fail while the adaptive_bridge flag is on, so we
+    # can keep the interpreter in charge until T_lazy is reached and
+    # avoid compiling bridges that only warm-run briefly.
+    rd_fail_count = r_uint(0)
 
     ST_BUSY_FLAG    = 0x01     # if set, busy tracing from the guard
     ST_TYPE_MASK    = 0x06     # mask for the type (TY_xxx)
@@ -734,8 +739,16 @@ class AbstractResumeGuardDescr(ResumeDescr):
         raise NotImplementedError("abstract base class")
 
     def handle_fail(self, deadframe, metainterp_sd, jitdriver_sd):
-        if (self.must_compile(deadframe, metainterp_sd, jitdriver_sd)
-                and not rstack.stack_almost_full()):
+        # Adaptive bridge stage 1 (lazy compilation): even when the
+        # jitcounter says "hot", delay starting a bridge trace until we
+        # have observed T_lazy failures on this exact descr. Cold
+        # bridges that never recur cost zero compile cycles.
+        if self._adaptive_bridge_still_lazy(jitdriver_sd):
+            compile_now = False
+        else:
+            compile_now = self.must_compile(deadframe, metainterp_sd,
+                                            jitdriver_sd)
+        if compile_now and not rstack.stack_almost_full():
             self.start_compiling()
             try:
                 self._trace_and_compile_from_bridge(deadframe, metainterp_sd,
@@ -750,6 +763,20 @@ class AbstractResumeGuardDescr(ResumeDescr):
                 assert isinstance(self, ResumeGuardDescr)
                 resume_in_blackhole(metainterp_sd, jitdriver_sd, self, deadframe)
         assert 0, "unreachable"
+
+    def _adaptive_bridge_still_lazy(self, jitdriver_sd):
+        # Stage 1 of the adaptive bridge strategy. Short-circuits the
+        # existing must_compile / jitcounter path while the per-descr
+        # failure count is below the configured T_lazy. The jitcounter
+        # is intentionally NOT ticked during this phase: we want the
+        # T_lazy threshold to be the sole gate.
+        warmstate = jitdriver_sd.warmstate
+        if not warmstate.enable_adaptive_bridge:
+            return False
+        self.rd_fail_count += r_uint(1)
+        if self.rd_fail_count < r_uint(warmstate.adaptive_bridge_lazy_threshold):
+            return True
+        return False
 
     def _trace_and_compile_from_bridge(self, deadframe, metainterp_sd,
                                        jitdriver_sd):
@@ -869,7 +896,7 @@ class AbstractResumeGuardDescr(ResumeDescr):
             self.status = hash & self.ST_SHIFT_MASK
 
 class ResumeGuardCopiedDescr(AbstractResumeGuardDescr):
-    _attrs_ = ('status', 'prev')
+    _attrs_ = ('status', 'rd_fail_count', 'prev')
 
     def __init__(self, prev):
         AbstractResumeGuardDescr.__init__(self)
@@ -891,7 +918,7 @@ class ResumeGuardCopiedDescr(AbstractResumeGuardDescr):
 
 class ResumeGuardDescr(AbstractResumeGuardDescr):
     _attrs_ = ('rd_numb', 'rd_consts', 'rd_virtuals',
-               'rd_pendingfields', 'status')
+               'rd_pendingfields', 'status', 'rd_fail_count')
     rd_numb = lltype.nullptr(NUMBERING)
     rd_consts = None
     rd_virtuals = None

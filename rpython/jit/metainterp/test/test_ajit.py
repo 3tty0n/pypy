@@ -8,7 +8,14 @@ from rpython.rlib import rgc
 from rpython.jit.codewriter.policy import StopAtXPolicy
 from rpython.jit.metainterp import history
 from rpython.jit.metainterp.test.support import LLJitMixin, noConst
-from rpython.jit.metainterp.warmspot import get_stats
+from rpython.jit.metainterp.warmspot import get_stats, get_tracetree_stats
+
+
+def _extract_multiplier(f):
+    try:
+        return f.inst_multiplier
+    except (AttributeError, TypeError):
+        return f.multiplier
 from rpython.jit.metainterp.pyjitpl import MetaInterp
 from rpython.rlib import rerased
 from rpython.rlib.jit import (JitDriver, we_are_jitted, hint, dont_look_inside,
@@ -3155,6 +3162,247 @@ class BasicTests:
         assert with_promotion > baseline, (
             "enable_hot_bridge_promotion should add at least one target_token: "
             "baseline=%d, with_promotion=%d" % (baseline, with_promotion))
+
+    def test_adaptive_bridge_lazy_defers_cold_bridges(self):
+        # Stage 1: with a high lazy threshold (T_lazy >> n), the second
+        # and third objects should NEVER cause a bridge to compile; they
+        # stay in the blackhole interpreter.  target_tokens count stays
+        # at the single preamble/peel pair (no bridges attached).
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        obj1 = Obj(1)
+        obj2 = Obj(2)
+        obj3 = Obj(3)
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                v = promote(obj.v)
+                total += v + i
+                i += 1
+            return total
+
+        def run(enable, tlazy, n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 5)
+            set_param(None, 'enable_adaptive_bridge', enable)
+            set_param(None, 'adaptive_bridge_lazy_threshold', tlazy)
+            hot_loop(obj1, n)
+            hot_loop(obj2, n)
+            return hot_loop(obj3, n)
+
+        # Baseline (adaptive off): every hot guard_value compiles a
+        # bridge. compiled_count counts loops + bridges.
+        res = self.meta_interp(run, [0, 50, 50])
+        assert res == run(0, 50, 50)
+        baseline_compiled = get_stats().compiled_count
+
+        # Adaptive on, T_lazy=1000 >> 2*n. No bridge should be compiled
+        # for obj2 / obj3 because we never reach T_lazy failures.
+        res = self.meta_interp(run, [1, 1000, 50])
+        assert res == run(1, 1000, 50)
+        adaptive_compiled = get_stats().compiled_count
+
+        assert adaptive_compiled < baseline_compiled, (
+            "adaptive_bridge with huge T_lazy should suppress bridge "
+            "compilation: baseline=%d adaptive=%d"
+            % (baseline_compiled, adaptive_compiled))
+
+    def test_adaptive_bridge_promotes_hot_guard(self):
+        # Stage 2: when T_lazy IS reached, the freshly compiled trace
+        # should be routed through retrace (prefer_loop_over_bridge),
+        # yielding at least one extra target_token like HBP does.
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        obj1 = Obj(1)
+        obj2 = Obj(2)
+        obj3 = Obj(3)
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                v = promote(obj.v)
+                total += v + i
+                i += 1
+            return total
+
+        def run(enable, tlazy, n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 5)
+            set_param(None, 'enable_adaptive_bridge', enable)
+            set_param(None, 'adaptive_bridge_lazy_threshold', tlazy)
+            hot_loop(obj1, n)
+            hot_loop(obj2, n)
+            return hot_loop(obj3, n)
+
+        # Adaptive off, T_lazy irrelevant: baseline bridge count.
+        res = self.meta_interp(run, [0, 1, 50])
+        assert res == run(0, 1, 50)
+        tokens = get_stats().get_all_jitcell_tokens()
+        baseline_tt = max(len(t.target_tokens) for t in tokens if t.target_tokens)
+
+        # Adaptive on with T_lazy=1 (effectively no lazy wait). Stage 2
+        # should kick in and produce at least one promoted loop variant.
+        res = self.meta_interp(run, [1, 1, 50])
+        assert res == run(1, 1, 50)
+        tokens = get_stats().get_all_jitcell_tokens()
+        promoted_tt = max(len(t.target_tokens) for t in tokens if t.target_tokens)
+
+        assert promoted_tt > baseline_tt, (
+            "adaptive_bridge with T_lazy=1 should promote like HBP: "
+            "baseline=%d promoted=%d" % (baseline_tt, promoted_tt))
+
+    def test_tracetree_two_specializations(self):
+        driver = JitDriver(
+            greens=[], reds=['pc', 'n', 'acc', 'f'],
+            shapes=[('f', _extract_multiplier)])
+
+        class Callable(object):
+            _immutable_fields_ = ['multiplier']
+            def __init__(self, multiplier):
+                self.multiplier = multiplier
+            def call(self, x):
+                return x * self.multiplier + 1
+
+        def hot_loop(f, n):
+            pc = 0
+            acc = 0
+            while pc < n:
+                driver.jit_merge_point(pc=pc, n=n, acc=acc, f=f)
+                acc = acc + f.call(pc)
+                pc = pc + 1
+            return acc
+
+        def run(enable_tt, n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 5)
+            set_param(None, 'enable_tracetree', enable_tt)
+            set_param(None, 'tracetree_max_specializations', 4)
+            set_param(None, 'tracetree_activation_threshold', 1)
+            f1 = Callable(2)
+            f2 = Callable(3)
+            hot_loop(f1, n)
+            hot_loop(f2, n)
+            return hot_loop(f2, n)
+
+        res_off = self.meta_interp(run, [0, 40])
+        stats_off = get_tracetree_stats()
+        assert stats_off.specializations_created == 0
+        assert stats_off.dispatch_events == 0
+
+        res_on = self.meta_interp(run, [1, 40])
+        stats_on = get_tracetree_stats()
+        assert res_on == res_off
+        assert stats_on.specializations_created >= 2, (
+            "expected at least 2 specializations, got %d" %
+            stats_on.specializations_created)
+        assert stats_on.unique_signatures_seen >= 2
+        assert stats_on.dispatch_hits >= 1, (
+            "no dispatch hits observed: dump=\n%s" % stats_on.dump())
+        assert stats_on.megamorphic_fallbacks == 0
+        assert stats_on.admission_rejections == 0
+        assert stats_on.activation_events >= 1
+
+    def test_tracetree_admission_cap(self):
+        driver = JitDriver(
+            greens=[], reds=['pc', 'n', 'acc', 'f'],
+            shapes=[('f', _extract_multiplier)])
+
+        class Callable(object):
+            _immutable_fields_ = ['multiplier']
+            def __init__(self, multiplier):
+                self.multiplier = multiplier
+            def call(self, x):
+                return x * self.multiplier + 1
+
+        def hot_loop(f, n):
+            pc = 0
+            acc = 0
+            while pc < n:
+                driver.jit_merge_point(pc=pc, n=n, acc=acc, f=f)
+                acc = acc + f.call(pc)
+                pc = pc + 1
+            return acc
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 5)
+            set_param(None, 'enable_tracetree', 1)
+            set_param(None, 'tracetree_max_specializations', 2)
+            set_param(None, 'tracetree_activation_threshold', 1)
+            f1 = Callable(2)
+            f2 = Callable(3)
+            f3 = Callable(5)
+            f4 = Callable(7)
+            hot_loop(f1, n)
+            hot_loop(f2, n)
+            hot_loop(f3, n)
+            return hot_loop(f4, n)
+
+        self.meta_interp(run, [30])
+        s = get_tracetree_stats()
+        assert s.specializations_created <= 2, (
+            "cap of 2 violated: %d specs created\n%s" %
+            (s.specializations_created, s.dump()))
+        assert s.admission_rejections >= 1, (
+            "expected at least one admission rejection\n%s" % s.dump())
+        assert s.megamorphic_fallbacks >= 1
+
+    def test_tracetree_activation_monomorphic_stays_quiet(self):
+        driver = JitDriver(
+            greens=[], reds=['pc', 'n', 'acc', 'f'],
+            shapes=[('f', _extract_multiplier)])
+
+        class Callable(object):
+            _immutable_fields_ = ['multiplier']
+            def __init__(self, multiplier):
+                self.multiplier = multiplier
+            def call(self, x):
+                return x * self.multiplier + 1
+
+        def hot_loop(f, n):
+            pc = 0
+            acc = 0
+            while pc < n:
+                driver.jit_merge_point(pc=pc, n=n, acc=acc, f=f)
+                acc = acc + f.call(pc)
+                pc = pc + 1
+            return acc
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 5)
+            set_param(None, 'enable_tracetree', 1)
+            set_param(None, 'tracetree_activation_threshold', 1)
+            f1 = Callable(2)
+            hot_loop(f1, n)
+            return hot_loop(f1, n)
+
+        self.meta_interp(run, [40])
+        s = get_tracetree_stats()
+        assert s.dispatch_misses == 0, s.dump()
+        assert s.activation_events == 0, s.dump()
+        assert s.megamorphic_fallbacks == 0, s.dump()
+        assert s.specializations_created == 1, s.dump()
 
     def test_frame_finished_during_retrace(self):
         class Base(object):
