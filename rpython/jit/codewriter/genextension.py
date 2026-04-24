@@ -109,7 +109,7 @@ class GenExtension(object):
 
         self.work_list = WorkList(self.pc_to_insn, self.assembler.label_positions, self.pc_to_nextpc, self.globals)
         for startpc in self.assembler.startpoints:
-            spec = self.work_list.specialize_pc(frozenset([]), startpc)
+            spec = self.work_list.specialize_pc(frozenset(), startpc)
         code_and_spec_per_pc = self.work_list.make_code()
         assert not self.code
         for pc, (code, spec) in code_and_spec_per_pc.iteritems():
@@ -902,13 +902,11 @@ class Specializer(object):
         """Generate fast-path code for integer binary ops with non-constant args."""
         arg0, arg1, result = self._get_args_and_res()
         lines = []
-        self._emit_sync_registers(lines)
-        box0 = self._get_as_box_after_sync(arg0)
-        box1 = self._get_as_box_after_sync(arg1)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
-        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
+        box0 = self._get_as_box_nosync(arg0)
+        box1 = self._get_as_box_nosync(arg1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_nosync(arg1))
         lines.append("_res = _v0 %s _v1" % py_op)
-        lines.append("# fast-path recording, skip heapcache")
         lines.append("_op = self.metainterp.history.record2_int(rop.%s, %s, %s, _res)" % (
             rop_name, box0, box1))
         lines.append("self.registers_i[%d] = _op" % result.index)
@@ -921,13 +919,11 @@ class Specializer(object):
         """Generate fast-path code for integer comparison ops."""
         arg0, arg1, result = self._get_args_and_res()
         lines = []
-        self._emit_sync_registers(lines)
-        box0 = self._get_as_box_after_sync(arg0)
-        box1 = self._get_as_box_after_sync(arg1)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
-        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
+        box0 = self._get_as_box_nosync(arg0)
+        box1 = self._get_as_box_nosync(arg1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_nosync(arg1))
         lines.append("_res = int(_v0 %s _v1)" % py_op)
-        lines.append("# fast-path recording, skip heapcache")
         lines.append("_op = self.metainterp.history.record2_int(rop.%s, %s, %s, _res)" % (
             rop_name, box0, box1))
         lines.append("self.registers_i[%d] = _op" % result.index)
@@ -940,13 +936,11 @@ class Specializer(object):
         """Generate fast-path code for float binary ops."""
         arg0, arg1, result = self._get_args_and_res()
         lines = []
-        self._emit_sync_registers(lines)
-        box0 = self._get_as_box_after_sync(arg0)
-        box1 = self._get_as_box_after_sync(arg1)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
-        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
+        box0 = self._get_as_box_nosync(arg0)
+        box1 = self._get_as_box_nosync(arg1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_nosync(arg1))
         lines.append("_res = _v0 %s _v1" % py_op)
-        lines.append("# fast-path recording, skip heapcache")
         lines.append("_op = self.metainterp.history.record2_float(rop.%s, %s, %s, _res)" % (
             rop_name, box0, box1))
         lines.append("self.registers_f[%d] = _op" % result.index)
@@ -959,13 +953,11 @@ class Specializer(object):
         """Generate fast-path code for float comparison ops (returns int)."""
         arg0, arg1, result = self._get_args_and_res()
         lines = []
-        self._emit_sync_registers(lines)
-        box0 = self._get_as_box_after_sync(arg0)
-        box1 = self._get_as_box_after_sync(arg1)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
-        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
+        box0 = self._get_as_box_nosync(arg0)
+        box1 = self._get_as_box_nosync(arg1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_nosync(arg1))
         lines.append("_res = int(_v0 %s _v1)" % py_op)
-        lines.append("# fast-path recording, skip heapcache")
         lines.append("_op = self.metainterp.history.record2_int(rop.%s, %s, %s, _res)" % (
             rop_name, box0, box1))
         lines.append("self.registers_i[%d] = _op" % result.index)
@@ -1063,9 +1055,8 @@ class Specializer(object):
     def _emit_unspecialized_int_unary_fast(self, rop_name, py_op):
         arg0, result = self._get_args_and_res()
         lines = []
-        self._emit_sync_registers(lines)
-        box0 = self._get_as_box_after_sync(arg0)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        box0 = self._get_as_box_nosync(arg0)
+        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
         lines.append("_res = %s_v0" % py_op)
         lines.append("_op = self.metainterp.history.record1_int(rop.%s, %s, _res)" % (
             rop_name, box0))
@@ -1078,9 +1069,8 @@ class Specializer(object):
     def _emit_unspecialized_float_unary_fast(self, rop_name, py_op):
         arg0, result = self._get_args_and_res()
         lines = []
-        self._emit_sync_registers(lines)
-        box0 = self._get_as_box_after_sync(arg0)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        box0 = self._get_as_box_nosync(arg0)
+        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
         lines.append("_res = %s_v0" % py_op)
         lines.append("_op = self.metainterp.history.record1_float(rop.%s, %s, _res)" % (
             rop_name, box0))
@@ -1093,9 +1083,8 @@ class Specializer(object):
     def _emit_unspecialized_int_is_true_fast(self):
         arg0, result = self._get_args_and_res()
         lines = []
-        self._emit_sync_registers(lines)
-        box0 = self._get_as_box_after_sync(arg0)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        box0 = self._get_as_box_nosync(arg0)
+        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
         lines.append("_res = int(bool(_v0))")
         lines.append("_op = self.metainterp.history.record1_int(rop.INT_IS_TRUE, %s, _res)" % box0)
         lines.append("self.registers_i[%d] = _op" % result.index)
@@ -1107,9 +1096,8 @@ class Specializer(object):
     def _emit_unspecialized_int_is_zero_fast(self):
         arg0, result = self._get_args_and_res()
         lines = []
-        self._emit_sync_registers(lines)
-        box0 = self._get_as_box_after_sync(arg0)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        box0 = self._get_as_box_nosync(arg0)
+        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
         lines.append("_res = int(_v0 == 0)")
         lines.append("_op = self.metainterp.history.record1_int(rop.INT_IS_ZERO, %s, _res)" % box0)
         lines.append("self.registers_i[%d] = _op" % result.index)
@@ -1556,6 +1544,23 @@ class Specializer(object):
         t = self._get_type_prefix(arg)
         return "self.registers_%s[%d]" % (t, arg.index)
 
+    def _get_as_box_nosync(self, arg):
+        if isinstance(arg, Constant) or arg in self.constant_registers:
+            return self._get_as_box(arg)
+        t = self._get_type_prefix(arg)
+        return "self.registers_%s[%d]" % (t, arg.index)
+
+    def _get_as_unboxed_nosync(self, arg):
+        if isinstance(arg, Constant) or arg in self.constant_registers:
+            return self._get_as_unboxed(arg)
+        t = self._get_type_prefix(arg)
+        if t == 'i':
+            return "self.registers_i[%d].getint()" % arg.index
+        elif t == 'f':
+            return "self.registers_f[%d].getfloatstorage()" % arg.index
+        else:
+            return "self.registers_r[%d].getref_base()" % arg.index
+
     def _emit_unbox_by_type(self, arg, lines, indent=''):
         t = self._get_type_prefix(arg)
         line = ''
@@ -1705,9 +1710,8 @@ class Specializer(object):
     def emit_unspecialized_float_abs(self):
         arg0, result = self._get_args_and_res()
         lines = []
-        self._emit_sync_registers(lines)
-        box0 = self._get_as_box_after_sync(arg0)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        box0 = self._get_as_box_nosync(arg0)
+        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
         lines.append("_res = abs(_v0)")
         lines.append("_op = self.metainterp.history.record1_float(rop.FLOAT_ABS, %s, _res)" % box0)
         lines.append("self.registers_f[%d] = _op" % result.index)
@@ -2121,18 +2125,15 @@ class Specializer(object):
         lines.append("    pc = %d" % (specializer.get_pc(),))
         lines.append("    continue")
 
-        # Fast-path: compute comparison and record directly, skip heapcache
-        self._emit_sync_registers(lines)
-        box0 = self._get_as_box_after_sync(arg0)
-        box1 = self._get_as_box_after_sync(arg1)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
-        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
+        box0 = self._get_as_box_nosync(arg0)
+        box1 = self._get_as_box_nosync(arg1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_nosync(arg1))
         lines.append("_cond = int(_v0 %s _v1)" % py_op)
-        lines.append("# fast-path: record comparison directly, skip heapcache")
         lines.append("condbox = self.metainterp.history.record2_int(rop.%s, %s, %s, _cond)" % (
             rop_name, box0, box1))
 
-        # Call opimpl_goto_if_not for guard generation
+        self._emit_sync_registers(lines)
         lines.append("self.opimpl_goto_if_not(condbox, %d, %d, replace=False)" % (target_pc, self.orig_pc))
         lines.append("pc = self.pc")
         lines.append("if pc == %s:" % (target_pc,))
@@ -2428,15 +2429,18 @@ def _make_register_syncer(constant_registers, cache={}):
     name = "jit_sync_regs_" + "_".join(args)
     lines = ["def %s(self, %s):" % (name, ", ".join(args))]
     for reg in constant_registers:
+        kind_char = reg.kind[0]
+        idx = reg.index
         if reg.kind == 'int':
-            val = "ConstInt(i%d)" % reg.index
+            lines.append('    _old = self.registers_i[%d]' % idx)
+            lines.append('    if not isinstance(_old, ConstInt) or _old.getint() != i%d:' % idx)
+            lines.append('        self.registers_i[%d] = ConstInt(i%d)' % (idx, idx))
         elif reg.kind == 'ref':
-            val = "ConstPtr(r%d)" % reg.index
+            lines.append('    self.registers_%s[%d] = ConstPtr(r%d)' % (kind_char, idx, idx))
         elif reg.kind == 'float':
-            val = "ConstFloat(f%d)" % reg.index
+            lines.append('    self.registers_%s[%d] = ConstFloat(f%d)' % (kind_char, idx, idx))
         else:
             assert 0
-        lines.append('    self.registers_%s[%d] = %s' % (reg.kind[0], reg.index, val))
     source = py.code.Source("\n".join(lines))
     d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr, "ConstFloat": ConstFloat}
     exec source.compile() in d

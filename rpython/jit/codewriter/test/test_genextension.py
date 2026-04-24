@@ -59,7 +59,6 @@ def jit_shortcut(self): # test
             _v0 = self.registers_i[22].getint()
             _v1 = 4
             _cond = int(_v0 > _v1)
-            # fast-path: record comparison directly, skip heapcache
             condbox = self.metainterp.history.record2_int(rop.INT_GT, self.registers_i[22], ConstInt(4), _cond)
             self.opimpl_goto_if_not(condbox, 16, 0, replace=False)
             pc = self.pc
@@ -699,7 +698,6 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
 _v0 = self.registers_i[0].getint()
 _v1 = self.registers_i[1].getint()
 _cond = int(_v0 < _v1)
-# fast-path: record comparison directly, skip heapcache
 condbox = self.metainterp.history.record2_int(rop.INT_LT, self.registers_i[0], self.registers_i[1], _cond)
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
@@ -713,7 +711,7 @@ continue"""
     # unspecialized case with constant register
     insn_specializer = work_list.specialize_pc({i2}, 5)
     s = insn_specializer.make_code()
-    # fast-path with register sync
+    # fast-path with deferred register sync before guard
     assert s == """\
 ri0 = self.registers_i[0]
 ri1 = self.registers_i[1]
@@ -722,12 +720,11 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
     i1 = ri1.getint()
     pc = 119
     continue
-glob0(self, i2) # jit_sync_regs_i2
 _v0 = self.registers_i[0].getint()
 _v1 = self.registers_i[1].getint()
 _cond = int(_v0 < _v1)
-# fast-path: record comparison directly, skip heapcache
 condbox = self.metainterp.history.record2_int(rop.INT_LT, self.registers_i[0], self.registers_i[1], _cond)
+glob0(self, i2) # jit_sync_regs_i2
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
