@@ -59,7 +59,6 @@ def jit_shortcut(self): # test
             _v0 = self.registers_i[22].getint()
             _v1 = 4
             _cond = int(_v0 > _v1)
-            # fast-path: record comparison directly, skip heapcache
             condbox = self.metainterp.history.record2_int(rop.INT_GT, self.registers_i[22], ConstInt(4), _cond)
             self.opimpl_goto_if_not(condbox, 16, 0, replace=False)
             pc = self.pc
@@ -79,20 +78,30 @@ def jit_shortcut(self): # test
                 pc = 117
                 continue
             else:
-                self.registers_i[23] = self.opimpl_int_add(ri23, ri22)
-            pc = 9
-            continue
+                _v0 = self.registers_i[23].getint()
+                _v1 = self.registers_i[22].getint()
+                _res = _v0 + _v1
+                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[23], self.registers_i[22], _res)
+                self.registers_i[23] = _op
+                i23 = _res
+                pc = 9
+                continue
         if pc == 9: # ('int_sub', %i22, (1), '->', %i22) frozenset([])
             self.pc = 13
             ri22 = self.registers_i[22]
             if isinstance(ri22, ConstInt):
                 i22 = ri22.getint()
-                pc = 118
+                pc = 116
                 continue
             else:
-                self.registers_i[22] = self.opimpl_int_sub(ri22, ConstInt(1))
-            pc = 0
-            continue
+                _v0 = self.registers_i[22].getint()
+                _v1 = 1
+                _res = _v0 - _v1
+                _op = self.metainterp.history.record2_int(rop.INT_SUB, self.registers_i[22], ConstInt(1), _res)
+                self.registers_i[22] = _op
+                i22 = _res
+                pc = 0
+                continue
         if pc == 13: # ('goto', TLabel('L1')) frozenset([])
             self.pc = 16
             pc = 0
@@ -108,28 +117,23 @@ def jit_shortcut(self): # test
             self.pc = 5
             cond = i22 > 4
             if not cond:
-                pc = 119
+                pc = 118
                 continue
-            pc = 120
+            pc = 119
             continue
-        if pc == 117: # ('int_add', %i23, %i22, '->', %i23) frozenset([%i23, %i22])
-            self.pc = 9
-            i23 = i23 + i22
-            pc = 121
-            continue
-        if pc == 118: # ('int_sub', %i22, (1), '->', %i22) frozenset([%i22])
+        if pc == 117: # ('int_sub', %i22, (1), '->', %i22) frozenset([%i23, %i22])
             self.pc = 13
             i22 = i22 - 1
-            pc = 116
+            pc = 120
             continue
-        if pc == 119: # ('int_return', %i23) frozenset([%i22])
+        if pc == 118: # ('int_return', %i23) frozenset([%i22])
             self.pc = 18
             ri23 = self.registers_i[23]
             try:
                 self.opimpl_int_return(ri23)
             except ChangeFrame: return
             assert 0, 'unreachable'
-        if pc == 120: # ('int_add', %i23, %i22, '->', %i23) frozenset([%i22])
+        if pc == 119: # ('int_add', %i23, %i22, '->', %i23) frozenset([%i22])
             self.pc = 9
             ri23 = self.registers_i[23]
             if isinstance(ri23, ConstInt):
@@ -137,28 +141,38 @@ def jit_shortcut(self): # test
                 pc = 117
                 continue
             else:
-                self.registers_i[23] = self.opimpl_int_add(ri23, ConstInt(i22))
-            pc = 118
-            continue
-        if pc == 121: # ('int_sub', %i22, (1), '->', %i22) frozenset([%i23, %i22])
-            self.pc = 13
-            i22 = i22 - 1
-            pc = 122
-            continue
-        if pc == 122: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([%i23, %i22])
+                _v0 = self.registers_i[23].getint()
+                _v1 = i22
+                _res = _v0 + _v1
+                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[23], ConstInt(i22), _res)
+                self.registers_i[23] = _op
+                i23 = _res
+                pc = 121
+                continue
+        if pc == 120: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([%i23, %i22])
             self.pc = 5
             cond = i22 > 4
             if not cond:
-                pc = 123
+                pc = 122
                 continue
-            pc = 117
+            pc = 123
             continue
-        if pc == 123: # ('int_return', %i23) frozenset([%i23, %i22])
+        if pc == 121: # ('int_sub', %i22, (1), '->', %i22) frozenset([%i22])
+            self.pc = 13
+            i22 = i22 - 1
+            pc = 116
+            continue
+        if pc == 122: # ('int_return', %i23) frozenset([%i23, %i22])
             self.pc = 18
             try:
                 self.opimpl_int_return(ConstInt(i23))
             except ChangeFrame: return
             assert 0, 'unreachable'
+        if pc == 123: # ('int_add', %i23, %i22, '->', %i23) frozenset([%i23, %i22])
+            self.pc = 9
+            i23 = i23 + i22
+            pc = 117
+            continue
         assert 0 # unreachable"""
 
 def test_integration_switch(enable_genextension):
@@ -519,12 +533,17 @@ ri0 = self.registers_i[0]
 if isinstance(ri1, ConstInt) and isinstance(ri0, ConstInt):
     i1 = ri1.getint()
     i0 = ri0.getint()
-    pc = 108
+    pc = 109
     continue
 else:
-    self.registers_i[1] = self.opimpl_int_add(ri1, ri0)
-pc = 6
-continue"""
+    _v0 = self.registers_i[1].getint()
+    _v1 = self.registers_i[0].getint()
+    _res = _v0 + _v1
+    _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], self.registers_i[0], _res)
+    self.registers_i[1] = _op
+    i1 = _res
+    pc = 6
+    continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 
@@ -539,9 +558,14 @@ if isinstance(ri1, ConstInt) and isinstance(ri0, ConstInt):
     pc = 113
     continue
 else:
-    self.registers_i[1] = self.opimpl_int_add(ri1, ri0)
-pc = 114
-continue"""
+    _v0 = self.registers_i[1].getint()
+    _v1 = self.registers_i[0].getint()
+    _res = _v0 + _v1
+    _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], self.registers_i[0], _res)
+    self.registers_i[1] = _op
+    i1 = _res
+    pc = 114
+    continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == {i2}
 
@@ -569,12 +593,17 @@ continue"""
 ri0 = self.registers_i[0]
 if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
-    pc = %d
+    pc = 109
     continue
 else:
-    self.registers_i[1] = self.opimpl_int_add(ri0, ConstInt(1))
-pc = 7
-continue""" % (work_list.OFFSET + 7)
+    _v0 = self.registers_i[0].getint()
+    _v1 = 1
+    _res = _v0 + _v1
+    _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[0], ConstInt(1), _res)
+    self.registers_i[1] = _op
+    i1 = _res
+    pc = 7
+    continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 
@@ -602,12 +631,17 @@ continue"""
 ri0 = self.registers_i[0]
 if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
-    pc = %d
+    pc = 109
     continue
 else:
-    self.registers_i[1] = self.opimpl_int_rshift(ri0, ConstInt(1))
-pc = 7
-continue""" % (work_list.OFFSET + 7)
+    _v0 = self.registers_i[0].getint()
+    _v1 = 1
+    _res = _v0 >> _v1
+    _op = self.metainterp.history.record2_int(rop.INT_RSHIFT, self.registers_i[0], ConstInt(1), _res)
+    self.registers_i[1] = _op
+    i1 = _res
+    pc = 7
+    continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 
@@ -631,15 +665,20 @@ continue"""
     newpc = insn_specializer.get_pc()
     assert newpc == 5
     s = insn_specializer.make_code()
-    # fast-path: directly compute and record, skip heapcache
     assert s == """\
-_v0 = self.registers_i[0].getint()
-_res = ~_v0
-_op = self.metainterp.history.record1_int(rop.INT_INVERT, self.registers_i[0], _res)
-self.registers_i[1] = _op
-i1 = _res
-pc = 7
-continue"""
+ri0 = self.registers_i[0]
+if isinstance(ri0, ConstInt):
+    i0 = ri0.getint()
+    pc = 109
+    continue
+else:
+    _v0 = self.registers_i[0].getint()
+    _res = ~_v0
+    _op = self.metainterp.history.record1_int(rop.INT_INVERT, self.registers_i[0], _res)
+    self.registers_i[1] = _op
+    i1 = _res
+    pc = 7
+    continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 
@@ -699,7 +738,6 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
 _v0 = self.registers_i[0].getint()
 _v1 = self.registers_i[1].getint()
 _cond = int(_v0 < _v1)
-# fast-path: record comparison directly, skip heapcache
 condbox = self.metainterp.history.record2_int(rop.INT_LT, self.registers_i[0], self.registers_i[1], _cond)
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
@@ -713,7 +751,7 @@ continue"""
     # unspecialized case with constant register
     insn_specializer = work_list.specialize_pc({i2}, 5)
     s = insn_specializer.make_code()
-    # fast-path with register sync
+    # fast-path with deferred register sync before guard
     assert s == """\
 ri0 = self.registers_i[0]
 ri1 = self.registers_i[1]
@@ -722,12 +760,11 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
     i1 = ri1.getint()
     pc = 119
     continue
-glob0(self, i2) # jit_sync_regs_i2
 _v0 = self.registers_i[0].getint()
 _v1 = self.registers_i[1].getint()
 _cond = int(_v0 < _v1)
-# fast-path: record comparison directly, skip heapcache
 condbox = self.metainterp.history.record2_int(rop.INT_LT, self.registers_i[0], self.registers_i[1], _cond)
+glob0(self, i2) # jit_sync_regs_i2
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
@@ -1048,9 +1085,14 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
     pc = 117
     continue
 else:
-    self.registers_i[2] = self.opimpl_int_xor(ri0, ri1)
-pc = 6
-continue"""
+    _v0 = self.registers_i[0].getint()
+    _v1 = self.registers_i[1].getint()
+    _res = _v0 ^ _v1
+    _op = self.metainterp.history.record2_int(rop.INT_XOR, self.registers_i[0], self.registers_i[1], _res)
+    self.registers_i[2] = _op
+    i2 = _res
+    pc = 6
+    continue"""
 
     work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
     insn_specializer = work_list.specialize_pc({i0, i1, i2, i3}, 5)
@@ -1456,15 +1498,20 @@ continue"""
     newpc = insn_specializer.get_pc()
     assert newpc == 5
     s = insn_specializer.make_code()
-    # fast-path: directly compute and record, skip heapcache
     assert s == """\
-_v0 = self.registers_i[0].getint()
-_res = int(bool(_v0))
-_op = self.metainterp.history.record1_int(rop.INT_IS_TRUE, self.registers_i[0], _res)
-self.registers_i[1] = _op
-i1 = _res
-pc = 7
-continue"""
+ri0 = self.registers_i[0]
+if isinstance(ri0, ConstInt):
+    i0 = ri0.getint()
+    pc = 109
+    continue
+else:
+    _v0 = self.registers_i[0].getint()
+    _res = int(bool(_v0))
+    _op = self.metainterp.history.record1_int(rop.INT_IS_TRUE, self.registers_i[0], _res)
+    self.registers_i[1] = _op
+    i1 = _res
+    pc = 7
+    continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 

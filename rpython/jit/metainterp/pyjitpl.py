@@ -166,10 +166,9 @@ class MIFrame(object):
                 registers[i] = missing
         if nonconst.NonConstant(0):             # force the right type
             constants[0] = ConstClass.value     # (useful for small tests)
-        if self.jitcode.genext_function is None:
-            for i in range(len(constants)):
-                registers[targetindex] = ConstClass(constants[i])
-                targetindex += 1
+        for i in range(len(constants)):
+            registers[targetindex] = ConstClass(constants[i])
+            targetindex += 1
         return registers
 
     def write_int_unboxed(self, index, value, position):
@@ -1724,9 +1723,9 @@ class MIFrame(object):
         # Note: the logger hides the jd_index argument, so we see in the logs:
         #    debug_merge_point(portal_call_depth, current_call_id, 'location')
         #
+        metainterp = self.metainterp
         args = [ConstInt(jd_index), ConstInt(portal_call_depth),
                 ConstInt(current_call_id)] + greenkey
-        metainterp = self.metainterp
         metainterp.history.record(rop.DEBUG_MERGE_POINT, args, None)
         warmrunnerstate = jitdriver_sd.warmstate
         if (metainterp.force_finish_trace and
