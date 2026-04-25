@@ -22,8 +22,9 @@ from rpython.rlib.rjitlog import rjitlog as jl
 from rpython.rlib import nonconst, rstack
 from rpython.rlib.debug import debug_start, debug_stop, debug_print
 from rpython.rlib.debug import have_debug_prints
-from rpython.rlib.jit import Counters
+from rpython.rlib.jit import Counters, dont_look_inside
 from rpython.rlib.objectmodel import we_are_translated, specialize, always_inline
+from rpython.jit.metainterp import bta as _bta_mod
 from rpython.rlib.unroll import unrolling_iterable
 from rpython.rtyper.lltypesystem import lltype, rffi, llmemory
 from rpython.rtyper import rclass
@@ -2644,6 +2645,8 @@ class MetaInterp(object):
         self.force_finish_trace = force_finish_trace
         self.trace_length_at_last_tco = -1
 
+        self._bta_info = None
+
     @always_inline
     def batch_op_count(self):
         """Batch an operation count instead of calling profiler directly.
@@ -3180,11 +3183,35 @@ class MetaInterp(object):
             self.staticdata.profiler.end_tracing()
             debug_stop('jit-tracing')
 
+    @dont_look_inside
+    def _setup_bta(self, original_greenkey):
+        if we_are_translated():
+            return
+        if len(original_greenkey) < 3 or original_greenkey[2].type != 'r':
+            return
+        try:
+            from rpython.rtyper.annlowlevel import cast_gcref_to_instance
+            from pypy.interpreter.pycode import PyCode
+            pycode_ref = original_greenkey[2].getref_base()
+            pycode = cast_gcref_to_instance(PyCode, pycode_ref)
+            if not _bta_mod.should_analyse_pycode(pycode):
+                return
+            info = _bta_mod._cached_analyse_pycode_data(
+                pycode.co_code,
+                pycode.co_nlocals,
+                pycode.co_argcount,
+                pycode.co_name,
+            )
+            self._bta_info = info
+        except Exception:
+            pass
+
     def _compile_and_run_once(self, original_boxes):
         self.initialize_state_from_start(original_boxes)
         self.current_merge_points = [(original_boxes, (0, 0, 0, 0, 0))]
         num_green_args = self.jitdriver_sd.num_green_args
         original_greenkey = original_boxes[:num_green_args]
+        self._setup_bta(original_greenkey)
         self.resumekey = compile.ResumeFromInterpDescr(original_greenkey)
         self.seen_loop_header_for_jdindex = -1
         try:
