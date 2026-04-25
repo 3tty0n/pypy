@@ -122,6 +122,8 @@ def parse_args():
                         help="Random seed for reproducible ordering")
     parser.add_argument("--no-check", action="store_true",
                         help="Skip system configuration check")
+    parser.add_argument("--timeout", type=int, default=300,
+                        help="Per-run timeout in seconds (default: 300)")
     args = parser.parse_args()
     return args
 
@@ -136,22 +138,27 @@ def build_command(exe_path, cpu=None, nice_val=None):
     return prefix + [exe_path]
 
 
-def run_icbd(env, exe_path, cpu=None, nice_val=None):
+def run_icbd(env, exe_path, cpu=None, nice_val=None, timeout=None):
+    """Run the ICBD benchmark with exception-safe directory handling."""
     env["PYTHONPATH"] = "icbd"
-    os.chdir("benchmarks/own/icbd")
-    command = build_command("%s/%s" % (this_dir, exe_path), cpu, nice_val)
-    command.extend([
-        "-m", "icbd.type_analyzer.analyze_all",
-        "-I", "stdlib/python2.5_tiny",
-        "-I", ".",
-        "-E", "icbd/type_analyzer/tests",
-        "-E", "icbd/compiler/benchmarks",
-        "-E", "icbd/compiler/tests",
-        "-I", "stdlib/type_mocks",
-        "-n", "icbd",
-    ])
-    subprocess.run(command, env=env, stdout=subprocess.DEVNULL)
-    os.chdir(this_dir)
+    orig_dir = os.getcwd()
+    try:
+        os.chdir("benchmarks/own/icbd")
+        command = build_command("%s/%s" % (this_dir, exe_path), cpu, nice_val)
+        command.extend([
+            "-m", "icbd.type_analyzer.analyze_all",
+            "-I", "stdlib/python2.5_tiny",
+            "-I", ".",
+            "-E", "icbd/type_analyzer/tests",
+            "-E", "icbd/compiler/benchmarks",
+            "-E", "icbd/compiler/tests",
+            "-I", "stdlib/type_mocks",
+            "-n", "icbd",
+        ])
+        subprocess.run(command, env=env, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.PIPE, timeout=timeout, check=True)
+    finally:
+        os.chdir(orig_dir)
 
 
 def run(num, dirname, typ, args):
@@ -159,6 +166,7 @@ def run(num, dirname, typ, args):
     cpu = args.cpu
     nice_val = args.nice
     cooldown = args.cooldown
+    timeout = getattr(args, 'timeout', None)
 
     bm_path = setup_bm_path(typ)
     benchmarks = setup_bms(typ)
@@ -196,17 +204,30 @@ def run(num, dirname, typ, args):
 
                 target_path = bm_path + "%s.py" % bm
 
-                if bm == "bm_icbd":
-                    run_icbd(env, exe_path, cpu, nice_val)
-                else:
-                    command = build_command(exe_path, cpu, nice_val)
-                    command.append(target_path)
-                    if bm == "bm_genshi":
-                        command.append("--benchmark=xml")
-                    elif bm == "bm_sympy":
-                        command.append("--benchmark=str")
-                    command.extend(["-n", "1"])
-                    subprocess.run(command, env=env, stdout=subprocess.DEVNULL)
+                try:
+                    if bm == "bm_icbd":
+                        run_icbd(env, exe_path, cpu, nice_val, timeout=timeout)
+                    else:
+                        command = build_command(exe_path, cpu, nice_val)
+                        command.append(target_path)
+                        if bm == "bm_genshi":
+                            command.append("--benchmark=xml")
+                        elif bm == "bm_sympy":
+                            command.append("--benchmark=str")
+                        command.extend(["-n", "1"])
+                        subprocess.run(
+                            command, env=env,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE,
+                            timeout=timeout, check=True)
+                except subprocess.TimeoutExpired:
+                    print("    ERROR: timeout after %ss — data lost" % timeout)
+                except subprocess.CalledProcessError as e:
+                    print("    ERROR: exit code %d — data may be incomplete" % e.returncode)
+                    if e.stderr:
+                        print("    stderr: %s" % e.stderr.decode('utf-8', 'replace')[:200])
+                except FileNotFoundError:
+                    print("    ERROR: binary not found: %s" % exe_path)
 
 
 if __name__ == "__main__":
@@ -222,7 +243,7 @@ if __name__ == "__main__":
     if not dirname:
         dirname = "pypylogs_%s" % get_time()
     if not os.path.exists(dirname):
-        os.mkdir(dirname)
+        os.makedirs(dirname)
 
     typ = args.benchmark
     if typ == "all":
