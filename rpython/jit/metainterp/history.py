@@ -443,6 +443,7 @@ class JitCellToken(AbstractDescr):
     # Bridges compiled with this cell token as original loop. Used as a
     # polymorphism signal by hot_bridge_promotion. Issue #5146.
     bridge_count = 0
+    wref_jitcell = None
     invalidated = False
     outermost_jitdriver_sd = None
     # and more data specified by the backend when the loop is compiled

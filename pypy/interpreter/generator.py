@@ -11,6 +11,9 @@ class GeneratorIterator(W_Root):
     "An iterator created by a generator."
     _immutable_fields_ = ['pycode']
 
+    def _jit_shape_id(self):
+        return 2
+
     def __init__(self, frame):
         self.space = frame.space
         self.frame = frame     # turned into None when frame_finished_execution

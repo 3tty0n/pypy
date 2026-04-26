@@ -40,6 +40,9 @@ class W_Root(object):
     _must_be_light_finalizer_ = True
     user_overridden_class = False
 
+    def _jit_shape_id(self):
+        return 0
+
     def getdict(self, space):
         return None
 

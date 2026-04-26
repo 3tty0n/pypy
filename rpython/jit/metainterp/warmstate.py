@@ -521,6 +521,7 @@ class WarmEnterState(object):
         tt_state = cell.tt_state
         tt_pending = tt_state is not None and tt_state.pending_shape_set
         cell.set_procedure_token(procedure_token)
+        procedure_token.wref_jitcell = weakref.ref(cell)
         if old_token is not None and (not tt_pending or old_is_tmp):
             self.cpu.redirect_call_assembler(old_token, procedure_token)
             # procedure_token is also kept alive by any loop that used

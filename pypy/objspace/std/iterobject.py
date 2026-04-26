@@ -7,6 +7,9 @@ from pypy.interpreter.typedef import TypeDef
 
 
 class W_AbstractSeqIterObject(W_Root):
+    def _jit_shape_id(self):
+        return 1
+
     def __init__(self, w_seq, index=0):
         if index < 0:
             index = 0

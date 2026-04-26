@@ -894,9 +894,21 @@ class ArrayBuffer(RawBuffer):
         return self.w_array._charbuf_start()
 
 
+def _unpack_shape_iter_class(w_iterator):
+    from rpython.rtyper.lltypesystem import lltype
+    from rpython.rtyper.rclass import OBJECTPTR
+    if not w_iterator:
+        return r_uint(0)
+    obj_ptr = lltype.cast_pointer(OBJECTPTR, w_iterator)
+    typeptr = obj_ptr.typeptr
+    return r_uint(lltype.cast_ptr_to_int(typeptr))
+_unpack_shape_iter_class._always_inline_ = True
+
 unpack_driver = jit.JitDriver(name='unpack_array',
                               greens=['selfclass', 'tp'],
-                              reds=['self', 'w_iterator'])
+                              reds=['self', 'w_iterator'],
+                              shapes=[('w_iterator',
+                                       _unpack_shape_iter_class)])
 
 def make_array(mytype):
     W_ArrayBase = globals()['W_ArrayBase']
