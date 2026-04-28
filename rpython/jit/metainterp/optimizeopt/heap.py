@@ -180,6 +180,10 @@ class CachedField(AbstractCachedEntry):
             if isinstance(opinfo, info.AbstractStructPtrInfo):
                 assert opinfo in self.cached_infos
         if isinstance(res, PreambleOp):
+            if optheap.optimizer.optunroll.short_preamble_producer is None:
+                assert isinstance(opinfo, info.AbstractStructPtrInfo)
+                opinfo._fields[descr.get_index()] = None
+                return None
             if not true_force:
                 return res.op
             res = optheap.optimizer.force_op_from_preamble(res)
@@ -242,6 +246,12 @@ class ArrayCachedItem(AbstractCachedEntry):
                 assert opinfo in self.cached_infos
         if (isinstance(res, PreambleOp) and
             optheap.optimizer.cpu.supports_guard_gc_type):
+            # Stale PreambleOp on bridge path - see CachedField._getfield.
+            if optheap.optimizer.optunroll.short_preamble_producer is None:
+                assert isinstance(opinfo, info.ArrayPtrInfo)
+                if opinfo._items is not None and self.index < len(opinfo._items):
+                    opinfo._items[self.index] = None
+                return None
             if not true_force:
                 return res.op
             index = res.preamble_op.getarg(1).getint()

@@ -357,6 +357,7 @@ class BaseJitCell(object):
 
 class WarmEnterState(object):
     enable_hot_bridge_promotion = False
+    hot_bridge_threshold = 1
     enable_adaptive_bridge = False
     adaptive_bridge_lazy_threshold = 50
     enable_tracetree = False
@@ -456,6 +457,11 @@ class WarmEnterState(object):
     def set_param_enable_hot_bridge_promotion(self, value):
         self.enable_hot_bridge_promotion = bool(value)
 
+    def set_param_hot_bridge_threshold(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_threshold = value
+
     def set_param_enable_adaptive_bridge(self, value):
         # Adaptive Bridge Compilation Strategy (stages 1-2 + HBP, gated on
         # this single flag for benchmarking the combined effect).
@@ -471,7 +477,10 @@ class WarmEnterState(object):
         self.adaptive_bridge_lazy_threshold = value
 
     def set_param_enable_tracetree(self, value):
-        self.enable_tracetree = bool(value)
+        shape_spec = False
+        if hasattr(self.jitdriver_sd, 'shape_spec'):
+            shape_spec = bool(self.jitdriver_sd.shape_spec)
+        self.enable_tracetree = bool(value) and shape_spec
 
     def set_param_tracetree_max_specializations(self, value):
         if value < 1:
@@ -569,8 +578,8 @@ class WarmEnterState(object):
         _tt_shape_entries = unrolling_iterable(
             [(num_green_args + red_index, extractor)
              for red_index, extractor in _shape_spec])
-        _tt_has_shape = bool(_shape_spec)
-        _tt_stats = self.tt_stats
+        tt_has_shape = bool(_shape_spec)
+        tt_stats = self.tt_stats
         _warmstate = self
 
         def execute_assembler(loop_token, *args):
@@ -632,13 +641,13 @@ class WarmEnterState(object):
             if cell is None:
                 cell = JitCell(*greenargs)
                 jitcounter.install_new_cell(hash, cell)
-                _tt_stats.greenkeys_total += 1
-            if _tt_has_shape and _warmstate.enable_tracetree:
+                tt_stats.greenkeys_total += 1
+            if tt_has_shape and _warmstate.enable_tracetree:
                 sig = tt_compute_sig(*args)
                 s = cell.tt_ensure_state()
                 s.pending_shape_sig = sig
                 s.pending_shape_set = True
-                _tt_stats.note_signature(sig)
+                tt_stats.note_signature(sig)
             # start tracing
             metainterp = MetaInterp(
                 metainterp_sd, jitdriver_sd,
@@ -707,47 +716,37 @@ class WarmEnterState(object):
                 # has been freed
                 jitcounter.cleanup_chain(hash)
                 return
-            if _tt_has_shape and _warmstate.enable_tracetree:
+            if tt_has_shape and _warmstate.enable_tracetree:
                 sig = tt_compute_sig(*args)
-                s = cell.tt_state
-                if (s is not None and not s.multi_mode
-                        and s.shape_sigs is not None
-                        and len(s.shape_sigs) == 1
-                        and s.shape_sigs[0] == sig):
-                    _tt_stats.note_signature_fast(sig)
-                    _tt_stats.dispatch_hits += 1
-                    # procedure_token already correct
+                matched = cell.tt_lookup(sig)
+                if matched is not None:
+                    tt_stats.dispatch_hits += 1
+                    procedure_token = matched
                 else:
-                    matched = cell.tt_lookup(sig)
-                    if matched is not None:
-                        _tt_stats.note_signature_fast(sig)
-                        _tt_stats.dispatch_hits += 1
-                        procedure_token = matched
-                    else:
-                        _tt_stats.note_signature(sig)
-                        _tt_stats.dispatch_misses += 1
-                        s = cell.tt_ensure_state()
-                        s.miss_count += 1
-                        thresh = _warmstate.tracetree_activation_threshold
-                        promote = (s.miss_count >= thresh)
-                        admit = (not s.megamorphic and
-                                 cell.tt_count() <
-                                 _warmstate.tracetree_max_specializations)
-                        if promote and admit:
-                            if not s.multi_mode:
-                                s.multi_mode = True
-                                _tt_stats.greenkeys_in_tt_mode += 1
-                                _tt_stats.activation_events += 1
-                            s.pending_shape_sig = sig
-                            s.pending_shape_set = True
-                            if jitcounter.tick(hash, increment_threshold):
-                                bound_reached(hash, cell, *args)
-                            return
-                        if promote and not admit:
-                            _tt_stats.admission_rejections += 1
-                            if cell.tt_count() > 0:
-                                _tt_stats.megamorphic_fallbacks += 1
-                            s.megamorphic = True
+                    tt_stats.note_signature(sig)
+                    tt_stats.dispatch_misses += 1
+                    s = cell.tt_ensure_state()
+                    s.miss_count += 1
+                    thresh = _warmstate.tracetree_activation_threshold
+                    prom = (s.miss_count >= thresh)
+                    admit = (not s.megamorphic and
+                             cell.tt_count() <
+                             _warmstate.tracetree_max_specializations)
+                    if prom and admit:
+                        if not s.multi_mode:
+                            s.multi_mode = True
+                            tt_stats.greenkeys_in_tt_mode += 1
+                            tt_stats.activation_events += 1
+                        s.pending_shape_sig = sig
+                        s.pending_shape_set = True
+                        if jitcounter.tick(hash, increment_threshold):
+                            bound_reached(hash, cell, *args)
+                        return
+                    if prom and not admit:
+                        tt_stats.admission_rejections += 1
+                        if cell.tt_count() > 0:
+                            tt_stats.megamorphic_fallbacks += 1
+                        s.megamorphic = True
             if not confirm_enter_jit(*args):
                 return
             # extract and unspecialize the red arguments to pass to

@@ -225,7 +225,11 @@ class UnrollOptimizer(Optimizer):
                 return info, self._newoperations[:]
             warmrunnerdescr = self.metainterp_sd.warmrunnerdesc
             limit = warmrunnerdescr.memory_manager.retrace_limit
-            if cell_token.retraced_count < limit:
+            warmstate = self.jitdriver_sd.warmstate
+            selective_retrace = (warmstate.enable_hot_bridge_promotion or
+                                 warmstate.enable_adaptive_bridge)
+            do_retrace = (prefer_loop_over_bridge or not selective_retrace)
+            if do_retrace and cell_token.retraced_count < limit:
                 cell_token.retraced_count += 1
                 debug_print('Retracing (%d/%d)' % (cell_token.retraced_count, limit))
             else:

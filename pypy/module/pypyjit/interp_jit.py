@@ -66,17 +66,13 @@ class PyPyJitDriver(JitDriver):
     greens = ['next_instr', 'is_being_profiled', 'pycode']
     virtualizables = ['frame']
 
-def _tracetree_shape_probe(ec):
-    return 0
-
 pypyjitdriver = PyPyJitDriver(get_printable_location = get_printable_location,
                               get_location = get_location,
                               get_unique_id = get_unique_id,
                               should_unroll_one_iteration =
                               should_unroll_one_iteration,
                               name='pypyjit',
-                              is_recursive=True,
-                              shapes=[('ec', _tracetree_shape_probe)])
+                              is_recursive=True)
 
 class __extend__(PyFrame):
 
@@ -335,4 +331,3 @@ def releaseall(space):
 #         pass
 
 # pypy_hooks = PyPyJitHookInterface()
-

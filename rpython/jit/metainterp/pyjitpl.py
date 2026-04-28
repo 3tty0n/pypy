@@ -2920,15 +2920,12 @@ class MetaInterp(object):
         key = resumedescr.get_resumestorage()
         assert isinstance(key, compile.ResumeGuardDescr)
         self.resumekey_original_loop_token = resumedescr.rd_loop_token.loop_token_wref()
-        # Promote only on the 2nd+ distinct value of a per-value
-        # guard_value (cell_token.bridge_count >= 1) to skip transient
-        # polymorphism. Issue #5146.
         warmstate = self.jitdriver_sd.warmstate
         if warmstate.enable_hot_bridge_promotion:
             typetag = resumedescr.status & compile.AbstractResumeGuardDescr.ST_TYPE_MASK
             cell_token = self.resumekey_original_loop_token
             if (typetag != 0 and cell_token is not None
-                    and cell_token.bridge_count >= 1):
+                    and cell_token.bridge_count >= warmstate.hot_bridge_threshold):
                 self.prefer_loop_over_bridge = True
         # Adaptive bridge stage 2 (hot guard promotion): by construction
         # of stage 1, reaching this point means rd_fail_count >= T_lazy,
