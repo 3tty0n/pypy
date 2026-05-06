@@ -63,31 +63,18 @@ def _is_pure_arithmetic_trace_op(opnum):
 
 def compile_pure_arithmetic_loop(metainterp, greenkey, trace, runtime_args,
                                  cut_at):
-    """Try to compile a pure-arithmetic loop without the optimizer.
-
-    For loops whose trace contains only pure int/float arithmetic (no
-    guards, no heap accesses, no calls, no GC references), skip all
-    optimizer passes and send the trace directly to the backend.
+    """Compile a pure-arithmetic loop, skipping the optimizer.
 
     Returns a TargetToken on success, or None to fall back to the normal
     optimizer path.
-
-    Why this works
-    --------------
-    The 7-pass optimizer (intbounds, heap, virtualstate, unroll, ...) is
-    designed for traces that have guards, heap operations, and virtual
-    objects. For pure arithmetic loops it is pure overhead: no guards to
-    eliminate, no virtuals to escape, no heap cache to maintain. Skipping
-    it reduces JIT compile time for this common case.
-
-    The GenExtension connection: at JitCode assembly time,
-    _classify_pure_arithmetic() already determined whether the portal's
-    jitcode is pure arithmetic. Here we confirm it at the trace level
-    (the trace is what actually reaches the backend) and attach the
-    genext_compile_function to the token for the backend's fast path.
     """
     jitdriver_sd = metainterp.jitdriver_sd
     metainterp_sd = metainterp.staticdata
+
+    # fast reject: skip trace scan if portal is not pure arithmetic
+    portal_jitcode = jitdriver_sd.mainjitcode
+    if portal_jitcode is None or not portal_jitcode.genext_is_pure_arithmetic:
+        return None
 
     traceiter = trace.get_iter()
     inputargs = traceiter.inputargs
@@ -113,13 +100,8 @@ def compile_pure_arithmetic_loop(metainterp, greenkey, trace, runtime_args,
     if ops[-1].getopnum() != rop.JUMP:
         return None
 
-    # Look up the GenExtension compile function from the portal jitcode.
-    # This was generated at translation time by _generate_compile_function()
-    # for pure arithmetic jitcodes.
-    portal_jitcode = jitdriver_sd.mainjitcode
-    genext_compile_fn = None
-    if portal_jitcode is not None and portal_jitcode.genext_is_pure_arithmetic:
-        genext_compile_fn = portal_jitcode.genext_compile_function
+    # portal jitcode is known to be pure arithmetic from the check above
+    genext_compile_fn = portal_jitcode.genext_compile_function
 
     # Build the TreeLoop directly, bypassing SimpleCompileData.optimize_trace
     jitcell_token = make_jitcell_token(jitdriver_sd)
