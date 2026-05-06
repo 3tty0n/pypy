@@ -9,9 +9,11 @@ from rpython.jit.metainterp.test.support import LLJitMixin
 from rpython.jit.metainterp.optimizeopt.bridgeopt import serialize_optimizer_knowledge
 from rpython.jit.metainterp.optimizeopt.bridgeopt import deserialize_optimizer_knowledge
 from rpython.jit.metainterp.resoperation import InputArgRef, InputArgInt
-from rpython.jit.metainterp.resume import NumberingState
+from rpython.jit.metainterp.resume import NumberingState, tag, TAGBOX
 from rpython.jit.metainterp.resumecode import unpack_numbering
-from rpython.jit.metainterp.optimizeopt.info import InstancePtrInfo
+from rpython.jit.metainterp.optimizeopt.info import (
+    InstancePtrInfo, NonNullPtrInfo)
+from rpython.jit.metainterp.optimizeopt.intutils import IntBound, MININT, MAXINT
 
 from hypothesis import strategies, given
 
@@ -30,10 +32,23 @@ class FakeOptimizer(object):
 
     def __init__(self, cpu=None):
         self.constant_classes = {}
+        self.nonnull = {}
+        self.intbounds = {}
         self.cpu = cpu
 
     def make_constant_class(self, arg, cls):
         self.constant_classes[arg] = cls
+
+    def make_nonnull(self, arg):
+        self.nonnull[arg] = None
+
+    def setintbound(self, arg, bound):
+        self.intbounds[arg] = bound
+
+class FakeMetaInterpSD(object):
+    def __init__(self, all_descrs):
+        self.all_descrs = all_descrs
+        self.cpu = None
 
 class FakeClass(object):
     pass
@@ -41,6 +56,32 @@ class FakeClass(object):
 class FakeStorage(object):
     def __init__(self, numb):
         self.rd_numb = numb
+
+class FakeMemo(object):
+    def getconst(self, const):
+        from rpython.jit.metainterp.resume import TAGINT
+        return tag(const.getint(), TAGINT)
+
+class FakeDescr(object):
+    def __init__(self, index):
+        self.index = index
+
+    def get_descr_index(self):
+        return self.index
+
+class FakeOptHeap(object):
+    def __init__(self, triples_struct=None, triples_array=None):
+        self.triples_struct = triples_struct or []
+        self.triples_array = triples_array or []
+        self.deserialized_struct = None
+        self.deserialized_array = None
+
+    def serialize_optheap(self, available_boxes):
+        return self.triples_struct, self.triples_array
+
+    def deserialize_optheap(self, triples_struct, triples_array):
+        self.deserialized_struct = triples_struct
+        self.deserialized_array = triples_array
 
 def test_known_classes():
     cls = FakeClass()
@@ -57,7 +98,7 @@ def test_known_classes():
     serialize_optimizer_knowledge(optimizer, numb_state, liveboxes, {}, None)
 
     assert unpack_numbering(numb_state.create_numbering()) == [
-            1, 0b010000, 0, 0, 0]
+            1, 0b010000, 0b010000, 0, 0, 0, 0]
 
     rbox1 = InputArgRef()
     rbox2 = InputArgRef()
@@ -69,7 +110,152 @@ def test_known_classes():
     assert box1 in after_optimizer.constant_classes
     assert box2 not in after_optimizer.constant_classes
     assert box3 not in after_optimizer.constant_classes
+    assert box1 in after_optimizer.nonnull
+    assert box2 not in after_optimizer.nonnull
+    assert box3 not in after_optimizer.nonnull
 
+def test_guarded_nonnull():
+    box1 = InputArgRef()
+    info = NonNullPtrInfo()
+    info.last_guard_pos = 0
+    box1.set_forwarded(info)
+    box2 = InputArgRef()
+    optimizer = FakeOptimizer()
+
+    numb_state = NumberingState(4)
+    numb_state.append_int(1) # size of resume block
+    liveboxes = [InputArgInt(), box2, box1]
+
+    serialize_optimizer_knowledge(optimizer, numb_state, liveboxes, {}, None)
+
+    assert unpack_numbering(numb_state.create_numbering()) == [
+            1, 0, 0b010000, 0, 0, 0, 0]
+
+    after_optimizer = FakeOptimizer()
+    after_optimizer.metainterp_sd = FakeMetaInterpSD([])
+    deserialize_optimizer_knowledge(
+        after_optimizer, FakeStorage(numb_state.create_numbering()),
+        liveboxes, liveboxes)
+    assert box1 in after_optimizer.nonnull
+    assert box2 not in after_optimizer.nonnull
+
+def test_unguarded_nonnull_not_serialized():
+    box1 = InputArgRef()
+    box1.set_forwarded(NonNullPtrInfo())
+    optimizer = FakeOptimizer()
+
+    numb_state = NumberingState(4)
+    numb_state.append_int(1)
+    liveboxes = [box1]
+
+    serialize_optimizer_knowledge(optimizer, numb_state, liveboxes, {}, None)
+
+    assert unpack_numbering(numb_state.create_numbering()) == [
+            1, 0, 0, 0, 0, 0, 0]
+
+    after_optimizer = FakeOptimizer()
+    after_optimizer.metainterp_sd = FakeMetaInterpSD([])
+    deserialize_optimizer_knowledge(
+        after_optimizer, FakeStorage(numb_state.create_numbering()),
+        liveboxes, liveboxes)
+    assert box1 not in after_optimizer.nonnull
+
+def test_intbounds():
+    box1 = InputArgInt()
+    box1.set_forwarded(IntBound(0, 10))
+    box2 = InputArgInt()
+    box2.set_forwarded(IntBound(-5, MAXINT))
+    box3 = InputArgInt()
+    box3.set_forwarded(IntBound(MININT, 100))
+    box4 = InputArgInt()
+    box4.set_forwarded(IntBound(MININT, MAXINT))
+    optimizer = FakeOptimizer()
+
+    numb_state = NumberingState(8)
+    numb_state.append_int(1)
+    liveboxes = [box1, box2, box3, box4]
+    liveboxes_from_env = {
+        box1: tag(0, TAGBOX),
+        box2: tag(1, TAGBOX),
+        box3: tag(2, TAGBOX),
+        box4: tag(3, TAGBOX),
+    }
+
+    serialize_optimizer_knowledge(
+        optimizer, numb_state, liveboxes, liveboxes_from_env, FakeMemo())
+
+    assert unpack_numbering(numb_state.create_numbering()) == [
+            1, 3,
+            tag(0, TAGBOX), 1, 0, 1, 10,
+            tag(1, TAGBOX), 1, -5, 0,
+            tag(2, TAGBOX), 0, 1, 100,
+            0, 0, 0]
+
+    after_optimizer = FakeOptimizer()
+    after_optimizer.metainterp_sd = FakeMetaInterpSD([])
+    deserialize_optimizer_knowledge(
+        after_optimizer, FakeStorage(numb_state.create_numbering()),
+        liveboxes, liveboxes)
+    assert after_optimizer.intbounds[box1].lower == 0
+    assert after_optimizer.intbounds[box1].upper == 10
+    assert after_optimizer.intbounds[box2].lower == -5
+    assert after_optimizer.intbounds[box2].upper == MAXINT
+    assert after_optimizer.intbounds[box3].lower == MININT
+    assert after_optimizer.intbounds[box3].upper == 100
+    assert box4 not in after_optimizer.intbounds
+
+def test_known_classes_with_livebox_hole():
+    cls = FakeClass()
+    box = InputArgRef()
+    box.set_forwarded(InstancePtrInfo(known_class=cls))
+    optimizer = FakeOptimizer()
+
+    numb_state = NumberingState(4)
+    numb_state.append_int(1)
+    liveboxes = [InputArgInt(), None, box]
+
+    serialize_optimizer_knowledge(optimizer, numb_state, liveboxes, {}, None)
+
+    rbox = InputArgRef()
+    after_optimizer = FakeOptimizer(cpu=FakeCPU({rbox: cls}))
+    deserialize_optimizer_knowledge(
+        after_optimizer, FakeStorage(numb_state.create_numbering()),
+        [InputArgInt(), None, rbox], liveboxes)
+    assert box in after_optimizer.constant_classes
+    assert box in after_optimizer.nonnull
+
+def test_heap_knowledge_cross_trace_roundtrip():
+    descr1 = FakeDescr(1)
+    descr2 = FakeDescr(2)
+    box1 = InputArgRef()
+    box2 = InputArgInt()
+    box3 = InputArgRef()
+    optheap = FakeOptHeap(
+        [(box1, descr1, box2)],
+        [(box3, 4, descr2, box2)])
+    optimizer = FakeOptimizer()
+    optimizer.optheap = optheap
+
+    numb_state = NumberingState(4)
+    numb_state.append_int(1)
+    liveboxes = [box1, box2, box3]
+    liveboxes_from_env = {
+        box1: tag(0, TAGBOX),
+        box2: tag(1, TAGBOX),
+        box3: tag(2, TAGBOX),
+    }
+    serialize_optimizer_knowledge(
+        optimizer, numb_state, liveboxes, liveboxes_from_env, FakeMemo())
+
+    after_optheap = FakeOptHeap()
+    after_optimizer = FakeOptimizer()
+    after_optimizer.metainterp_sd = FakeMetaInterpSD([None, descr1, descr2])
+    after_optimizer.optheap = after_optheap
+    deserialize_optimizer_knowledge(
+        after_optimizer, FakeStorage(numb_state.create_numbering()),
+        liveboxes, liveboxes)
+    assert after_optheap.deserialized_struct == [(box1, descr1, box2)]
+    assert after_optheap.deserialized_array == [(box3, 4, descr2, box2)]
 
 box_strategy = strategies.builds(InputArgInt) | strategies.builds(InputArgRef)
 def _make_tup(box, known_class):
@@ -96,7 +282,7 @@ def test_random_class_knowledge(boxes_known_classes):
 
     serialize_optimizer_knowledge(optimizer, numb_state, liveboxes, {}, None)
 
-    assert len(numb_state.create_numbering().code) == 4 + math.ceil(len(refboxes) / 6.0)
+    assert len(numb_state.create_numbering().code) == 5 + 2 * math.ceil(len(refboxes) / 6.0)
 
     dct = {box: cls
               for box, known_class in boxes_known_classes
