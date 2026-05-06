@@ -899,11 +899,18 @@ class W_ListObject(W_Root):
         if mucked:
             raise oefmt(space.w_ValueError, "list modified during sort")
 
-def get_printable_location_sortkey(strategy_type, tp):
-    return "_compute_keys_for_sorting [%s, %s]" % (strategy_type, tp.getname(tp.space), )
+def _print_callable_greenkey(callable_greenkey):
+    from pypy.interpreter.eval import Code
+    if isinstance(callable_greenkey, Code):
+        return callable_greenkey.co_name
+    return callable_greenkey.iterator_greenkey_printable()
+
+def get_printable_location_sortkey(strategy_type, callable_greenkey):
+    return "_compute_keys_for_sorting [%s, %s]" % (
+            strategy_type, _print_callable_greenkey(callable_greenkey), )
 
 sortkey_jmp = jit.JitDriver(
-    greens=['strategy_type', 'tp'],
+    greens=['strategy_type', 'callable_greenkey'],
     reds='auto',
     name='_compute_keys_for_sorting',
     get_printable_location=get_printable_location_sortkey)
@@ -911,13 +918,12 @@ sortkey_jmp = jit.JitDriver(
 def _compute_keys_for_sorting(strategy, list_w, w_callable):
     space = strategy.space
     i = 0
-    # XXX would like a new API space.greenkey_for_callable here
-    # (also in min/max and map/filter)
-    tp = space.type(w_callable)
+    callable_greenkey = space.callable_greenkey(w_callable)
     while i < len(list_w):
         # bit weird: we have a list_w at this point, but we still specialize on
         # the strategy to distinguish the cases better
-        sortkey_jmp.jit_merge_point(tp=tp, strategy_type=type(strategy))
+        sortkey_jmp.jit_merge_point(callable_greenkey=callable_greenkey,
+                                    strategy_type=type(strategy))
         w_item = list_w[i]
         w_keyitem = space.call_function(w_callable, w_item)
         list_w[i] = KeyContainer(w_keyitem, w_item)

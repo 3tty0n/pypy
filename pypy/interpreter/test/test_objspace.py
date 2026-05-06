@@ -35,6 +35,28 @@ class TestObjSpace:
         w_d = self.space.newdict()
         assert self.space.eq_w(w_d, self.space.wrap(d))
 
+    def test_callable_greenkey(self):
+        space = self.space
+        w_func = space.appexec((), """():
+            def f(x):
+                return x + 1
+            return f
+        """)
+        assert (space.callable_greenkey(w_func) is
+                space._try_fetch_pycode(w_func))
+
+        w_method = space.appexec((), """():
+            class A(object):
+                def f(self, x):
+                    return x + 1
+            return A().f
+        """)
+        assert (space.callable_greenkey(w_method) is
+                space._try_fetch_pycode(w_method))
+
+        w_list = space.newlist([])
+        assert space.callable_greenkey(w_list) is space.type(w_list)
+
     def test_newtuple(self):
         w = self.space.wrap
         t = tuple(range(10))

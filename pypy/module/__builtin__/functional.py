@@ -144,10 +144,7 @@ map_1_jitdriver = jit.JitDriver(name='map_1',
 def get_callable_greenkey(space, w_func):
     if w_func is None:
         return None
-    pycode = space._try_fetch_pycode(w_func)
-    if pycode:
-        return pycode
-    return space.type(w_func)
+    return space.callable_greenkey(w_func)
 
 def print_callable_greenkey(callable_greenkey):
     from pypy.interpreter.eval import Code
@@ -265,20 +262,24 @@ the items of the sequence (or a list of tuples if more than one sequence)."""
     return _map_n(space, w_func, args_w)
 
 
-def get_printable_location(has_key, has_item, greenkey):
-    return "min [has_key=%s, has_item=%s, %s]" % (
-            has_key, has_item, greenkey.iterator_greenkey_printable())
+def get_printable_location(has_key, has_item, callable_greenkey, greenkey):
+    return "min [has_key=%s, has_item=%s, %s, %s]" % (
+            has_key, has_item, print_callable_greenkey(callable_greenkey),
+            greenkey.iterator_greenkey_printable())
 
 min_jitdriver = jit.JitDriver(name='min',
-        greens=['has_key', 'has_item', 'greenkey'], reds='auto',
+        greens=['has_key', 'has_item', 'callable_greenkey', 'greenkey'],
+        reds='auto',
         get_printable_location=get_printable_location)
 
-def get_printable_location(has_key, has_item, greenkey):
-    return "max [has_key=%s, has_item=%s, %s]" % (
-            has_key, has_item, greenkey.iterator_greenkey_printable())
+def get_printable_location(has_key, has_item, callable_greenkey, greenkey):
+    return "max [has_key=%s, has_item=%s, %s, %s]" % (
+            has_key, has_item, print_callable_greenkey(callable_greenkey),
+            greenkey.iterator_greenkey_printable())
 
 max_jitdriver = jit.JitDriver(name='max',
-        greens=['has_key', 'has_item', 'greenkey'], reds='auto',
+        greens=['has_key', 'has_item', 'callable_greenkey', 'greenkey'],
+        reds='auto',
         get_printable_location=get_printable_location)
 
 @specialize.arg(3)
@@ -292,11 +293,13 @@ def min_max_sequence(space, w_sequence, w_key, implementation_of):
     w_iter = space.iter(w_sequence)
     greenkey = space.iterator_greenkey(w_iter)
     has_key = w_key is not None
+    callable_greenkey = get_callable_greenkey(space, w_key)
     has_item = False
     w_max_item = None
     w_max_val = None
     while True:
         jitdriver.jit_merge_point(has_key=has_key, has_item=has_item,
+                                  callable_greenkey=callable_greenkey,
                                   greenkey=greenkey)
         try:
             w_item = space.next(w_iter)

@@ -1193,6 +1193,15 @@ class ObjSpace(object):
             return w_func.code
         return None
 
+    def callable_greenkey(self, w_callable):
+        """Return a stable green key for JIT drivers that repeatedly call a
+        user-provided callable.
+        """
+        pycode = self._try_fetch_pycode(w_callable)
+        if pycode is not None:
+            return pycode
+        return self.type(w_callable)
+
     def call_function(self, w_func, *args_w):
         nargs = len(args_w) # used for pruning funccall versions
         if not self.config.objspace.disable_call_speedhacks and nargs < 5:
