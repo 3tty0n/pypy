@@ -35,12 +35,12 @@ class CannotSpecializePure(Exception):
 
 
 def _is_pure_arithmetic_trace_op(opnum):
-    """Return True if opnum is valid in a pure arithmetic loop trace.
-
-    Accepts LABEL, JUMP, and always-pure int/float operations that
-    operate only on integer or float values (no GC references).
-    """
     if opnum == rop.LABEL or opnum == rop.JUMP:
+        return True
+    if (opnum == rop.INT_ADD_OVF or opnum == rop.INT_SUB_OVF or
+            opnum == rop.INT_MUL_OVF):
+        return True
+    if opnum == rop.GUARD_NO_OVERFLOW or opnum == rop.GUARD_OVERFLOW:
         return True
     if not rop.is_always_pure(opnum):
         return False
@@ -63,15 +63,9 @@ def _is_pure_arithmetic_trace_op(opnum):
 
 def compile_pure_arithmetic_loop(metainterp, greenkey, trace, runtime_args,
                                  cut_at):
-    """Compile a pure-arithmetic loop, skipping the optimizer.
-
-    Returns a TargetToken on success, or None to fall back to the normal
-    optimizer path.
-    """
     jitdriver_sd = metainterp.jitdriver_sd
     metainterp_sd = metainterp.staticdata
 
-    # fast reject: skip trace scan if portal is not pure arithmetic
     portal_jitcode = jitdriver_sd.mainjitcode
     if portal_jitcode is None or not portal_jitcode.genext_is_pure_arithmetic:
         return None

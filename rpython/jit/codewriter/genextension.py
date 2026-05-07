@@ -79,6 +79,20 @@ class GenExtension(object):
         from rpython.jit.codewriter.flatten import Label
         from rpython.jit.codewriter.jitcode import JitCode
         from rpython.jit.metainterp.pyjitpl import ChangeFrame
+        for insn in self.ssarepr.insns:
+            if isinstance(insn[0], Label) or insn[0] == '---':
+                continue
+            opname = insn[0]
+            if (
+                    opname in ('raise', 'reraise') or
+                    opname.startswith('inline_call_') or
+                    opname.startswith('getarrayitem_vable_') or
+                    opname.startswith('setarrayitem_vable_') or
+                    opname.startswith('getfield_vable_') or
+                    opname.startswith('setfield_vable_')
+                ):
+                self.jitcode.genext_function = None
+                return
         for index, insn in enumerate(self.ssarepr.insns):
             self._reset_insn()
             if isinstance(insn[0], Label) or insn[0] == '---':
@@ -193,29 +207,71 @@ class GenExtension(object):
         self.jitcode.genext_is_pure_arithmetic = True
 
     def _generate_compile_function(self):
-        """Generate a backend compile function for pure arithmetic jitcodes."""
         if not self.jitcode.genext_is_pure_arithmetic:
             return
 
         def compile_shortcut(assembler, inputargs, operations):
             from rpython.jit.backend.x86.regloc import (
-                RegLoc, ImmedLoc, FrameLoc, eax, ecx, xmm0, xmm1)
-            from rpython.jit.backend.x86.arch import JITFRAME_FIXED_SIZE, WORD
+                RegLoc, ImmedLoc, FrameLoc, eax, ecx, xmm0, xmm1,
+                r10, r11, xmm2, xmm3)
+            from rpython.jit.backend.x86.arch import (
+                JITFRAME_FIXED_SIZE, WORD, IS_X86_64)
             from rpython.jit.metainterp.resoperation import rop
+            from rpython.jit.backend.llsupport.assembler import GuardToken
+            from rpython.jit.backend.llsupport.gcmap import allocate_gcmap
             from rpython.rlib.rarithmetic import intmask
             from rpython.rlib.longlong2float import float2longlong
             from rpython.jit.metainterp.history import ConstInt, ConstFloat
 
             frame_map = {}
             frame_pos = [0]
+            last_use = {}
+            for i, op in enumerate(operations):
+                for j in range(op.numargs()):
+                    a = op.getarg(j)
+                    if a is not None and not isinstance(a, ConstInt) and \
+                            not isinstance(a, ConstFloat):
+                        last_use[a] = i
+                # guard failargs are read by the recovery stub, not op.numargs()
+                if rop.is_guard(op.getopnum()):
+                    failargs = op.getfailargs() or []
+                    for fa in failargs:
+                        if fa is None:
+                            continue
+                        if isinstance(fa, ConstInt) or isinstance(fa, ConstFloat):
+                            continue
+                        last_use[fa] = i
+            cached_int = [None]
+            cached_xmm = [None]
+            if IS_X86_64:
+                int_pool = [r11, r10]
+                xmm_pool = [xmm3, xmm2]
+            else:
+                int_pool = []
+                xmm_pool = []
+            box_loc = {}
+            current_op_index = [0]
+
+            def _new_frame_slot(box):
+                pos = frame_pos[0]
+                frame_pos[0] = pos + 1
+                ebp_offset = (pos + JITFRAME_FIXED_SIZE) * WORD
+                loc = FrameLoc(pos, ebp_offset, box.type)
+                frame_map[box] = loc
+                return loc
 
             def _get_frame_loc(box):
                 if box not in frame_map:
-                    pos = frame_pos[0]
-                    frame_pos[0] = pos + 1
-                    ebp_offset = (pos + JITFRAME_FIXED_SIZE) * WORD
-                    frame_map[box] = FrameLoc(pos, ebp_offset, box.type)
+                    return _new_frame_slot(box)
                 return frame_map[box]
+
+            base_ofs = assembler.cpu.get_baseofs_of_frame_field()
+            initial_locs = []
+            for box in inputargs:
+                loc = _get_frame_loc(box)
+                initial_locs.append(loc.value - base_ofs)
+            if assembler.current_clt is not None:
+                assembler.current_clt._ll_initial_locs = initial_locs
 
             def _loc(box):
                 if box is None:
@@ -225,19 +281,118 @@ class GenExtension(object):
                 if isinstance(box, ConstFloat):
                     return ImmedLoc(intmask(float2longlong(
                         box.getfloatstorage())), is_float=True)
+                if cached_int[0] is box:
+                    return eax
+                if cached_xmm[0] is box:
+                    return xmm0
+                if box in box_loc:
+                    return box_loc[box]
                 return _get_frame_loc(box)
 
+            def _store_box_to_home(box, src_reg, is_float):
+                if box in box_loc:
+                    home = box_loc[box]
+                else:
+                    if is_float:
+                        if xmm_pool:
+                            home = xmm_pool.pop()
+                        else:
+                            home = _get_frame_loc(box)
+                    else:
+                        if int_pool:
+                            home = int_pool.pop()
+                        else:
+                            home = _get_frame_loc(box)
+                    box_loc[box] = home
+                if home is src_reg:
+                    return
+                if is_float:
+                    assembler.mc.MOVSD(home, src_reg)
+                else:
+                    assembler.mc.MOV(home, src_reg)
+
+            def _spill_cached_int():
+                box = cached_int[0]
+                cached_int[0] = None
+                if box is None:
+                    return
+                if last_use.get(box, -1) < current_op_index[0]:
+                    return
+                _store_box_to_home(box, eax, is_float=False)
+
+            def _spill_cached_xmm():
+                box = cached_xmm[0]
+                cached_xmm[0] = None
+                if box is None:
+                    return
+                if last_use.get(box, -1) < current_op_index[0]:
+                    return
+                _store_box_to_home(box, xmm0, is_float=True)
+
             def _load_int(box, reg=eax):
+                if reg is eax and cached_int[0] is box:
+                    return eax
+                if reg is eax:
+                    _spill_cached_int()
                 loc = _loc(box)
                 if loc is not reg:
                     assembler.mc.MOV(reg, loc)
                 return reg
 
             def _load_float(box, reg=xmm0):
+                if reg is xmm0 and cached_xmm[0] is box:
+                    return xmm0
+                if reg is xmm0:
+                    _spill_cached_xmm()
                 loc = _loc(box)
                 if loc is not reg:
                     assembler.mc.MOVSD(reg, loc)
                 return reg
+
+            def _publish_int_result(op, op_index):
+                box = op.result
+                if box is None:
+                    cached_int[0] = None
+                    return
+                lu = last_use.get(box, -1)
+                if lu <= op_index:
+                    cached_int[0] = None
+                    return
+                if lu == op_index + 1:
+                    cached_int[0] = box
+                    return
+                cached_int[0] = None
+                _store_box_to_home(box, eax, is_float=False)
+
+            def _publish_float_result(op, op_index):
+                box = op.result
+                if box is None:
+                    cached_xmm[0] = None
+                    return
+                lu = last_use.get(box, -1)
+                if lu <= op_index:
+                    cached_xmm[0] = None
+                    return
+                if lu == op_index + 1:
+                    cached_xmm[0] = box
+                    return
+                cached_xmm[0] = None
+                _store_box_to_home(box, xmm0, is_float=True)
+
+            def _release_dead_pool_regs(op_index):
+                dead = []
+                for box, home in box_loc.iteritems():
+                    if last_use.get(box, -1) > op_index:
+                        continue
+                    if not isinstance(home, RegLoc):
+                        continue
+                    if home.is_xmm:
+                        xmm_pool.append(home)
+                    else:
+                        int_pool.append(home)
+                    dead.append(box)
+                for box in dead:
+                    del box_loc[box]
 
             def _store_int(resloc, reg=eax):
                 if resloc is not reg:
@@ -247,7 +402,28 @@ class GenExtension(object):
                 if resloc is not reg:
                     assembler.mc.MOVSD(resloc, reg)
 
-            for op in operations:
+            def _flush_caches():
+                _spill_cached_int()
+                _spill_cached_xmm()
+
+            def _emit_overflow_guard(guard_op):
+                _flush_caches()
+                faildescr = guard_op.getdescr()
+                failargs = guard_op.getfailargs() or []
+                fail_locs = []
+                for fa in failargs:
+                    if fa is None:
+                        fail_locs.append(None)
+                    else:
+                        fail_locs.append(_loc(fa))
+                frame_depth = frame_pos[0] + JITFRAME_FIXED_SIZE
+                token = assembler.implement_guard_recovery(
+                    guard_op.getopnum(), faildescr, failargs,
+                    fail_locs, frame_depth)
+                assembler.implement_guard(token)
+
+            for op_index, op in enumerate(operations):
+                current_op_index[0] = op_index
                 opnum = op.getopnum()
                 if opnum == rop.LABEL:
                     mc = assembler.mc
@@ -260,6 +436,7 @@ class GenExtension(object):
                         op.getdescr()] = None
                     assembler.label()
                 elif opnum == rop.JUMP:
+                    _flush_caches()
                     label_op = operations[0]
                     assert label_op.getopnum() == rop.LABEL
                     label_args = label_op.getarglist()
@@ -274,16 +451,19 @@ class GenExtension(object):
                             else:
                                 assembler.mc.MOV(dst, src)
                     assembler.closing_jump(op.getdescr())
+                elif (opnum == rop.GUARD_NO_OVERFLOW or
+                        opnum == rop.GUARD_OVERFLOW):
+                    _emit_overflow_guard(op)
                 elif opnum == rop.INT_ADD:
                     arg0 = _load_int(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
                     assembler.genop_int_add(op, [arg0, arg1], arg0)
-                    _store_int(_loc(op.result), arg0)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.INT_SUB:
                     arg0 = _load_int(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
                     assembler.genop_int_sub(op, [arg0, arg1], arg0)
-                    _store_int(_loc(op.result), arg0)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.INT_MUL:
                     arg0 = _load_int(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
@@ -291,22 +471,40 @@ class GenExtension(object):
                         assembler.mc.MOV(ecx, arg1)
                         arg1 = ecx
                     assembler.genop_int_mul(op, [arg0, arg1], arg0)
-                    _store_int(_loc(op.result), arg0)
+                    _publish_int_result(op, op_index)
+                elif opnum == rop.INT_ADD_OVF:
+                    arg0 = _load_int(op.getarg(0))
+                    arg1 = _loc(op.getarg(1))
+                    assembler.genop_int_add_ovf(op, [arg0, arg1], arg0)
+                    _publish_int_result(op, op_index)
+                elif opnum == rop.INT_SUB_OVF:
+                    arg0 = _load_int(op.getarg(0))
+                    arg1 = _loc(op.getarg(1))
+                    assembler.genop_int_sub_ovf(op, [arg0, arg1], arg0)
+                    _publish_int_result(op, op_index)
+                elif opnum == rop.INT_MUL_OVF:
+                    arg0 = _load_int(op.getarg(0))
+                    arg1 = _loc(op.getarg(1))
+                    if isinstance(arg1, FrameLoc):
+                        assembler.mc.MOV(ecx, arg1)
+                        arg1 = ecx
+                    assembler.genop_int_mul_ovf(op, [arg0, arg1], arg0)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.INT_AND:
                     arg0 = _load_int(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
                     assembler.genop_int_and(op, [arg0, arg1], arg0)
-                    _store_int(_loc(op.result), arg0)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.INT_OR:
                     arg0 = _load_int(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
                     assembler.genop_int_or(op, [arg0, arg1], arg0)
-                    _store_int(_loc(op.result), arg0)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.INT_XOR:
                     arg0 = _load_int(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
                     assembler.genop_int_xor(op, [arg0, arg1], arg0)
-                    _store_int(_loc(op.result), arg0)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.INT_LSHIFT:
                     arg0 = _load_int(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
@@ -314,7 +512,7 @@ class GenExtension(object):
                         assembler.mc.MOV(ecx, arg1)
                         arg1 = ecx
                     assembler.mc.SHL(arg0, arg1)
-                    _store_int(_loc(op.result), arg0)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.INT_RSHIFT:
                     arg0 = _load_int(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
@@ -322,7 +520,7 @@ class GenExtension(object):
                         assembler.mc.MOV(ecx, arg1)
                         arg1 = ecx
                     assembler.mc.SAR(arg0, arg1)
-                    _store_int(_loc(op.result), arg0)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.UINT_RSHIFT:
                     arg0 = _load_int(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
@@ -330,24 +528,24 @@ class GenExtension(object):
                         assembler.mc.MOV(ecx, arg1)
                         arg1 = ecx
                     assembler.mc.SHR(arg0, arg1)
-                    _store_int(_loc(op.result), arg0)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.INT_NEG:
                     arg0 = _load_int(op.getarg(0))
                     assembler.genop_int_neg(op, [arg0], arg0)
-                    _store_int(_loc(op.result), arg0)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.INT_INVERT:
                     arg0 = _load_int(op.getarg(0))
                     assembler.genop_int_invert(op, [arg0], arg0)
-                    _store_int(_loc(op.result), arg0)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.INT_FORCE_GE_ZERO:
                     arg0 = _load_int(op.getarg(0))
                     assembler.genop_int_force_ge_zero(op, [arg0], arg0)
-                    _store_int(_loc(op.result), arg0)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.INT_SIGNEXT:
                     arg0 = _load_int(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
                     assembler.genop_int_signext(op, [arg0, arg1], arg0)
-                    _store_int(_loc(op.result), arg0)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.FLOAT_ADD:
                     arg0 = _load_float(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
@@ -358,7 +556,7 @@ class GenExtension(object):
                         raise CannotCompileGenExt(
                             "float constant in binary op")
                     assembler.genop_float_add(op, [arg0, arg1], arg0)
-                    _store_float(_loc(op.result), arg0)
+                    _publish_float_result(op, op_index)
                 elif opnum == rop.FLOAT_SUB:
                     arg0 = _load_float(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
@@ -369,7 +567,7 @@ class GenExtension(object):
                         raise CannotCompileGenExt(
                             "float constant in binary op")
                     assembler.genop_float_sub(op, [arg0, arg1], arg0)
-                    _store_float(_loc(op.result), arg0)
+                    _publish_float_result(op, op_index)
                 elif opnum == rop.FLOAT_MUL:
                     arg0 = _load_float(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
@@ -380,7 +578,7 @@ class GenExtension(object):
                         raise CannotCompileGenExt(
                             "float constant in binary op")
                     assembler.genop_float_mul(op, [arg0, arg1], arg0)
-                    _store_float(_loc(op.result), arg0)
+                    _publish_float_result(op, op_index)
                 elif opnum == rop.FLOAT_TRUEDIV:
                     arg0 = _load_float(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
@@ -391,26 +589,29 @@ class GenExtension(object):
                         raise CannotCompileGenExt(
                             "float constant in binary op")
                     assembler.genop_float_truediv(op, [arg0, arg1], arg0)
-                    _store_float(_loc(op.result), arg0)
+                    _publish_float_result(op, op_index)
                 elif opnum == rop.FLOAT_NEG:
                     arg0 = _load_float(op.getarg(0))
                     assembler.genop_float_neg(op, [arg0], arg0)
-                    _store_float(_loc(op.result), arg0)
+                    _publish_float_result(op, op_index)
                 elif opnum == rop.FLOAT_ABS:
                     arg0 = _load_float(op.getarg(0))
                     assembler.genop_float_abs(op, [arg0], arg0)
-                    _store_float(_loc(op.result), arg0)
+                    _publish_float_result(op, op_index)
                 elif opnum == rop.CAST_FLOAT_TO_INT:
                     arg0 = _load_float(op.getarg(0))
+                    _spill_cached_int()
                     assembler.genop_cast_float_to_int(op, [arg0], eax)
-                    _store_int(_loc(op.result), eax)
+                    _publish_int_result(op, op_index)
                 elif opnum == rop.CAST_INT_TO_FLOAT:
                     arg0 = _load_int(op.getarg(0))
+                    _spill_cached_xmm()
                     assembler.genop_cast_int_to_float(op, [arg0], xmm0)
-                    _store_float(_loc(op.result), xmm0)
+                    _publish_float_result(op, op_index)
                 else:
                     raise CannotCompileGenExt(
                         "unsupported op: %s" % op.getopname())
+                _release_dead_pool_regs(op_index)
 
             return frame_pos[0]
 

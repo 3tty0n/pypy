@@ -532,12 +532,9 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
             operations = self._inject_debugging_code(looptoken, operations,
                                                      'e', number)
 
-        # Check for a GenExtension-generated compile function (pure arithmetic
-        # fast path: no regalloc, no GC rewrite).
         genext_compile_fn = looptoken.genext_compile_function
         use_genext = False
         if genext_compile_fn is not None:
-            # genext path: reserve empty gc table, emit prologue, then body
             self.reserve_gcref_table([])
             functionpos = self.mc.get_relative_pos()
             self._call_header_with_stack_check()
@@ -555,6 +552,7 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
             self.update_frame_depth(
                 frame_depth_no_fixed_size + JITFRAME_FIXED_SIZE)
             size_excluding_failure_stuff = self.mc.get_relative_pos()
+            self.write_pending_failure_recoveries(None)
             full_size = self.mc.get_relative_pos()
         else:
             regalloc = RegAlloc(self, self.cpu.translate_support_code)
