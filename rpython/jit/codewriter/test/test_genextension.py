@@ -1,7 +1,7 @@
 import re
 
 from rpython.flowspace.model import Constant
-from rpython.jit.codewriter.jitcode import SwitchDictDescr
+from rpython.jit.codewriter.jitcode import JitCode, SwitchDictDescr
 from rpython.jit.codewriter.flatten import (
     SSARepr, Label, TLabel, Register, ListOfKind)
 from rpython.jit.codewriter.assembler import Assembler, AssemblerError
@@ -1524,6 +1524,31 @@ def test_assert_not_none():
 assert bool(i0)
 pc = 108
 continue"""
+
+def test_raise_disables_genextension(enable_genextension):
+    ssarepr = SSARepr("raise_test", genextension=True)
+    r0 = Register('ref', 0)
+    ssarepr.insns = [
+        ('raise', r0),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'ref': 1})
+    assert jitcode.genext_function is None
+    assert not hasattr(jitcode, '_genext_source')
+
+
+def test_inline_call_disables_genextension(enable_genextension):
+    ssarepr = SSARepr("inline_call_test", genextension=True)
+    i0, r0, i1 = Register('int', 0), Register('ref', 0), Register('int', 1)
+    callee = JitCode("callee")
+    ssarepr.insns = [
+        ('inline_call_ir_i', callee, ListOfKind('int', [i0]),
+         ListOfKind('ref', [r0]), '->', i1),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 2, 'ref': 1})
+    assert jitcode.genext_function is None
+    assert not hasattr(jitcode, '_genext_source')
 
 
 def test_float_add():
