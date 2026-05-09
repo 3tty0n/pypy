@@ -432,28 +432,28 @@ class Frame(object):
     def LT(self):
         w_y = self.pop()
         w_x = self.pop()
-        w_z = w_x.le(w_y)
+        w_z = w_x.lt(w_y)
         self.push(w_z)
 
     @enable_shallow_tracing
     def _LT(self):
         w_y = self._pop()
         w_x = self._pop()
-        w_z = w_x.le(w_y)
+        w_z = w_x.lt(w_y)
         self._push(w_z)
 
     @enable_shallow_tracing
     def GT(self):
         w_y = self.pop()
         w_x = self.pop()
-        w_z = w_x.ge(w_y)
+        w_z = w_x.gt(w_y)
         self.push(w_z)
 
     @enable_shallow_tracing
     def _GT(self):
         w_y = self._pop()
         w_x = self._pop()
-        w_z = w_x.ge(w_y)
+        w_z = w_x.gt(w_y)
         self._push(w_z)
 
     @enable_shallow_tracing
@@ -491,7 +491,8 @@ class Frame(object):
         if dummy:
             return
         w_x = self.interp(t)
-        oldframe.drop(argnum)
+        # copy_frame(argnum) copies argnum+1 slots (args plus DUPN duplicate).
+        oldframe.drop(argnum + 1)
         if w_x:
             oldframe.push(w_x)
 
@@ -501,7 +502,7 @@ class Frame(object):
         "Special handler to be compiled to call_assembler_r"
         w_x = self.interp_CALL_ASSEMBLER(t, t, bytecode,
                                          tstack, dummy)
-        oldframe.DROP(argnum)
+        oldframe.DROP(argnum + 1)
         if w_x:
             oldframe.PUSH(w_x)
 
@@ -510,7 +511,7 @@ class Frame(object):
         if dummy:
             return
         w_x = self._interp(t)
-        oldframe._drop(argnum)
+        oldframe._drop(argnum + 1)
         if w_x:
             oldframe._push(w_x)
 
@@ -765,19 +766,19 @@ class Frame(object):
             pc += 1
 
             if opcode == CONST_INT:
-                self._CONST_INT(pc)
+                self._CONST_INT(pc, False)
                 pc += 1
 
             elif opcode == CONST_NEG_INT:
-                self._CONST_INT(pc, neg=True)
+                self._CONST_INT(pc, True)
                 pc += 1
 
             elif opcode == CONST_FLOAT:
-                self._CONST_FLOAT(pc)
+                self._CONST_FLOAT(pc, False)
                 pc += 9
 
             elif opcode == CONST_NEG_FLOAT:
-                self._CONST_FLOAT(pc, neg=True)
+                self._CONST_FLOAT(pc, True)
                 pc += 9
 
             elif opcode == CONST_N:
@@ -929,6 +930,16 @@ class Frame(object):
 
                     tier2driver.can_enter_jit(bytecode=bytecode, pc=t, self=self)
 
+                pc = t
+
+            elif opcode == JUMP_N:
+                t = _construct_value(bytecode, pc)
+                pc += 4
+                if t < pc:
+                    if not we_are_jitted():
+                        if bytecode.counts[pc-1] < TRACE_THRESHOLD:
+                            raise ContinueInThreadedJIT(pc-1)
+                    tier2driver.can_enter_jit(bytecode=bytecode, pc=t, self=self)
                 pc = t
 
             elif opcode == JUMP_IF:
