@@ -2,9 +2,9 @@ import py
 from rpython.jit.tl.threadedcode.traverse_stack import *
 
 def test_t_empty():
-    assert t_is_empty(t_empty())
-    assert (not t_is_empty(TStack(2, TStack(3, None))))
-    assert (not t_is_empty(TStack(42, None)))
+    assert t_empty().t_is_empty()
+    assert (not TStack(2, TStack(3, None)).t_is_empty())
+    assert (not TStack(42, None).t_is_empty())
 
 def test_t_pop_and_t_push():
     tstack = t_empty()

@@ -127,7 +127,7 @@ class TestFrame:
     def test_simple_loop(self):
         code = [
             tla.DUP,
-            tla.CONST_INT, 1,
+            tla.CONST_INT, 2,
             tla.LT,
             tla.JUMP_IF, 11,
             tla.CONST_INT, 1,
@@ -144,7 +144,7 @@ class TestFrame:
             tla.CONST_INT, 1,
             tla.SUB,
             tla.DUP,
-            tla.CONST_INT, 1,
+            tla.CONST_INT, 2,
             tla.LT,
             tla.JUMP_IF, 12,
             tla.JUMP, 1,
@@ -153,7 +153,7 @@ class TestFrame:
             tla.SUB,
             tla.DUP,
             tla.DUP,
-            tla.CONST_INT, 1,
+            tla.CONST_INT, 2,
             tla.LT,
             tla.JUMP_IF, 25,
             tla.JUMP, 1,
@@ -204,7 +204,7 @@ class TestLLType(LLJitMixin):
         """Tier-1 interpreter (threaded driver + threaded_inline_handler on tier1driver)."""
         code = [
             tla.DUP,
-            tla.CONST_INT, 1,
+            tla.CONST_INT, 2,
             tla.LT,
             tla.JUMP_IF, 11,
             tla.CONST_INT, 1,
