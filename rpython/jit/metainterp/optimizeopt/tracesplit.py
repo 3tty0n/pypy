@@ -17,7 +17,9 @@ from rpython.jit.metainterp.optimizeopt.intutils import (
 from rpython.jit.metainterp.optimizeopt.bridgeopt import (
     deserialize_optimizer_knowledge)
 from rpython.jit.metainterp.optimizeopt.util import make_dispatcher_method
-from rpython.jit.metainterp.opencoder import Trace, TraceIterator
+from rpython.jit.metainterp.optimizeopt.threaded_codegen import (
+    peek_has_nested_threaded_marker_before_loop_end,
+    should_elide_void_handler_call)
 from rpython.jit.metainterp.resoperation import (
     rop, OpHelpers, ResOperation, InputArgRef, InputArgInt,
     InputArgFloat, InputArgVector, GuardResOp)
@@ -81,7 +83,15 @@ class OptTraceSplit(Optimizer):
         self.token = None
         self.token_map = {}
 
-        self.conditions = jitdriver_sd.jitdriver.conditions
+        jitdriver = jitdriver_sd.jitdriver
+        if jitdriver is None:
+            self.conditions = []
+            self._threaded_inline_handler = False
+        else:
+            self.conditions = jitdriver.conditions
+            self._threaded_inline_handler = jitdriver.threaded_inline_handler
+
+        self._inline_depth = 0
 
         self._already_setup_current_token = False
         self._pseudoops = []
@@ -154,7 +164,6 @@ class OptTraceSplit(Optimizer):
                 last_op = op
                 break
 
-            # shallow tracing: turn on flags
             if rop.is_call(opnum):
                 numargs = op.numargs()
                 lastarg = op.getarg(numargs - 1)
@@ -162,9 +171,20 @@ class OptTraceSplit(Optimizer):
                     op.setarg(numargs - 1, ConstInt(0))
 
             if rop.is_jit_emit_jump(opnum):
+                if (self._inline_depth > 0):
+                    self._handle_emit_jump(op)
+                    self._inline_depth = 0
+                    continue
+                if (self._threaded_inline_handler and
+                        not self._in_slow_path and
+                        peek_has_nested_threaded_marker_before_loop_end(trace)):
+                    self._inline_depth = 1
+                    continue
                 self._handle_emit_jump(op)
                 continue
             elif rop.is_jit_emit_ret(opnum):
+                if self._inline_depth > 0:
+                    self._inline_depth = 0
                 self._handle_emit_ret(op)
                 continue
             elif rop.is_begin_slow_path(opnum):
@@ -234,6 +254,7 @@ class OptTraceSplit(Optimizer):
         # accumulate counters
         if flush:
             self.flush()
+            self._inline_depth = 0
             if last_op:
                 self.send_extra_operation(last_op)
 
@@ -287,6 +308,8 @@ class OptTraceSplit(Optimizer):
             self._specialguardop.append(op)
             self.emit(op)
         elif startswith(name, "handler_"):
+            if should_elide_void_handler_call(self, op, name):
+                return
             self._handle_dummy_flag(op)
         else:
             self.emit(op)
@@ -298,6 +321,8 @@ class OptTraceSplit(Optimizer):
         if effectinfo.oopspecindex == EffectInfo.OS_JIT_CALL_ASSEMBLER:
             self._handle_call_assembler(op)
         elif startswith(name, "handler_"):
+            if should_elide_void_handler_call(self, op, name):
+                return
             self._handle_dummy_flag(op)
         else:
             self.emit(op)

@@ -20,7 +20,9 @@ from rpython.jit.metainterp.resoperation import (
     rop, ResOperation, InputArgInt, OpHelpers, InputArgRef)
 from rpython.jit.metainterp.support import ptr2int
 from rpython.jit.metainterp.optimizeopt.intdiv import magic_numbers
-from rpython.jit.metainterp.optimizeopt.tracesplit import OptTraceSplit, mark
+from rpython.jit.metainterp.optimizeopt.tracesplit import OptTraceSplit
+from rpython.jit.metainterp.optimizeopt.threaded_codegen import (
+    peek_has_nested_threaded_marker_before_loop_end)
 from rpython.jit.metainterp.test.test_resume import (
     ResumeDataFakeReader, MyMetaInterp)
 from rpython.jit.metainterp.optimizeopt.test import test_util, test_dependency
@@ -119,6 +121,11 @@ class FakeJitDriverSD(test_util.FakeJitDriverStaticData):
 class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
 
     enable_opts = "intbounds:rewrite:string:earlyforce:pure:heap"
+
+    @pytest.fixture(autouse=True)
+    def _tracesplit_jitdriver_sd(self, cls_attributes):
+        # After BaseTest.cls_attributes: replace bare FakeJitDriverStaticData.
+        self.jitdriver_sd = FakeJitDriverSD()
 
     cpu = runner.LLGraphCPU(None)
     Ptr = lltype.Ptr
@@ -579,3 +586,69 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         emit_jump_pos = [0, 6, 11]
         for i, key in enumerate(sorted(opt.token_map.keys())):
             assert key == emit_jump_pos[i]
+
+    def test_peek_nested_threaded_marker(self):
+        ops = """
+        [p0]
+        label(p0)
+        debug_merge_point(0, 0, 0, 0, '0: a')
+        jit_emit_jump(0, 6)
+        debug_merge_point(0, 0, 0, 6, '6: b')
+        call_n(ConstClass(func_ptr), p0, 1, descr=calldescr)
+        jump(p0)
+        """
+        loop = self.parse(ops)
+        jitcell_token = compile.make_jitcell_token(self.jitdriver_sd)
+        token = TargetToken(jitcell_token, original_jitcell_token=jitcell_token)
+        if loop.operations[-1].getopnum() == rop.JUMP:
+            loop.operations[-1].setdescr(token)
+        trace = convert_loop_to_trace(loop, self.metainterp_sd)
+        tr_it = trace.get_iter()
+        tr_it.next()  # label
+        assert peek_has_nested_threaded_marker_before_loop_end(tr_it)
+        tr_it2 = trace.get_iter()
+        while not tr_it2.done():
+            op = tr_it2.next()
+            if op.getopnum() == rop.JIT_EMIT_JUMP:
+                assert not peek_has_nested_threaded_marker_before_loop_end(tr_it2)
+                break
+
+    def test_trace_split_threaded_inline_merges_to_second_emit_jump(self):
+        setattr(self.metainterp_sd, "done_with_this_frame_descr_ref",
+                compile.DoneWithThisFrameDescrRef())
+        setattr(self.jitdriver_sd, "index", 0)
+        setattr(self.jitdriver_sd, "num_red_args", 1)
+        setattr(self.jitdriver_sd, "num_green_args", 3)
+        jd = FakeJitDriver()
+        jd.threaded_inline_handler = True
+        setattr(self.jitdriver_sd, "jitdriver", jd)
+
+        ops = """
+        [p0]
+        label(p0)
+        debug_merge_point(0, 0, 0, 0, '0: a')
+        call_n(ConstClass(func_ptr), p0, 1, 1, descr=calldescr)
+        jit_emit_jump(0, 6)
+        debug_merge_point(0, 0, 0, 6, '6: b')
+        call_n(ConstClass(func_ptr), p0, 2, 1, descr=calldescr)
+        jit_emit_jump(0, 10)
+        debug_merge_point(0, 0, 0, 10, '10: c')
+        jump(p0)
+        """
+
+        body = """
+        [p0]
+        debug_merge_point(0, 0, 0, 0, '0: a')
+        call_n(ConstClass(func_ptr), p0, 1, 0, descr=calldescr)
+        debug_merge_point(0, 0, 0, 6, '6: b')
+        call_n(ConstClass(func_ptr), p0, 2, 0, descr=calldescr)
+        jump(p0)
+        """
+
+        bridge = """
+        [p0]
+        debug_merge_point(0, 0, 0, 10, '10: c')
+        jump(p0)
+        """
+
+        self.assert_equal_split(ops, body, bridge)

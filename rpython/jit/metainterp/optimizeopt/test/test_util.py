@@ -473,6 +473,7 @@ class FakeWarmState(object):
 
 class FakeJitDriverStaticData(object):
     vec = False
+    jitdriver = None
     class warmstate:
         pureop_historylength = 16
 
