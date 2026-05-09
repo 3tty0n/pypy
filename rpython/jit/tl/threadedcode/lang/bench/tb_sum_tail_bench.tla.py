@@ -1,0 +1,37 @@
+# Microbench: tail-recursive sum 1..N via CALL_ASSEMBLER + FRAME_RESET + JUMP.
+# Stress: call_assembler, threaded handler splits, backward JUMP to entry.
+# CONST_N loads N = 1_000_000 (same as lang/sum-tail.tla.py).
+from rpython.jit.tl.threadedcode import tla
+
+code = [
+    tla.CONST_INT, 0,
+    tla.CONST_N, 0, 15, 66, 64,
+    tla.DUPN, 1,
+    tla.DUPN, 1,
+    tla.CALL_ASSEMBLER, 20, 2,
+    tla.DUP,
+    tla.PRINT,
+    tla.POP1,
+    tla.POP1,
+    tla.POP1,
+    tla.EXIT,
+    tla.DUPN, 1,
+    tla.CONST_INT, 1,
+    tla.GT,
+    tla.JUMP_IF, 31,
+    tla.DUPN, 2,
+    tla.JUMP, 53,
+    tla.DUPN, 2,
+    tla.DUPN, 2,
+    tla.ADD,
+    tla.DUPN, 2,
+    tla.CONST_INT, 1,
+    tla.SUB,
+    tla.DUPN, 1,
+    tla.DUPN, 1,
+    tla.FRAME_RESET, 2, 2, 2,
+    tla.JUMP, 20,
+    tla.POP1,
+    tla.POP1,
+    tla.RET, 2,
+]
