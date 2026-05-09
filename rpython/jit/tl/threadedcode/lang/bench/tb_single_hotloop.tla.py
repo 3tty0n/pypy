@@ -1,6 +1,5 @@
 # Microbench: minimal backward JUMP + JUMP_IF (tier-2 threaded merge).
 # Input: W_IntObject(n), n >= 0. Decrements until n == 0; returns 0.
-# Note: LT in this VM is implemented as x <= y; use EQ for a strict zero test.
 # Byte layout must match JUMP_IF / JUMP targets (byte PCs).
 from rpython.jit.tl.threadedcode import tla
 
