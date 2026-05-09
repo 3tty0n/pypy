@@ -18,13 +18,14 @@ def enable_shallow_tracing(func):
     @always_inline
     def call_handler(*args):
         """Add dummy flag, which is placed at the last argument, to shallow_handler.
-        When we_are_jitted returns True, add True to the dummy flag. Otherwise,
-        pass False to the flag.
+        When we_are_jitted and the frame has no inline budget, use shallow (dummy True).
+        Otherwise run the full handler (one-step-deeper inlining when budget > 0).
         """
-        if we_are_jitted():
+        frame = args[0]
+        if we_are_jitted() and frame.jit_inline_budget <= 0:
             shallow_hanlder(*args + (func, True,))
         else:
-            shallow_hanlder(*args + (None, False,))
+            shallow_hanlder(*args + (func, False,))
 
     return call_handler
 
@@ -50,10 +51,11 @@ def enable_shallow_tracing_argn(argn):
 
         @always_inline
         def call_handler(*args):
-            if we_are_jitted():
+            frame = args[0]
+            if we_are_jitted() and frame.jit_inline_budget <= 0:
                 return shallow_hanlder(*args + (func, True,))
             else:
-                return shallow_hanlder(*args + (None, False,))
+                return shallow_hanlder(*args + (func, False,))
 
         return call_handler
 
@@ -81,10 +83,11 @@ def enable_shallow_tracing_with_value(value):
 
         @always_inline
         def call_handler(*args):
-            if we_are_jitted():
+            frame = args[0]
+            if we_are_jitted() and frame.jit_inline_budget <= 0:
                 return shallow_hanlder(*args + (func, True,))
             else:
-                return shallow_hanlder(*args + (None, False,))
+                return shallow_hanlder(*args + (func, False,))
 
         return call_handler
 

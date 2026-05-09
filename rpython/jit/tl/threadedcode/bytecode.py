@@ -49,7 +49,10 @@ _bytecodes_has_args = [
     ('ABS_FLOAT', 1),
     ('SIN', 0),
     ('COS', 0),
-    ('SQRT', 0)
+    ('SQRT', 0),
+    ('CALL_H', 3),
+    ('CALL_ASSEMBLER_H', 3),
+    ('CALL_N_H', 6),
 ]
 
 for bytecode, has_arg in _bytecodes_has_args:
@@ -116,7 +119,12 @@ class Bytecode(object):
         return '\n'.join(lines)
 
 def assemble(mylist):
-    return ''.join([chr(x) for x in mylist])
+    parts = []
+    i = 0
+    while i < len(mylist):
+        parts.append(chr(mylist[i] & 0xFF))
+        i += 1
+    return ''.join(parts)
 
 
 def compile(file_name):

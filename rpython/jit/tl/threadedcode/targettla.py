@@ -36,6 +36,10 @@ def entry_point(args):
             tier = int(args[i+1])
             del args[i:i+2]
             continue
+        elif args[i] == "--tla-inline-depth":
+            tla.set_global_inline_cap(int(args[i + 1]))
+            del args[i:i+2]
+            continue
         i += 1
 
     filename = args[1]
