@@ -786,6 +786,18 @@ class LLGraphCPU(model.AbstractCPU):
         p = rffi.cast(rffi.CArrayPtr(lltype.Signed), addr)
         p[0] += 1
 
+    def bh_jit_emit_jump(self, jd_box, targetbox):
+        pass
+
+    def bh_jit_emit_ret(self, jd_box, returnbox):
+        pass
+
+    def bh_begin_slow_path(self):
+        pass
+
+    def bh_end_slow_path(self):
+        pass
+
     def unpack_arraydescr_size(self, arraydescr):
         from rpython.jit.backend.llsupport.symbolic import get_array_token
         from rpython.jit.backend.llsupport.descr import get_type_flag, FLAG_SIGNED
