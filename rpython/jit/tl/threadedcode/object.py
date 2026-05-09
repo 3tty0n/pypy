@@ -76,7 +76,13 @@ class W_IntObject(W_Object):
             raise OperationError
 
     def mod(self, w_other):
-        raise OperationError
+        if isinstance(w_other, W_IntObject):
+            if w_other.intvalue == 0:
+                raise OperationError
+            m = self.intvalue % w_other.intvalue
+            return W_IntObject(m)
+        else:
+            raise OperationError
 
     def eq(self, w_other):
         if isinstance(w_other, W_IntObject):
