@@ -8,15 +8,14 @@ INLINE_HINT_DEFAULT = 0
 INLINE_HINT_FORCE_SHALLOW = 1
 INLINE_HINT_ALLOW_DEEP_1 = 2
 
-_global_inline_cap = 0
+_global_inline_cap_holder = [0]
 _entry_inline_hints = {}
 
 def set_global_inline_cap(n):
-    global _global_inline_cap
-    _global_inline_cap = int(n)
+    _global_inline_cap_holder[0] = int(n)
 
 def get_global_inline_cap():
-    return _global_inline_cap
+    return _global_inline_cap_holder[0]
 
 def register_entry_inline_hint(entry_pc, value):
     _entry_inline_hints[int(entry_pc)] = int(value)

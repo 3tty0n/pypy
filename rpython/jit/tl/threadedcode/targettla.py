@@ -5,9 +5,16 @@ from rpython.rlib.rtime import time
 from rpython.rlib import jit
 from rpython.jit.tl.threadedcode import tla
 from rpython.jit.tl.threadedcode.bytecode import Bytecode
+from rpython.jit.tl.threadedcode.tl_pipeline import compile_string_from_source
 
 def entry_point(args):
-    usage = "Usage: %s filename x n" % (args[0],)
+    usage = (
+        "Usage: %s [options] file.tl x [n]\n"
+        "       %s [options] --raw-bytecode file.bin x [n]\n"
+        "  file.tl: TL source (see grammar.txt); compiled then run.\n"
+        "  --raw-bytecode: load pre-assembled bytecode (legacy).\n"
+        "  x: initial int on the operand stack; n: repeat count (default 100)."
+    ) % (args[0], args[0])
 
     if len(args) < 3:
         print usage
@@ -15,6 +22,7 @@ def entry_point(args):
 
     debug = False
     tier = 1
+    raw_bytecode = False
     i = 0
     while True:
         if not i < len(args):
@@ -40,6 +48,10 @@ def entry_point(args):
             tla.set_global_inline_cap(int(args[i + 1]))
             del args[i:i+2]
             continue
+        elif args[i] == "--raw-bytecode":
+            raw_bytecode = True
+            del args[i]
+            continue
         i += 1
 
     filename = args[1]
@@ -50,7 +62,7 @@ def entry_point(args):
         n = int(args[3])
 
     w_x = tla.W_IntObject(x)
-    bytecode = load_bytecode(filename)
+    bytecode = load_program(filename, raw_bytecode=raw_bytecode)
     w_res = tla.W_IntObject(0)
     for _ in range(n):
         n1 = time()
@@ -60,12 +72,15 @@ def entry_point(args):
     print w_res.getrepr()
     return 0
 
-def load_bytecode(filename):
+def load_program(filename, raw_bytecode=False):
     from rpython.rlib.streamio import open_file_as_stream
     f = open_file_as_stream(filename)
-    bytecode = f.readall()
+    data = f.readall()
     f.close()
-    return Bytecode(bytecode)
+    if raw_bytecode:
+        return Bytecode(data)
+    packed = compile_string_from_source(data)
+    return Bytecode(packed)
 
 def target(driver, args):
     return entry_point
