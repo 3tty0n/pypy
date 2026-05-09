@@ -628,7 +628,8 @@ class JitDriver(object):
                  can_never_inline=None, should_unroll_one_iteration=None,
                  name='jitdriver', check_untranslated=True, vectorize=False,
                  get_unique_id=None, is_recursive=False, get_location=None,
-                 threaded_code_gen=False, conditions=None):
+                 threaded_code_gen=False, threaded_inline_handler=False,
+                 conditions=None):
 
         """get_location:
               The return value is designed to provide enough information to express the
@@ -695,6 +696,10 @@ class JitDriver(object):
         self.is_recursive = is_recursive
         self.vec = vectorize
         self.threaded_code_gen = threaded_code_gen
+        self.threaded_inline_handler = threaded_inline_handler
+        if threaded_inline_handler:
+            assert threaded_code_gen, (
+                "threaded_inline_handler requires threaded_code_gen=True")
         if threaded_code_gen:
             assert conditions is not None, \
                 "in threaded code generation, must specify conditions e.g. \"_is_true, _is_false_object, etc.\""
@@ -1418,10 +1423,6 @@ def leave_portal_frame():
     from rpython.rtyper.lltypesystem import lltype
     from rpython.rtyper.lltypesystem.lloperation import llop
     llop.jit_leave_portal_frame(lltype.Void)
-
-# -----
-# For threaded code
-# -----
 
 def emit_jump(targetbox):
     from rpython.rtyper.lltypesystem import lltype
