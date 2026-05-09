@@ -75,3 +75,16 @@ class FunApp(Node):
     def __init__(self, callee, args):
         self.callee = callee
         self.args = args
+
+
+class If(Node):
+    def __init__(self, condition, then_expr, else_expr):
+        self.condition = condition
+        self.then_expr = then_expr
+        self.else_expr = else_expr
+
+
+class While(Node):
+    def __init__(self, cond_expr, body_expr):
+        self.cond_expr = cond_expr
+        self.body_expr = body_expr

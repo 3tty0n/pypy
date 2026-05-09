@@ -13,6 +13,8 @@ from rpython.jit.tl.threadedcode.tl_ast import (
     ArrayMake,
     ArrayLoad,
     ArrayStore,
+    If,
+    While,
 )
 
 currentdir = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +39,15 @@ class Transformer(object):
     def visit_expr(self, node):
         ch0 = node.children[0]
         ai = getattr(ch0, 'additional_info', None)
+        if ai == 'if':
+            return If(
+                self.visit_expr(node.children[1]),
+                self.visit_expr(node.children[3]),
+                self.visit_expr(node.children[5]))
+        if ai == 'while':
+            return While(
+                self.visit_simple_expr(node.children[1]),
+                self.visit_expr(node.children[3]))
         if ai == 'let':
             varname = node.children[1].additional_info
             rhs = self.visit_expr(node.children[3])
@@ -93,7 +104,7 @@ class Transformer(object):
             return self.visit_atom(children[0])
         if len(children) == 3:
             op = getattr(children[1], 'additional_info', None)
-            if op in ('+', '-', '<', '=='):
+            if op in ('+', '-', '<', '==', '*', '%', '>'):
                 return BinOp(
                     op,
                     self.visit_atom(children[0]),

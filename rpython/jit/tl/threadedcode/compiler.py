@@ -18,6 +18,8 @@ from rpython.jit.tl.threadedcode.tl_ast import (
     ArrayMake,
     ArrayLoad,
     ArrayStore,
+    If,
+    While,
 )
 
 NO_FUNC_ADDR = -1
@@ -109,6 +111,23 @@ class _Context(object):
         self.emit_opc_u8(bc.JUMP, 0)
         return len(self.code) - 1
 
+    def patch_be32_arg(self, pos, n):
+        self.code[pos] = (n >> 24) & 0xFF
+        self.code[pos + 1] = (n >> 16) & 0xFF
+        self.code[pos + 2] = (n >> 8) & 0xFF
+        self.code[pos + 3] = n & 0xFF
+
+    def emit_jump_if_n_placeholder(self):
+        self.emit_opc_be32(bc.JUMP_IF_N, 0)
+        return len(self.code) - 4
+
+    def emit_jump_n_placeholder(self):
+        self.emit_opc_be32(bc.JUMP_N, 0)
+        return len(self.code) - 4
+
+    def emit_jump_n(self, target_pc):
+        self.emit_opc_be32(bc.JUMP_N, target_pc)
+
     def patch_u8(self, pos, target):
         if target < 0:
             raise CompileError()
@@ -136,9 +155,47 @@ def compile_expr(node, ctx):
             ctx.emit_opc(bc.LT)
         elif op == '==':
             ctx.emit_opc(bc.EQ)
+        elif op == '*':
+            ctx.emit_opc(bc.MUL)
+        elif op == '%':
+            ctx.emit_opc(bc.MOD)
+        elif op == '>':
+            ctx.emit_opc(bc.GT)
         else:
             raise CompileError()
         ctx.note_binop()
+    elif isinstance(node, If):
+        depth_before = ctx.stack_top
+        compile_expr(node.condition, ctx)
+        ctx.stack_top -= 1
+        pos_jif = ctx.emit_jump_if_n_placeholder()
+        ctx.stack_top = depth_before
+        compile_expr(node.else_expr, ctx)
+        pos_skip_then = ctx.emit_jump_n_placeholder()
+        then_pc = ctx.here()
+        ctx.patch_be32_arg(pos_jif, then_pc)
+        ctx.stack_top = depth_before
+        compile_expr(node.then_expr, ctx)
+        end_pc = ctx.here()
+        ctx.patch_be32_arg(pos_skip_then, end_pc)
+        ctx.stack_top = depth_before + 1
+    elif isinstance(node, While):
+        depth_before = ctx.stack_top
+        top_pc = ctx.here()
+        compile_expr(node.cond_expr, ctx)
+        ctx.stack_top -= 1
+        pos_jif_body = ctx.emit_jump_if_n_placeholder()
+        pos_j_exit = ctx.emit_jump_n_placeholder()
+        body_pc = ctx.here()
+        ctx.patch_be32_arg(pos_jif_body, body_pc)
+        ctx.stack_top = depth_before
+        compile_expr(node.body_expr, ctx)
+        ctx.stack_top = depth_before
+        ctx.emit_jump_n(top_pc)
+        exit_pc = ctx.here()
+        ctx.patch_be32_arg(pos_j_exit, exit_pc)
+        ctx.emit_const_int(0)
+        ctx.stack_top = depth_before + 1
     elif isinstance(node, LetIn):
         compile_expr(node.rhs, ctx)
         slot = ctx.stack_top - 1

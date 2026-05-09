@@ -11,13 +11,18 @@ atom: DECIMAL | FLOAT | VARIABLE;
 simple_expr: "(" simple_expr ")"
              | atom "+" simple_expr
              | atom "-" simple_expr
+             | atom "*" simple_expr
+             | atom "%" simple_expr
+             | atom ">" simple_expr
              | atom "<" simple_expr
              | atom "==" simple_expr
              | array_store
              | array_load
              | atom;
 
-expr: "let" VARIABLE "=" expr "in" expr
+expr: "if" expr "then" expr "else" expr
+    | "while" simple_expr "do" expr
+    | "let" VARIABLE "=" expr "in" expr
     | "let rec" VARIABLE formal_args "=" expr ";;"
     | "Array.make" simple_expr simple_expr
     | simple_expr actual_args

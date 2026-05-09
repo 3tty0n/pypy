@@ -17,6 +17,8 @@ from rpython.jit.tl.threadedcode.tl_ast import (
     ArrayMake,
     ArrayLoad,
     ArrayStore,
+    If,
+    While,
 )
 
 
@@ -149,6 +151,14 @@ K_LETREC = 14
 K_IN = 15
 K_ARRAY_MAKE = 16
 K_ARROW = 17
+K_STAR = 18
+K_PERCENT = 19
+K_GT = 20
+K_IF = 21
+K_THEN = 22
+K_ELSE = 23
+K_WHILE = 24
+K_DO = 25
 
 
 class _Tok(object):
@@ -172,6 +182,18 @@ def tokenize(s):
         c = s[pos]
         if c == '(':
             toks.append(_Tok(K_LPAREN))
+            pos += 1
+            continue
+        if c == '*':
+            toks.append(_Tok(K_STAR))
+            pos += 1
+            continue
+        if c == '%':
+            toks.append(_Tok(K_PERCENT))
+            pos += 1
+            continue
+        if c == '>':
+            toks.append(_Tok(K_GT))
             pos += 1
             continue
         if c == ')':
@@ -227,6 +249,46 @@ def tokenize(s):
                 pass
             else:
                 toks.append(_Tok(K_LET))
+                pos = pos2
+                continue
+        if _starts_with(s, pos, 'if'):
+            pos2 = pos + 2
+            if pos2 < n and (_is_alpha(s[pos2]) or _is_digit(s[pos2])):
+                pass
+            else:
+                toks.append(_Tok(K_IF))
+                pos = pos2
+                continue
+        if _starts_with(s, pos, 'then'):
+            pos2 = pos + 4
+            if pos2 < n and (_is_alpha(s[pos2]) or _is_digit(s[pos2])):
+                pass
+            else:
+                toks.append(_Tok(K_THEN))
+                pos = pos2
+                continue
+        if _starts_with(s, pos, 'else'):
+            pos2 = pos + 4
+            if pos2 < n and (_is_alpha(s[pos2]) or _is_digit(s[pos2])):
+                pass
+            else:
+                toks.append(_Tok(K_ELSE))
+                pos = pos2
+                continue
+        if _starts_with(s, pos, 'while'):
+            pos2 = pos + 5
+            if pos2 < n and (_is_alpha(s[pos2]) or _is_digit(s[pos2])):
+                pass
+            else:
+                toks.append(_Tok(K_WHILE))
+                pos = pos2
+                continue
+        if _starts_with(s, pos, 'do'):
+            pos2 = pos + 2
+            if pos2 < n and (_is_alpha(s[pos2]) or _is_digit(s[pos2])):
+                pass
+            else:
+                toks.append(_Tok(K_DO))
                 pos = pos2
                 continue
         if _starts_with(s, pos, 'Array.make'):
@@ -307,6 +369,20 @@ class RParser(object):
 
     def parse_expr(self):
         t = self.peek()
+        if t.kind == K_IF:
+            self.expect(K_IF)
+            cnd = self.parse_expr()
+            self.expect(K_THEN)
+            thn = self.parse_expr()
+            self.expect(K_ELSE)
+            els = self.parse_expr()
+            return If(cnd, thn, els)
+        if t.kind == K_WHILE:
+            self.expect(K_WHILE)
+            cnd = self.parse_simple_expr()
+            self.expect(K_DO)
+            body = self.parse_expr()
+            return While(cnd, body)
         if t.kind == K_LET:
             self.expect(K_LET)
             nm = self.expect(K_NAME).name
@@ -347,6 +423,16 @@ class RParser(object):
             self.expect(K_RPAREN)
             return e
         left = self.parse_atom_expr()
+        while isinstance(left, Variable) and len(left.val) != 1 and self.peek().kind == K_LPAREN:
+            args = []
+            self.expect(K_LPAREN)
+            args.append(self.parse_simple_expr())
+            self.expect(K_RPAREN)
+            while self.peek().kind == K_LPAREN:
+                self.expect(K_LPAREN)
+                args.append(self.parse_simple_expr())
+                self.expect(K_RPAREN)
+            left = FunApp(left, args)
         t = self.peek()
         if t.kind == K_PLUS:
             self.expect(K_PLUS)
@@ -364,6 +450,18 @@ class RParser(object):
             self.expect(K_EQEQ)
             right = self.parse_simple_expr()
             return BinOp('==', left, right)
+        if t.kind == K_STAR:
+            self.expect(K_STAR)
+            right = self.parse_simple_expr()
+            return BinOp('*', left, right)
+        if t.kind == K_PERCENT:
+            self.expect(K_PERCENT)
+            right = self.parse_simple_expr()
+            return BinOp('%', left, right)
+        if t.kind == K_GT:
+            self.expect(K_GT)
+            right = self.parse_simple_expr()
+            return BinOp('>', left, right)
         return left
 
     def parse_atom_expr(self):

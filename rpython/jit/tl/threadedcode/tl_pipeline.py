@@ -4,7 +4,7 @@ Source -> bytecode -> TLA interpreter (tier-2 ``Frame._interp``).
 The lexer/parser in ``tl_rparse`` and ``compiler.compile_program`` are written
 for RPython; ``parser.parse`` (ebnf) is only for CPython tests / tooling.
 """
-from rpython.jit.tl.threadedcode.bytecode import assemble
+from rpython.jit.tl.threadedcode.bytecode import assemble, Bytecode
 from rpython.jit.tl.threadedcode.compiler import compile_program
 from rpython.jit.tl.threadedcode.tl_rparse import parse_program
 from rpython.jit.tl.threadedcode.tla import Frame
@@ -28,7 +28,7 @@ def compile_string_from_source(source):
 
 def interpret_source(source):
     """Run a program and return the ``W_Object`` left by ``EXIT``."""
-    bc = compile_string_from_source(source)
+    bc = Bytecode(compile_string_from_source(source))
     frame = Frame(bc)
     return frame._interp(0)
 
