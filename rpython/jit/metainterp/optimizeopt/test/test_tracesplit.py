@@ -110,6 +110,7 @@ class FakeMetaInterp(object):
 
 class FakeJitDriver(object):
     conditions = ["is_true"]
+    threaded_inline_handler = False
 
 class FakeJitDriverSD(test_util.FakeJitDriverStaticData):
     result_type = history.REF

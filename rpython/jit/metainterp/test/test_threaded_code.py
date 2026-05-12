@@ -407,5 +407,39 @@ class BasicTests:
             myjitdriver, code, save_state, restore_state, emit_jump, emit_ret)
         res = self.meta_interp(interp, [100])
 
+    def test_minilang_stack_inline_handler(self):
+        """Regression: ``threaded_inline_handler=True`` must compile and run a
+        loop with multiple per-bytecode handlers per trace block."""
+
+        @dont_look_inside
+        def emit_jump(x, y, z):
+            return x
+
+        @dont_look_inside
+        def emit_ret(x, y):
+            return x
+
+        def opcode_to_string(pc, entry_state, bytecode, tstack):
+            return "%s: %s, tstack top: %s" % (
+                pc, _tla_opcode_printable(pc, bytecode), tstack.pc)
+
+        myjitdriver = JitDriver(
+            greens=['pc', 'entry_state', 'bytecode', 'tstack'], reds=['frame'],
+            get_printable_location=opcode_to_string,
+            threaded_code_gen=True,
+            threaded_inline_handler=True,
+            conditions=['is_true'])
+
+        save_state, restore_state = _make_frame_snapshot_helpers(
+            ThreadedMiniLangFrame.size)
+
+        code = [
+            NOP, DUP, CONST_INT, 1, LT, JUMP_IF, 9, JUMP, 14, CONST_INT, 1, SUB,
+            JUMP, 1, EXIT]
+        interp = _make_threaded_stack_interp(
+            myjitdriver, code, save_state, restore_state, emit_jump, emit_ret)
+        res = self.meta_interp(interp, [100])
+
+
 class TestLLtype(BasicTests, LLJitMixin):
     pass
