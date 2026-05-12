@@ -190,6 +190,10 @@ def compile_expr(node, ctx):
         ctx.patch_be32_arg(pos_jif_body, body_pc)
         ctx.stack_top = depth_before
         compile_expr(node.body_expr, ctx)
+        # Body left exactly one value on the operand stack (compile_expr
+        # invariant: every expression pushes one). Drop it so the stack
+        # state at the loop top matches across iterations.
+        ctx.emit_opc(bc.POP)
         ctx.stack_top = depth_before
         ctx.emit_jump_n(top_pc)
         exit_pc = ctx.here()

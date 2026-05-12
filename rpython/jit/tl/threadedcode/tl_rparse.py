@@ -245,7 +245,7 @@ def tokenize(s):
                 continue
         if _starts_with(s, pos, 'let'):
             pos2 = pos + 3
-            if pos2 < n and _is_alpha(s[pos2]):
+            if pos2 < n and (_is_alpha(s[pos2]) or _is_digit(s[pos2])):
                 pass
             else:
                 toks.append(_Tok(K_LET))
@@ -339,6 +339,21 @@ def tokenize(s):
     return toks
 
 
+def _peel_funapp_rhs(node, args):
+    """If ``node`` is a right-leaning BinOp chain whose rightmost leaf is a
+    Variable, return a copy with that leaf replaced by ``FunApp(var, args)``.
+    Returns ``None`` otherwise (caller should signal a parse error).
+    """
+    if isinstance(node, Variable):
+        return FunApp(node, args)
+    if isinstance(node, BinOp):
+        new_right = _peel_funapp_rhs(node.right, args)
+        if new_right is None:
+            return None
+        return BinOp(node.op, node.left, new_right)
+    return None
+
+
 class RParser(object):
     def __init__(self, toks):
         self.toks = toks
@@ -414,7 +429,14 @@ class RParser(object):
             return se
         if isinstance(se, Variable):
             return FunApp(se, args)
-        raise ParseError()
+        # Right-recursive simple_expr may have parked the callee as the
+        # rightmost leaf of a BinOp chain (e.g. ``n + f (n - 1)`` parses with
+        # ``se = BinOp(+, n, f)`` and ``args = [n-1]``). Promote that leaf to
+        # a FunApp in place.
+        peeled = _peel_funapp_rhs(se, args)
+        if peeled is None:
+            raise ParseError()
+        return peeled
 
     def parse_simple_expr(self):
         if self.peek().kind == K_LPAREN:
@@ -423,16 +445,6 @@ class RParser(object):
             self.expect(K_RPAREN)
             return e
         left = self.parse_atom_expr()
-        while isinstance(left, Variable) and len(left.val) != 1 and self.peek().kind == K_LPAREN:
-            args = []
-            self.expect(K_LPAREN)
-            args.append(self.parse_simple_expr())
-            self.expect(K_RPAREN)
-            while self.peek().kind == K_LPAREN:
-                self.expect(K_LPAREN)
-                args.append(self.parse_simple_expr())
-                self.expect(K_RPAREN)
-            left = FunApp(left, args)
         t = self.peek()
         if t.kind == K_PLUS:
             self.expect(K_PLUS)

@@ -23,6 +23,20 @@ regexs, rules, ToAST = parse_ebnf(grammar)
 _parse = make_parse_function(regexs, rules, eof=True)
 
 
+def _peel_funapp_rhs(node, args):
+    """Same as ``tl_rparse._peel_funapp_rhs`` — kept local so this module is
+    self-contained for callers that import only ``parser``.
+    """
+    if isinstance(node, Variable):
+        return FunApp(node, args)
+    if isinstance(node, BinOp):
+        new_right = _peel_funapp_rhs(node.right, args)
+        if new_right is None:
+            return None
+        return BinOp(node.op, node.left, new_right)
+    return None
+
+
 class Transformer(object):
     def _grab_exprs(self, star):
         exprs = []
@@ -67,7 +81,12 @@ class Transformer(object):
         if len(node.children) == 2:
             callee = self.visit_simple_expr(ch0)
             args = self.visit_actual_args(node.children[1])
-            return FunApp(callee, args)
+            if isinstance(callee, Variable):
+                return FunApp(callee, args)
+            peeled = _peel_funapp_rhs(callee, args)
+            if peeled is None:
+                raise NotImplementedError(str(node))
+            return peeled
         raise NotImplementedError(str(node))
 
     def visit_simple_expr(self, node):
