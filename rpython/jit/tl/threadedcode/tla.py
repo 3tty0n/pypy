@@ -9,7 +9,9 @@ from rpython.rlib.rrandom import Random
 from rpython.jit.tl.threadedcode.hints import (
     enable_shallow_tracing,
     enable_shallow_tracing_argn,
-    enable_shallow_tracing_with_value
+    enable_shallow_tracing_with_value,
+    enable_deep_tracing,
+    enable_deep_tracing_with_value,
 )
 from rpython.jit.tl.threadedcode.inline_policy import (
     compute_child_inline_budget,
@@ -220,7 +222,7 @@ class Frame(object):
         w_x = self._pop()
         return w_x.is_true()
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def CONST_INT(self, pc):
         if isinstance(pc, int):
             x = ord(self.bytecode[pc])
@@ -228,7 +230,7 @@ class Frame(object):
         else:
             raise OperationError
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def CONST_INT_NEG(self, pc):
         if isinstance(pc, int):
             x = ord(self.bytecode[pc])
@@ -236,7 +238,7 @@ class Frame(object):
         else:
             raise OperationError
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _CONST_INT(self, pc, neg=False):
         if isinstance(pc, int):
             bytecode = jit.promote(self.bytecode)
@@ -248,7 +250,7 @@ class Frame(object):
         else:
             raise OperationError
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def CONST_FLOAT(self, pc, neg=False):
         if isinstance(pc, int):
             x = _construct_float(self.bytecode, pc)
@@ -256,7 +258,7 @@ class Frame(object):
         else:
             raise OperationError
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def CONST_FLOAT_NEG(self, pc):
         if isinstance(pc, int):
             x = _construct_float(self.bytecode, pc)
@@ -264,7 +266,7 @@ class Frame(object):
         else:
             raise OperationError
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _CONST_FLOAT(self, pc, neg=False):
         if isinstance(pc, int):
             bytecode = jit.promote(self.bytecode)
@@ -276,7 +278,7 @@ class Frame(object):
         else:
             raise OperationError
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def CONST_N(self, pc):
         if isinstance(pc, int):
             bytecode = jit.promote(self.bytecode)
@@ -285,7 +287,7 @@ class Frame(object):
         else:
             raise OperationError
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _CONST_N(self, pc):
         if isinstance(pc, int):
             bytecode = jit.promote(self.bytecode)
@@ -307,7 +309,7 @@ class Frame(object):
             return self.take(0)
         return self.pop()
 
-    @enable_shallow_tracing_with_value(W_Object())
+    @enable_deep_tracing_with_value(W_Object())
     def _POP(self):
         return self._pop()
 
@@ -321,154 +323,154 @@ class Frame(object):
         for _ in range(n):
             self._pop()
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def POP1(self):
         v = self.pop()
         _ = self.pop()
         self.push(v)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _POP1(self):
         v = self._pop()
         _ = self._pop()
         self._push(v)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def ADD(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.add(w_y)
         self.push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _ADD(self):
         w_y = self._pop()
         w_x = self._pop()
         w_z = w_x.add(w_y)
         self._push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def SUB(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.sub(w_y)
         self.push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _SUB(self):
         w_y = self._pop()
         w_x = self._pop()
         w_z = w_x.sub(w_y)
         self._push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def MUL(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.mul(w_y)
         self.push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _MUL(self):
         w_y = self._pop()
         w_x = self._pop()
         w_z = w_x.mul(w_y)
         self._push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def DIV(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.div(w_y)
         self.push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _DIV(self):
         w_y = self._pop()
         w_x = self._pop()
         w_z = w_x.div(w_y)
         self._push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def MOD(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.mod(w_y)
         self.push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _MOD(self):
         w_y = self._pop()
         w_x = self._pop()
         w_z = w_x.mod(w_y)
         self._push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def DUP(self):
         w_x = self.pop()
         self.push(w_x)
         self.push(w_x)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _DUP(self):
         w_x = self._pop()
         self._push(w_x)
         self._push(w_x)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def DUPN(self, pc):
         n = ord(self.bytecode[pc])
         w_x = self.take(n)
         self.push(w_x)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _DUPN(self, pc):
         bytecode = jit.promote(self.bytecode)
         n = ord(bytecode[pc])
         w_x = self._take(n)
         self._push(w_x)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def LT(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.lt(w_y)
         self.push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _LT(self):
         w_y = self._pop()
         w_x = self._pop()
         w_z = w_x.lt(w_y)
         self._push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def GT(self):
         w_y = self.pop()
         w_x = self.pop()
         w_z = w_x.gt(w_y)
         self.push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _GT(self):
         w_y = self._pop()
         w_x = self._pop()
         w_z = w_x.gt(w_y)
         self._push(w_z)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def EQ(self):
         w_y = self.pop()
         w_x = self.pop()
         self.push(w_x.eq(w_y))
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _EQ(self):
         w_y = self._pop()
         w_x = self._pop()
         self._push(w_x.eq(w_y))
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def NE(self):
         w_y = self.pop()
         w_x = self.pop()
@@ -477,7 +479,7 @@ class Frame(object):
         else:
             self.push(W_IntObject(0))
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _NE(self):
         w_y = self._pop()
         w_x = self._pop()
@@ -529,17 +531,17 @@ class Frame(object):
         v = self._pop()
         return v
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def PRINT(self):
         v = self.take(0)
         print v.getrepr()
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _PRINT(self):
         v = self._take(0)
         # print v.getrepr()
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def FRAME_RESET(self, o, l, n):
         ret = self.stack[self.stackpos - n - 1]
         old_base = self.stackpos - n
@@ -552,7 +554,7 @@ class Frame(object):
         self.stack[new_base + n] = ret
         self.stackpos = new_base + n + 1
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     @jit.unroll_safe
     def _FRAME_RESET(self, o, l, n):
         stackpos = jit.promote(self.stackpos)
@@ -567,7 +569,7 @@ class Frame(object):
         self.stack[new_base + n] = ret
         self.stackpos = new_base + n + 1
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def BUILD_LIST(self):
         size = self.pop()
         init = self.pop()
@@ -576,7 +578,7 @@ class Frame(object):
         lst = [init] * int(size.intvalue)
         self.push(W_ListObject(lst))
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _BUILD_LIST(self):
         size = self._pop()
         init = self._pop()
@@ -585,7 +587,7 @@ class Frame(object):
         lst = [init] * int(size.intvalue)
         self._push(W_ListObject(lst))
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def LOAD(self):
         w_index = self.pop()
         w_lst = self.pop()
@@ -597,7 +599,7 @@ class Frame(object):
         w_x = w_lst.listvalue[int(w_index.intvalue)]
         self.push(w_x)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _LOAD(self):
         w_index = self._pop()
         w_lst = self._pop()
@@ -608,7 +610,7 @@ class Frame(object):
         w_x = w_lst.listvalue[int(w_index.intvalue)]
         self._push(w_x)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def STORE(self):
         w_index = self.pop()
         w_lst = self.pop()
@@ -620,7 +622,7 @@ class Frame(object):
         w_lst.listvalue[int(w_index.intvalue)] = w_x
         self.push(w_lst)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _STORE(self):
         w_index = self._pop()
         w_lst = self._pop()
@@ -632,15 +634,15 @@ class Frame(object):
         w_lst.listvalue[int(w_index.intvalue)] = w_x
         self._push(w_lst)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def RAND_INT(self):
         raise NotImplementedError
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _RAND_INT(self):
         raise NotImplementedError
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def COS(self):
         w_x = self.pop()
         if isinstance(w_x, W_IntObject):
@@ -651,7 +653,7 @@ class Frame(object):
             raise OperationError
         self.push(w_c)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _COS(self):
         w_x = self._pop()
         if isinstance(w_x, W_IntObject):
@@ -662,7 +664,7 @@ class Frame(object):
             raise OperationError
         self._push(w_c)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def SIN(self):
         w_x = self.pop()
         if isinstance(w_x, W_IntObject):
@@ -673,7 +675,7 @@ class Frame(object):
             raise OperationError
         self.push(w_c)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _SIN(self):
         w_x = self._pop()
         if isinstance(w_x, W_IntObject):
@@ -684,7 +686,7 @@ class Frame(object):
             raise OperationError
         self._push(w_c)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def SQRT(self):
         w_x = self.pop()
         if isinstance(w_x, W_IntObject):
@@ -695,7 +697,7 @@ class Frame(object):
             raise OperationError
         self.push(w_x)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _SQRT(self):
         w_x = self._pop()
         if isinstance(w_x, W_IntObject):
@@ -706,41 +708,41 @@ class Frame(object):
             raise OperationError
         self._push(w_x)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def INT_TO_FLOAT(self):
         w_x = self.pop()
         if isinstance(w_x, W_IntObject):
             w_x = W_FloatObject(float(w_x.intvalue))
         self.push(w_x)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _INT_TO_FLOAT(self):
         w_x = self._pop()
         assert isinstance(w_x, W_IntObject)
         w_x = W_FloatObject(float(w_x.intvalue))
         self._push(w_x)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def FLOAT_TO_INT(self):
         w_x = self.pop()
         assert isinstance(w_x, W_FloatObject)
         w_x = W_IntObject(int(w_x.floatvalue))
         self.push(w_x)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _FLOAT_TO_INT(self):
         w_x = self._pop()
         assert isinstance(w_x, W_FloatObject)
         w_x = W_IntObject(int(w_x.floatvalue))
         self._push(w_x)
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def ABS_FLOAT(self):
         w_x = self.pop()
         assert isinstance(w_x, W_FloatObject)
         self.push(W_FloatObject(abs(w_x.floatvalue)))
 
-    @enable_shallow_tracing
+    @enable_deep_tracing
     def _ABS_FLOAT(self):
         w_x = self._pop()
         assert isinstance(w_x, W_FloatObject)

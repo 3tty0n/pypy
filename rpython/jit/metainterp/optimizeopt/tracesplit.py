@@ -18,8 +18,7 @@ from rpython.jit.metainterp.optimizeopt.bridgeopt import (
     deserialize_optimizer_knowledge)
 from rpython.jit.metainterp.optimizeopt.util import make_dispatcher_method
 from rpython.jit.metainterp.optimizeopt.threaded_codegen import (
-    peek_has_nested_threaded_marker_before_loop_end,
-    should_elide_void_handler_call)
+    peek_has_nested_threaded_marker_before_loop_end)
 from rpython.jit.metainterp.resoperation import (
     rop, OpHelpers, ResOperation, InputArgRef, InputArgInt,
     InputArgFloat, InputArgVector, GuardResOp)
@@ -308,8 +307,11 @@ class OptTraceSplit(Optimizer):
             self._specialguardop.append(op)
             self.emit(op)
         elif startswith(name, "handler_"):
-            if should_elide_void_handler_call(self, op, name):
-                return
+            # See ``_handle_dummy_flag`` — the rewrite is only safe when
+            # the shim signature still carries an explicit ``Ptr`` func
+            # arg. Emit the original residual handler_<name> call when
+            # it doesn't; correctness is unchanged (the shim's own
+            # ``dummy=False`` path runs the real handler).
             self._handle_dummy_flag(op)
         else:
             self.emit(op)
@@ -321,8 +323,6 @@ class OptTraceSplit(Optimizer):
         if effectinfo.oopspecindex == EffectInfo.OS_JIT_CALL_ASSEMBLER:
             self._handle_call_assembler(op)
         elif startswith(name, "handler_"):
-            if should_elide_void_handler_call(self, op, name):
-                return
             self._handle_dummy_flag(op)
         else:
             self.emit(op)
@@ -421,18 +421,47 @@ class OptTraceSplit(Optimizer):
         self.emit(newop)
 
     def _handle_dummy_flag(self, op):
+        """Rewrite a ``call_n(shim_X, frame, args..., func_ptr, dummy)``
+        op produced by ``@enable_shallow_tracing`` into a direct
+        ``call_n(func_ptr, frame, args...)`` op, skipping the shim
+        layer. The rewrite is only sound when the recorded shim
+        signature actually carries the ``func_ptr`` arg (so
+        ``CallDescr.get_calldescr_without_flag`` correctly drops both
+        ``func_ptr`` and ``dummy``). RPython sometimes elides the
+        unused ``func_ptr`` parameter from the specialised shim's
+        signature; in that case ``calldescr_without_flag`` is wrong
+        (it drops a real handler arg as if it were the func pointer)
+        and ``arglist[-2]`` is not the func pointer. We detect that by
+        checking whether the new descr exists AND the rewritten
+        first-arg slot is something the runtime can call (i.e. a
+        ``ConstInt`` address constant). If either condition fails we
+        leave the shim call as-is; the existing dummy=1 -> dummy=0
+        rewrite in ``propagate_all_forward`` still flips the trace-time
+        no-op shim into a real-call shim, so correctness is preserved.
+        """
         numargs = op.numargs()
-        opnum = op.getopnum()
-        arglist = op.getarglist()
+        if numargs < 2:
+            self.emit(op)
+            return
 
+        arglist = op.getarglist()
         newfunc = arglist[-2]
+
+        descr = op.getdescr()
+        newdescr = descr.get_calldescr_without_flag()
+
+        # If the func slot isn't a constant address we can't form a
+        # direct call op; the recorded shim signature must have elided
+        # the func arg.
+        if newdescr is None or not isinstance(newfunc, ConstInt):
+            self.emit(op)
+            return
+
+        opnum = op.getopnum()
         offset = numargs - 2
         assert offset >= 0
         newargs = arglist[:offset]
         newargs[0] = newfunc
-
-        descr = op.getdescr()
-        newdescr = descr.get_calldescr_without_flag()
 
         newop = op.copy_and_change(opnum, newargs, descr=newdescr)
         op.set_forwarded(newop)
@@ -465,7 +494,13 @@ class OptTraceSplit(Optimizer):
 
     def _get_name_from_op(self, op):
         arg0 = op.getarg(0)
-        assert isinstance(arg0, ConstInt)
+        # An indirect call (function-pointer arg is a runtime value rather
+        # than a hoisted ConstClass) cannot be matched by name; return "".
+        # All name-based dispatch paths in this file (handler_X rewrite,
+        # cond/marked-guard checks, in_fast_path detection) treat the
+        # empty name as "no match" and fall through to ``self.emit(op)``.
+        if not isinstance(arg0, ConstInt):
+            return ""
         adr = cast_int_to_adr(arg0.getint())
         return self.metainterp_sd.get_name_from_address(adr)
 
