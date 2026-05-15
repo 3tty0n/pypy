@@ -377,6 +377,137 @@ def max(space, __args__):
     """
     return min_max(space, __args__, "max")
 
+def get_printable_location_reduce(callable_greenkey, greenkey):
+    return "reduce [%s, %s]" % (
+            print_callable_greenkey(callable_greenkey),
+            greenkey.iterator_greenkey_printable())
+
+reduce_jitdriver = jit.JitDriver(name='reduce',
+        greens=['callable_greenkey', 'greenkey'], reds='auto',
+        get_printable_location=get_printable_location_reduce)
+
+
+def get_printable_location_filter(none_func, callable_greenkey, greenkey):
+    return "filter [none_func=%s, %s, %s]" % (
+            none_func, print_callable_greenkey(callable_greenkey),
+            greenkey.iterator_greenkey_printable())
+
+filter_jitdriver = jit.JitDriver(name='filter',
+        greens=['none_func', 'callable_greenkey', 'greenkey'], reds='auto',
+        get_printable_location=get_printable_location_filter)
+
+
+def filter(space, w_func, w_seq):
+    """filter(function or None, sequence) -> list, tuple, or string
+
+Return those items of sequence for which function(item) is true.  If
+function is None, return the items that are true.  If sequence is a tuple
+or string, return the same type, else return a list."""
+    none_func = space.is_none(w_func)
+    is_unicode = space.isinstance_w(w_seq, space.w_unicode)
+    is_bytes = (not is_unicode and
+                space.isinstance_w(w_seq, space.w_bytes))
+    if (none_func and is_bytes and
+            space.is_w(space.type(w_seq), space.w_bytes)):
+        return w_seq
+    if (none_func and is_unicode and
+            space.is_w(space.type(w_seq), space.w_unicode)):
+        return w_seq
+    is_tuple = space.isinstance_w(w_seq, space.w_tuple)
+    items_w = _filter_kept_items(space, w_func, w_seq, is_bytes, is_unicode)
+    if is_bytes:
+        chars = []
+        for w_item in items_w:
+            if not space.isinstance_w(w_item, space.w_bytes):
+                raise oefmt(space.w_TypeError,
+                            "__getitem__ returned a non-string type")
+            chars.append(space.bytes_w(w_item))
+        return space.newbytes(''.join(chars))
+    if is_unicode:
+        for w_item in items_w:
+            if not space.isinstance_w(w_item, space.w_unicode):
+                raise oefmt(space.w_TypeError,
+                            "__getitem__ returned a non-string type")
+        return space.call_method(space.newutf8('', 0), 'join',
+                                 space.newlist(items_w))
+    if is_tuple:
+        return space.newtuple(items_w[:])
+    return space.newlist(items_w)
+
+
+def _filter_kept_items(space, w_func, w_seq, is_bytes, is_unicode):
+    none_func = space.is_none(w_func)
+    w_iter = space.iter(w_seq)
+    greenkey = space.iterator_greenkey(w_iter)
+    if none_func:
+        callable_greenkey = None
+    else:
+        callable_greenkey = get_callable_greenkey(space, w_func)
+    items_w = []
+    while True:
+        filter_jitdriver.jit_merge_point(none_func=none_func,
+                                         callable_greenkey=callable_greenkey,
+                                         greenkey=greenkey)
+        try:
+            w_item = space.next(w_iter)
+        except OperationError as e:
+            if not e.match(space, space.w_StopIteration):
+                raise
+            break
+        if none_func:
+            keep = space.is_true(w_item)
+        else:
+            keep = space.is_true(space.call_function(w_func, w_item))
+        if keep:
+            items_w.append(w_item)
+    return items_w
+
+
+def reduce(space, __args__):
+    """reduce(function, sequence[, initial]) -> value
+
+Apply a function of two arguments cumulatively to the items of a sequence,
+from left to right, so as to reduce the sequence to a single value.
+For example, reduce(lambda x, y: x+y, [1, 2, 3, 4, 5]) calculates
+((((1+2)+3)+4)+5).  If initial is present, it is placed before the items
+of the sequence in the calculation, and serves as a default when the
+sequence is empty."""
+    if __args__.keywords:
+        raise oefmt(space.w_TypeError,
+                    "reduce() does not take keyword arguments")
+    args_w = __args__.arguments_w
+    if len(args_w) < 2 or len(args_w) > 3:
+        raise oefmt(space.w_TypeError,
+                    "reduce() takes 2 or 3 arguments (%d given)",
+                    len(args_w))
+    w_func = args_w[0]
+    w_seq = args_w[1]
+    w_iter = space.iter(w_seq)
+    greenkey = space.iterator_greenkey(w_iter)
+    callable_greenkey = get_callable_greenkey(space, w_func)
+    if len(args_w) == 3:
+        w_result = args_w[2]
+    else:
+        try:
+            w_result = space.next(w_iter)
+        except OperationError as e:
+            if not e.match(space, space.w_StopIteration):
+                raise
+            raise oefmt(space.w_TypeError,
+                        "reduce() of empty sequence with no initial value")
+    while True:
+        reduce_jitdriver.jit_merge_point(
+                callable_greenkey=callable_greenkey, greenkey=greenkey)
+        try:
+            w_item = space.next(w_iter)
+        except OperationError as e:
+            if not e.match(space, space.w_StopIteration):
+                raise
+            break
+        w_result = space.call_function(w_func, w_result, w_item)
+    return w_result
+
+
 def min(space, __args__):
     """min(iterable[, key=func]) -> value
     min(a, b, c, ...[, key=func]) -> value
