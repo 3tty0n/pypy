@@ -57,6 +57,13 @@ Usage:
       --jit-hbp enable_hot_bridge_promotion=1,enable_tracetree=1 \\
       --reps 10 -n 50
 
+  # Fast HBP-vs-baseline iteration loop (curated representative set;
+  # skips the multi-hour sympy_*/sqlalchemy_*/django tail):
+  bench_e2e.py --hbp --pypy ./pypy/goal/pypy-c --quick --reps 5 -n 30
+
+  # Or select by cost tier (small | medium | large; combinable):
+  bench_e2e.py --hbp --pypy ./pypy/goal/pypy-c --tier small,medium
+
   # Bench both standard build targets (baseline `pypy-c` then proposed
   # `pypy-jit-ext-c`) and print the head-to-head comparison:
   bench_e2e.py --all --reps 10 -n 50
@@ -79,6 +86,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -105,6 +113,7 @@ BENCHMARKS = [
     ("genshi_text",   "own/bm_genshi.py",                     {"PYTHONPATH": "lib/genshi"}, ["--benchmark=text"]),
     ("genshi_xml",    "own/bm_genshi.py",                     {"PYTHONPATH": "lib/genshi"}, ["--benchmark=xml"]),
     ("go",            "own/go.py",                            {}, []),
+    ("hof_mono",      "own/hof_mono.py",                      {}, []),
     ("html5lib",      "unladen_swallow/performance/bm_html5lib.py", {"PYTHONPATH": "unladen_swallow/lib/html5lib:lib"}, []),
     ("json_bench",    "own/json_bench.py",                    {}, []),
     ("meteor-contest","own/meteor-contest.py",                {}, []),
@@ -138,6 +147,75 @@ BENCHMARKS = [
     ("unpickle",      "unladen_swallow/performance/bm_pickle.py", {}, ["unpickle"]),
     ("unpickle_list", "unladen_swallow/performance/bm_pickle.py", {}, ["unpickle_list"]),
 ]
+
+
+# Cost tiers for benchmark-validation iteration speed. Classified by
+# steady-state cost/iter + warmup/trace weight (relative at a fixed -n):
+#   small  -- sub-~50ms/iter, tiny traces, ~instant steady state
+#             (smoke tier; cheapest HBP/TT-validation loop)
+#   medium -- tens-to-low-hundreds ms/iter, real trace trees + some
+#             bridge churn (where HBP/TraceTree effects show clearest)
+#   large  -- hundreds-of-ms+/iter or very long JIT warmup (big libs,
+#             megamorphic call sites); dominates a full run's wall time
+TIERS = {
+    "small": [
+        "hof_mono",
+        "deltablue", "float", "nqueens", "chaos", "fannkuch",
+        "spectral-norm", "richards", "nbody_modified", "pidigits",
+        "crypto_pyaes", "telco", "json_bench", "meteor-contest",
+        "pickle", "pickle_dict", "pickle_list", "unpickle",
+        "unpickle_list", "scimark_sor",
+    ],
+    "medium": [
+        "ai", "raytrace-simple", "pyflate-fast", "scimark_lu",
+        "scimark_fft", "scimark_sparsematmult", "bm_mdp", "eparse",
+        "genshi_text", "genshi_xml", "bm_chameleon",
+        "spitfire2", "spitfire_cstringio2", "sqlitesynth", "html5lib",
+        "bm_dulwich_log", "pyxl_bench",
+    ],
+    "large": [
+        "scimark_montecarlo", "django", "spambayes", "sympy_expand",
+        "sympy_integrate", "sympy_str", "sympy_sum",
+        "sqlalchemy_declarative", "sqlalchemy_imperative",
+        "bm_krakatau", "go", "bm_mako", "bm_mdp"
+    ],
+}
+
+# One representative per behavior family (numeric loop, AI search,
+# HOF-heavy raytracer, OO-dispatch, serialization, ...) at small/medium
+# cost -- the recommended fast HBP-vs-baseline iteration set; exercises
+# the HOF-monomorphism + TraceTree paths without the multi-hour
+# sympy_*/sqlalchemy_*/django tail.
+QUICK = [
+    "hof_mono",
+    "deltablue", "float", "go", "raytrace-simple", "richards",
+    "chaos", "json_bench", "scimark_lu", "spectral-norm",
+    "nbody_modified",
+]
+
+
+def _resolve_names(args):
+    """Pick the benchmark name list from the mutually-combinable
+    selectors, in precedence order: explicit --benchmarks > --quick >
+    --tier > all. --benchmarks always wins so an ad-hoc subset can
+    override a tier; order follows the BENCHMARKS list for stable runs."""
+    if getattr(args, "benchmarks", ""):
+        return [b.strip() for b in args.benchmarks.split(",") if b.strip()]
+    if getattr(args, "quick", False):
+        wanted = set(QUICK)
+    elif getattr(args, "tier", None):
+        wanted = set()
+        for t in args.tier.split(","):
+            t = t.strip()
+            if t and t not in TIERS:
+                sys.stderr.write("unknown --tier %r (choose from %s)\n"
+                                 % (t, ", ".join(sorted(TIERS))))
+                sys.exit(2)
+            if t:
+                wanted.update(TIERS[t])
+    else:
+        return [b[0] for b in BENCHMARKS]
+    return [b[0] for b in BENCHMARKS if b[0] in wanted]
 
 
 _FLOAT = r"[0-9]+(?:\.[0-9]+(?:[eE][+-]?[0-9]+)?)?"
@@ -368,8 +446,29 @@ def _caffeinated(cmd):
     return cmd
 
 
-def run_one(pypy, script, env_extra, extra_args, n, warmup_iters=10,
-            jit_off=False, prewarm=True, jit_params=None):
+def _kill_group(p):
+    """Hard-stop a timed-out child and everything it spawned. Tries a
+    graceful SIGTERM to the process group, then SIGKILL after a short
+    grace; falls back to killing just the child if the platform has no
+    process groups (or the group is already gone)."""
+    def _sig(sig):
+        try:
+            os.killpg(os.getpgid(p.pid), sig)
+        except (OSError, AttributeError):
+            try:
+                p.kill()
+            except OSError:
+                pass
+    _sig(signal.SIGTERM)
+    for _ in range(20):                 # up to ~2s grace
+        if p.poll() is not None:
+            return
+        time.sleep(0.1)
+    _sig(signal.SIGKILL)
+
+
+def run_one(pypy, script, env_extra, extra_args, n, warmup_iters=0,
+            jit_off=False, prewarm=False, jit_params=None, timeout=None):
     """Run a single (binary, benchmark) once. Returns dict of metrics.
 
     `jit_params`: optional comma-separated `--jit` parameter string
@@ -377,6 +476,15 @@ def run_one(pypy, script, env_extra, extra_args, n, warmup_iters=10,
     (and jit_off is False) it is passed verbatim as `--jit <params>`,
     so the SAME binary can be A/B'd under different JIT policies (the
     HBP-vs-baseline mode). Ignored when jit_off=True (`--jit off` wins).
+
+    `timeout`: optional per-spawn wall-clock cap in seconds (None/0 =
+    no cap). Large-tier benchmarks (django, sympy_*, scimark_montecarlo,
+    ...) can run for many minutes; without a cap one pathological spawn
+    wedges the whole matrix. On expiry the child's *process group* is
+    SIGTERM'd then SIGKILL'd and the run is recorded as a timeout error
+    (the matrix continues). Child stdout/stderr go to temp files, not
+    PIPEs, so a long/chatty large benchmark can never deadlock on a
+    full 64K pipe buffer mid-run.
 
     Stable-setting hygiene (S20): deterministic child env, caffeinate
     wrap, and one untimed pre-warm run (fs/code-cache) discarded before
@@ -403,30 +511,66 @@ def run_one(pypy, script, env_extra, extra_args, n, warmup_iters=10,
                 + [os.path.join(BENCH_DIR, script), "-n", str(n)]
                 + list(extra_args))
 
+    tmo = timeout if (timeout and timeout > 0) else None
+
     def _exec(capture_log):
         tmp = tempfile.NamedTemporaryFile(prefix="pypylog_e2e_",
                                           suffix=".txt", delete=False)
         tmp.close()
+        outf = tempfile.NamedTemporaryFile(prefix="pypyout_e2e_",
+                                           suffix=".txt", delete=False)
+        outf.close()
         e = dict(env)
         e["PYPYLOG"] = ("jit-summary:%s" % tmp.name) if capture_log else "-"
+
+        def _cleanup():
+            for pth in (tmp.name, outf.name):
+                try: os.unlink(pth)
+                except OSError: pass
+
         t0 = time.time()
+        ofh = open(outf.name, "wb")
         try:
+            # start_new_session: child gets its own process group so a
+            # timeout can kill the whole tree (incl. any caffeinate
+            # wrapper), not just the immediate child.
+            kw = {}
+            if hasattr(os, "setsid"):
+                kw["preexec_fn"] = os.setsid
             p = subprocess.Popen(_caffeinated(base_cmd),
-                                  stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE, env=e)
-            stdout, _ = p.communicate()
-            rc = p.returncode
+                                  stdout=ofh, stderr=subprocess.STDOUT,
+                                  env=e, **kw)
         except OSError as ex:
-            try: os.unlink(tmp.name)
-            except OSError: pass
+            ofh.close(); _cleanup()
             return None, None, None, ("OSError: %s" % ex)
-        wall = time.time() - t0
+        timed_out = False
         try:
+            if tmo is None:
+                p.wait()
+            else:
+                deadline = t0 + tmo
+                while True:
+                    if p.poll() is not None:
+                        break
+                    if time.time() >= deadline:
+                        timed_out = True
+                        _kill_group(p)
+                        p.wait()
+                        break
+                    time.sleep(0.5)
+        finally:
+            ofh.close()
+        wall = time.time() - t0
+        rc = p.returncode
+        try:
+            with open(outf.name, "rb") as f:
+                stdout = f.read()
             with open(tmp.name) as f:
                 logtxt = f.read()
         finally:
-            try: os.unlink(tmp.name)
-            except OSError: pass
+            _cleanup()
+        if timed_out:
+            return None, None, wall, ("timeout %.0fs" % tmo)
         if rc != 0:
             return None, None, wall, ("rc=%d" % rc)
         return stdout, logtxt, wall, None
@@ -584,9 +728,9 @@ def _thermal_guard(label, cooldown=8, max_wait=120):
         waited += cooldown
 
 
-def run_all_interleaved(base, cand, names, reps, n, warmup_iters=10,
-                        break_even=False, prewarm=True):
-    """S20 stable-setting comparison: for each (benchmark, rep) run the
+def run_all_interleaved(base, cand, names, reps, n, warmup_iters=0,
+                        break_even=False, prewarm=False):
+    """Stable-setting comparison: for each (benchmark, rep) run the
     BASELINE then the CANDIDATE back to back (A,B,A,B...), never
     all-A-then-all-B -- so slow thermal/DVFS drift hits both arms
     symmetrically instead of confounding the A/B delta. Serial only
@@ -641,37 +785,54 @@ def run_all_interleaved(base, cand, names, reps, n, warmup_iters=10,
 
 
 def run_hbp_interleaved(pypy, jit_base, jit_hbp, names, reps, n,
-                        warmup_iters=10, break_even=False, prewarm=True):
-    """S20 stable interleaved A/B of the SAME binary under two JIT
+                        warmup_iters=0, break_even=False, prewarm=False,
+                        timeout=None):
+    """Stable performance measurement of the SAME binary under two JIT
     policies: BASELINE (`jit_base`) vs HBP (`jit_hbp`).
 
     Identical to run_all_interleaved's drift-symmetric A,B,A,B schedule
     (so thermal/DVFS noise hits both policies equally), except the two
     arms differ only by their `--jit` parameter string, not by binary.
-    `jit_base` "" means stock JIT defaults (HBP off). Returns
+    `jit_base` "" means stock JIT defaults (HBP off).
+
+    Large-tier support: a per-spawn `timeout` (None = none) keeps one
+    pathological heavy benchmark from wedging the matrix. Every spawn
+    prints a timestamped heartbeat *before* it starts (incl. the
+    otherwise-silent untimed pre-warm), so a long heavy run is never
+    mistaken for a hang. Returns
     {"baseline": (raw, summary), "hbp": (raw, summary)}."""
     by_name = dict((b[0], b) for b in BENCHMARKS)
     valid = [nm for nm in names if nm in by_name]
     arms = (("baseline", jit_base), ("hbp", jit_hbp))
     sp = dict((lbl, dict((nm, []) for nm in valid)) for lbl, _ in arms)
+
+    def _hb(msg):
+        print("  [%s] %s" % (time.strftime("%H:%M:%S"), msg))
+        sys.stdout.flush()
+
     for nm in valid:
         _, script, env, extra = by_name[nm]
-        print("[%s] %d reps (interleaved baseline/hbp, same binary)" %
-              (nm, reps))
+        print("[%s] %d reps n=%d (interleaved baseline/hbp, same binary)"
+              % (nm, reps, n))
         sys.stdout.flush()
         be_cache = {}
         if break_even:
             # JIT-off curve is policy-independent -> measure once, reuse.
+            _hb("%s break-even (--jit off) starting%s" %
+                (nm, " [+prewarm]" if prewarm else ""))
             ro = run_one(pypy, script, env, extra, n, warmup_iters,
-                         jit_off=True, prewarm=prewarm)
+                         jit_off=True, prewarm=prewarm, timeout=timeout)
             be = ro.get("iter_times") if "error" not in ro else None
             for lbl, _ in arms:
                 be_cache[lbl] = be
         for i in range(reps):
             for lbl, jp in arms:
                 thr = _thermal_guard("%s/%s" % (nm, lbl))
+                _hb("%s rep %d %s starting%s" %
+                    (nm, i, lbl, " [+prewarm]" if prewarm else ""))
                 r = run_one(pypy, script, env, extra, n, warmup_iters,
-                            prewarm=prewarm, jit_params=(jp or None))
+                            prewarm=prewarm, jit_params=(jp or None),
+                            timeout=timeout)
                 if "error" in r:
                     print("  [%s] rep %d %-8s ERROR %s" %
                           (nm, i, lbl, r["error"]))
@@ -863,10 +1024,7 @@ def cmd_run_one(pypy, out_path, args):
     if not os.access(pypy, os.X_OK):
         sys.stderr.write("not executable: %s\n" % pypy)
         sys.exit(2)
-    if args.benchmarks:
-        names = [b.strip() for b in args.benchmarks.split(",") if b.strip()]
-    else:
-        names = [b[0] for b in BENCHMARKS]
+    names = _resolve_names(args)
     raw, summary = run_all(pypy, names, args.reps, args.n,
                            args.warmup_iters, jobs=args.jobs)
     out = {
@@ -890,22 +1048,19 @@ def cmd_run(args):
                                else "./pypy/goal/pypy-c")
         if not os.access(pypy, os.X_OK):
             sys.stderr.write("not executable: %s\n" % pypy); sys.exit(2)
-        if args.benchmarks:
-            names = [b.strip() for b in args.benchmarks.split(",")
-                     if b.strip()]
-        else:
-            names = [b[0] for b in BENCHMARKS]
-        print("\n%s\nS20 stable interleaved A/B (same binary, JIT policy):\n"
+        names = _resolve_names(args)
+        print("\n%s\nStable (same binary, JIT policy):\n"
               "  binary    = %s\n  baseline  = --jit %s\n  hbp       = "
               "--jit %s\nreps=%d n=%d break_even=%s prewarm=%s\n%s" %
               ("=" * 70, pypy, args.jit_baseline or "(stock defaults)",
                args.jit_hbp, args.reps, args.n, args.break_even,
-               not args.no_prewarm, "=" * 70))
+               not args.prewarm, "=" * 70))
         res = run_hbp_interleaved(pypy, args.jit_baseline, args.jit_hbp,
                                   names, args.reps, args.n,
                                   args.warmup_iters,
                                   break_even=args.break_even,
-                                  prewarm=not args.no_prewarm)
+                                  prewarm=args.prewarm,
+                                  timeout=args.timeout or None)
         out_paths = ["e2e_baseline.json", "e2e_hbp.json"]
         for lbl, op in (("baseline", out_paths[0]), ("hbp", out_paths[1])):
             raw, summary = res[lbl]
@@ -929,19 +1084,15 @@ def cmd_run(args):
         for p in (base, cand):
             if not os.access(p, os.X_OK):
                 sys.stderr.write("not executable: %s\n" % p); sys.exit(2)
-        if args.benchmarks:
-            names = [b.strip() for b in args.benchmarks.split(",")
-                     if b.strip()]
-        else:
-            names = [b[0] for b in BENCHMARKS]
-        print("\n%s\nS20 stable interleaved A/B: baseline=%s candidate=%s\n"
+        names = _resolve_names(args)
+        print("\n%s\nStable: baseline=%s candidate=%s\n"
               "reps=%d n=%d break_even=%s prewarm=%s\n%s" %
               ("=" * 70, base, cand, args.reps, args.n,
-               args.break_even, not args.no_prewarm, "=" * 70))
+               args.break_even, args.prewarm, "=" * 70))
         res = run_all_interleaved(base, cand, names, args.reps, args.n,
                                   args.warmup_iters,
                                   break_even=args.break_even,
-                                  prewarm=not args.no_prewarm)
+                                  prewarm=args.prewarm)
         out_paths = ["e2e_baseline.json", "e2e_proposed.json"]
         for who, op in ((base, out_paths[0]), (cand, out_paths[1])):
             raw, summary = res[who]
@@ -977,10 +1128,7 @@ def cmd_run(args):
                 sys.stderr.write("not executable: %s\n" % p)
                 sys.exit(2)
             pypys_abs.append(p)
-        if args.benchmarks:
-            names = [b.strip() for b in args.benchmarks.split(",") if b.strip()]
-        else:
-            names = [b[0] for b in BENCHMARKS]
+        names = _resolve_names(args)
         print("\n%s" % ("=" * 70))
         print("Bench %d binaries in parallel (--parallel-binaries)" %
               len(pypys_abs))
@@ -1119,17 +1267,12 @@ def _compare_two_paths(baseline_path, optim_path):
                     ds.append((b, d))
         return ds
 
-    # S20 PRIMARY metrics first (JIT-self-measured, low-noise):
-    _summarize("TRACING TIME (S20 primary)", deltas_trace, "tracing_med")
-    _summarize("OPTIMIZATION TIME (S20 primary)",
+    _summarize("TRACING TIME", deltas_trace, "tracing_med")
+    _summarize("OPTIMIZATION TIME",
                _deltas_for("optimization_med"), "optimization_med")
-    _summarize("BACKEND CODEGEN TIME (S20 primary)",
+    _summarize("BACKEND CODEGEN TIME",
                _deltas_for("backend_med"), "backend_med")
-    _summarize("JIT TOTAL (S20 primary)", deltas_jit_total, "jit_total_med")
-    # Structural counts (deterministic-ish drivers; +% = candidate has fewer):
-    for ck in ("loops_med", "bridges_med", "guards_med", "abort_total_med",
-               "slow_tracing_exec_med", "fast_tracing_exec_med"):
-        _summarize("COUNT " + ck, _deltas_for(ck), ck)
+    _summarize("JIT TOTAL", deltas_jit_total, "jit_total_med")
     # Warmup-class shift (how many benchmarks each VM gets to steady):
     from collections import Counter
     cb = Counter(base["summary"][b].get("warmup_class", "n/a") for b in common)
@@ -1188,7 +1331,8 @@ def main():
                           "defaults, HBP off)."))
     ap.add_argument("--jit-hbp",
                     default="enable_hot_bridge_promotion=1,"
-                            "enable_tracetree=1",
+                            "enable_tracetree=1,"
+                            "retrace_limit=1",
                     help=("--jit param string for the HBP arm of --hbp "
                           "mode (default: "
                           "enable_hot_bridge_promotion=1,"
@@ -1198,15 +1342,22 @@ def main():
                           "report the cumulative JIT-on-vs-interpreter "
                           "break-even iteration (S20 robust warmup scalar; "
                           "doubles run cost)."))
-    ap.add_argument("--no-prewarm", action="store_true",
-                    help=("skip the untimed pre-warm run before each "
-                          "measured run (S20 hygiene; default: prewarm on)."))
+    ap.add_argument("--prewarm", action="store_true",
+                    help=("do the untimed pre-warm run before each "
+                          "measured run (default: prewarm off)."))
     ap.add_argument("--reps", type=int, default=10,
                     help="reps per (binary, benchmark) (default: 10)")
     ap.add_argument("-n", type=int, default=60,
                     help="-n value passed to each benchmark (default: 60)")
-    ap.add_argument("--warmup-iters", type=int, default=30,
-                    help="iterations to drop as warmup (default: 50)")
+    ap.add_argument("--warmup-iters", type=int, default=0,
+                    help="iterations to drop as warmup (default: 0)")
+    ap.add_argument("--timeout", type=int, default=0,
+                    help=("per-spawn wall-clock cap in seconds (0 = none, "
+                          "default). Large-tier benchmarks can run for "
+                          "many minutes; a cap stops one pathological "
+                          "spawn from wedging the whole matrix -- it is "
+                          "recorded as a timeout error and the run "
+                          "continues. (--hbp mode.)"))
     ap.add_argument("--jobs", "-j", type=int, default=1,
                     help=("run benchmark processes in parallel with N "
                           "workers (default: 1 = sequential).  N>1 "
@@ -1224,7 +1375,16 @@ def main():
                                    "binaries, treated as a prefix and each "
                                    "binary writes <prefix>_<name>.json"))
     ap.add_argument("--benchmarks", default="",
-                    help="comma-separated subset (default: all in list)")
+                    help="comma-separated subset (default: all in list); "
+                         "overrides --quick / --tier when given")
+    ap.add_argument("--tier", default="",
+                    help="run only the given cost tier(s): comma-separated "
+                         "subset of {small,medium,large} (e.g. "
+                         "--tier small,medium). See TIERS in this file.")
+    ap.add_argument("--quick", action="store_true",
+                    help="run the curated fast HBP-vs-baseline iteration "
+                         "set (one representative per behavior family, "
+                         "small/medium cost; see QUICK in this file).")
     ap.add_argument("--compare", nargs=2, metavar=("BASE", "OPT"),
                     help="compare two JSON outputs already on disk")
     args = ap.parse_args()
@@ -1242,6 +1402,4 @@ def main():
         ap.error("--jobs must be >= 0")
     return cmd_run(args)
 
-
-if __name__ == "__main__":
-    main()
+main()
