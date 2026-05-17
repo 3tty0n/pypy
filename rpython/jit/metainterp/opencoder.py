@@ -711,6 +711,26 @@ class Trace(BaseTrace):
         self._op_end(opnum, descr, old_pos)
         return pos
 
+    # ------------------------------------------------------------------
+    # Position-only recording: take raw trace positions of the argument
+    # boxes directly, skipping _encode() and its isinstance/dispatch
+    # overhead. Used by GenExtension code paths that maintain unboxed
+    # positions in locals instead of allocating FrontendOp boxes.
+    def record_op1_by_position(self, opnum, pos1, descr=None):
+        pos = self._index
+        old_pos = self._op_start(opnum, 1)
+        self.append_int(tag(TAGBOX, pos1))
+        self._op_end(opnum, descr, old_pos)
+        return pos
+
+    def record_op2_by_position(self, opnum, pos1, pos2, descr=None):
+        pos = self._index
+        old_pos = self._op_start(opnum, 2)
+        self.append_int(tag(TAGBOX, pos1))
+        self.append_int(tag(TAGBOX, pos2))
+        self._op_end(opnum, descr, old_pos)
+        return pos
+
     def _encode_descr(self, descr):
         descr_index = descr.get_descr_index()
         if descr_index != -1:

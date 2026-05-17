@@ -28,6 +28,125 @@ def giveup():
     from rpython.jit.metainterp.pyjitpl import SwitchToBlackhole
     raise SwitchToBlackhole(Counters.ABORT_BRIDGE)
 
+
+class CannotSpecializePure(Exception):
+    """Raised when a trace cannot use the pure arithmetic fast path."""
+    pass
+
+
+def _is_pure_arithmetic_trace_op(opnum):
+    """Return True if opnum is valid in a pure arithmetic loop trace.
+
+    Accepts LABEL, JUMP, and always-pure int/float operations that
+    operate only on integer or float values (no GC references).
+    """
+    if opnum == rop.LABEL or opnum == rop.JUMP:
+        return True
+    if not rop.is_always_pure(opnum):
+        return False
+    # Exclude operations that touch GC pointers
+    if opnum in (rop.PTR_EQ, rop.PTR_NE,
+                 rop.INSTANCE_PTR_EQ, rop.INSTANCE_PTR_NE,
+                 rop.CAST_PTR_TO_INT, rop.CAST_INT_TO_PTR,
+                 rop.NURSERY_PTR_INCREMENT,
+                 rop.SAME_AS_R):
+        return False
+    # Exclude heap-reading pure ops
+    if opnum in (rop.ARRAYLEN_GC, rop.STRLEN, rop.STRGETITEM,
+                 rop.GETARRAYITEM_GC_PURE_I, rop.GETARRAYITEM_GC_PURE_F,
+                 rop.GETARRAYITEM_GC_PURE_R,
+                 rop.UNICODELEN, rop.UNICODEGETITEM,
+                 rop.LOAD_FROM_GC_TABLE):
+        return False
+    return True
+
+
+def compile_pure_arithmetic_loop(metainterp, greenkey, trace, runtime_args,
+                                 cut_at):
+    """Try to compile a pure-arithmetic loop without the optimizer.
+
+    For loops whose trace contains only pure int/float arithmetic (no
+    guards, no heap accesses, no calls, no GC references), skip all
+    optimizer passes and send the trace directly to the backend.
+
+    Returns a TargetToken on success, or None to fall back to the normal
+    optimizer path.
+
+    Why this works
+    --------------
+    The 7-pass optimizer (intbounds, heap, virtualstate, unroll, ...) is
+    designed for traces that have guards, heap operations, and virtual
+    objects. For pure arithmetic loops it is pure overhead: no guards to
+    eliminate, no virtuals to escape, no heap cache to maintain. Skipping
+    it reduces JIT compile time for this common case.
+
+    The GenExtension connection: at JitCode assembly time,
+    _classify_pure_arithmetic() already determined whether the portal's
+    jitcode is pure arithmetic. Here we confirm it at the trace level
+    (the trace is what actually reaches the backend) and attach the
+    genext_compile_function to the token for the backend's fast path.
+    """
+    jitdriver_sd = metainterp.jitdriver_sd
+    metainterp_sd = metainterp.staticdata
+
+    traceiter = trace.get_iter()
+    inputargs = traceiter.inputargs
+
+    # Reject if any input is a GC reference
+    for arg in inputargs:
+        if arg.type == 'r':
+            return None
+
+    # Walk the trace and confirm every operation is pure arithmetic
+    ops = []
+    while not traceiter.done():
+        op = traceiter.next()
+        if not _is_pure_arithmetic_trace_op(op.getopnum()):
+            return None
+        if op.type == 'r':
+            return None
+        ops.append(op)
+
+    if not ops:
+        return None
+    # Last operation must be JUMP (a loop-closing back-edge)
+    if ops[-1].getopnum() != rop.JUMP:
+        return None
+
+    # Look up the GenExtension compile function from the portal jitcode.
+    # This was generated at translation time by _generate_compile_function()
+    # for pure arithmetic jitcodes.
+    portal_jitcode = jitdriver_sd.mainjitcode
+    genext_compile_fn = None
+    if portal_jitcode is not None and portal_jitcode.genext_is_pure_arithmetic:
+        genext_compile_fn = portal_jitcode.genext_compile_function
+
+    # Build the TreeLoop directly, bypassing SimpleCompileData.optimize_trace
+    jitcell_token = make_jitcell_token(jitdriver_sd)
+    jitcell_token.genext_compile_function = genext_compile_fn
+
+    loop = create_empty_loop(metainterp)
+    loop.original_jitcell_token = jitcell_token
+    loop.inputargs = inputargs
+
+    target_token = TargetToken(jitcell_token)
+    target_token.original_jitcell_token = jitcell_token
+
+    label = ResOperation(rop.LABEL, inputargs[:], descr=target_token)
+    ops[-1].setdescr(target_token)   # JUMP target -> this loop's label
+    loop.operations = [label] + ops
+
+    if not we_are_translated():
+        loop.check_consistency()
+
+    jitcell_token.target_tokens = [target_token]
+
+    send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, loop, "loop",
+                         runtime_args, metainterp.box_names_memo)
+    record_loop_or_bridge(metainterp_sd, loop)
+    return target_token
+
+
 class CompileData(object):
     """ An object that accumulates all of the necessary info for
     the optimization phase, but does not actually have any other state
@@ -217,6 +336,11 @@ def record_loop_or_bridge(metainterp_sd, loop):
 
 def compile_simple_loop(metainterp, greenkey, trace, runtime_args, enable_opts,
                         cut_at, patch_jumpop_at_end=True):
+    # Fast path: pure arithmetic loops skip all optimizer passes
+    result = compile_pure_arithmetic_loop(
+        metainterp, greenkey, trace, runtime_args, cut_at)
+    if result is not None:
+        return result
     jitdriver_sd = metainterp.jitdriver_sd
     metainterp_sd = metainterp.staticdata
     jitcell_token = make_jitcell_token(jitdriver_sd)

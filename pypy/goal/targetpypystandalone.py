@@ -242,16 +242,23 @@ class PyPyTarget(object):
         return pypy_optiondescription
 
     def target(self, driver, args):
-        driver.exe_name = 'pypy-jit-ext-%(backend)s'
-        exe_name = os.getenv('PYPY_EXE_NAME')
-        if exe_name:
-            driver.exe_name = exe_name + '-%(backend)s'
-        print('exe_name:', driver.exe_name)
-
         config = driver.config
         parser = self.opt_parser(config)
 
         parser.parse_args(args)
+
+        # Pick exe_name based on the genextension flag so `--no-gen-extension`
+        # produces `pypy-c` and the default produces `pypy-jit-ext-c`. Both
+        # can coexist in pypy/goal/ and be compared head-to-head from the same
+        # source tree. $PYPY_EXE_NAME still overrides if set.
+        env_name = os.getenv('PYPY_EXE_NAME')
+        if env_name:
+            driver.exe_name = env_name + '-%(backend)s'
+        elif config.translation.genextension:
+            driver.exe_name = 'pypy-jit-ext-%(backend)s'
+        else:
+            driver.exe_name = 'pypy-%(backend)s'
+        print('exe_name:', driver.exe_name)
 
         # expose the following variables to ease debugging
         global space, entry_point
