@@ -293,6 +293,39 @@ class AbstractAarch64Builder(object):
         base = 0b0001111001100001110000
         self.write32((base << 10) | (rn << 5) | rd)
 
+    # NEON Advanced-SIMD, 2x float64 (.2D); see test/test_neon_encoding.py
+    def FADD_2d(self, rd, rn, rm):
+        # FADD Vd.2D, Vn.2D, Vm.2D
+        self.write32(0x4E60D400 | (rm << 16) | (rn << 5) | rd)
+
+    def FMUL_2d(self, rd, rn, rm):
+        # FMUL Vd.2D, Vn.2D, Vm.2D
+        self.write32(0x6E60DC00 | (rm << 16) | (rn << 5) | rd)
+
+    def LD1_2d(self, rt, rn):
+        # LD1 {Vt.2D}, [Xn]
+        self.write32(0x4C407C00 | (rn << 5) | rt)
+
+    def ST1_2d(self, rt, rn):
+        # ST1 {Vt.2D}, [Xn]
+        self.write32(0x4C007C00 | (rn << 5) | rt)
+
+    def DUP_2d(self, rd, rn):
+        # DUP Vd.2D, Vn.D[0]  (broadcast lane 0 to both lanes)
+        self.write32(0x4E080400 | (rn << 5) | rd)
+
+    def DUP_d(self, rd, rn, sidx):
+        # DUP Dd, Vn.D[sidx]  (extract one .2D lane into a scalar d-reg)
+        imm5 = (sidx << 4) | 0b01000
+        self.write32(0x5E000400 | (imm5 << 16) | (rn << 5) | rd)
+
+    def INS_d(self, rd, rn, didx, sidx):
+        # INS Vd.D[didx], Vn.D[sidx]  (move one .2D lane into a lane of Vd)
+        imm5 = (didx << 4) | 0b01000
+        imm4 = sidx << 3
+        self.write32(0x6E000400 | (imm5 << 16) | (imm4 << 11)
+                     | (rn << 5) | rd)
+
     def SUB_rr(self, rd, rn, rm, s=0):
         base = 0b11001011001 | (s << 8)
         self.write32((base << 21) | (rm << 16) | (0b11 << 13) | (rn << 5) | (rd))

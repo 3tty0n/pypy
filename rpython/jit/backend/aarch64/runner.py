@@ -6,6 +6,7 @@ from rpython.jit.backend.aarch64 import registers as r
 from rpython.jit.backend.aarch64.regalloc import VFPRegisterManager
 from rpython.jit.backend.llsupport.llmodel import AbstractLLCPU
 from rpython.jit.backend.aarch64.codebuilder import InstrBuilder
+from rpython.jit.backend.aarch64.vector_ext import Aarch64VectorExt
 
 class CPU_ARM64(AbstractLLCPU):
     """ARM 64"""
@@ -16,6 +17,7 @@ class CPU_ARM64(AbstractLLCPU):
     float_regs = VFPRegisterManager.all_regs
     supports_floats = True
     HAS_CODEMAP = True
+    vector_ext = Aarch64VectorExt()
 
     from rpython.jit.backend.aarch64.arch import JITFRAME_FIXED_SIZE
 
@@ -31,6 +33,7 @@ class CPU_ARM64(AbstractLLCPU):
 
     def setup_once(self):
         self.assembler.setup_once()
+        self.vector_ext.setup_once(self.assembler)
         if self.HAS_CODEMAP:
             self.codemap.setup()
 

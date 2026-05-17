@@ -190,14 +190,46 @@ class GenExtension(object):
                 code_and_spec_per_pc[pc] = (str(py.code.Source("\n".join(self.code)).deindent()), spec)
         self.code = []
         allconsts = set()
+        entries = []
         for pc, (code, spec) in code_and_spec_per_pc.iteritems():
             allconsts.update(spec.constant_registers)
-            self.code.append("if pc == %s: # %s %s" % (pc, spec.insn, spec.constant_registers))
-            #self.code.append("    import pdb;pdb.set_trace()")
-            self.code.append("    self.pc = %s" % (self.pc_to_nextpc[spec.orig_pc], ))
+            entries.append((pc, code, spec))
+        entries.sort(key=lambda e: e[0])
+
+        def _emit_block(pc, code, spec, ind):
+            p = "    " * ind
+            self.code.append("%sif pc == %s: # %s %s"
+                             % (p, pc, spec.insn, spec.constant_registers))
+            self.code.append("%s    self.pc = %s"
+                             % (p, self.pc_to_nextpc[spec.orig_pc]))
             for line in str(py.code.Source(code).indent('    ')).splitlines():
-                self.code.append(line)
-        self.code.append("assert 0 # unreachable")
+                self.code.append(p + line)
+            self.code.append("%selse:" % p)
+            self.code.append("%s    assert 0 # unreachable" % p)
+
+        def _emit_bst(lo, hi, ind):
+            # Balanced binary search over entries[lo:hi] sorted by pc:
+            # O(log M) integer compares per traced step instead of the
+            # flat O(M) linear if-chain that made the generated tracer
+            # lose to the generic O(1) tracer on large jitcodes. The
+            # per-pc block bodies and their semantics are unchanged --
+            # this only restructures which block is selected.
+            p = "    " * ind
+            if hi - lo == 1:
+                _emit_block(entries[lo][0], entries[lo][1],
+                            entries[lo][2], ind)
+                return
+            mid = (lo + hi) // 2
+            pivot = entries[mid][0]
+            self.code.append("%sif pc < %s:" % (p, pivot))
+            _emit_bst(lo, mid, ind + 1)
+            self.code.append("%selse:" % p)
+            _emit_bst(mid, hi, ind + 1)
+
+        if entries:
+            _emit_bst(0, len(entries), 0)
+        else:
+            self.code.append("assert 0 # unreachable")
         allcode = []
         allconsts = sorted(["%s%s" % (val.kind[0], val.index) for val in allconsts])
         self.precode.append("def jit_shortcut(self): # %s" % self.jitcode.name)
@@ -260,12 +292,12 @@ class GenExtension(object):
         if not self.jitcode.genext_is_pure_arithmetic:
             return
         from rpython.jit.backend import detect_cpu
-        if _genext_compile_target() != detect_cpu.MODEL_X86_64:
-            # compile_shortcut below emits x86-64 machine code directly.
-            # On any other target (e.g. AArch64) leave genext_compile_function
-            # unset so pure-arith loops use the normal, correct backend path.
-            # An AArch64 codegen is a separate, harness-validated follow-up
-            # (see the aarch64 _assemble_loop seam, guarded by this field).
+        target = _genext_compile_target()
+        if target != detect_cpu.MODEL_X86_64:
+            if target == detect_cpu.MODEL_ARM64:
+                self._generate_compile_function_aarch64()
+            # Any other target: leave genext_compile_function unset so
+            # pure-arith loops use the normal, correct backend path.
             return
 
         def compile_shortcut(assembler, inputargs, operations):
@@ -672,6 +704,30 @@ class GenExtension(object):
                 _release_dead_pool_regs(op_index)
 
             return frame_pos[0]
+
+        self.jitcode.genext_compile_function = compile_shortcut
+
+    def _generate_compile_function_aarch64(self):
+        # T1 stage 1a: aarch64 genext compile_shortcut SCAFFOLD.
+        #
+        # aarch64's MachineCodeBuilder has no truncate_to, so unlike the
+        # x86 path (emit-then-truncate-on-CannotCompileGenExt) the aarch64
+        # seam is DECIDE-FIRST: the assembler calls compile_shortcut with
+        # probe=True (a pure predicate, NO emission); only if it returns
+        # True is it called again with probe=False to emit.  This is
+        # never-wrong-by-construction: any unsupported trace -> probe
+        # returns False -> the normal aarch64 backend compiles it.
+        #
+        # Stage 1a wires the seam only: probe ALWAYS returns False, so
+        # behaviour is provably identical to leaving genext_compile_
+        # function unset (always the normal backend).  The int-only
+        # emitter is stage 1b, added behind this proven-safe predicate.
+        def compile_shortcut(assembler, inputargs, operations, probe):
+            if probe:
+                return False          # stage 1a: nothing supported yet
+            # Unreachable while probe is hard-False; defensive only.
+            raise CannotCompileGenExt(
+                "aarch64 genext emitter not yet enabled (stage 1a)")
 
         self.jitcode.genext_compile_function = compile_shortcut
 

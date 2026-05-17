@@ -17,7 +17,8 @@ from rpython.jit.backend.aarch64 import registers as r
 from rpython.jit.backend.aarch64.jump import remap_frame_layout_mixed
 from rpython.jit.backend.aarch64.locations import imm
 from rpython.jit.backend.llsupport.gcmap import allocate_gcmap
-from rpython.jit.backend.llsupport.descr import CallDescr
+from rpython.jit.backend.llsupport.descr import (CallDescr, ArrayDescr,
+        unpack_arraydescr)
 from rpython.jit.codewriter.effectinfo import EffectInfo
 from rpython.jit.codewriter import longlong
 
@@ -44,6 +45,16 @@ class TempFloat(TempVar):
 
     def __repr__(self):
         return "<TempFloat at %s>" % (id(self),)
+
+
+class TempVector(TempVar):
+    type = FLOAT
+
+    def is_vector(self):
+        return True
+
+    def __repr__(self):
+        return "<TempVector at %s>" % (id(self),)
 
 
 class ARMFrameManager(FrameManager):
@@ -111,6 +122,28 @@ class VFPRegisterManager(ARMRegisterManager):
         box = TempFloat()
         reg = self.force_allocate_reg(box, forbidden_vars=forbidden_vars,
                                                     selected_reg=selected_reg)
+        self.temp_boxes.append(box)
+        return reg
+
+
+class VectorRegisterManager(ARMRegisterManager):
+    all_regs = r.all_vector_regs
+    box_types = [FLOAT]
+    save_around_call_regs = []   # vectorizer rejects loops containing calls
+
+    def __init__(self, longevity, frame_manager=None, assembler=None):
+        RegisterManager.__init__(self, longevity, frame_manager, assembler)
+
+    def convert_to_imm(self, c):
+        assert 0, "vector constants are not supported"
+
+    def call_result_location(self, v):
+        assert 0, "no calls in vectorized loops"
+
+    def get_scratch_reg(self, type=FLOAT, forbidden_vars=[], selected_reg=None):
+        box = TempVector()
+        reg = self.force_allocate_reg(box, forbidden_vars=forbidden_vars,
+                                      selected_reg=selected_reg)
         self.temp_boxes.append(box)
         return reg
 
@@ -194,6 +227,7 @@ class Regalloc(BaseRegalloc):
         asm = self.assembler
         self.vfprm = VFPRegisterManager(longevity, fm, asm)
         self.rm = CoreRegisterManager(longevity, fm, asm)
+        self.vrm = VectorRegisterManager(longevity, fm, asm)
         return operations
 
     def prepare_loop(self, inputargs, operations, looptoken, allgcrefs):
@@ -204,19 +238,27 @@ class Regalloc(BaseRegalloc):
 
     def loc(self, var):
         if var.type == FLOAT:
+            if var.is_vector():
+                return self.vrm.loc(var)
             return self.vfprm.loc(var)
         else:
             return self.rm.loc(var)
 
     def possibly_free_var(self, var):
         if var.type == FLOAT:
-            self.vfprm.possibly_free_var(var)
+            if var.is_vector():
+                self.vrm.possibly_free_var(var)
+            else:
+                self.vfprm.possibly_free_var(var)
         else:
             self.rm.possibly_free_var(var)
 
     def force_spill_var(self, var):
         if var.type == FLOAT:
-            self.vfprm.force_spill_var(var)
+            if var.is_vector():
+                self.vrm.force_spill_var(var)
+            else:
+                self.vfprm.force_spill_var(var)
         else:
             self.rm.force_spill_var(var)
 
@@ -246,10 +288,14 @@ class Regalloc(BaseRegalloc):
     def free_temp_vars(self):
         self.rm.free_temp_vars()
         self.vfprm.free_temp_vars()
+        self.vrm.free_temp_vars()
 
     def make_sure_var_in_reg(self, var, forbidden_vars=[],
                          selected_reg=None, need_lower_byte=False):
         if var.type == FLOAT:
+            if var.is_vector():
+                return self.vrm.make_sure_var_in_reg(var, forbidden_vars,
+                                        selected_reg, need_lower_byte)
             return self.vfprm.make_sure_var_in_reg(var, forbidden_vars,
                                         selected_reg, need_lower_byte)
         else:
@@ -301,6 +347,7 @@ class Regalloc(BaseRegalloc):
     def next_instruction(self):
         self.rm.next_instruction()
         self.vfprm.next_instruction()
+        self.vrm.next_instruction()
 
     def prepare_op_increment_debug_counter(self, op):
         boxes = op.getarglist()
@@ -1036,8 +1083,103 @@ class Regalloc(BaseRegalloc):
             gc_ll_descr.get_nursery_top_addr(),
             lengthloc, itemsize, maxlength, gcmap, arraydescr)
 
+    # ------------------------- NEON vectorizer -------------------------
+    # Minimal float64x2 support for scimark raw-array loops.  Vector
+    # boxes have type==FLOAT and is_vector()==True and are routed to
+    # self.vrm (q16..q23) by the dispatch methods above.
+
+    def _prepare_op_vec_load(self, op):
+        descr = op.getdescr()
+        assert isinstance(descr, ArrayDescr)
+        itemsize, _, _ = unpack_arraydescr(descr)
+        assert itemsize == 8       # float64x2 only
+        args = op.getarglist()
+        base_loc = self.make_sure_var_in_reg(op.getarg(0), args)
+        index_loc = self.make_sure_var_in_reg(op.getarg(1), args)
+        scale = get_scale(op.getarg(2).getint())
+        ofs = op.getarg(3).getint()
+        self.possibly_free_vars_for_op(op)
+        res_loc = self.force_allocate_reg(op)
+        return [base_loc, index_loc, imm(scale), imm(ofs), res_loc]
+
+    prepare_op_vec_load_f = _prepare_op_vec_load
+
+    def prepare_op_vec_store(self, op):
+        descr = op.getdescr()
+        assert isinstance(descr, ArrayDescr)
+        itemsize, _, _ = unpack_arraydescr(descr)
+        assert itemsize == 8
+        args = op.getarglist()
+        base_loc = self.make_sure_var_in_reg(op.getarg(0), args)
+        index_loc = self.make_sure_var_in_reg(op.getarg(1), args)
+        value_loc = self.make_sure_var_in_reg(op.getarg(2), args)
+        scale = get_scale(op.getarg(3).getint())
+        ofs = op.getarg(4).getint()
+        self.possibly_free_vars_for_op(op)
+        return [base_loc, index_loc, value_loc, imm(scale), imm(ofs)]
+
+    def _prepare_op_vec_arith(self, op):
+        args = op.getarglist()
+        loc0 = self.make_sure_var_in_reg(op.getarg(0), args)
+        loc1 = self.make_sure_var_in_reg(op.getarg(1), args)
+        self.possibly_free_vars_for_op(op)
+        res = self.force_allocate_reg(op)
+        return [loc0, loc1, res]
+
+    prepare_op_vec_float_add = _prepare_op_vec_arith
+    prepare_op_vec_float_mul = _prepare_op_vec_arith
+
+    def prepare_op_vec_expand_f(self, op):
+        arg = op.getarg(0)
+        args = op.getarglist()
+        if arg.is_constant():
+            src_loc = self.convert_to_imm(arg)          # ConstFloatLoc
+        else:
+            src_loc = self.make_sure_var_in_reg(arg, args)   # scalar d-reg
+        self.possibly_free_vars_for_op(op)
+        res_loc = self.force_allocate_reg(op)           # vector reg
+        return [src_loc, res_loc]
+
+    def prepare_op_vec_unpack_f(self, op):
+        # vec_unpack_f(src_vec, srcidx, count): extract one float64 lane
+        # of the source vector into a scalar d-reg (the FFT lane-extract
+        # shape).  Vector-result unpack is not demanded yet.
+        assert not op.is_vector()
+        args = op.getarglist()
+        src_loc = self.make_sure_var_in_reg(op.getarg(0), args)
+        srcidx = op.getarg(1).getint()
+        count = op.getarg(2).getint()
+        assert count == 1
+        self.possibly_free_vars_for_op(op)
+        res_loc = self.force_allocate_reg(op)
+        return [res_loc, src_loc, imm(srcidx)]
+
+    def prepare_op_vec_pack_f(self, op):
+        # vec_pack_f(dst_vec, src, residx, count): insert scalar src
+        # (lane 0) into lane residx of the result vector, which reuses
+        # the dst_vec register.
+        assert op.is_vector()
+        args = op.getarglist()
+        src_loc = self.make_sure_var_in_reg(op.getarg(1), args)
+        residx = op.getarg(2).getint()
+        count = op.getarg(3).getint()
+        assert count == 1
+        self.possibly_free_vars_for_op(op)
+        res_loc = self.vrm.force_result_in_reg(op, op.getarg(0), args)
+        return [res_loc, src_loc, imm(residx)]
+
+    def prepare_op_vec_f(self, op):
+        # VEC_F: pseudo op that only reserves a fresh vector register;
+        # the following vec_pack_f ops fill every lane, so the
+        # uninitialised contents are never observed.  No code emitted.
+        res_loc = self.force_allocate_reg(op)
+        return [res_loc]
+
     def force_allocate_reg(self, var, forbidden_vars=[], selected_reg=None):
         if var.type == FLOAT:
+            if var.is_vector():
+                return self.vrm.force_allocate_reg(var, forbidden_vars,
+                                                   selected_reg)
             return self.vfprm.force_allocate_reg(var, forbidden_vars,
                                                  selected_reg)
         else:
@@ -1047,6 +1189,7 @@ class Regalloc(BaseRegalloc):
     def _check_invariants(self):
         self.rm._check_invariants()
         self.vfprm._check_invariants()
+        self.vrm._check_invariants()
 
     def prepare_bridge(self, inputargs, arglocs, operations, allgcrefs,
                        frame_info):
@@ -1065,6 +1208,9 @@ class Regalloc(BaseRegalloc):
             if loc.is_core_reg():
                 self.rm.reg_bindings[arg] = loc
                 used[loc] = None
+            elif loc.is_vector_reg():
+                self.vrm.reg_bindings[arg] = loc
+                used[loc] = None
             elif loc.is_vfp_reg():
                 self.vfprm.reg_bindings[arg] = loc
                 used[loc] = None
@@ -1081,6 +1227,10 @@ class Regalloc(BaseRegalloc):
         for reg in self.vfprm.all_regs:
             if reg not in used:
                 self.vfprm.free_regs.append(reg)
+        self.vrm.free_regs = []
+        for reg in self.vrm.all_regs:
+            if reg not in used:
+                self.vrm.free_regs.append(reg)
         # note: we need to make a copy of inputargs because possibly_free_vars
         # is also used on op args, which is a non-resizable list
         self.possibly_free_vars(list(inputargs))

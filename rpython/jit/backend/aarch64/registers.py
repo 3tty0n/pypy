@@ -1,6 +1,6 @@
 
 from rpython.jit.backend.aarch64.locations import (RegisterLocation,
-    ZeroRegister, VFPRegisterLocation)
+    ZeroRegister, VFPRegisterLocation, VectorRegisterLocation)
 
 
 registers = [RegisterLocation(i) for i in range(31)]
@@ -11,6 +11,14 @@ sp = xzr = ZeroRegister()
 
 vfpregisters = [VFPRegisterLocation(i) for i in range(32)]
 all_vfp_regs = vfpregisters[:8]
+
+# NEON 128-bit vector registers.  q16..q23 are caller-saved scratch and
+# their low-64 halves (d16..d23) are outside the managed scalar VFP set
+# (all_vfp_regs = d0..d7), so the vector pool cannot alias a scalar FP
+# allocation.  The auto-vectorizer rejects loops containing calls, so a
+# vector value is never live across a call -> no callee-save needed.
+neonregisters = [VectorRegisterLocation(i) for i in range(32)]
+all_vector_regs = neonregisters[16:24]
 all_regs = registers[:14]+ [x19, x20] #, x21, x22]
 
 lr = x30

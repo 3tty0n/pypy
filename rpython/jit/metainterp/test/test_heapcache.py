@@ -29,11 +29,13 @@ class FakeEffectinfo(object):
     OS_ARRAYCOPY = 0
     OS_ARRAYMOVE = 9
 
-    def __init__(self, extraeffect, oopspecindex, write_descrs_fields, write_descrs_arrays):
+    def __init__(self, extraeffect, oopspecindex, write_descrs_fields,
+                 write_descrs_arrays, can_invalidate=True):
         self.extraeffect = extraeffect
         self.oopspecindex = oopspecindex
         self._write_descrs_fields = write_descrs_fields
         self._write_descrs_arrays = write_descrs_arrays
+        self.can_invalidate = can_invalidate
         if len(write_descrs_arrays) == 1:
             [self.single_write_descr_array] = write_descrs_arrays
         else:
@@ -42,18 +44,35 @@ class FakeEffectinfo(object):
     def has_random_effects(self):
         return self.extraeffect == self.EF_RANDOM_EFFECTS
 
+    def check_can_invalidate(self):
+        return self.can_invalidate
+
+    def check_forces_virtual_or_virtualizable(self):
+        return self.extraeffect >= self.EF_FORCES_VIRTUAL_OR_VIRTUALIZABLE
+
+    # Mirror the real EffectInfo bitstring API: True iff the call may
+    # write that descr (membership in the write set for the fake).
+    def check_write_descr_field(self, fielddescr):
+        return fielddescr in self._write_descrs_fields
+
+    def check_write_descr_array(self, arraydescr):
+        return arraydescr in self._write_descrs_arrays
+
 class FakeCallDescr(object):
-    def __init__(self, extraeffect, oopspecindex=None, write_descrs_fields=[], write_descrs_arrays=[]):
+    def __init__(self, extraeffect, oopspecindex=None, write_descrs_fields=[],
+                 write_descrs_arrays=[], can_invalidate=True):
         self.extraeffect = extraeffect
         self.oopspecindex = oopspecindex
         self.__write_descrs_fields = write_descrs_fields
         self.__write_descrs_arrays = write_descrs_arrays
+        self.__can_invalidate = can_invalidate
 
     def get_extra_info(self):
         return FakeEffectinfo(
             self.extraeffect, self.oopspecindex,
             write_descrs_fields=self.__write_descrs_fields,
             write_descrs_arrays=self.__write_descrs_arrays,
+            can_invalidate=self.__can_invalidate,
         )
 
 arraycopydescr1 = FakeCallDescr(FakeEffectinfo.EF_CANNOT_RAISE, FakeEffectinfo.OS_ARRAYCOPY, write_descrs_arrays=[descr1])
@@ -793,6 +812,16 @@ class TestHeapCache(object):
             EF_ELIDABLE_CANNOT_RAISE = 2
             EF_ELIDABLE_OR_MEMORYERROR = 3
             EF_ELIDABLE_CAN_RAISE = 4
+            def has_random_effects(self):
+                return False
+            def check_can_invalidate(self):
+                return False
+            def check_forces_virtual_or_virtualizable(self):
+                return False
+            def check_write_descr_field(self, fielddescr):
+                return False
+            def check_write_descr_array(self, arraydescr):
+                return False
         descr.get_extra_info = XTra
         h.invalidate_caches_varargs(rop.CALL_N, descr, [])
         assert h.is_unescaped(box1)

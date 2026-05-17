@@ -22,6 +22,9 @@ class AssemblerLocation(object):
     def is_vfp_reg(self):
         return False
 
+    def is_vector_reg(self):
+        return False
+
     def is_imm_float(self):
         return False
 
@@ -64,6 +67,28 @@ class VFPRegisterLocation(RegisterLocation):
 
     def as_key(self):            # 40 <= as_key <= 71
         return self.value + 40
+
+    def is_float(self):
+        return True
+
+class VectorRegisterLocation(RegisterLocation):
+    _immutable_ = True
+    type = FLOAT
+
+    def __repr__(self):
+        return 'neon(v%d)' % self.value
+
+    def is_core_reg(self):
+        return False
+
+    def is_vfp_reg(self):
+        return False
+
+    def is_vector_reg(self):
+        return True
+
+    def as_key(self):            # 80 <= as_key <= 111
+        return self.value + 80
 
     def is_float(self):
         return True

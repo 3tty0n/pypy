@@ -200,20 +200,24 @@ def test_hbp_should_throttle_dual_gate():
     lt = FakeLoopToken()
     d = object.__new__(ResumeGuardDescr)
 
-    # gate absent: rd_loop_token defaults to None -> no throttle
+    # HBP GATE TURNED OFF: _hbp_should_throttle is hard-disabled and must
+    # return False for every input combination -- bridges compile as
+    # eagerly as stock PyPy (slow-path specialization via bridges).  The
+    # dual-gate fixtures are kept so re-enabling is a one-line revert.
+
+    # gate absent: rd_loop_token defaults to None
     assert d._hbp_should_throttle() is False
 
     d.rd_loop_token = FakeCLT(lt)
-    # at/below the storm threshold -> no throttle
+    # at/below the storm threshold
     lt.n_compiled_bridges = HBP_BRIDGE_STORM_THRESHOLD
     assert d._hbp_should_throttle() is False
 
-    # dynamic gate open + static gate open -> throttle
+    # both sub-gates would be open, but the gate is disabled -> still False
     lt.n_compiled_bridges = HBP_BRIDGE_STORM_THRESHOLD + 1
-    assert d._hbp_should_throttle() is True
+    assert d._hbp_should_throttle() is False
 
-    # static gate closed (arithmetic-dominated loop) -> never throttle,
-    # even in a confirmed storm: this is the explosion-prevention guard
+    # static sub-gate closed -> still False
     FakeJitCode.genext_hbp_candidate = False
     assert d._hbp_should_throttle() is False
     FakeJitCode.genext_hbp_candidate = True

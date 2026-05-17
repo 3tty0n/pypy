@@ -424,13 +424,41 @@ class HeapCache(object):
                 self._clear_caches_arraymove(opnum, descr, argboxes, effectinfo)
                 return
             else:
-                # Only invalidate things that are escaped
-                # XXX can do better, only do it for the descrs in the effectinfo
-                for descr, cache in self.heap_cache.iteritems():
-                    cache.invalidate_unescaped()
-                for descr, indices in self.heap_array_cache.iteritems():
-                    for cache in indices.itervalues():
+                # Only invalidate things that are escaped, and -- unless the
+                # call can do arbitrary things (EF_RANDOM_EFFECTS, for which
+                # the bitstrings are None) -- only the descrs the call's
+                # effectinfo says it may write.  Mirrors the contract in
+                # optimizeopt.heap.force_from_effectinfo; it is a strict
+                # subset of the old "invalidate every cached descr": a descr
+                # the call provably does not write keeps its cached
+                # (unescaped) values valid, so fewer getfield/getarrayitem
+                # ops get re-recorded -> fewer guards -> less resume data.
+                if (effectinfo.has_random_effects() or
+                        effectinfo.check_can_invalidate() or
+                        effectinfo.check_forces_virtual_or_virtualizable()):
+                    # arbitrary effects, the call may invalidate a
+                    # quasi-immutable, or it forces virtuals/virtualizable:
+                    # keep the old conservative full invalidation.  For
+                    # forcing calls the narrowing is counter-productive --
+                    # keeping a cached virtual field across them only
+                    # extends the virtual's liveness (it is materialized
+                    # anyway), inflating nvirtuals/opt/backend (the go-class
+                    # cost); optimizeopt.heap.force_from_effectinfo
+                    # likewise special-cases forcing calls.  quasi-immut /
+                    # guard_not_invalidated state must also be reset here.
+                    for descr, cache in self.heap_cache.iteritems():
                         cache.invalidate_unescaped()
+                    for descr, indices in self.heap_array_cache.iteritems():
+                        for cache in indices.itervalues():
+                            cache.invalidate_unescaped()
+                else:
+                    for descr, cache in self.heap_cache.iteritems():
+                        if effectinfo.check_write_descr_field(descr):
+                            cache.invalidate_unescaped()
+                    for descr, indices in self.heap_array_cache.iteritems():
+                        if effectinfo.check_write_descr_array(descr):
+                            for cache in indices.itervalues():
+                                cache.invalidate_unescaped()
                 return
 
         # XXX not completely sure, but I *think* it is needed to reset() the

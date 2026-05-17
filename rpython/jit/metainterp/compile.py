@@ -846,6 +846,13 @@ class AbstractResumeGuardDescr(ResumeDescr):
         return self.status & self.ST_SHIFT_MASK
 
     def _hbp_should_throttle(self):
+        # HBP GATE TURNED OFF: always return False -> the per-guard
+        # jitcounter increment is never divided, so bridges compile as
+        # eagerly as stock PyPy.  Failing-guard slow paths are therefore
+        # specialized into compiled bridges instead of being throttled
+        # into repeated blackhole bail-outs.  The dual-gate logic below is
+        # retained (dead) so this is a one-line, fully reversible switch.
+        return False
         # Dual gate: dynamic bridge-storm confirmation AND static
         # genext HBP-candidate classification of the loop's portal jitcode.
         # Either gate absent -> no throttling (exact current behavior).

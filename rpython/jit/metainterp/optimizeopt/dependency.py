@@ -510,9 +510,12 @@ class DefTracker(object):
                 while i >= 0:
                     def_node = def_chain[i][0]
                     oref = def_node.memory_ref
-                    if oref is not None and mref.alias(oref):
+                    if mref is not None and oref is not None and mref.alias(oref):
                         return def_node
-                    elif oref is None:
+                    elif oref is None or mref is None:
+                        # no memory ref on one side -> cannot prove
+                        # non-aliasing; keep the dependency (conservative
+                        # default, as documented for DependencyGraph)
                         return def_node
                     i -= 1
                 return None

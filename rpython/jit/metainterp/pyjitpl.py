@@ -27,12 +27,20 @@ from rpython.rlib.objectmodel import we_are_translated, specialize, always_inlin
 from rpython.rlib.unroll import unrolling_iterable
 from rpython.rtyper.lltypesystem import lltype, rffi, llmemory
 from rpython.rtyper import rclass
-import os
 
 SIZE_LIVE_OP = OFFSET_SIZE + 1
 
-SKIP_HEAPCACHE_PURE_INT = os.environ.get('PYPY_SKIP_HEAPCACHE_PURE_INT', '') == '1'
-FAST_INT_RECORD = os.environ.get('PYPY_FAST_INT_RECORD', '') == '1'
+
+def _get_jit_shortcut_flag(name):
+    from rpython.config.translationoption import get_translation_config
+    config = get_translation_config()
+    translation_config = getattr(config, "translation", None)
+    return bool(getattr(translation_config, name, False))
+
+
+SKIP_HEAPCACHE_PURE_INT = _get_jit_shortcut_flag('skip_heapcache_pure_int')
+FAST_INT_RECORD = _get_jit_shortcut_flag('fast_int_record')
+
 
 class PyjitplCounters(object):
     _record_helper_calls = 0
@@ -2023,17 +2031,15 @@ class MIFrame(object):
         # changes, due to a call or a return.
         staticdata = self.metainterp.staticdata
         try:
-            name = self.jitcode.name
             if self.jitcode.genext_function:
-                if name not in staticdata.genext_jitcell_counters:
-                    staticdata.genext_jitcell_counters[name] = 0
-                staticdata.genext_jitcell_counters[name] += 1
+                # O(1) per-jitcode int counter (was a per-call string-keyed
+                # dict membership test + insert + increment -- symmetric
+                # overhead on both tracer paths, see followup doc S24).
+                self.jitcode.genext_fast_exec_count += 1
                 staticdata.profiler.count(Counters.FAST_TRACING_FUNCTION_EXECUTIONS)
                 return self.jitcode.genext_function(self)
 
-            if name not in staticdata.genext_slow_counters:
-                staticdata.genext_slow_counters[name] = 0
-            staticdata.genext_slow_counters[name] += 1
+            self.jitcode.genext_slow_exec_count += 1
             staticdata.profiler.count(Counters.SLOW_TRACING_FUNCTION_EXECUTIONS)
             pc = self.pc
             while True:
@@ -2483,9 +2489,6 @@ class MetaInterpStaticData(object):
         self.op_void_return = insns.get('void_return/', -1)
 
         self.opcode_counters = [0] * len(insns)
-
-        self.genext_jitcell_counters = {}
-        self.genext_slow_counters = {}
 
     def setup_descrs(self, descrs):
         self.opcode_descrs = descrs
