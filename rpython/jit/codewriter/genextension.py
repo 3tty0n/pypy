@@ -128,10 +128,19 @@ class GenExtension(object):
                     opname in ('raise', 'reraise') or
                     opname.startswith('inline_call_') or
                     opname.startswith('getarrayitem_vable_') or
-                    opname.startswith('setarrayitem_vable_') or
-                    opname.startswith('getfield_vable_') or
-                    opname.startswith('setfield_vable_')
+                    opname.startswith('setarrayitem_vable_')
                 ):
+                # VAB-1 stages 1-2: get/setfield_vable_ are no longer
+                # whole-jitcode disqualifiers. They route through
+                # emit_unspecialized_{get,set}field_vable_* ->
+                # _shortcut_{get,set}field_vable, which return None/False on
+                # any uncertainty (UNKNOWN vable status) so the emitted code
+                # falls back to the full opimpl_*field_vable_* path --
+                # identical to the non-genext tracer. These are *field* ops
+                # with a fixed field index (no unboxed array index), hence
+                # none of the OOB hazard that the array-item bail-out (still
+                # in place, gated by 05a325e3eb's -1 path) guards against.
+                # setfield's standard case preserves synchronize_virtualizable.
                 self.jitcode.genext_function = None
                 return
         for index, insn in enumerate(self.ssarepr.insns):
