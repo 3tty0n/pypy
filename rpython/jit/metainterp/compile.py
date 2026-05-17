@@ -765,15 +765,13 @@ class AbstractResumeGuardDescr(ResumeDescr):
         assert 0, "unreachable"
 
     def _adaptive_bridge_still_lazy(self, jitdriver_sd):
-        # Stage 1 of the adaptive bridge strategy. Short-circuits the
-        # existing must_compile / jitcounter path while the per-descr
-        # failure count is below the configured T_lazy. The jitcounter
-        # is intentionally NOT ticked during this phase: we want the
-        # T_lazy threshold to be the sole gate.
         warmstate = jitdriver_sd.warmstate
-        if not warmstate.enable_adaptive_bridge:
+        adaptive = warmstate.enable_adaptive_bridge
+        if not adaptive and not warmstate.enable_hot_bridge_promotion:
             return False
         self.rd_fail_count += r_uint(1)
+        if not adaptive:
+            return False
         if self.rd_fail_count < r_uint(warmstate.adaptive_bridge_lazy_threshold):
             return True
         return False

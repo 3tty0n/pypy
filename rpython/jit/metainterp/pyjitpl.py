@@ -24,6 +24,7 @@ from rpython.rlib.debug import debug_start, debug_stop, debug_print
 from rpython.rlib.debug import have_debug_prints
 from rpython.rlib.jit import Counters
 from rpython.rlib.objectmodel import we_are_translated, specialize, always_inline
+from rpython.rlib.rarithmetic import r_uint
 from rpython.rlib.unroll import unrolling_iterable
 from rpython.rtyper.lltypesystem import lltype, rffi, llmemory
 from rpython.rtyper import rclass
@@ -2924,13 +2925,20 @@ class MetaInterp(object):
         if warmstate.enable_hot_bridge_promotion:
             typetag = resumedescr.status & compile.AbstractResumeGuardDescr.ST_TYPE_MASK
             cell_token = self.resumekey_original_loop_token
+            # hbp stage 1
             if (typetag != 0 and cell_token is not None
-                    and cell_token.bridge_count >= warmstate.hot_bridge_threshold):
+                    and not cell_token.hbp_megamorphic
+                    and cell_token.bridge_count
+                        >= warmstate.hot_bridge_threshold
+                    and resumedescr.rd_fail_count
+                        >= r_uint(warmstate.hot_bridge_guard_threshold)):
                 self.prefer_loop_over_bridge = True
-        # Adaptive bridge stage 2 (hot guard promotion): by construction
-        # of stage 1, reaching this point means rd_fail_count >= T_lazy,
-        # so the guard is genuinely hot.  Prefer a fresh peeled-loop
-        # variant over a slow generic bridge on InvalidLoop.
+                cell_token.hbp_variant_count += 1
+                if (cell_token.hbp_variant_count
+                        >= warmstate.hot_bridge_max_variants):
+                    cell_token.hbp_megamorphic = True
+
+        # hbp stage 2
         if warmstate.enable_adaptive_bridge:
             self.prefer_loop_over_bridge = True
         if self.resumekey_original_loop_token is None:
