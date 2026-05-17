@@ -334,14 +334,13 @@ def _caffeinated(cmd):
 
 
 def run_one(pypy, script, env_extra, extra_args, n, warmup_iters=10,
-            jit_off=False, prewarm=True):
+            jit_off=False):
     """Run a single (binary, benchmark) once. Returns dict of metrics.
 
-    Stable-setting hygiene: deterministic child env, caffeinate
-    wrap, and one untimed pre-warm run (fs/code-cache) discarded before
-    the measured run. The full per-iteration series is kept (warmup is
-    NOT dropped); analyze_warmup() derives the warmup scalars and
-    `running` is the *detected* steady suffix (regression guard only)."""
+    Stable-setting hygiene: deterministic child env and a caffeinate
+    wrap. The full per-iteration series is kept (warmup is NOT dropped);
+    analyze_warmup() derives the warmup scalars and `running` is the
+    *detected* steady suffix (regression guard only)."""
     env = os.environ.copy()
     for k, v in env_extra.items():
         parts = []
@@ -357,12 +356,12 @@ def run_one(pypy, script, env_extra, extra_args, n, warmup_iters=10,
                 + [os.path.join(BENCH_DIR, script), "-n", str(n)]
                 + list(extra_args))
 
-    def _exec(capture_log):
+    def _exec():
         tmp = tempfile.NamedTemporaryFile(prefix="pypylog_e2e_",
                                           suffix=".txt", delete=False)
         tmp.close()
         e = dict(env)
-        e["PYPYLOG"] = ("jit-summary:%s" % tmp.name) if capture_log else "-"
+        e["PYPYLOG"] = "jit-summary:%s" % tmp.name
         t0 = time.time()
         try:
             p = subprocess.Popen(_caffeinated(base_cmd),
@@ -385,12 +384,7 @@ def run_one(pypy, script, env_extra, extra_args, n, warmup_iters=10,
             return None, None, wall, ("rc=%d" % rc)
         return stdout, logtxt, wall, None
 
-    # One untimed pre-warm run (fs/code cache) discarded -> the measured
-    # run starts from a warm OS state (stable-setting hygiene).
-    if prewarm:
-        _exec(False)
-
-    stdout, log, wall, err = _exec(True)
+    stdout, log, wall, err = _exec()
     if err is not None:
         return {"error": err, "wall": wall}
     summary = parse_jit_summary(log)
@@ -546,7 +540,7 @@ def _thermal_guard(label, cooldown=8, max_wait=120):
 
 
 def run_all_interleaved(base, cand, names, reps, n, warmup_iters=10,
-                        break_even=False, prewarm=True):
+                        break_even=False):
     """stable-setting comparison: for each (benchmark, rep) run the
     BASELINE then the CANDIDATE back to back (A,B,A,B...), never
     all-A-then-all-B -- so slow thermal/DVFS drift hits both arms
@@ -564,14 +558,13 @@ def run_all_interleaved(base, cand, names, reps, n, warmup_iters=10,
         if break_even:
             for who in (base, cand):
                 ro = run_one(who, script, env, extra, n, warmup_iters,
-                             jit_off=True, prewarm=prewarm)
+                             jit_off=True)
                 be_cache[who] = (ro.get("iter_times")
                                  if "error" not in ro else None)
         for i in range(reps):
             for who in (base, cand):
                 thr = _thermal_guard("%s/%s" % (nm, os.path.basename(who)))
-                r = run_one(who, script, env, extra, n, warmup_iters,
-                            prewarm=prewarm)
+                r = run_one(who, script, env, extra, n, warmup_iters)
                 if "error" in r:
                     print("  [%s] rep %d %s ERROR %s" %
                           (nm, i, os.path.basename(who), r["error"]))
@@ -822,13 +815,12 @@ def cmd_run(args):
                 sys.stderr.write("not executable: %s\n" % p); sys.exit(2)
         names = _resolve_names(args)
         print("\n%s\nstable interleaved A/B: baseline=%s candidate=%s\n"
-              "reps=%d n=%d break_even=%s prewarm=%s\n%s" %
+              "reps=%d n=%d break_even=%s\n%s" %
               ("=" * 70, base, cand, args.reps, args.n,
-               args.break_even, not args.no_prewarm, "=" * 70))
+               args.break_even, "=" * 70))
         res = run_all_interleaved(base, cand, names, args.reps, args.n,
                                   args.warmup_iters,
-                                  break_even=args.break_even,
-                                  prewarm=not args.no_prewarm)
+                                  break_even=args.break_even)
         out_paths = ["e2e_baseline.json", "e2e_proposed.json"]
         _write_interleaved(res, base, cand, out_paths, args)
         print("\n%s\nComparison: %s vs %s\n%s\n" %
@@ -886,13 +878,12 @@ def cmd_run(args):
                 sys.stderr.write("not executable: %s\n" % p); sys.exit(2)
         names = _resolve_names(args)
         print("\n%s\nstable interleaved A/B: baseline=%s candidate=%s\n"
-              "reps=%d n=%d break_even=%s prewarm=%s\n%s" %
+              "reps=%d n=%d break_even=%s\n%s" %
               ("=" * 70, base, cand, args.reps, args.n,
-               args.break_even, not args.no_prewarm, "=" * 70))
+               args.break_even, "=" * 70))
         res = run_all_interleaved(base, cand, names, args.reps, args.n,
                                   args.warmup_iters,
-                                  break_even=args.break_even,
-                                  prewarm=not args.no_prewarm)
+                                  break_even=args.break_even)
         _write_interleaved(res, base, cand, out_paths, args)
     else:
         for i, (pypy, out_path) in enumerate(zip(pypys, out_paths)):
@@ -1116,9 +1107,6 @@ def main():
                           "report the cumulative JIT-on-vs-interpreter "
                           "break-even iteration (robust warmup scalar; "
                           "doubles run cost)."))
-    ap.add_argument("--no-prewarm", action="store_true",
-                    help=("skip the untimed pre-warm run before each "
-                          "measured run (hygiene; default: prewarm on)."))
     ap.add_argument("--reps", type=int, default=10,
                     help="reps per (binary, benchmark) (default: 10)")
     ap.add_argument("-n", type=int, default=50,

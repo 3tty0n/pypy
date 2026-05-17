@@ -7,10 +7,6 @@ from rpython.rlib.rarithmetic import r_uint32, r_uint
 from rpython.rlib.objectmodel import always_inline, specialize
 import os
 
-# Set to True to enable verification mode (slower but validates fast-path correctness)
-# Can also be enabled via environment variable PYPY_HEAPCACHE_VERIFY=1
-HEAPCACHE_VERIFY_FASTPATH = os.environ.get('PYPY_HEAPCACHE_VERIFY', '') == '1'
-
 """ A big note: we don't do heap caches on Consts, because it used
 to be done with the identity of the Const instance. This gives very wonky
 results at best, so we decided to not do it at all. Can be fixed with
@@ -165,11 +161,6 @@ class HeapCache(object):
         self.likely_virtual_version = r_uint(0)
         # Flag to enable/disable genextension-specific fast-path for pure int ops
         self.genext_fastpath_enabled = genext_fastpath_enabled
-        # Profiling counters for heapcache costs analysis
-        self._count_invalidate_calls = 0
-        self._count_fastpath_skips = 0
-        self._count_mark_escaped = 0
-        self._count_clear_caches = 0
         self.reset()
 
     def reset(self):
@@ -221,32 +212,22 @@ class HeapCache(object):
             ref_frontend_op._heapc_deps = None
 
     def invalidate_caches_varargs(self, opnum, descr, argboxes):
-        self._count_invalidate_calls += 1
         if self.genext_fastpath_enabled and self._is_pure_int_op(opnum):
-            if HEAPCACHE_VERIFY_FASTPATH:
-                self._verify_pure_int_op_invariants(opnum, argboxes)
-            self._count_fastpath_skips += 1
+            self._verify_pure_int_op_invariants(opnum, argboxes)
             return
         self.mark_escaped_varargs(opnum, descr, argboxes)
-        self._count_mark_escaped += 1
         if self.clear_caches_not_necessary(opnum, descr):
             return
-        self._count_clear_caches += 1
         self.clear_caches_varargs(opnum, descr, argboxes)
 
     @specialize.arg(1)
     def invalidate_caches(self, opnum, descr, *argboxes):
-        self._count_invalidate_calls += 1
         if self.genext_fastpath_enabled and self._is_pure_int_op(opnum):
-            if HEAPCACHE_VERIFY_FASTPATH:
-                self._verify_pure_int_op_invariants_tuple(opnum, argboxes)
-            self._count_fastpath_skips += 1
+            self._verify_pure_int_op_invariants_tuple(opnum, *argboxes)
             return
         self.mark_escaped(opnum, descr, *argboxes)
-        self._count_mark_escaped += 1
         if self.clear_caches_not_necessary(opnum, descr):
             return
-        self._count_clear_caches += 1
         self.clear_caches(opnum, descr, *argboxes)
 
     @always_inline
@@ -279,11 +260,14 @@ class HeapCache(object):
                 raise AssertionError(
                     "Pure int op %d has RefFrontendOp arg - _is_pure_int_op is wrong!" % opnum)
 
-    def _verify_pure_int_op_invariants_tuple(self, opnum, argboxes):
-        for box in argboxes:
-            if isinstance(box, RefFrontendOp):
-                raise AssertionError(
-                    "Pure int op %d has RefFrontendOp arg - _is_pure_int_op is wrong!" % opnum)
+    def _verify_pure_int_op_invariants_tuple(self, opnum, *argboxes):
+        if len(argboxes) == 0:
+            return
+        box = argboxes[0]
+        if isinstance(box, RefFrontendOp):
+            raise AssertionError(
+                "Pure int op %d has RefFrontendOp arg - _is_pure_int_op is wrong!" % opnum)
+        self._verify_pure_int_op_invariants_tuple(opnum, *argboxes[1:])
 
     def _escape_from_write(self, box, fieldbox):
         if self.is_unescaped(box) and self.is_unescaped(fieldbox):
@@ -730,22 +714,3 @@ class HeapCache(object):
         self.loop_invariant_arg0int = allboxes[0].getint()
         self.loop_invariant_result = res
 
-    def get_heapcache_stats(self):
-        """Return profiling stats for heapcache costs analysis.
-        - invalidate_calls: total calls to invalidate_caches
-        - fastpath_skips: calls that took the fast path (pure int ops)
-        - mark_escaped: calls that ran mark_escaped
-        - clear_caches: calls that ran clear_caches
-        """
-        return {
-            'invalidate_calls': self._count_invalidate_calls,
-            'fastpath_skips': self._count_fastpath_skips,
-            'mark_escaped': self._count_mark_escaped,
-            'clear_caches': self._count_clear_caches,
-        }
-
-    def reset_heapcache_stats(self):
-        self._count_invalidate_calls = 0
-        self._count_fastpath_skips = 0
-        self._count_mark_escaped = 0
-        self._count_clear_caches = 0
