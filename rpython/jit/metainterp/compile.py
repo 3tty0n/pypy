@@ -35,12 +35,12 @@ class CannotSpecializePure(Exception):
 
 
 def _is_pure_arithmetic_trace_op(opnum):
-    """Return True if opnum is valid in a pure arithmetic loop trace.
-
-    Accepts LABEL, JUMP, and always-pure int/float operations that
-    operate only on integer or float values (no GC references).
-    """
     if opnum == rop.LABEL or opnum == rop.JUMP:
+        return True
+    if (opnum == rop.INT_ADD_OVF or opnum == rop.INT_SUB_OVF or
+            opnum == rop.INT_MUL_OVF):
+        return True
+    if opnum == rop.GUARD_NO_OVERFLOW or opnum == rop.GUARD_OVERFLOW:
         return True
     if not rop.is_always_pure(opnum):
         return False
@@ -63,31 +63,12 @@ def _is_pure_arithmetic_trace_op(opnum):
 
 def compile_pure_arithmetic_loop(metainterp, greenkey, trace, runtime_args,
                                  cut_at):
-    """Try to compile a pure-arithmetic loop without the optimizer.
-
-    For loops whose trace contains only pure int/float arithmetic (no
-    guards, no heap accesses, no calls, no GC references), skip all
-    optimizer passes and send the trace directly to the backend.
-
-    Returns a TargetToken on success, or None to fall back to the normal
-    optimizer path.
-
-    Why this works
-    --------------
-    The 7-pass optimizer (intbounds, heap, virtualstate, unroll, ...) is
-    designed for traces that have guards, heap operations, and virtual
-    objects. For pure arithmetic loops it is pure overhead: no guards to
-    eliminate, no virtuals to escape, no heap cache to maintain. Skipping
-    it reduces JIT compile time for this common case.
-
-    The GenExtension connection: at JitCode assembly time,
-    _classify_pure_arithmetic() already determined whether the portal's
-    jitcode is pure arithmetic. Here we confirm it at the trace level
-    (the trace is what actually reaches the backend) and attach the
-    genext_compile_function to the token for the backend's fast path.
-    """
     jitdriver_sd = metainterp.jitdriver_sd
     metainterp_sd = metainterp.staticdata
+
+    portal_jitcode = jitdriver_sd.mainjitcode
+    if portal_jitcode is None or not portal_jitcode.genext_is_pure_arithmetic:
+        return None
 
     traceiter = trace.get_iter()
     inputargs = traceiter.inputargs
@@ -113,13 +94,8 @@ def compile_pure_arithmetic_loop(metainterp, greenkey, trace, runtime_args,
     if ops[-1].getopnum() != rop.JUMP:
         return None
 
-    # Look up the GenExtension compile function from the portal jitcode.
-    # This was generated at translation time by _generate_compile_function()
-    # for pure arithmetic jitcodes.
-    portal_jitcode = jitdriver_sd.mainjitcode
-    genext_compile_fn = None
-    if portal_jitcode is not None and portal_jitcode.genext_is_pure_arithmetic:
-        genext_compile_fn = portal_jitcode.genext_compile_function
+    # portal jitcode is known to be pure arithmetic from the check above
+    genext_compile_fn = portal_jitcode.genext_compile_function
 
     # Build the TreeLoop directly, bypassing SimpleCompileData.optimize_trace
     jitcell_token = make_jitcell_token(jitdriver_sd)
@@ -800,10 +776,23 @@ class ResumeDescr(AbstractFailDescr):
     def clone(self):
         return self
 
+# Hot-Bridge-Promotion throttle: when a loop is statically classified as
+# bridge-prone (genext_hbp_candidate) AND has dynamically produced more than
+# HBP_BRIDGE_STORM_THRESHOLD bridges, the per-guard-failure jitcounter
+# increment is divided by HBP_THROTTLE_FACTOR.  A smaller increment means the
+# counter (which fires at 1.0) needs proportionally more guard failures before
+# a bridge is compiled -- raising the bar, never lowering it.  Dual-gating
+# (static + dynamic) makes it impossible to fire on an arithmetic-dominated
+# loop, which is what prevents a bridge/trace explosion.
+HBP_BRIDGE_STORM_THRESHOLD = 30
+HBP_THROTTLE_FACTOR = 4.0
+
+
 class AbstractResumeGuardDescr(ResumeDescr):
     _attrs_ = ('status',)
 
     status = r_uint(0)
+    rd_loop_token = None
 
     ST_BUSY_FLAG    = 0x01     # if set, busy tracing from the guard
     ST_TYPE_MASK    = 0x06     # mask for the type (TY_xxx)
@@ -856,6 +845,26 @@ class AbstractResumeGuardDescr(ResumeDescr):
     def get_jitcounter_hash(self):
         return self.status & self.ST_SHIFT_MASK
 
+    def _hbp_should_throttle(self):
+        # Dual gate: dynamic bridge-storm confirmation AND static
+        # genext HBP-candidate classification of the loop's portal jitcode.
+        # Either gate absent -> no throttling (exact current behavior).
+        loop_token_ref = self.rd_loop_token
+        if loop_token_ref is None:
+            return False
+        loop_token = loop_token_ref.loop_token_wref()
+        if loop_token is None:
+            return False
+        if loop_token.n_compiled_bridges <= HBP_BRIDGE_STORM_THRESHOLD:
+            return False
+        jitdriver_sd = loop_token.outermost_jitdriver_sd
+        if jitdriver_sd is None:
+            return False
+        mainjitcode = jitdriver_sd.mainjitcode
+        if mainjitcode is None:
+            return False
+        return mainjitcode.genext_hbp_candidate
+
     def must_compile(self, deadframe, metainterp_sd, jitdriver_sd):
         jitcounter = metainterp_sd.warmrunnerdesc.jitcounter
         #
@@ -902,6 +911,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
                           intval * 1442968193)
         #
         increment = jitdriver_sd.warmstate.increment_trace_eagerness
+        if self._hbp_should_throttle():
+            increment = increment / HBP_THROTTLE_FACTOR
         return jitcounter.tick(hash, increment)
 
     def start_compiling(self):
@@ -930,6 +941,9 @@ class AbstractResumeGuardDescr(ResumeDescr):
                                new_loop.original_jitcell_token,
                                metainterp.box_names_memo)
         record_loop_or_bridge(metainterp.staticdata, new_loop)
+        original_loop_token = metainterp.resumekey_original_loop_token
+        if original_loop_token is not None:
+            original_loop_token.n_compiled_bridges += 1
 
     def make_a_counter_per_value(self, guard_value_op, index):
         assert guard_value_op.getopnum() == rop.GUARD_VALUE

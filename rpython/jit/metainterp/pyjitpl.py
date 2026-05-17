@@ -166,10 +166,9 @@ class MIFrame(object):
                 registers[i] = missing
         if nonconst.NonConstant(0):             # force the right type
             constants[0] = ConstClass.value     # (useful for small tests)
-        if self.jitcode.genext_function is None:
-            for i in range(len(constants)):
-                registers[targetindex] = ConstClass(constants[i])
-                targetindex += 1
+        for i in range(len(constants)):
+            registers[targetindex] = ConstClass(constants[i])
+            targetindex += 1
         return registers
 
     def write_int_unboxed(self, index, value, position):
@@ -1329,6 +1328,20 @@ class MIFrame(object):
         assert 0 <= index < vinfo.get_array_length(virtualizable, arrayindex)
         return vinfo.get_index_in_array(virtualizable, arrayindex, index)
 
+    def _shortcut_get_arrayitem_vable_index_unboxed(self, arrayfielddescr,
+                                                    index):
+        # Returns -1 instead of asserting on out-of-bounds so callers can
+        # fall back gracefully without crashing the shortcut path.
+        vinfo = self.metainterp.jitdriver_sd.virtualizable_info
+        virtualizable_box = self.metainterp.virtualizable_boxes[-1]
+        virtualizable = vinfo.unwrap_virtualizable_box(virtualizable_box)
+        arrayindex = vinfo.array_field_by_descrs[arrayfielddescr]
+        if index < 0:
+            return -1
+        if index >= vinfo.get_array_length(virtualizable, arrayindex):
+            return -1
+        return vinfo.get_index_in_array(virtualizable, arrayindex, index)
+
     @arguments("box", "box", "descr", "descr", "orgpc")
     def _opimpl_getarrayitem_vable(self, box, indexbox, fdescr, adescr, pc):
         if self._nonstandard_virtualizable(pc, box, fdescr):
@@ -1724,9 +1737,9 @@ class MIFrame(object):
         # Note: the logger hides the jd_index argument, so we see in the logs:
         #    debug_merge_point(portal_call_depth, current_call_id, 'location')
         #
+        metainterp = self.metainterp
         args = [ConstInt(jd_index), ConstInt(portal_call_depth),
                 ConstInt(current_call_id)] + greenkey
-        metainterp = self.metainterp
         metainterp.history.record(rop.DEBUG_MERGE_POINT, args, None)
         warmrunnerstate = jitdriver_sd.warmstate
         if (metainterp.force_finish_trace and
@@ -2356,7 +2369,9 @@ class MIFrame(object):
                 return self.opimpl_getarrayitem_gc_i(arraybox, indexbox, adescr)
         assert nonstandardness_status == self.STANDARD_VIRTUALIZABLE
         self.metainterp.check_synchronized_virtualizable()
-        index = self._get_arrayitem_vable_index_unboxed(fdescr, index)
+        index = self._shortcut_get_arrayitem_vable_index_unboxed(fdescr, index)
+        if index < 0:
+            return None
         return self.metainterp.virtualizable_boxes[index]
 
     def _shortcut_setarrayitem_vable(self, box, index, valuebox,
@@ -2375,7 +2390,9 @@ class MIFrame(object):
                                              adescr)
         else:
             assert nonstandardness_status == self.STANDARD_VIRTUALIZABLE
-            index = self._get_arrayitem_vable_index_unboxed(fdescr, index)
+            index = self._shortcut_get_arrayitem_vable_index_unboxed(fdescr, index)
+            if index < 0:
+                return False
             self.metainterp.virtualizable_boxes[index] = valuebox
             self.metainterp.synchronize_virtualizable()
         return True

@@ -171,3 +171,53 @@ def test_compile_tmp_callback():
         assert lltype.cast_opaque_ptr(lltype.Ptr(EXC), e.value) == llexc
     else:
         assert 0, "should have raised"
+
+
+def test_hbp_should_throttle_dual_gate():
+    from rpython.jit.metainterp.compile import (
+        ResumeGuardDescr, HBP_BRIDGE_STORM_THRESHOLD)
+
+    class FakeJitCode(object):
+        genext_hbp_candidate = True
+
+    class FakeJitDriverSD(object):
+        mainjitcode = FakeJitCode()
+
+    class FakeLoopToken(object):
+        n_compiled_bridges = 0
+        outermost_jitdriver_sd = FakeJitDriverSD()
+
+    class FakeCLT(object):
+        def __init__(self, lt):
+            self._lt = lt
+        def loop_token_wref(self):
+            return self._lt
+
+    class DeadCLT(object):
+        def loop_token_wref(self):
+            return None
+
+    lt = FakeLoopToken()
+    d = object.__new__(ResumeGuardDescr)
+
+    # gate absent: rd_loop_token defaults to None -> no throttle
+    assert d._hbp_should_throttle() is False
+
+    d.rd_loop_token = FakeCLT(lt)
+    # at/below the storm threshold -> no throttle
+    lt.n_compiled_bridges = HBP_BRIDGE_STORM_THRESHOLD
+    assert d._hbp_should_throttle() is False
+
+    # dynamic gate open + static gate open -> throttle
+    lt.n_compiled_bridges = HBP_BRIDGE_STORM_THRESHOLD + 1
+    assert d._hbp_should_throttle() is True
+
+    # static gate closed (arithmetic-dominated loop) -> never throttle,
+    # even in a confirmed storm: this is the explosion-prevention guard
+    FakeJitCode.genext_hbp_candidate = False
+    assert d._hbp_should_throttle() is False
+    FakeJitCode.genext_hbp_candidate = True
+
+    # dead weakref -> no throttle
+    d.rd_loop_token = DeadCLT()
+    assert d._hbp_should_throttle() is False
