@@ -194,20 +194,28 @@ class Profiler(BaseProfiler):
 
 
     def _print_genext_stats(self):
+        from rpython.jit.codewriter.jitcode import JitCode
+
         debug_print("{jit-genext-specialized")
         debug_print("jitcodename,count")
-        counters = self.metainterp_sd.genext_jitcell_counters
-        for jitcode_name in counters:
-            count = counters[jitcode_name]
-            debug_print("%s,%d" % (jitcode_name, count))
+        for jitcode in self.metainterp_sd.jitcodes:
+            if not isinstance(jitcode, JitCode):
+                continue
+            if jitcode.genext_fast_exec_count == 0:
+                continue
+            debug_print("%s,%d" % (jitcode.name,
+                                   jitcode.genext_fast_exec_count))
         debug_print("jit-genext-specialized}")
 
         debug_print("{jit-genext-unspecialized")
         debug_print("jitcodename,count")
-        counters = self.metainterp_sd.genext_slow_counters
-        for jitcode_name in counters:
-            count = counters[jitcode_name]
-            debug_print("%s,%d" % (jitcode_name, count))
+        for jitcode in self.metainterp_sd.jitcodes:
+            if not isinstance(jitcode, JitCode):
+                continue
+            if jitcode.genext_slow_exec_count == 0:
+                continue
+            debug_print("%s,%d" % (jitcode.name,
+                                   jitcode.genext_slow_exec_count))
         debug_print("jit-genext-unspecialized}")
 
     def _print_stats(self):

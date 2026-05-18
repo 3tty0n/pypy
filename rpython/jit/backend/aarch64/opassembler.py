@@ -415,6 +415,74 @@ class ResOpAssembler(BaseAssembler):
     emit_op_gc_load_indexed_r = _emit_op_gc_load_indexed
     emit_op_gc_load_indexed_f = _emit_op_gc_load_indexed
 
+    # ------------------------- NEON vectorizer -------------------------
+
+    def _vec_addr(self, base_loc, index_loc, scale, ofs):
+        # LD1/ST1 {Vt.2D},[Xn] take only a base register, so fold
+        # base + (index << scale) + ofs into the ip0 scratch register
+        # (same addressing idiom as _emit_op_gc_load_indexed).
+        assert base_loc.is_core_reg()
+        assert index_loc.is_core_reg()
+        if scale:
+            self.mc.ADD_rr_shifted(r.ip0.value, base_loc.value,
+                                   index_loc.value, scale)
+        else:
+            self.mc.ADD_rr(r.ip0.value, base_loc.value, index_loc.value)
+        if ofs:
+            if check_imm_arg(ofs):
+                self.mc.ADD_ri(r.ip0.value, r.ip0.value, ofs)
+            else:
+                self.mc.gen_load_int(r.ip1.value, ofs)
+                self.mc.ADD_rr(r.ip0.value, r.ip0.value, r.ip1.value)
+        return r.ip0
+
+    def emit_op_vec_load_f(self, op, arglocs):
+        base_loc, index_loc, scale_loc, ofs_loc, res_loc = arglocs
+        addr = self._vec_addr(base_loc, index_loc, scale_loc.value,
+                              ofs_loc.value)
+        self.mc.LD1_2d(res_loc.value, addr.value)
+
+    def emit_op_vec_store(self, op, arglocs):
+        base_loc, index_loc, value_loc, scale_loc, ofs_loc = arglocs
+        addr = self._vec_addr(base_loc, index_loc, scale_loc.value,
+                              ofs_loc.value)
+        self.mc.ST1_2d(value_loc.value, addr.value)
+
+    def emit_op_vec_float_add(self, op, arglocs):
+        l0, l1, res = arglocs
+        self.mc.FADD_2d(res.value, l0.value, l1.value)
+
+    def emit_op_vec_float_mul(self, op, arglocs):
+        l0, l1, res = arglocs
+        self.mc.FMUL_2d(res.value, l0.value, l1.value)
+
+    def emit_op_vec_expand_f(self, op, arglocs):
+        src_loc, res_loc = arglocs
+        if src_loc.is_imm_float():
+            # materialise the constant double into the VFP scratch reg,
+            # then broadcast it into both lanes
+            self.load(r.vfp_ip, src_loc)
+            self.mc.DUP_2d(res_loc.value, r.vfp_ip.value)
+        else:
+            # the scalar d-reg aliases the low 64 bits of the same-numbered
+            # v-reg, so DUP Vres.2D, Vsrc.D[0] broadcasts it both lanes
+            self.mc.DUP_2d(res_loc.value, src_loc.value)
+
+    def emit_op_vec_unpack_f(self, op, arglocs):
+        res_loc, src_loc, srcidx_loc = arglocs
+        # extract lane srcidx of the .2D source vector into scalar Dres
+        self.mc.DUP_d(res_loc.value, src_loc.value, srcidx_loc.value)
+
+    def emit_op_vec_pack_f(self, op, arglocs):
+        res_loc, src_loc, residx_loc = arglocs
+        # insert scalar src (lane 0) into lane residx of the result vector
+        self.mc.INS_d(res_loc.value, src_loc.value, residx_loc.value, 0)
+
+    def emit_op_vec_f(self, op, arglocs):
+        # pseudo op: the register is materialised lane by lane by the
+        # following vec_pack_f inserts; nothing to emit here.
+        pass
+
     def _write_to_mem(self, value_loc, base_loc, ofs_loc, scale):
         # Write a value of size '1 << scale' at the address
         # 'base_ofs + ofs_loc'.  Note that 'scale' is not used to scale

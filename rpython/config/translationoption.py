@@ -135,9 +135,20 @@ translation_optiondescription = OptionDescription(
                default=True,
                cmdline="--gen-extension"),
     BoolOption("heapcache_genext_fastpath",
-               "enable heapcache fast-path for pure int ops (tailored for genextension)",
+               "heapcache fast-path for pure int ops",
                default=True,
                cmdline="--heapcache-genext-fastpath"),
+    BoolOption("skip_heapcache_pure_int",
+               "skip heapcache invalidation for pure-int ops in record_helper "
+               "(genextension research/debug lever; was PYPY_SKIP_HEAPCACHE_PURE_INT)",
+               default=False,
+               cmdline="--skip-heapcache-pure-int"),
+    BoolOption("fast_int_record",
+               "record int binops via the specialized _record_int_binop path "
+               "instead of the generic _record_helper (genextension research/"
+               "debug lever; was PYPY_FAST_INT_RECORD)",
+               default=False,
+               cmdline="--fast-int-record"),
     # misc
     BoolOption("verbose", "Print extra information", default=False,
                cmdline="--verbose"),

@@ -28,6 +28,101 @@ def giveup():
     from rpython.jit.metainterp.pyjitpl import SwitchToBlackhole
     raise SwitchToBlackhole(Counters.ABORT_BRIDGE)
 
+
+class CannotSpecializePure(Exception):
+    """Raised when a trace cannot use the pure arithmetic fast path."""
+    pass
+
+
+def _is_pure_arithmetic_trace_op(opnum):
+    if opnum == rop.LABEL or opnum == rop.JUMP:
+        return True
+    if (opnum == rop.INT_ADD_OVF or opnum == rop.INT_SUB_OVF or
+            opnum == rop.INT_MUL_OVF):
+        return True
+    if opnum == rop.GUARD_NO_OVERFLOW or opnum == rop.GUARD_OVERFLOW:
+        return True
+    if not rop.is_always_pure(opnum):
+        return False
+    # Exclude operations that touch GC pointers
+    if opnum in (rop.PTR_EQ, rop.PTR_NE,
+                 rop.INSTANCE_PTR_EQ, rop.INSTANCE_PTR_NE,
+                 rop.CAST_PTR_TO_INT, rop.CAST_INT_TO_PTR,
+                 rop.NURSERY_PTR_INCREMENT,
+                 rop.SAME_AS_R):
+        return False
+    # Exclude heap-reading pure ops
+    if opnum in (rop.ARRAYLEN_GC, rop.STRLEN, rop.STRGETITEM,
+                 rop.GETARRAYITEM_GC_PURE_I, rop.GETARRAYITEM_GC_PURE_F,
+                 rop.GETARRAYITEM_GC_PURE_R,
+                 rop.UNICODELEN, rop.UNICODEGETITEM,
+                 rop.LOAD_FROM_GC_TABLE):
+        return False
+    return True
+
+
+def compile_pure_arithmetic_loop(metainterp, greenkey, trace, runtime_args,
+                                 cut_at):
+    jitdriver_sd = metainterp.jitdriver_sd
+    metainterp_sd = metainterp.staticdata
+
+    portal_jitcode = jitdriver_sd.mainjitcode
+    if portal_jitcode is None or not portal_jitcode.genext_is_pure_arithmetic:
+        return None
+
+    traceiter = trace.get_iter()
+    inputargs = traceiter.inputargs
+
+    # Reject if any input is a GC reference
+    for arg in inputargs:
+        if arg.type == 'r':
+            return None
+
+    # Walk the trace and confirm every operation is pure arithmetic
+    ops = []
+    while not traceiter.done():
+        op = traceiter.next()
+        if not _is_pure_arithmetic_trace_op(op.getopnum()):
+            return None
+        if op.type == 'r':
+            return None
+        ops.append(op)
+
+    if not ops:
+        return None
+    # Last operation must be JUMP (a loop-closing back-edge)
+    if ops[-1].getopnum() != rop.JUMP:
+        return None
+
+    # portal jitcode is known to be pure arithmetic from the check above
+    genext_compile_fn = portal_jitcode.genext_compile_function
+
+    # Build the TreeLoop directly, bypassing SimpleCompileData.optimize_trace
+    jitcell_token = make_jitcell_token(jitdriver_sd)
+    jitcell_token.genext_compile_function = genext_compile_fn
+
+    loop = create_empty_loop(metainterp)
+    loop.original_jitcell_token = jitcell_token
+    loop.inputargs = inputargs
+
+    target_token = TargetToken(jitcell_token)
+    target_token.original_jitcell_token = jitcell_token
+
+    label = ResOperation(rop.LABEL, inputargs[:], descr=target_token)
+    ops[-1].setdescr(target_token)   # JUMP target -> this loop's label
+    loop.operations = [label] + ops
+
+    if not we_are_translated():
+        loop.check_consistency()
+
+    jitcell_token.target_tokens = [target_token]
+
+    send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, loop, "loop",
+                         runtime_args, metainterp.box_names_memo)
+    record_loop_or_bridge(metainterp_sd, loop)
+    return target_token
+
+
 class CompileData(object):
     """ An object that accumulates all of the necessary info for
     the optimization phase, but does not actually have any other state
@@ -217,6 +312,11 @@ def record_loop_or_bridge(metainterp_sd, loop):
 
 def compile_simple_loop(metainterp, greenkey, trace, runtime_args, enable_opts,
                         cut_at, patch_jumpop_at_end=True):
+    # Fast path: pure arithmetic loops skip all optimizer passes
+    result = compile_pure_arithmetic_loop(
+        metainterp, greenkey, trace, runtime_args, cut_at)
+    if result is not None:
+        return result
     jitdriver_sd = metainterp.jitdriver_sd
     metainterp_sd = metainterp.staticdata
     jitcell_token = make_jitcell_token(jitdriver_sd)
@@ -676,10 +776,23 @@ class ResumeDescr(AbstractFailDescr):
     def clone(self):
         return self
 
+# Hot-Bridge-Promotion throttle: when a loop is statically classified as
+# bridge-prone (genext_hbp_candidate) AND has dynamically produced more than
+# HBP_BRIDGE_STORM_THRESHOLD bridges, the per-guard-failure jitcounter
+# increment is divided by HBP_THROTTLE_FACTOR.  A smaller increment means the
+# counter (which fires at 1.0) needs proportionally more guard failures before
+# a bridge is compiled -- raising the bar, never lowering it.  Dual-gating
+# (static + dynamic) makes it impossible to fire on an arithmetic-dominated
+# loop, which is what prevents a bridge/trace explosion.
+HBP_BRIDGE_STORM_THRESHOLD = 30
+HBP_THROTTLE_FACTOR = 4.0
+
+
 class AbstractResumeGuardDescr(ResumeDescr):
     _attrs_ = ('status',)
 
     status = r_uint(0)
+    rd_loop_token = None
 
     ST_BUSY_FLAG    = 0x01     # if set, busy tracing from the guard
     ST_TYPE_MASK    = 0x06     # mask for the type (TY_xxx)
@@ -732,6 +845,33 @@ class AbstractResumeGuardDescr(ResumeDescr):
     def get_jitcounter_hash(self):
         return self.status & self.ST_SHIFT_MASK
 
+    def _hbp_should_throttle(self):
+        # HBP GATE TURNED OFF: always return False -> the per-guard
+        # jitcounter increment is never divided, so bridges compile as
+        # eagerly as stock PyPy.  Failing-guard slow paths are therefore
+        # specialized into compiled bridges instead of being throttled
+        # into repeated blackhole bail-outs.  The dual-gate logic below is
+        # retained (dead) so this is a one-line, fully reversible switch.
+        return False
+        # Dual gate: dynamic bridge-storm confirmation AND static
+        # genext HBP-candidate classification of the loop's portal jitcode.
+        # Either gate absent -> no throttling (exact current behavior).
+        loop_token_ref = self.rd_loop_token
+        if loop_token_ref is None:
+            return False
+        loop_token = loop_token_ref.loop_token_wref()
+        if loop_token is None:
+            return False
+        if loop_token.n_compiled_bridges <= HBP_BRIDGE_STORM_THRESHOLD:
+            return False
+        jitdriver_sd = loop_token.outermost_jitdriver_sd
+        if jitdriver_sd is None:
+            return False
+        mainjitcode = jitdriver_sd.mainjitcode
+        if mainjitcode is None:
+            return False
+        return mainjitcode.genext_hbp_candidate
+
     def must_compile(self, deadframe, metainterp_sd, jitdriver_sd):
         jitcounter = metainterp_sd.warmrunnerdesc.jitcounter
         #
@@ -778,6 +918,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
                           intval * 1442968193)
         #
         increment = jitdriver_sd.warmstate.increment_trace_eagerness
+        if self._hbp_should_throttle():
+            increment = increment / HBP_THROTTLE_FACTOR
         return jitcounter.tick(hash, increment)
 
     def start_compiling(self):
@@ -806,6 +948,9 @@ class AbstractResumeGuardDescr(ResumeDescr):
                                new_loop.original_jitcell_token,
                                metainterp.box_names_memo)
         record_loop_or_bridge(metainterp.staticdata, new_loop)
+        original_loop_token = metainterp.resumekey_original_loop_token
+        if original_loop_token is not None:
+            original_loop_token.n_compiled_bridges += 1
 
     def make_a_counter_per_value(self, guard_value_op, index):
         assert guard_value_op.getopnum() == rop.GUARD_VALUE

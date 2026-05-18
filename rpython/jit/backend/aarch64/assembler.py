@@ -8,6 +8,7 @@ from rpython.jit.backend.aarch64.regalloc import (Regalloc, check_imm_arg,
     operations as regalloc_operations, guard_operations, comp_operations,
     CoreRegisterManager, VFPRegisterManager)
 from rpython.jit.backend.aarch64 import registers as r
+from rpython.jit.backend.aarch64.jump import remap_frame_layout_mixed
 from rpython.jit.backend.arm import conditions as c
 from rpython.jit.backend.llsupport import jitframe, rewrite
 from rpython.jit.backend.llsupport.assembler import BaseAssembler
@@ -69,20 +70,40 @@ class AssemblerARM64(ResOpAssembler):
             operations = self._inject_debugging_code(looptoken, operations,
                                                      'e', looptoken.number)
 
-        regalloc = Regalloc(assembler=self)
-        allgcrefs = []
-        operations = regalloc.prepare_loop(inputargs, operations, looptoken,
-                                           allgcrefs)
-        self.reserve_gcref_table(allgcrefs)
-        functionpos = self.mc.get_relative_pos()
+        # T1 genext aarch64 seam: DECIDE-FIRST (aarch64 mc has no
+        # truncate_to).  Probe is a pure predicate, no emission; only if
+        # it returns True do we emit via the genext path.  Otherwise the
+        # normal backend below compiles the loop unchanged.  Stage 1a:
+        # probe is hard-False, so this is a provable no-op.
+        genext_compile_fn = looptoken.genext_compile_function
+        use_genext = False
+        if genext_compile_fn is not None and genext_compile_fn(
+                self, inputargs, operations, True):
+            self.reserve_gcref_table([])
+            functionpos = self.mc.get_relative_pos()
+            self._call_header_with_stack_check()
+            self._check_frame_depth_debug(self.mc)
+            loop_head = self.mc.get_relative_pos()
+            looptoken._ll_loop_code = loop_head
+            frame_depth_no_fixed_size = genext_compile_fn(
+                self, inputargs, operations, False)
+            use_genext = True
 
-        self._call_header_with_stack_check()
-        self._check_frame_depth_debug(self.mc)
+        if not use_genext:
+            regalloc = Regalloc(assembler=self)
+            allgcrefs = []
+            operations = regalloc.prepare_loop(inputargs, operations, looptoken,
+                                               allgcrefs)
+            self.reserve_gcref_table(allgcrefs)
+            functionpos = self.mc.get_relative_pos()
 
-        loop_head = self.mc.get_relative_pos()
-        looptoken._ll_loop_code = loop_head
-        #
-        frame_depth_no_fixed_size = self._assemble(regalloc, inputargs, operations)
+            self._call_header_with_stack_check()
+            self._check_frame_depth_debug(self.mc)
+
+            loop_head = self.mc.get_relative_pos()
+            looptoken._ll_loop_code = loop_head
+            #
+            frame_depth_no_fixed_size = self._assemble(regalloc, inputargs, operations)
         self.update_frame_depth(frame_depth_no_fixed_size + JITFRAME_FIXED_SIZE)
         #
         size_excluding_failure_stuff = self.mc.get_relative_pos()
@@ -226,7 +247,8 @@ class AssemblerARM64(ResOpAssembler):
 
         self.teardown()
 
-        return AsmInfo(ops_offset, startpos + rawstart, codeendpos - startpos)
+        return AsmInfo(ops_offset, startpos + rawstart, codeendpos - startpos,
+                       rawstart + bridgestartpos)
 
     def setup(self, looptoken):
         BaseAssembler.setup(self, looptoken)
@@ -1058,6 +1080,72 @@ class AssemblerARM64(ResOpAssembler):
         b.BL(bridge_addr)
         b.copy_to_raw_memory(patch_addr)
         faildescr.adr_jump_offset = 0
+
+    def stitch_bridge(self, faildescr, target):
+        # post_loop_compilation calls cpu.stitch_bridge directly, outside
+        # any assemble_loop/assemble_bridge context, so (unlike x86) the
+        # aarch64 W^X JIT pages are still execute-only here -- materialize
+        # would SIGBUS.  Toggle write-protection like assemble_bridge.
+        rmmap.enter_assembler_writing()
+        try:
+            return self._stitch_bridge(faildescr, target)
+        finally:
+            rmmap.leave_assembler_writing()
+
+    def _stitch_bridge(self, faildescr, target):
+        """ Attach an already-compiled loop version to a guard.  The
+            version was compiled for a different guard's fail-arg
+            layout, so emit a small stub that remaps the registers /
+            stack slots to the version's expected layout, branch into
+            the version, and patch the guard to enter the stub.
+        """
+        asminfo, bridge_faildescr, version, looptoken = target
+        # AbstractFailDescr is the base defining adr_jump_offset and
+        # rd_vector_info; the narrower ResumeGuardDescr is not guaranteed
+        # here (the descr may be a Copied/CompileLoopVersion variant).
+        assert isinstance(bridge_faildescr, AbstractFailDescr)
+        assert isinstance(faildescr, AbstractFailDescr)
+        assert asminfo.rawstart != 0
+        # vector-reduction accumulators are not handled here yet; assert
+        # no rd_vector_info so adding accum support later cannot silently
+        # skip the remap the x86 backend performs in this case.
+        assert faildescr.rd_vector_info is None
+        assert bridge_faildescr.rd_vector_info is None
+
+        self.setup(looptoken)
+
+        guard_locs = self.rebuild_faillocs_from_descr(faildescr,
+                                                      version.inputargs)
+        bridge_locs = self.rebuild_faillocs_from_descr(bridge_faildescr,
+                                                       version.inputargs)
+        assert len(guard_locs) == len(bridge_locs)
+        src_locations1 = []
+        dst_locations1 = []
+        src_locations2 = []
+        dst_locations2 = []
+        for i in range(len(guard_locs)):
+            src_loc = guard_locs[i]
+            dst_loc = bridge_locs[i]
+            if not src_loc.is_float():
+                src_locations1.append(src_loc)
+                dst_locations1.append(dst_loc)
+            else:
+                src_locations2.append(src_loc)
+                dst_locations2.append(dst_loc)
+        remap_frame_layout_mixed(self, src_locations1, dst_locations1, r.ip0,
+                                 src_locations2, dst_locations2, r.vfp_ip)
+        # branch into the precompiled loop version (position independent)
+        self.mc.B(asminfo.rawstart)
+        rawstart = self.materialize_loop(looptoken)
+        # patch the guard to enter this remap stub, same mechanism as
+        # patch_trace (overwrite the guard's recovery stub start)
+        b = InstrBuilder()
+        patch_addr = faildescr.adr_jump_offset
+        assert patch_addr != 0
+        b.BL(rawstart)
+        b.copy_to_raw_memory(patch_addr)
+        faildescr.adr_jump_offset = 0
+        self.teardown()
 
     def process_pending_guards(self, block_start):
         clt = self.current_clt

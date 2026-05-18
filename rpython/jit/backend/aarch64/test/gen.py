@@ -5,7 +5,16 @@ import tempfile
 class ASMInstruction(object):
 
     asm_opts = '-march=armv8-a'
-    body = """.section .text
+    if sys.platform == 'darwin':
+        body = """.section __TEXT,__text
+.global _main
+_main:
+    .ascii "START   "
+    %s
+    .ascii "END     "
+"""
+    else:
+        body = """.section .text
 _start: .global _start
         .global main
         b main

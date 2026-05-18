@@ -19,6 +19,7 @@ Reason codes:
   HAS_LABEL_ARG       - Operation has label argument (control flow)
   IS_LIVE_OP          - Operation is -live- marker
   NEWFRAME            - Operation requires new frame
+  BRIDGEOPT_FACT      - Optimizer fact carried across a trace/bridge boundary
 """
 
 import os
@@ -42,6 +43,7 @@ REASON_IS_MEMORY_OP = 'IS_MEMORY_OP'
 REASON_HAS_LABEL_ARG = 'HAS_LABEL_ARG'
 REASON_IS_LIVE_OP = 'IS_LIVE_OP'
 REASON_NEWFRAME = 'NEWFRAME'
+REASON_BRIDGEOPT_FACT = 'BRIDGEOPT_FACT'
 REASON_FAST_PATH = 'FAST_PATH'  # Successfully used fast path
 
 

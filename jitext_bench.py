@@ -45,6 +45,11 @@ BENCHMARKS_ALL_MACRO = BENCHMARKS_OWN_MACRO + BENCHMARKS_UNLADEN_SWALLOW
 
 BENCHMARKS_ALL = BENCHMARKS_OWN_MICRO + BENCHMARKS_OWN_MACRO + BENCHMARKS_UNLADEN_SWALLOW
 
+BENCHMARKS_LARGE = [
+    "bm_krakatau",
+    "bm_icbd"
+]
+
 def setup_env_own():
     env = os.environ.copy()
     env["PYTHONPATH"] = ":".join(
@@ -83,7 +88,7 @@ def setup_env_unladen():
 
 
 def setup_env(typ):
-    if typ in ("own", "own-macro", "own-micro"):
+    if typ in ("own", "own-macro", "own-micro", "large"):
         return setup_env_own()
     elif typ == "unladen":
         return setup_env_unladen()
@@ -92,7 +97,7 @@ def setup_env(typ):
 
 
 def setup_bm_path(typ):
-    if typ in ("own", "own-macro", "own-micro"):
+    if typ in ("own", "own-macro", "own-micro", "large"):
         return "benchmarks/own/"
     elif typ == "unladen":
         return "benchmarks/unladen_swallow/performance/"
@@ -109,6 +114,8 @@ def setup_bms(typ):
         return BENCHMARKS_OWN_MICRO
     elif typ == "unladen":
         return BENCHMARKS_UNLADEN_SWALLOW
+    elif typ == "large":
+        return BENCHMARKS_LARGE
     else:
         raise Exception("unreachable path")
 
@@ -126,6 +133,8 @@ def setup_bms_plot(typ):
         return BENCHMARKS_ALL_MACRO
     elif typ == "all":
         return BENCHMARKS_ALL
+    elif typ == "large":
+        return BENCHMARKS_LARGE
     else:
         raise Exception("unreachable path")
 

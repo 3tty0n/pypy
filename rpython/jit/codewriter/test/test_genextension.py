@@ -1,7 +1,7 @@
 import re
 
 from rpython.flowspace.model import Constant
-from rpython.jit.codewriter.jitcode import SwitchDictDescr
+from rpython.jit.codewriter.jitcode import JitCode, SwitchDictDescr
 from rpython.jit.codewriter.flatten import (
     SSARepr, Label, TLabel, Register, ListOfKind)
 from rpython.jit.codewriter.assembler import Assembler, AssemblerError
@@ -49,117 +49,180 @@ def jit_shortcut(self): # test
     if pc == 0: pc = 0
     else: assert 0, 'unreachable'
     while 1:
-        if pc == 0: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([])
-            self.pc = 5
-            ri22 = self.registers_i[22]
-            if isinstance(ri22, ConstInt):
-                i22 = ri22.getint()
-                pc = 116
-                continue
-            _v0 = self.registers_i[22].getint()
-            _v1 = 4
-            _cond = int(_v0 > _v1)
-            # fast-path: record comparison directly, skip heapcache
-            condbox = self.metainterp.history.record2_int(rop.INT_GT, self.registers_i[22], ConstInt(4), _cond)
-            self.opimpl_goto_if_not(condbox, 16, 0, replace=False)
-            pc = self.pc
-            if pc == 16:
-                pc = 16
+        if pc < 117:
+            if pc < 13:
+                if pc < 5:
+                    if pc == 0: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([])
+                        self.pc = 5
+                        ri22 = self.registers_i[22]
+                        if isinstance(ri22, ConstInt):
+                            i22 = ri22.getint()
+                            pc = 116
+                            continue
+                        _v0 = self.registers_i[22].getint()
+                        _v1 = 4
+                        _cond = int(_v0 > _v1)
+                        condbox = self.metainterp.history.record2_int(rop.INT_GT, self.registers_i[22], ConstInt(4), _cond)
+                        self.opimpl_goto_if_not(condbox, 16, 0, replace=False)
+                        pc = self.pc
+                        if pc == 16:
+                            pc = 16
+                        else:
+                            assert self.pc == 5
+                            pc = 5
+                        continue
+                    else:
+                        assert 0 # unreachable
+                else:
+                    if pc < 9:
+                        if pc == 5: # ('int_add', %i23, %i22, '->', %i23) frozenset([])
+                            self.pc = 9
+                            ri23 = self.registers_i[23]
+                            ri22 = self.registers_i[22]
+                            if isinstance(ri23, ConstInt) and isinstance(ri22, ConstInt):
+                                i23 = ri23.getint()
+                                i22 = ri22.getint()
+                                pc = 117
+                                continue
+                            else:
+                                _v0 = self.registers_i[23].getint()
+                                _v1 = self.registers_i[22].getint()
+                                _res = _v0 + _v1
+                                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[23], self.registers_i[22], _res)
+                                self.registers_i[23] = _op
+                                i23 = _res
+                                pc = 9
+                                continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 9: # ('int_sub', %i22, (1), '->', %i22) frozenset([])
+                            self.pc = 13
+                            ri22 = self.registers_i[22]
+                            if isinstance(ri22, ConstInt):
+                                i22 = ri22.getint()
+                                pc = 116
+                                continue
+                            else:
+                                _v0 = self.registers_i[22].getint()
+                                _v1 = 1
+                                _res = _v0 - _v1
+                                _op = self.metainterp.history.record2_int(rop.INT_SUB, self.registers_i[22], ConstInt(1), _res)
+                                self.registers_i[22] = _op
+                                i22 = _res
+                                pc = 0
+                                continue
+                        else:
+                            assert 0 # unreachable
             else:
-                assert self.pc == 5
-                pc = 5
-            continue
-        if pc == 5: # ('int_add', %i23, %i22, '->', %i23) frozenset([])
-            self.pc = 9
-            ri23 = self.registers_i[23]
-            ri22 = self.registers_i[22]
-            if isinstance(ri23, ConstInt) and isinstance(ri22, ConstInt):
-                i23 = ri23.getint()
-                i22 = ri22.getint()
-                pc = 117
-                continue
+                if pc < 16:
+                    if pc == 13: # ('goto', TLabel('L1')) frozenset([])
+                        self.pc = 16
+                        pc = 0
+                        continue
+                    else:
+                        assert 0 # unreachable
+                else:
+                    if pc < 116:
+                        if pc == 16: # ('int_return', %i23) frozenset([])
+                            self.pc = 18
+                            ri23 = self.registers_i[23]
+                            try:
+                                self.opimpl_int_return(ri23)
+                            except ChangeFrame: return
+                            assert 0, 'unreachable'
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 116: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([%i22])
+                            self.pc = 5
+                            cond = i22 > 4
+                            if not cond:
+                                pc = 118
+                                continue
+                            pc = 119
+                            continue
+                        else:
+                            assert 0 # unreachable
+        else:
+            if pc < 120:
+                if pc < 118:
+                    if pc == 117: # ('int_sub', %i22, (1), '->', %i22) frozenset([%i23, %i22])
+                        self.pc = 13
+                        i22 = i22 - 1
+                        pc = 120
+                        continue
+                    else:
+                        assert 0 # unreachable
+                else:
+                    if pc < 119:
+                        if pc == 118: # ('int_return', %i23) frozenset([%i22])
+                            self.pc = 18
+                            ri23 = self.registers_i[23]
+                            try:
+                                self.opimpl_int_return(ri23)
+                            except ChangeFrame: return
+                            assert 0, 'unreachable'
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 119: # ('int_add', %i23, %i22, '->', %i23) frozenset([%i22])
+                            self.pc = 9
+                            ri23 = self.registers_i[23]
+                            if isinstance(ri23, ConstInt):
+                                i23 = ri23.getint()
+                                pc = 117
+                                continue
+                            else:
+                                _v0 = self.registers_i[23].getint()
+                                _v1 = i22
+                                _res = _v0 + _v1
+                                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[23], ConstInt(i22), _res)
+                                self.registers_i[23] = _op
+                                i23 = _res
+                                pc = 121
+                                continue
+                        else:
+                            assert 0 # unreachable
             else:
-                self.registers_i[23] = self.opimpl_int_add(ri23, ri22)
-            pc = 9
-            continue
-        if pc == 9: # ('int_sub', %i22, (1), '->', %i22) frozenset([])
-            self.pc = 13
-            ri22 = self.registers_i[22]
-            if isinstance(ri22, ConstInt):
-                i22 = ri22.getint()
-                pc = 118
-                continue
-            else:
-                self.registers_i[22] = self.opimpl_int_sub(ri22, ConstInt(1))
-            pc = 0
-            continue
-        if pc == 13: # ('goto', TLabel('L1')) frozenset([])
-            self.pc = 16
-            pc = 0
-            continue
-        if pc == 16: # ('int_return', %i23) frozenset([])
-            self.pc = 18
-            ri23 = self.registers_i[23]
-            try:
-                self.opimpl_int_return(ri23)
-            except ChangeFrame: return
-            assert 0, 'unreachable'
-        if pc == 116: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([%i22])
-            self.pc = 5
-            cond = i22 > 4
-            if not cond:
-                pc = 119
-                continue
-            pc = 120
-            continue
-        if pc == 117: # ('int_add', %i23, %i22, '->', %i23) frozenset([%i23, %i22])
-            self.pc = 9
-            i23 = i23 + i22
-            pc = 121
-            continue
-        if pc == 118: # ('int_sub', %i22, (1), '->', %i22) frozenset([%i22])
-            self.pc = 13
-            i22 = i22 - 1
-            pc = 116
-            continue
-        if pc == 119: # ('int_return', %i23) frozenset([%i22])
-            self.pc = 18
-            ri23 = self.registers_i[23]
-            try:
-                self.opimpl_int_return(ri23)
-            except ChangeFrame: return
-            assert 0, 'unreachable'
-        if pc == 120: # ('int_add', %i23, %i22, '->', %i23) frozenset([%i22])
-            self.pc = 9
-            ri23 = self.registers_i[23]
-            if isinstance(ri23, ConstInt):
-                i23 = ri23.getint()
-                pc = 117
-                continue
-            else:
-                self.registers_i[23] = self.opimpl_int_add(ri23, ConstInt(i22))
-            pc = 118
-            continue
-        if pc == 121: # ('int_sub', %i22, (1), '->', %i22) frozenset([%i23, %i22])
-            self.pc = 13
-            i22 = i22 - 1
-            pc = 122
-            continue
-        if pc == 122: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([%i23, %i22])
-            self.pc = 5
-            cond = i22 > 4
-            if not cond:
-                pc = 123
-                continue
-            pc = 117
-            continue
-        if pc == 123: # ('int_return', %i23) frozenset([%i23, %i22])
-            self.pc = 18
-            try:
-                self.opimpl_int_return(ConstInt(i23))
-            except ChangeFrame: return
-            assert 0, 'unreachable'
-        assert 0 # unreachable"""
+                if pc < 122:
+                    if pc < 121:
+                        if pc == 120: # ('goto_if_not_int_gt', %i22, (4), TLabel('L2')) frozenset([%i23, %i22])
+                            self.pc = 5
+                            cond = i22 > 4
+                            if not cond:
+                                pc = 122
+                                continue
+                            pc = 123
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 121: # ('int_sub', %i22, (1), '->', %i22) frozenset([%i22])
+                            self.pc = 13
+                            i22 = i22 - 1
+                            pc = 116
+                            continue
+                        else:
+                            assert 0 # unreachable
+                else:
+                    if pc < 123:
+                        if pc == 122: # ('int_return', %i23) frozenset([%i23, %i22])
+                            self.pc = 18
+                            try:
+                                self.opimpl_int_return(ConstInt(i23))
+                            except ChangeFrame: return
+                            assert 0, 'unreachable'
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 123: # ('int_add', %i23, %i22, '->', %i23) frozenset([%i23, %i22])
+                            self.pc = 9
+                            i23 = i23 + i22
+                            pc = 117
+                            continue
+                        else:
+                            assert 0 # unreachable"""
 
 def test_integration_switch(enable_genextension):
     ssarepr = SSARepr("test", genextension=True)
@@ -199,81 +262,122 @@ def jit_shortcut(self): # test
     elif pc == 22: pc = 22
     else: assert 0, 'unreachable'
     while 1:
-        if pc == 0: # ('-live-', %i22) frozenset([])
-            self.pc = 3
-            pc = 3
-            continue
-        if pc == 3: # ('switch', %i22, <SwitchDictDescr {-5: 9, 2: 14, 7: 19}>) frozenset([])
-            self.pc = 7
-            ri22 = self.registers_i[22]
-            if isinstance(ri22, ConstInt):
-                i22 = ri22.getint()
-                pc = 122
-                continue
-            self.opimpl_switch(ri22, glob0, 3)
-            pc = self.pc
-            if pc == 9: pc = 9
-            elif pc == 14: pc = 14
-            elif pc == 19: pc = 19
-            elif pc == 7: pc = 7
-            else: assert 0
-            continue
-        if pc == 7: # ('int_return', (42)) frozenset([])
-            self.pc = 9
-            try:
-                self.opimpl_int_return(ConstInt(42))
-            except ChangeFrame: return
-            assert 0, 'unreachable'
-        if pc == 9: # ('-live-',) frozenset([])
-            self.pc = 12
-            pc = 12
-            continue
-        if pc == 12: # ('int_return', (12)) frozenset([])
-            self.pc = 14
-            try:
-                self.opimpl_int_return(ConstInt(12))
-            except ChangeFrame: return
-            assert 0, 'unreachable'
-        if pc == 14: # ('-live-',) frozenset([])
-            self.pc = 17
-            pc = 17
-            continue
-        if pc == 17: # ('int_return', (51)) frozenset([])
-            self.pc = 19
-            try:
-                self.opimpl_int_return(ConstInt(51))
-            except ChangeFrame: return
-            assert 0, 'unreachable'
-        if pc == 19: # ('-live-',) frozenset([])
-            self.pc = 22
-            pc = 22
-            continue
-        if pc == 22: # ('int_return', (1212)) frozenset([])
-            self.pc = 24
-            try:
-                self.opimpl_int_return(ConstInt(1212))
-            except ChangeFrame: return
-            assert 0, 'unreachable'
-        if pc == 122: # ('switch', %i22, <SwitchDictDescr {-5: 9, 2: 14, 7: 19}>) frozenset([%i22])
-            self.pc = 7
-            if i22 == -5:
-                pc = 12
-                continue
-            elif i22 == 2:
-                pc = 17
-                continue
-            elif i22 == 7:
-                pc = 22
-                continue
-            pc = 123
-            continue
-        if pc == 123: # ('int_return', (42)) frozenset([%i22])
-            self.pc = 9
-            try:
-                self.opimpl_int_return(ConstInt(42))
-            except ChangeFrame: return
-            assert 0, 'unreachable'
-        assert 0 # unreachable"""
+        if pc < 14:
+            if pc < 7:
+                if pc < 3:
+                    if pc == 0: # ('-live-', %i22) frozenset([])
+                        self.pc = 3
+                        pc = 3
+                        continue
+                    else:
+                        assert 0 # unreachable
+                else:
+                    if pc == 3: # ('switch', %i22, <SwitchDictDescr {-5: 9, 2: 14, 7: 19}>) frozenset([])
+                        self.pc = 7
+                        ri22 = self.registers_i[22]
+                        if isinstance(ri22, ConstInt):
+                            i22 = ri22.getint()
+                            pc = 122
+                            continue
+                        self.opimpl_switch(ri22, glob0, 3)
+                        pc = self.pc
+                        if pc == 9: pc = 9
+                        elif pc == 14: pc = 14
+                        elif pc == 19: pc = 19
+                        elif pc == 7: pc = 7
+                        else: assert 0
+                        continue
+                    else:
+                        assert 0 # unreachable
+            else:
+                if pc < 9:
+                    if pc == 7: # ('int_return', (42)) frozenset([])
+                        self.pc = 9
+                        try:
+                            self.opimpl_int_return(ConstInt(42))
+                        except ChangeFrame: return
+                        assert 0, 'unreachable'
+                    else:
+                        assert 0 # unreachable
+                else:
+                    if pc < 12:
+                        if pc == 9: # ('-live-',) frozenset([])
+                            self.pc = 12
+                            pc = 12
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 12: # ('int_return', (12)) frozenset([])
+                            self.pc = 14
+                            try:
+                                self.opimpl_int_return(ConstInt(12))
+                            except ChangeFrame: return
+                            assert 0, 'unreachable'
+                        else:
+                            assert 0 # unreachable
+        else:
+            if pc < 22:
+                if pc < 17:
+                    if pc == 14: # ('-live-',) frozenset([])
+                        self.pc = 17
+                        pc = 17
+                        continue
+                    else:
+                        assert 0 # unreachable
+                else:
+                    if pc < 19:
+                        if pc == 17: # ('int_return', (51)) frozenset([])
+                            self.pc = 19
+                            try:
+                                self.opimpl_int_return(ConstInt(51))
+                            except ChangeFrame: return
+                            assert 0, 'unreachable'
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 19: # ('-live-',) frozenset([])
+                            self.pc = 22
+                            pc = 22
+                            continue
+                        else:
+                            assert 0 # unreachable
+            else:
+                if pc < 122:
+                    if pc == 22: # ('int_return', (1212)) frozenset([])
+                        self.pc = 24
+                        try:
+                            self.opimpl_int_return(ConstInt(1212))
+                        except ChangeFrame: return
+                        assert 0, 'unreachable'
+                    else:
+                        assert 0 # unreachable
+                else:
+                    if pc < 123:
+                        if pc == 122: # ('switch', %i22, <SwitchDictDescr {-5: 9, 2: 14, 7: 19}>) frozenset([%i22])
+                            self.pc = 7
+                            if i22 == -5:
+                                pc = 12
+                                continue
+                            elif i22 == 2:
+                                pc = 17
+                                continue
+                            elif i22 == 7:
+                                pc = 22
+                                continue
+                            pc = 123
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 123: # ('int_return', (42)) frozenset([%i22])
+                            self.pc = 9
+                            try:
+                                self.opimpl_int_return(ConstInt(42))
+                            except ChangeFrame: return
+                            assert 0, 'unreachable'
+                        else:
+                            assert 0 # unreachable"""
 
 @pytest.mark.xfail()
 def test_skip_jump_to_live(enable_genextension):
@@ -295,47 +399,194 @@ def test_skip_jump_to_live(enable_genextension):
     assert jitcode._genext_source == """\
 def jit_shortcut(self): # test
     pc = self.pc
+    i0 = 0xcafedead
+    i1 = 0xcafedead
+    if pc == 0: pc = 0
+    elif pc == 11: pc = 11
+    else: assert 0, 'unreachable'
     while 1:
-        if pc == 0: # ('int_sub', %i0, (1), '->', %i0)
-            self.pc = 4
-            self._result_argcode = 'i'
-            self.registers_i[0] = self.opimpl_int_sub(self.registers_i[0], ConstInt(1))
-            pc = 4
-            continue
-        if pc == 4: # ('int_add', %i1, %i0, '->', %i1)
-            self.pc = 8
-            self._result_argcode = 'i'
-            self.registers_i[1] = self.opimpl_int_add(self.registers_i[1], self.registers_i[0])
-            pc = 11
-            continue
-        if pc == 8: # ('-live-', %i1, %i0)
-            self.pc = 11
-            pass # live
-            pc = 11
-            continue
-        if pc == 11: # ('goto_if_not_int_gt', %i0, (0), TLabel('L2'))
-            self.pc = 16
-            self._result_argcode = 'v'
-            self.opimpl_goto_if_not_int_gt(self.registers_i[0], ConstInt(0), 19, 11)
-            pc = self.pc
-            if pc == 16: pc = 0
-            elif pc == 19: pc = 19
+        if pc < 120:
+            if pc < 11:
+                if pc < 4:
+                    if pc == 0: # ('int_sub', %i0, (1), '->', %i0) frozenset([])
+                        self.pc = 4
+                        ri0 = self.registers_i[0]
+                        if isinstance(ri0, ConstInt):
+                            i0 = ri0.getint()
+                            pc = 119
+                            continue
+                        else:
+                            _v0 = self.registers_i[0].getint()
+                            _v1 = 1
+                            _res = _v0 - _v1
+                            _op = self.metainterp.history.record2_int(rop.INT_SUB, self.registers_i[0], ConstInt(1), _res)
+                            self.registers_i[0] = _op
+                            i0 = _res
+                            pc = 4
+                            continue
+                    else:
+                        assert 0 # unreachable
+                else:
+                    if pc < 8:
+                        if pc == 4: # ('int_add', %i1, %i0, '->', %i1) frozenset([])
+                            self.pc = 8
+                            ri1 = self.registers_i[1]
+                            ri0 = self.registers_i[0]
+                            if isinstance(ri1, ConstInt) and isinstance(ri0, ConstInt):
+                                i1 = ri1.getint()
+                                i0 = ri0.getint()
+                                pc = 120
+                                continue
+                            else:
+                                _v0 = self.registers_i[1].getint()
+                                _v1 = self.registers_i[0].getint()
+                                _res = _v0 + _v1
+                                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], self.registers_i[0], _res)
+                                self.registers_i[1] = _op
+                                i1 = _res
+                                pc = 11
+                                continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 8: # ('-live-', %i1, %i0) frozenset([])
+                            self.pc = 11
+                            pc = 11
+                            continue
+                        else:
+                            assert 0 # unreachable
             else:
-                assert 0 # unreachable
-            continue
-        if pc == 16: # ('goto', TLabel('L1'))
-            self.pc = 19
-            pc = self.pc = 0 # goto
-            continue
-            pc = 0
-            continue
-        if pc == 19: # ('int_return', %i1)
-            self.pc = 21
-            try:
-                self.opimpl_int_return(self.registers_i[1])
-            except ChangeFrame: return
-            assert 0 # unreachable
-        assert 0 # unreachable"""
+                if pc < 19:
+                    if pc < 16:
+                        if pc == 11: # ('goto_if_not_int_gt', %i0, (0), TLabel('L2')) frozenset([])
+                            self.pc = 16
+                            ri0 = self.registers_i[0]
+                            if isinstance(ri0, ConstInt):
+                                i0 = ri0.getint()
+                                pc = 121
+                                continue
+                            _v0 = self.registers_i[0].getint()
+                            _v1 = 0
+                            _cond = int(_v0 > _v1)
+                            condbox = self.metainterp.history.record2_int(rop.INT_GT, self.registers_i[0], ConstInt(0), _cond)
+                            self.opimpl_goto_if_not(condbox, 19, 11, replace=False)
+                            pc = self.pc
+                            if pc == 19:
+                                pc = 19
+                            else:
+                                assert self.pc == 16
+                                pc = 16
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 16: # ('goto', TLabel('L1')) frozenset([])
+                            self.pc = 19
+                            pc = 0
+                            continue
+                        else:
+                            assert 0 # unreachable
+                else:
+                    if pc < 119:
+                        if pc == 19: # ('int_return', %i1) frozenset([])
+                            self.pc = 21
+                            ri1 = self.registers_i[1]
+                            try:
+                                self.opimpl_int_return(ri1)
+                            except ChangeFrame: return
+                            assert 0, 'unreachable'
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 119: # ('int_add', %i1, %i0, '->', %i1) frozenset([%i0])
+                            self.pc = 8
+                            ri1 = self.registers_i[1]
+                            if isinstance(ri1, ConstInt):
+                                i1 = ri1.getint()
+                                pc = 120
+                                continue
+                            else:
+                                _v0 = self.registers_i[1].getint()
+                                _v1 = i0
+                                _res = _v0 + _v1
+                                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], ConstInt(i0), _res)
+                                self.registers_i[1] = _op
+                                i1 = _res
+                                pc = 121
+                                continue
+                        else:
+                            assert 0 # unreachable
+        else:
+            if pc < 123:
+                if pc < 121:
+                    if pc == 120: # ('goto_if_not_int_gt', %i0, (0), TLabel('L2')) frozenset([%i1, %i0])
+                        self.pc = 16
+                        cond = i0 > 0
+                        if not cond:
+                            pc = 122
+                            continue
+                        pc = 123
+                        continue
+                    else:
+                        assert 0 # unreachable
+                else:
+                    if pc < 122:
+                        if pc == 121: # ('goto_if_not_int_gt', %i0, (0), TLabel('L2')) frozenset([%i0])
+                            self.pc = 16
+                            cond = i0 > 0
+                            if not cond:
+                                pc = 124
+                                continue
+                            pc = 125
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 122: # ('int_return', %i1) frozenset([%i1, %i0])
+                            self.pc = 21
+                            try:
+                                self.opimpl_int_return(ConstInt(i1))
+                            except ChangeFrame: return
+                            assert 0, 'unreachable'
+                        else:
+                            assert 0 # unreachable
+            else:
+                if pc < 125:
+                    if pc < 124:
+                        if pc == 123: # ('int_sub', %i0, (1), '->', %i0) frozenset([%i1, %i0])
+                            self.pc = 4
+                            i0 = i0 - 1
+                            pc = 126
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 124: # ('int_return', %i1) frozenset([%i0])
+                            self.pc = 21
+                            ri1 = self.registers_i[1]
+                            try:
+                                self.opimpl_int_return(ri1)
+                            except ChangeFrame: return
+                            assert 0, 'unreachable'
+                        else:
+                            assert 0 # unreachable
+                else:
+                    if pc < 126:
+                        if pc == 125: # ('int_sub', %i0, (1), '->', %i0) frozenset([%i0])
+                            self.pc = 4
+                            i0 = i0 - 1
+                            pc = 119
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 126: # ('int_add', %i1, %i0, '->', %i1) frozenset([%i1, %i0])
+                            self.pc = 8
+                            i1 = i1 + i0
+                            pc = 120
+                            continue
+                        else:
+                            assert 0 # unreachable"""
 
 
 @pytest.mark.xfail()
@@ -362,58 +613,227 @@ def test_skip_conditional_jump(enable_genextension):
     assert jitcode._genext_source == """\
 def jit_shortcut(self): # test
     pc = self.pc
+    i0 = 0xcafedead
+    i1 = 0xcafedead
+    if pc == 0: pc = 0
+    elif pc == 11: pc = 11
+    elif pc == 22: pc = 22
+    else: assert 0, 'unreachable'
     while 1:
-        if pc == 0: # ('int_sub', %i0, (1), '->', %i0)
-            self.pc = 4
-            self._result_argcode = 'i'
-            self.registers_i[0] = self.opimpl_int_sub(self.registers_i[0], ConstInt(1))
-            pc = 4
-            continue
-        if pc == 4: # ('int_add', %i1, %i0, '->', %i1)
-            self.pc = 8
-            self._result_argcode = 'i'
-            self.registers_i[1] = self.opimpl_int_add(self.registers_i[1], self.registers_i[0])
-            pc = 11
-            continue
-        if pc == 8: # ('-live-', %i1, %i0)
-            self.pc = 11
-            pass # live
-            pc = 11
-            continue
-        if pc == 11: # ('goto_if_not_int_gt', %i0, (0), TLabel('L2'))
-            self.pc = 16
-            self._result_argcode = 'v'
-            self.opimpl_goto_if_not_int_gt(self.registers_i[0], ConstInt(0), 19, 11)
-            pc = self.pc
-            if pc == 16: pc = 0
-            elif pc == 19: pc = 22
+        if pc < 126:
+            if pc < 16:
+                if pc < 8:
+                    if pc < 4:
+                        if pc == 0: # ('int_sub', %i0, (1), '->', %i0) frozenset([])
+                            self.pc = 4
+                            ri0 = self.registers_i[0]
+                            if isinstance(ri0, ConstInt):
+                                i0 = ri0.getint()
+                                pc = 125
+                                continue
+                            else:
+                                _v0 = self.registers_i[0].getint()
+                                _v1 = 1
+                                _res = _v0 - _v1
+                                _op = self.metainterp.history.record2_int(rop.INT_SUB, self.registers_i[0], ConstInt(1), _res)
+                                self.registers_i[0] = _op
+                                i0 = _res
+                                pc = 4
+                                continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 4: # ('int_add', %i1, %i0, '->', %i1) frozenset([])
+                            self.pc = 8
+                            ri1 = self.registers_i[1]
+                            ri0 = self.registers_i[0]
+                            if isinstance(ri1, ConstInt) and isinstance(ri0, ConstInt):
+                                i1 = ri1.getint()
+                                i0 = ri0.getint()
+                                pc = 126
+                                continue
+                            else:
+                                _v0 = self.registers_i[1].getint()
+                                _v1 = self.registers_i[0].getint()
+                                _res = _v0 + _v1
+                                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], self.registers_i[0], _res)
+                                self.registers_i[1] = _op
+                                i1 = _res
+                                pc = 11
+                                continue
+                        else:
+                            assert 0 # unreachable
+                else:
+                    if pc < 11:
+                        if pc == 8: # ('-live-', %i1, %i0) frozenset([])
+                            self.pc = 11
+                            pc = 11
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 11: # ('goto_if_not_int_gt', %i0, (0), TLabel('L2')) frozenset([])
+                            self.pc = 16
+                            ri0 = self.registers_i[0]
+                            if isinstance(ri0, ConstInt):
+                                i0 = ri0.getint()
+                                pc = 127
+                                continue
+                            _v0 = self.registers_i[0].getint()
+                            _v1 = 0
+                            _cond = int(_v0 > _v1)
+                            condbox = self.metainterp.history.record2_int(rop.INT_GT, self.registers_i[0], ConstInt(0), _cond)
+                            self.opimpl_goto_if_not(condbox, 19, 11, replace=False)
+                            pc = self.pc
+                            if pc == 19:
+                                pc = 19
+                            else:
+                                assert self.pc == 16
+                                pc = 16
+                            continue
+                        else:
+                            assert 0 # unreachable
             else:
-                assert 0 # unreachable
-            continue
-        if pc == 16: # ('goto', TLabel('L1'))
-            self.pc = 19
-            pc = self.pc = 0 # goto
-            continue
-            pc = 0
-            continue
-        if pc == 19: # ('-live-', %i1, %i0)
-            self.pc = 22
-            pass # live
-            pc = 25
-            continue
-        if pc == 22: # ('goto', TLabel('L4'))
-            self.pc = 25
-            pc = self.pc = 25 # goto
-            continue
-            pc = 25
-            continue
-        if pc == 25: # ('int_return', %i1)
-            self.pc = 27
-            try:
-                self.opimpl_int_return(self.registers_i[1])
-            except ChangeFrame: return
-            assert 0 # unreachable
-        assert 0 # unreachable"""
+                if pc < 22:
+                    if pc < 19:
+                        if pc == 16: # ('goto', TLabel('L1')) frozenset([])
+                            self.pc = 19
+                            pc = 0
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 19: # ('-live-', %i1, %i0) frozenset([])
+                            self.pc = 22
+                            pc = 25
+                            continue
+                        else:
+                            assert 0 # unreachable
+                else:
+                    if pc < 25:
+                        if pc == 22: # ('goto', TLabel('L4')) frozenset([])
+                            self.pc = 25
+                            pc = 25
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc < 125:
+                            if pc == 25: # ('int_return', %i1) frozenset([])
+                                self.pc = 27
+                                ri1 = self.registers_i[1]
+                                try:
+                                    self.opimpl_int_return(ri1)
+                                except ChangeFrame: return
+                                assert 0, 'unreachable'
+                            else:
+                                assert 0 # unreachable
+                        else:
+                            if pc == 125: # ('int_add', %i1, %i0, '->', %i1) frozenset([%i0])
+                                self.pc = 8
+                                ri1 = self.registers_i[1]
+                                if isinstance(ri1, ConstInt):
+                                    i1 = ri1.getint()
+                                    pc = 126
+                                    continue
+                                else:
+                                    _v0 = self.registers_i[1].getint()
+                                    _v1 = i0
+                                    _res = _v0 + _v1
+                                    _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], ConstInt(i0), _res)
+                                    self.registers_i[1] = _op
+                                    i1 = _res
+                                    pc = 127
+                                    continue
+                            else:
+                                assert 0 # unreachable
+        else:
+            if pc < 130:
+                if pc < 128:
+                    if pc < 127:
+                        if pc == 126: # ('goto_if_not_int_gt', %i0, (0), TLabel('L2')) frozenset([%i1, %i0])
+                            self.pc = 16
+                            cond = i0 > 0
+                            if not cond:
+                                pc = 128
+                                continue
+                            pc = 129
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 127: # ('goto_if_not_int_gt', %i0, (0), TLabel('L2')) frozenset([%i0])
+                            self.pc = 16
+                            cond = i0 > 0
+                            if not cond:
+                                pc = 130
+                                continue
+                            pc = 131
+                            continue
+                        else:
+                            assert 0 # unreachable
+                else:
+                    if pc < 129:
+                        if pc == 128: # ('-live-', %i1, %i0) frozenset([%i1, %i0])
+                            self.pc = 22
+                            pc = 132
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 129: # ('int_sub', %i0, (1), '->', %i0) frozenset([%i1, %i0])
+                            self.pc = 4
+                            i0 = i0 - 1
+                            pc = 133
+                            continue
+                        else:
+                            assert 0 # unreachable
+            else:
+                if pc < 132:
+                    if pc < 131:
+                        if pc == 130: # ('-live-', %i1, %i0) frozenset([%i0])
+                            self.pc = 22
+                            pc = 134
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 131: # ('int_sub', %i0, (1), '->', %i0) frozenset([%i0])
+                            self.pc = 4
+                            i0 = i0 - 1
+                            pc = 125
+                            continue
+                        else:
+                            assert 0 # unreachable
+                else:
+                    if pc < 133:
+                        if pc == 132: # ('int_return', %i1) frozenset([%i1, %i0])
+                            self.pc = 27
+                            try:
+                                self.opimpl_int_return(ConstInt(i1))
+                            except ChangeFrame: return
+                            assert 0, 'unreachable'
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc < 134:
+                            if pc == 133: # ('int_add', %i1, %i0, '->', %i1) frozenset([%i1, %i0])
+                                self.pc = 8
+                                i1 = i1 + i0
+                                pc = 126
+                                continue
+                            else:
+                                assert 0 # unreachable
+                        else:
+                            if pc == 134: # ('int_return', %i1) frozenset([%i0])
+                                self.pc = 27
+                                ri1 = self.registers_i[1]
+                                try:
+                                    self.opimpl_int_return(ri1)
+                                except ChangeFrame: return
+                                assert 0, 'unreachable'
+                            else:
+                                assert 0 # unreachable"""
 
 
 @pytest.mark.xfail()
@@ -437,49 +857,142 @@ def test_skip_chained_jump_1(enable_genextension):
     assert jitcode._genext_source == """\
 def jit_shortcut(self): # test
     pc = self.pc
+    i0 = 0xcafedead
+    i1 = 0xcafedead
+    if pc == 0: pc = 0
+    elif pc == 14: pc = 14
+    else: assert 0, 'unreachable'
     while 1:
-        if pc == 0: # ('int_sub', %i0, (1), '->', %i0)
-            self.pc = 4
-            self._result_argcode = 'i'
-            self.registers_i[0] = self.opimpl_int_sub(self.registers_i[0], ConstInt(1))
-            pc = 4
-            continue
-        if pc == 4: # ('int_add', %i1, %i0, '->', %i1)
-            self.pc = 8
-            self._result_argcode = 'i'
-            self.registers_i[1] = self.opimpl_int_add(self.registers_i[1], self.registers_i[0])
-            pc = 0
-            continue
-        if pc == 8: # ('goto', TLabel('L2'))
-            self.pc = 11
-            pc = self.pc = 0 # goto
-            continue
-            pc = 0
-            continue
-        if pc == 11: # ('-live-', %i1, %i0)
-            self.pc = 14
-            pass # live
-            pc = 0
-            continue
-        if pc == 14: # ('goto', TLabel('L1'))
-            self.pc = 17
-            pc = self.pc = 0 # goto
-            continue
-            pc = 0
-            continue
-        if pc == 17: # ('goto', TLabel('L3'))
-            self.pc = 20
-            pc = self.pc = 0 # goto
-            continue
-            pc = 0
-            continue
-        if pc == 20: # ('int_return', %i1)
-            self.pc = 22
-            try:
-                self.opimpl_int_return(self.registers_i[1])
-            except ChangeFrame: return
-            assert 0 # unreachable
-        assert 0 # unreachable"""
+        if pc < 17:
+            if pc < 8:
+                if pc < 4:
+                    if pc == 0: # ('int_sub', %i0, (1), '->', %i0) frozenset([])
+                        self.pc = 4
+                        ri0 = self.registers_i[0]
+                        if isinstance(ri0, ConstInt):
+                            i0 = ri0.getint()
+                            pc = 120
+                            continue
+                        else:
+                            _v0 = self.registers_i[0].getint()
+                            _v1 = 1
+                            _res = _v0 - _v1
+                            _op = self.metainterp.history.record2_int(rop.INT_SUB, self.registers_i[0], ConstInt(1), _res)
+                            self.registers_i[0] = _op
+                            i0 = _res
+                            pc = 4
+                            continue
+                    else:
+                        assert 0 # unreachable
+                else:
+                    if pc == 4: # ('int_add', %i1, %i0, '->', %i1) frozenset([])
+                        self.pc = 8
+                        ri1 = self.registers_i[1]
+                        ri0 = self.registers_i[0]
+                        if isinstance(ri1, ConstInt) and isinstance(ri0, ConstInt):
+                            i1 = ri1.getint()
+                            i0 = ri0.getint()
+                            pc = 121
+                            continue
+                        else:
+                            _v0 = self.registers_i[1].getint()
+                            _v1 = self.registers_i[0].getint()
+                            _res = _v0 + _v1
+                            _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], self.registers_i[0], _res)
+                            self.registers_i[1] = _op
+                            i1 = _res
+                            pc = 0
+                            continue
+                    else:
+                        assert 0 # unreachable
+            else:
+                if pc < 11:
+                    if pc == 8: # ('goto', TLabel('L2')) frozenset([])
+                        self.pc = 11
+                        pc = 0
+                        continue
+                    else:
+                        assert 0 # unreachable
+                else:
+                    if pc < 14:
+                        if pc == 11: # ('-live-', %i1, %i0) frozenset([])
+                            self.pc = 14
+                            pc = 0
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 14: # ('goto', TLabel('L1')) frozenset([])
+                            self.pc = 17
+                            pc = 0
+                            continue
+                        else:
+                            assert 0 # unreachable
+        else:
+            if pc < 121:
+                if pc < 20:
+                    if pc == 17: # ('goto', TLabel('L3')) frozenset([])
+                        self.pc = 20
+                        pc = 0
+                        continue
+                    else:
+                        assert 0 # unreachable
+                else:
+                    if pc < 120:
+                        if pc == 20: # ('int_return', %i1) frozenset([])
+                            self.pc = 22
+                            ri1 = self.registers_i[1]
+                            try:
+                                self.opimpl_int_return(ri1)
+                            except ChangeFrame: return
+                            assert 0, 'unreachable'
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 120: # ('int_add', %i1, %i0, '->', %i1) frozenset([%i0])
+                            self.pc = 8
+                            ri1 = self.registers_i[1]
+                            if isinstance(ri1, ConstInt):
+                                i1 = ri1.getint()
+                                pc = 121
+                                continue
+                            else:
+                                _v0 = self.registers_i[1].getint()
+                                _v1 = i0
+                                _res = _v0 + _v1
+                                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], ConstInt(i0), _res)
+                                self.registers_i[1] = _op
+                                i1 = _res
+                                pc = 122
+                                continue
+                        else:
+                            assert 0 # unreachable
+            else:
+                if pc < 122:
+                    if pc == 121: # ('int_sub', %i0, (1), '->', %i0) frozenset([%i1, %i0])
+                        self.pc = 4
+                        i0 = i0 - 1
+                        pc = 123
+                        continue
+                    else:
+                        assert 0 # unreachable
+                else:
+                    if pc < 123:
+                        if pc == 122: # ('int_sub', %i0, (1), '->', %i0) frozenset([%i0])
+                            self.pc = 4
+                            i0 = i0 - 1
+                            pc = 120
+                            continue
+                        else:
+                            assert 0 # unreachable
+                    else:
+                        if pc == 123: # ('int_add', %i1, %i0, '->', %i1) frozenset([%i1, %i0])
+                            self.pc = 8
+                            i1 = i1 + i0
+                            pc = 121
+                            continue
+                        else:
+                            assert 0 # unreachable"""
 
 
 def test_specialize_int_add():
@@ -519,12 +1032,17 @@ ri0 = self.registers_i[0]
 if isinstance(ri1, ConstInt) and isinstance(ri0, ConstInt):
     i1 = ri1.getint()
     i0 = ri0.getint()
-    pc = 108
+    pc = 109
     continue
 else:
-    self.registers_i[1] = self.opimpl_int_add(ri1, ri0)
-pc = 6
-continue"""
+    _v0 = self.registers_i[1].getint()
+    _v1 = self.registers_i[0].getint()
+    _res = _v0 + _v1
+    _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], self.registers_i[0], _res)
+    self.registers_i[1] = _op
+    i1 = _res
+    pc = 6
+    continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 
@@ -539,9 +1057,14 @@ if isinstance(ri1, ConstInt) and isinstance(ri0, ConstInt):
     pc = 113
     continue
 else:
-    self.registers_i[1] = self.opimpl_int_add(ri1, ri0)
-pc = 114
-continue"""
+    _v0 = self.registers_i[1].getint()
+    _v1 = self.registers_i[0].getint()
+    _res = _v0 + _v1
+    _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], self.registers_i[0], _res)
+    self.registers_i[1] = _op
+    i1 = _res
+    pc = 114
+    continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == {i2}
 
@@ -569,12 +1092,17 @@ continue"""
 ri0 = self.registers_i[0]
 if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
-    pc = %d
+    pc = 109
     continue
 else:
-    self.registers_i[1] = self.opimpl_int_add(ri0, ConstInt(1))
-pc = 7
-continue""" % (work_list.OFFSET + 7)
+    _v0 = self.registers_i[0].getint()
+    _v1 = 1
+    _res = _v0 + _v1
+    _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[0], ConstInt(1), _res)
+    self.registers_i[1] = _op
+    i1 = _res
+    pc = 7
+    continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 
@@ -602,12 +1130,17 @@ continue"""
 ri0 = self.registers_i[0]
 if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
-    pc = %d
+    pc = 109
     continue
 else:
-    self.registers_i[1] = self.opimpl_int_rshift(ri0, ConstInt(1))
-pc = 7
-continue""" % (work_list.OFFSET + 7)
+    _v0 = self.registers_i[0].getint()
+    _v1 = 1
+    _res = _v0 >> _v1
+    _op = self.metainterp.history.record2_int(rop.INT_RSHIFT, self.registers_i[0], ConstInt(1), _res)
+    self.registers_i[1] = _op
+    i1 = _res
+    pc = 7
+    continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 
@@ -631,15 +1164,20 @@ continue"""
     newpc = insn_specializer.get_pc()
     assert newpc == 5
     s = insn_specializer.make_code()
-    # fast-path: directly compute and record, skip heapcache
     assert s == """\
-_v0 = self.registers_i[0].getint()
-_res = ~_v0
-_op = self.metainterp.history.record1_int(rop.INT_INVERT, self.registers_i[0], _res)
-self.registers_i[1] = _op
-i1 = _res
-pc = 7
-continue"""
+ri0 = self.registers_i[0]
+if isinstance(ri0, ConstInt):
+    i0 = ri0.getint()
+    pc = 109
+    continue
+else:
+    _v0 = self.registers_i[0].getint()
+    _res = ~_v0
+    _op = self.metainterp.history.record1_int(rop.INT_INVERT, self.registers_i[0], _res)
+    self.registers_i[1] = _op
+    i1 = _res
+    pc = 7
+    continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 
@@ -699,7 +1237,6 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
 _v0 = self.registers_i[0].getint()
 _v1 = self.registers_i[1].getint()
 _cond = int(_v0 < _v1)
-# fast-path: record comparison directly, skip heapcache
 condbox = self.metainterp.history.record2_int(rop.INT_LT, self.registers_i[0], self.registers_i[1], _cond)
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
@@ -713,7 +1250,7 @@ continue"""
     # unspecialized case with constant register
     insn_specializer = work_list.specialize_pc({i2}, 5)
     s = insn_specializer.make_code()
-    # fast-path with register sync
+    # fast-path with deferred register sync before guard
     assert s == """\
 ri0 = self.registers_i[0]
 ri1 = self.registers_i[1]
@@ -722,12 +1259,11 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
     i1 = ri1.getint()
     pc = 119
     continue
-glob0(self, i2) # jit_sync_regs_i2
 _v0 = self.registers_i[0].getint()
 _v1 = self.registers_i[1].getint()
 _cond = int(_v0 < _v1)
-# fast-path: record comparison directly, skip heapcache
 condbox = self.metainterp.history.record2_int(rop.INT_LT, self.registers_i[0], self.registers_i[1], _cond)
+glob0(self, i2) # jit_sync_regs_i2
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
@@ -1048,9 +1584,14 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
     pc = 117
     continue
 else:
-    self.registers_i[2] = self.opimpl_int_xor(ri0, ri1)
-pc = 6
-continue"""
+    _v0 = self.registers_i[0].getint()
+    _v1 = self.registers_i[1].getint()
+    _res = _v0 ^ _v1
+    _op = self.metainterp.history.record2_int(rop.INT_XOR, self.registers_i[0], self.registers_i[1], _res)
+    self.registers_i[2] = _op
+    i2 = _res
+    pc = 6
+    continue"""
 
     work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
     insn_specializer = work_list.specialize_pc({i0, i1, i2, i3}, 5)
@@ -1456,15 +1997,20 @@ continue"""
     newpc = insn_specializer.get_pc()
     assert newpc == 5
     s = insn_specializer.make_code()
-    # fast-path: directly compute and record, skip heapcache
     assert s == """\
-_v0 = self.registers_i[0].getint()
-_res = int(bool(_v0))
-_op = self.metainterp.history.record1_int(rop.INT_IS_TRUE, self.registers_i[0], _res)
-self.registers_i[1] = _op
-i1 = _res
-pc = 7
-continue"""
+ri0 = self.registers_i[0]
+if isinstance(ri0, ConstInt):
+    i0 = ri0.getint()
+    pc = 109
+    continue
+else:
+    _v0 = self.registers_i[0].getint()
+    _res = int(bool(_v0))
+    _op = self.metainterp.history.record1_int(rop.INT_IS_TRUE, self.registers_i[0], _res)
+    self.registers_i[1] = _op
+    i1 = _res
+    pc = 7
+    continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 
@@ -1477,6 +2023,31 @@ def test_assert_not_none():
 assert bool(i0)
 pc = 108
 continue"""
+
+def test_raise_disables_genextension(enable_genextension):
+    ssarepr = SSARepr("raise_test", genextension=True)
+    r0 = Register('ref', 0)
+    ssarepr.insns = [
+        ('raise', r0),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'ref': 1})
+    assert jitcode.genext_function is None
+    assert not hasattr(jitcode, '_genext_source')
+
+
+def test_inline_call_disables_genextension(enable_genextension):
+    ssarepr = SSARepr("inline_call_test", genextension=True)
+    i0, r0, i1 = Register('int', 0), Register('ref', 0), Register('int', 1)
+    callee = JitCode("callee")
+    ssarepr.insns = [
+        ('inline_call_ir_i', callee, ListOfKind('int', [i0]),
+         ListOfKind('ref', [r0]), '->', i1),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 2, 'ref': 1})
+    assert jitcode.genext_function is None
+    assert not hasattr(jitcode, '_genext_source')
 
 
 def test_float_add():
@@ -1570,3 +2141,70 @@ else:
     self.registers_i[1] = v0
     pc = 7
     continue"""
+
+
+def test_hbp_signals_dispatch_heavy(enable_genextension):
+    ssarepr = SSARepr("dispatchy", genextension=True)
+    i0 = Register('int', 0)
+    ssarepr.insns = [
+        (Label('L1'),),
+        ('goto_if_not_int_gt', i0, Constant(1, lltype.Signed), TLabel('L2')),
+        ('goto_if_not_int_gt', i0, Constant(5, lltype.Signed), TLabel('L2')),
+        ('goto_if_not_int_gt', i0, Constant(9, lltype.Signed), TLabel('L2')),
+        ('int_return', i0),
+        (Label('L2'),),
+        ('int_return', i0),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 1})
+    # 5 real ops, 3 goto_if_not_ -> gbd=0.6, score=0.42 > 0.20
+    assert jitcode.genext_hbp_candidate is True
+    assert jitcode.genext_hbp_score > 0.20
+
+
+def test_hbp_signals_arithmetic_only(enable_genextension):
+    ssarepr = SSARepr("arith", genextension=True)
+    i0, i1 = Register('int', 0), Register('int', 1)
+    ssarepr.insns = [
+        (Label('L1'),),
+        ('int_add', i1, i0, '->', i1),
+        ('int_sub', i0, Constant(1, lltype.Signed), '->', i0),
+        ('int_mul', i1, i0, '->', i1),
+        ('int_return', i1),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 2})
+    assert jitcode.genext_hbp_candidate is False
+    assert jitcode.genext_hbp_score == 0.0
+
+
+def test_genext_compile_function_target_gated(enable_genextension):
+    # x86-64: genext_compile_function is the x86 emitter (not None).
+    # aarch64: T1 stage 1a installs a SCAFFOLD closure (not None) whose
+    # probe() is hard-False -> the assembler always falls back to the
+    # normal backend (provable no-op).  Other targets: still None.
+    # genext_is_pure_arithmetic / genext_function are unaffected.
+    from rpython.jit.backend import detect_cpu
+    ssarepr = SSARepr("arith_gate", genextension=True)
+    i0, i1 = Register('int', 0), Register('int', 1)
+    ssarepr.insns = [
+        (Label('L1'),),
+        ('int_add', i1, i0, '->', i1),
+        ('int_sub', i0, Constant(1, lltype.Signed), '->', i0),
+        ('int_return', i1),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 2})
+    assert jitcode.genext_is_pure_arithmetic is True
+    try:
+        target = detect_cpu.autodetect()
+    except Exception:
+        target = None
+    if target == detect_cpu.MODEL_X86_64:
+        assert jitcode.genext_compile_function is not None
+    elif target == detect_cpu.MODEL_ARM64:
+        # stage 1a scaffold installed, but probe is hard-False
+        assert jitcode.genext_compile_function is not None
+        assert jitcode.genext_compile_function(None, None, None, True) is False
+    else:
+        assert jitcode.genext_compile_function is None

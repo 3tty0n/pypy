@@ -3,7 +3,10 @@ optimizer of the bridge attached to a guard. """
 
 from rpython.jit.metainterp import resumecode
 from rpython.jit.metainterp.history import Const, ConstInt, CONST_NULL
-from .info import getptrinfo
+from .info import getptrinfo, NonNullPtrInfo
+from .intutils import IntBound, MININT, MAXINT
+
+WASTE_CROSS_TRACE = 'W-cross-trace'
 
 
 # adds the following sections at the end of the resume code:
@@ -14,6 +17,17 @@ from .info import getptrinfo
 #            0 klass unknown
 #            (the class is found by actually looking at the runtime value)
 #            the bits are bunched in bunches of 7
+#
+# ---- known non-null references
+# <bitfield> size is the number of reference boxes in the liveboxes
+#            1 reference known non-null
+#            0 nullness unknown
+#            the bits are bunched in bunches of 7
+#
+# ---- integer bounds
+# <length>
+# (<box> <has lower> <lower> <has upper> <upper>) length times.
+# Only bounds whose concrete endpoints fit in resume numbering are stored.
 #
 # ---- heap knowledge
 # <length>
@@ -73,11 +87,14 @@ def serialize_optimizer_knowledge(optimizer, numb_state, liveboxes, liveboxes_fr
     # known *after* the guard
     bitfield = 0
     shifts = 0
+    known_class_count = 0
     for box in liveboxes:
         if box is None or box.type != "r":
             continue
         info = getptrinfo(box)
         known_class = info is not None and info.get_known_class(optimizer.cpu) is not None
+        if known_class:
+            known_class_count += 1
         bitfield <<= 1
         bitfield |= known_class
         shifts += 1
@@ -86,6 +103,39 @@ def serialize_optimizer_knowledge(optimizer, numb_state, liveboxes, liveboxes_fr
             bitfield = shifts = 0
     if shifts:
         numb_state.append_int(bitfield << (6 - shifts))
+
+    # Nullness knowledge is intentionally stored separately from class
+    # knowledge: a bridge often only needs to know that a live reference
+    # already passed guard_nonnull in the parent trace.
+    bitfield = 0
+    shifts = 0
+    known_nonnull_count = 0
+    for box in liveboxes:
+        if box is None or box.type != "r":
+            continue
+        info = getptrinfo(box)
+        known_nonnull = _serialize_nonnull_fact(optimizer, info)
+        if known_nonnull:
+            known_nonnull_count += 1
+        bitfield <<= 1
+        bitfield |= known_nonnull
+        shifts += 1
+        if shifts == 6:
+            numb_state.append_int(bitfield)
+            bitfield = shifts = 0
+    if shifts:
+        numb_state.append_int(bitfield << (6 - shifts))
+
+    intbounds = _serialize_intbounds(liveboxes, liveboxes_from_env)
+    numb_state.append_int(len(intbounds))
+    for box, has_lower, lower, has_upper, upper in intbounds:
+        numb_state.append_short(tag_box(box, liveboxes_from_env, memo))
+        numb_state.append_int(has_lower)
+        if has_lower:
+            numb_state.append_int(lower)
+        numb_state.append_int(has_upper)
+        if has_upper:
+            numb_state.append_int(upper)
 
     # heap knowledge: we store triples of known heap fields in non-virtual
     # structs
@@ -107,6 +157,8 @@ def serialize_optimizer_knowledge(optimizer, numb_state, liveboxes, liveboxes_fr
             numb_state.append_int(descr_index)
             numb_state.append_short(tag_box(box2, liveboxes_from_env, memo))
     else:
+        triples_struct = []
+        triples_array = []
         numb_state.append_int(0)
         numb_state.append_int(0)
 
@@ -121,6 +173,64 @@ def serialize_optimizer_knowledge(optimizer, numb_state, liveboxes, liveboxes_fr
     else:
         numb_state.append_int(0)
 
+    _record_cross_trace_knowledge(known_class_count, known_nonnull_count,
+                                  len(intbounds), len(triples_struct),
+                                  len(triples_array))
+
+def _serialize_nonnull_fact(optimizer, info):
+    if info is None or not info.is_nonnull():
+        return False
+    if info.get_known_class(optimizer.cpu) is not None:
+        return True
+    if isinstance(info, NonNullPtrInfo):
+        return info.get_last_guard_pos() != -1
+    return False
+
+def _serialize_intbounds(liveboxes, liveboxes_from_env):
+    result = []
+    for box in liveboxes:
+        if box is None or box.type != "i" or box not in liveboxes_from_env:
+            continue
+        intbound = box.get_forwarded()
+        if not isinstance(intbound, IntBound):
+            continue
+        if intbound.is_unbounded():
+            continue
+        has_lower = intbound.lower > MININT
+        has_upper = intbound.upper < MAXINT
+        if has_lower and not _fits_resume_int(intbound.lower):
+            has_lower = False
+        if has_upper and not _fits_resume_int(intbound.upper):
+            has_upper = False
+        if not has_lower and not has_upper:
+            continue
+        lower = 0
+        upper = 0
+        if has_lower:
+            lower = intbound.lower
+        if has_upper:
+            upper = intbound.upper
+        result.append((box, has_lower, lower, has_upper, upper))
+    return result
+
+def _fits_resume_int(value):
+    return -32768 <= value <= 32767
+
+def _record_cross_trace_knowledge(known_class_count, known_nonnull_count,
+                                  intbound_count, struct_count, array_count):
+    total = (known_class_count + known_nonnull_count + intbound_count +
+             struct_count + array_count)
+    if not total:
+        return
+    try:
+        from rpython.jit.codewriter.genextprof import (
+            SLOWPATH_PROFILE_ENABLED, get_profiler, REASON_BRIDGEOPT_FACT)
+    except ImportError:
+        return
+    if SLOWPATH_PROFILE_ENABLED:
+        get_profiler().record_codegen(WASTE_CROSS_TRACE,
+                                      REASON_BRIDGEOPT_FACT, total)
+
 def deserialize_optimizer_knowledge(optimizer, resumestorage, frontend_boxes, liveboxes):
     reader = resumecode.Reader(resumestorage.rd_numb)
     assert len(frontend_boxes) == len(liveboxes)
@@ -134,7 +244,7 @@ def deserialize_optimizer_knowledge(optimizer, resumestorage, frontend_boxes, li
     bitfield = 0
     mask = 0
     for i, box in enumerate(liveboxes):
-        if box.type != "r":
+        if box is None or box.type != "r":
             continue
         if not mask:
             bitfield = reader.next_item()
@@ -144,6 +254,35 @@ def deserialize_optimizer_knowledge(optimizer, resumestorage, frontend_boxes, li
         if class_known:
             cls = optimizer.cpu.cls_of_box(frontend_boxes[i])
             optimizer.make_constant_class(box, cls)
+
+    # non-null reference knowledge
+    bitfield = 0
+    mask = 0
+    for box in liveboxes:
+        if box is None or box.type != "r":
+            continue
+        if not mask:
+            bitfield = reader.next_item()
+            mask = 0b100000
+        known_nonnull = bitfield & mask
+        mask >>= 1
+        if known_nonnull:
+            optimizer.make_nonnull(box)
+
+    # integer bounds
+    length = reader.next_item()
+    for i in range(length):
+        tagged = reader.next_item()
+        box = decode_box(resumestorage, tagged, liveboxes, metainterp_sd.cpu)
+        has_lower = reader.next_item()
+        lower = MININT
+        if has_lower:
+            lower = reader.next_item()
+        has_upper = reader.next_item()
+        upper = MAXINT
+        if has_upper:
+            upper = reader.next_item()
+        optimizer.setintbound(box, IntBound(lower, upper))
 
     # heap knowledge
     length = reader.next_item()

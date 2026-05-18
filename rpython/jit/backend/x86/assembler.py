@@ -25,6 +25,7 @@ from rpython.jit.backend.x86.arch import (FRAME_FIXED_SIZE, WORD, IS_X86_64,
                                        JITFRAME_FIXED_SIZE, IS_X86_32,
                                        PASS_ON_MY_FRAME, THREADLOCAL_OFS,
                                        DEFAULT_FRAME_BYTES, WIN64)
+from rpython.jit.codewriter.genextension import CannotCompileGenExt
 from rpython.jit.backend.x86.regloc import (eax, ecx, edx, ebx, esp, ebp, esi,
     xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, r8, r9, r10, r11, edi,
     r12, r13, r14, r15, X86_64_SCRATCH_REG, X86_64_XMM_SCRATCH_REG,
@@ -531,23 +532,47 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
             operations = self._inject_debugging_code(looptoken, operations,
                                                      'e', number)
 
-        regalloc = RegAlloc(self, self.cpu.translate_support_code)
-        #
-        allgcrefs = []
-        operations = regalloc.prepare_loop(inputargs, operations,
-                                           looptoken, allgcrefs)
-        self.reserve_gcref_table(allgcrefs)
-        functionpos = self.mc.get_relative_pos()
-        self._call_header_with_stack_check()
-        self._check_frame_depth_debug(self.mc)
-        looppos = self.mc.get_relative_pos()
-        frame_depth_no_fixed_size = self._assemble(regalloc, inputargs,
-                                                   operations)
-        self.update_frame_depth(frame_depth_no_fixed_size + JITFRAME_FIXED_SIZE)
-        #
-        size_excluding_failure_stuff = self.mc.get_relative_pos()
-        self.write_pending_failure_recoveries(regalloc)
-        full_size = self.mc.get_relative_pos()
+        genext_compile_fn = looptoken.genext_compile_function
+        use_genext = False
+        if genext_compile_fn is not None:
+            self.reserve_gcref_table([])
+            functionpos = self.mc.get_relative_pos()
+            self._call_header_with_stack_check()
+            self._check_frame_depth_debug(self.mc)
+            looppos = self.mc.get_relative_pos()
+            try:
+                frame_depth_no_fixed_size = genext_compile_fn(
+                    self, inputargs, operations)
+                use_genext = True
+            except CannotCompileGenExt:
+                # truncate to 0 so normal path can re-reserve and re-emit
+                self.mc.truncate_to(0)
+
+        if use_genext:
+            self.update_frame_depth(
+                frame_depth_no_fixed_size + JITFRAME_FIXED_SIZE)
+            size_excluding_failure_stuff = self.mc.get_relative_pos()
+            self.write_pending_failure_recoveries(None)
+            full_size = self.mc.get_relative_pos()
+        else:
+            regalloc = RegAlloc(self, self.cpu.translate_support_code)
+            #
+            allgcrefs = []
+            operations = regalloc.prepare_loop(inputargs, operations,
+                                               looptoken, allgcrefs)
+            self.reserve_gcref_table(allgcrefs)
+            functionpos = self.mc.get_relative_pos()
+            self._call_header_with_stack_check()
+            self._check_frame_depth_debug(self.mc)
+            looppos = self.mc.get_relative_pos()
+            frame_depth_no_fixed_size = self._assemble(regalloc, inputargs,
+                                                       operations)
+            self.update_frame_depth(
+                frame_depth_no_fixed_size + JITFRAME_FIXED_SIZE)
+            #
+            size_excluding_failure_stuff = self.mc.get_relative_pos()
+            self.write_pending_failure_recoveries(regalloc)
+            full_size = self.mc.get_relative_pos()
         #
         rawstart = self.materialize_loop(looptoken)
         self.patch_gcref_table(looptoken, rawstart)

@@ -3,7 +3,7 @@ from rpython.jit.metainterp.history import (VECTOR, FLOAT, INT,
         ConstInt, ConstFloat, TargetToken)
 from rpython.jit.metainterp.resoperation import (rop, ResOperation,
         GuardResOp, VecOperation, OpHelpers, VecOperationNew,
-        VectorizationInfo)
+        VectorizationInfo, VectorOp)
 from rpython.jit.metainterp.optimizeopt.dependency import (DependencyGraph,
         MemoryRef, Node, IndexVar)
 from rpython.jit.metainterp.optimizeopt.renamer import Renamer
@@ -26,6 +26,47 @@ def forwarded_vecinfo(op):
         if not op.is_constant():
             op.set_forwarded(fwd)
     return fwd
+
+def is_scalar_in_vector(arg):
+    """ True for a VEC_UNPACK with count == 1: it returns a value in a
+        vector register but holds a single scalar lane, not a full-width
+        vector. returns_vector() is True for it (it is a VectorOp whose
+        type is not 'v'), yet it is the only VectorOp whose is_vector()
+        is False. Such a value still has to be expanded to the pack
+        width before it can feed a vector operation. """
+    return isinstance(arg, VectorOp) and not arg.is_vector()
+
+def reconstructed_source_vector(args):
+    """ If args == [vec_unpack(V,0,1), vec_unpack(V,1,1), ...,
+        vec_unpack(V,n-1,1)] for a single source vector V whose lane
+        count is exactly n, then V already holds precisely these lanes
+        in order. Return V so it can be reused directly instead of
+        unpacking every lane and packing them back into a fresh vector
+        (semantically identical, but emits no extra vector ops and never
+        needs a vec_pack scratch register). """
+    n = len(args)
+    src = None
+    for i, a in enumerate(args):
+        if not (isinstance(a, VectorOp) and
+                a.getopnum() in (rop.VEC_UNPACK_F, rop.VEC_UNPACK_I)):
+            return None
+        idx = a.getarg(1)
+        cnt = a.getarg(2)
+        if not (isinstance(idx, ConstInt) and isinstance(cnt, ConstInt)):
+            return None
+        if idx.value != i or cnt.value != 1:
+            return None
+        s = a.getarg(0)
+        if src is None:
+            src = s
+        elif src is not s:
+            return None
+    if src is None:
+        return None
+    vecinfo = forwarded_vecinfo(src)
+    if vecinfo.count != n:
+        return None
+    return src
 
 class SchedulerState(object):
     def __init__(self, cpu, graph):
@@ -369,7 +410,7 @@ def prepare_arguments(state, oprestrict, pack, args):
             # ignore this argument
             continue
         restrict = restrictions[i]
-        if arg.returns_vector():
+        if arg.returns_vector() and not is_scalar_in_vector(arg):
             restrict.check(arg)
             continue
         pos, vecop = state.getvector_of_box(arg)
@@ -563,6 +604,12 @@ def expand(state, pack, args, arg, index):
     if vecop:
         args[index] = vecop
         return vecop
+
+    src = reconstructed_source_vector(expandargs)
+    if src is not None:
+        state.expand(expandargs, src)
+        args[index] = src
+        return src
 
     arg_vecinfo = forwarded_vecinfo(arg)
     vecop = OpHelpers.create_vec(arg.type, arg_vecinfo.bytesize, arg_vecinfo.signed, pack.opnum())

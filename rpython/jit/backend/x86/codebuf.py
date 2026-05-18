@@ -77,6 +77,14 @@ class MachineCodeBlockWrapper(BlockBuilderMixin,
             raise ShortJumpTooFar
         self.overwrite(jcond_location-1, chr(offset))
 
+    def truncate_to(self, pos):
+        """Truncate the code buffer to the given relative position."""
+        assert pos >= 0
+        while self._baserelpos + self.SUBBLOCK_SIZE <= pos:
+            self._baserelpos += self.SUBBLOCK_SIZE
+            self._cursubblock = self._cursubblock.prev
+        self._cursubindex = pos - self._baserelpos
+
     def get_relative_pos(self, break_basic_block=True):
         if break_basic_block:
             self.forget_scratch_register()

@@ -59,6 +59,17 @@ class BlackholeInterpBuilder(object):
         self.setup_descrs(asm.descrs)
         self.metainterp_sd = metainterp_sd
         self.blackholeinterps = None
+        # High-water register/const counts observed across all jitcodes
+        # positioned so far. Newly created blackhole interpreters are
+        # pre-sized to these in acquire_interp, so setposition's
+        # [default]*N reallocation churn stops after the pool warms.
+        # Pure sizing: a larger register array is already a supported
+        # state (setposition only reallocs when len < N and keeps larger
+        # arrays); unused slots keep their default (NULL for refs), so
+        # observable behaviour and GC-liveness are unchanged.
+        self._pool_regs_i = 0
+        self._pool_regs_r = 0
+        self._pool_regs_f = 0
 
     def _cleanup_(self):
         self.blackholeinterps = None
@@ -248,7 +259,10 @@ class BlackholeInterpBuilder(object):
             self.blackholeinterps = res.back
             return res
         else:
-            return BlackholeInterpreter(self)
+            interp = BlackholeInterpreter(self)
+            interp._presize_registers(self._pool_regs_i, self._pool_regs_r,
+                                      self._pool_regs_f)
+            return interp
 
     def release_interp(self, interp):
         interp.cleanup_registers()
@@ -309,6 +323,28 @@ class BlackholeInterpreter(object):
     def __repr__(self):
         return '<BHInterp %s>' % self.jitcode
 
+    def _presize_registers(self, ni, nr, nf):
+        # Pre-allocate register arrays to the pool high-water sizes so the
+        # first setposition does not reallocate. Mirrors setposition's
+        # allocation exactly (same defaults/construction/guard), so it is a
+        # semantic no-op preface: setposition then finds len >= N and skips
+        # its realloc, copy_constants unchanged. Larger-than-needed arrays
+        # are an already-supported state; extra slots keep defaults.
+        if we_are_translated():
+            default_i = 0
+            default_r = NULL
+            default_f = longlong.ZEROF
+        else:
+            default_i = MissingValue()
+            default_r = MissingValue()
+            default_f = MissingValue()
+        if ni and (self.registers_i is None or len(self.registers_i) < ni):
+            self.registers_i = [default_i] * ni
+        if nr and (self.registers_r is None or len(self.registers_r) < nr):
+            self.registers_r = [default_r] * nr
+        if nf and (self.registers_f is None or len(self.registers_f) < nf):
+            self.registers_f = [default_f] * nf
+
     def setposition(self, jitcode, position):
         num_regs_and_consts_i = jitcode.num_regs_and_consts_i()
         num_regs_and_consts_r = jitcode.num_regs_and_consts_r()
@@ -333,6 +369,13 @@ class BlackholeInterpreter(object):
             if self.registers_f is None or len(self.registers_f) < num_regs_and_consts_f:
                 self.registers_f = [default_f] * num_regs_and_consts_f
             self.copy_constants(self.registers_f, jitcode.constants_f, jitcode.num_regs_f())
+        b = self.builder
+        if num_regs_and_consts_i > b._pool_regs_i:
+            b._pool_regs_i = num_regs_and_consts_i
+        if num_regs_and_consts_r > b._pool_regs_r:
+            b._pool_regs_r = num_regs_and_consts_r
+        if num_regs_and_consts_f > b._pool_regs_f:
+            b._pool_regs_f = num_regs_and_consts_f
         self.jitcode = jitcode
         self.position = position
 
