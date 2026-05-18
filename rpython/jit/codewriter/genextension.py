@@ -255,7 +255,7 @@ class GenExtension(object):
         self.jitcode._genext_source = "\n".join(allcode)
         # Import rop for opnum constants used in type-specialized recording
         from rpython.jit.metainterp.resoperation import rop
-        d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr, "ConstFloat": ConstFloat, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
+        d = {"Const": Const, "ConstInt": ConstInt, "ConstPtr": ConstPtr, "ConstFloat": ConstFloat, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
              "lltype": lltype, "rstr": rstr, 'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR, 'support': support,
              'rop': rop, 'r_uint': r_uint, 'int_signext': int_signext}
         d.update(self.globals)
@@ -1563,6 +1563,50 @@ class Specializer(object):
         self._emit_jump(lines, constant_registers=next_consts, indent=indent)
         return lines
 
+    def _emit_unspecialized_ref_comparison_fast(self, rop_name, py_op):
+        # fast path for ptr/instance identity compares with non-constant
+        # args; result is int 0/1, value is identity on the unboxed GCREFs
+        arg0, arg1, result = self._get_args_and_res()
+        lines = []
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        box1 = self._get_as_box_after_sync(arg1)
+        lines.append("_b0 = %s" % box0)
+        lines.append("_b1 = %s" % box1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
+        lines.append("_res = int(_v0 %s _v1)" % py_op)
+        # constant-fold when both args are constant at runtime, like
+        # execute_and_record's canfold (no op recorded, no later guard)
+        lines.append("if isinstance(_b0, Const) and isinstance(_b1, Const):")
+        lines.append("    self.registers_i[%d] = ConstInt(_res)" % result.index)
+        lines.append("    i%d = _res" % result.index)
+        self._emit_jump(
+            lines,
+            constant_registers=self.constant_registers.union({result}),
+            indent="    ")
+        lines.append("# fast-path recording, skip heapcache")
+        lines.append("_op = self.metainterp.history.record2_int(rop.%s, _b0, _b1, _res)" % (
+            rop_name,))
+        lines.append("self.registers_i[%d] = _op" % result.index)
+        lines.append("i%d = _res" % result.index)
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+
+    def _emit_specialized_ref_comparison(self, py_op):
+        # all-args-constant path for ptr/instance identity comparisons
+        arg0, arg1 = self._get_args()
+        result = self.insn[self.resindex]
+        lines = ['i%s = %s %s %s' % (
+            result.index,
+            self._get_as_unboxed(arg0),
+            py_op,
+            self._get_as_unboxed(arg1),
+        )]
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({result}))
+        return lines
+
     def _get_as_unboxed_after_sync(self, arg):
         """Get unboxed value after sync - handles constant registers properly."""
         if isinstance(arg, Constant):
@@ -2070,16 +2114,16 @@ class Specializer(object):
         return lines
 
     def emit_specialized_instance_ptr_eq(self):
-        arg0, arg1 = self._get_args()
-        lines = []
-        result = self.insn[self.resindex]
-        lines.append('i%s = %s == %s' % (
-            result.index,
-            self._get_as_unboxed(arg0),
-            self._get_as_unboxed(arg1),
-        ))
-        self._emit_jump(lines, constant_registers=self.constant_registers.union({result}))
-        return lines
+        return self._emit_specialized_ref_comparison("==")
+
+    def emit_specialized_instance_ptr_ne(self):
+        return self._emit_specialized_ref_comparison("!=")
+
+    def emit_specialized_ptr_eq(self):
+        return self._emit_specialized_ref_comparison("==")
+
+    def emit_specialized_ptr_ne(self):
+        return self._emit_specialized_ref_comparison("!=")
 
     def emit_specialized_goto(self):
         label, = self._get_args()
@@ -2720,22 +2764,16 @@ class Specializer(object):
         return lines
 
     def emit_unspecialized_instance_ptr_eq(self):
-        args = self._get_args()
-        res = self.insn[self.resindex]
-        lines = []
-        # try to figure out every register is constant
-        self._emit_n_ary_if(args, lines)
-        # if all registers are constant, let the control to the specialized path
-        specializer = self.work_list.specialize_insn(
-            self.insn, self.constant_registers.union(set(args)), self.orig_pc)
-        lines.append("    pc = %d" % (specializer.get_pc(), ))
-        lines.append("    continue")
-        result = self.insn[self.resindex]
-        lines.append("self.registers_i[%s] = self.opimpl_instance_ptr_eq(%s, %s)" % (
-            result.index, self._get_as_box(args[0]), self._get_as_box(args[1])
-        ))
-        self._emit_jump(lines)
-        return lines
+        return self._emit_unspecialized_ref_comparison_fast("INSTANCE_PTR_EQ", "==")
+
+    def emit_unspecialized_instance_ptr_ne(self):
+        return self._emit_unspecialized_ref_comparison_fast("INSTANCE_PTR_NE", "!=")
+
+    def emit_unspecialized_ptr_eq(self):
+        return self._emit_unspecialized_ref_comparison_fast("PTR_EQ", "==")
+
+    def emit_unspecialized_ptr_ne(self):
+        return self._emit_unspecialized_ref_comparison_fast("PTR_NE", "!=")
 
 
     def emit_unspecialized_goto_if_not_absolute(self, name):
@@ -2825,11 +2863,26 @@ class Specializer(object):
 
         box0 = self._get_as_box_nosync(arg0)
         box1 = self._get_as_box_nosync(arg1)
+        # b1 is b2: x <cmp> x is constant, resolve the branch statically
+        # with no op/guard (like vanilla opimpl_goto_if_not_int_<cmp>).
+        # True for le/eq/ge (fall through), False for lt/ne/gt (jump).
+        same_box_true = rop_name in ("INT_LE", "INT_EQ", "INT_GE")
+        if same_box_true:
+            same_box_pc = self.work_list.pc_to_nextpc[self.orig_pc]
+        else:
+            same_box_pc = target_pc
+        same_box_spec = self.work_list.specialize_pc(
+            self.constant_registers, same_box_pc)
+        lines.append("_b0 = %s" % box0)
+        lines.append("_b1 = %s" % box1)
+        lines.append("if _b0 is _b1:")
+        lines.append("    pc = %s" % (same_box_spec.spec_pc,))
+        lines.append("    continue")
         lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
         lines.append("_v1 = %s" % self._get_as_unboxed_nosync(arg1))
         lines.append("_cond = int(_v0 %s _v1)" % py_op)
-        lines.append("condbox = self.metainterp.history.record2_int(rop.%s, %s, %s, _cond)" % (
-            rop_name, box0, box1))
+        lines.append("condbox = self.metainterp.history.record2_int(rop.%s, _b0, _b1, _cond)" % (
+            rop_name,))
 
         self._emit_sync_registers(lines)
         lines.append("self.opimpl_goto_if_not(condbox, %d, %d, replace=False)" % (target_pc, self.orig_pc))

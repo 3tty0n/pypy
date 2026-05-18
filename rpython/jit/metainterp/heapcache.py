@@ -215,6 +215,8 @@ class HeapCache(object):
         if self.genext_fastpath_enabled and self._is_pure_int_op(opnum):
             self._verify_pure_int_op_invariants(opnum, argboxes)
             return
+        if self.genext_fastpath_enabled and self._is_invalidate_caches_noop_op(opnum):
+            return
         self.mark_escaped_varargs(opnum, descr, argboxes)
         if self.clear_caches_not_necessary(opnum, descr):
             return
@@ -224,6 +226,8 @@ class HeapCache(object):
     def invalidate_caches(self, opnum, descr, *argboxes):
         if self.genext_fastpath_enabled and self._is_pure_int_op(opnum):
             self._verify_pure_int_op_invariants_tuple(opnum, *argboxes)
+            return
+        if self.genext_fastpath_enabled and self._is_invalidate_caches_noop_op(opnum):
             return
         self.mark_escaped(opnum, descr, *argboxes)
         if self.clear_caches_not_necessary(opnum, descr):
@@ -253,6 +257,16 @@ class HeapCache(object):
             opnum == rop.LOAD_FROM_GC_TABLE):
             return False
         return True
+
+    @always_inline
+    def _is_invalidate_caches_noop_op(self, opnum):
+        # mark_escaped excludes these and clear_caches_not_necessary is
+        # True for them, so invalidate_caches is a no-op; their heap
+        # bookkeeping is done by the opimpls, not here.
+        return (opnum == rop.PTR_EQ or opnum == rop.PTR_NE or
+                opnum == rop.INSTANCE_PTR_EQ or opnum == rop.INSTANCE_PTR_NE or
+                opnum == rop.GETFIELD_GC_R or opnum == rop.GETFIELD_GC_I or
+                opnum == rop.GETFIELD_GC_F or opnum == rop.ASSERT_NOT_NONE)
 
     def _verify_pure_int_op_invariants(self, opnum, argboxes):
         for box in argboxes:

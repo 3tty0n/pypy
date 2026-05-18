@@ -59,10 +59,15 @@ def jit_shortcut(self): # test
                             i22 = ri22.getint()
                             pc = 116
                             continue
+                        _b0 = self.registers_i[22]
+                        _b1 = ConstInt(4)
+                        if _b0 is _b1:
+                            pc = 16
+                            continue
                         _v0 = self.registers_i[22].getint()
                         _v1 = 4
                         _cond = int(_v0 > _v1)
-                        condbox = self.metainterp.history.record2_int(rop.INT_GT, self.registers_i[22], ConstInt(4), _cond)
+                        condbox = self.metainterp.history.record2_int(rop.INT_GT, _b0, _b1, _cond)
                         self.opimpl_goto_if_not(condbox, 16, 0, replace=False)
                         pc = self.pc
                         if pc == 16:
@@ -1234,10 +1239,15 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
     i1 = ri1.getint()
     pc = 117
     continue
+_b0 = self.registers_i[0]
+_b1 = self.registers_i[1]
+if _b0 is _b1:
+    pc = 17
+    continue
 _v0 = self.registers_i[0].getint()
 _v1 = self.registers_i[1].getint()
 _cond = int(_v0 < _v1)
-condbox = self.metainterp.history.record2_int(rop.INT_LT, self.registers_i[0], self.registers_i[1], _cond)
+condbox = self.metainterp.history.record2_int(rop.INT_LT, _b0, _b1, _cond)
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
@@ -1259,10 +1269,15 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
     i1 = ri1.getint()
     pc = 119
     continue
+_b0 = self.registers_i[0]
+_b1 = self.registers_i[1]
+if _b0 is _b1:
+    pc = 120
+    continue
 _v0 = self.registers_i[0].getint()
 _v1 = self.registers_i[1].getint()
 _cond = int(_v0 < _v1)
-condbox = self.metainterp.history.record2_int(rop.INT_LT, self.registers_i[0], self.registers_i[1], _cond)
+condbox = self.metainterp.history.record2_int(rop.INT_LT, _b0, _b1, _cond)
 glob0(self, i2) # jit_sync_regs_i2
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
@@ -1736,14 +1751,20 @@ def test_instance_ptr_eq():
     assert newpc == 5
     s = insn_specializer.make_code()
     assert s == """\
-rr0 = self.registers_r[0]
-rr1 = self.registers_r[1]
-if isinstance(rr0, ConstPtr) and isinstance(rr1, ConstPtr):
-    r0 = rr0.getref_base()
-    r1 = rr1.getref_base()
+_b0 = self.registers_r[0]
+_b1 = self.registers_r[1]
+_v0 = self.registers_r[0].getref_base()
+_v1 = self.registers_r[1].getref_base()
+_res = int(_v0 == _v1)
+if isinstance(_b0, Const) and isinstance(_b1, Const):
+    self.registers_i[2] = ConstInt(_res)
+    i2 = _res
     pc = %d
     continue
-self.registers_i[2] = self.opimpl_instance_ptr_eq(rr0, rr1)
+# fast-path recording, skip heapcache
+_op = self.metainterp.history.record2_int(rop.INSTANCE_PTR_EQ, _b0, _b1, _res)
+self.registers_i[2] = _op
+i2 = _res
 pc = 6
 continue""" % (work_list.OFFSET + max(pc_to_insn))
 
@@ -1753,12 +1774,21 @@ continue""" % (work_list.OFFSET + max(pc_to_insn))
     assert newpc == 106
     s = insn_specializer.make_code()
     assert s == """\
-rr1 = self.registers_r[1]
-if isinstance(rr1, ConstPtr):
-    r1 = rr1.getref_base()
+glob0(self, r0) # jit_sync_regs_r0
+_b0 = self.registers_r[0]
+_b1 = self.registers_r[1]
+_v0 = r0
+_v1 = self.registers_r[1].getref_base()
+_res = int(_v0 == _v1)
+if isinstance(_b0, Const) and isinstance(_b1, Const):
+    self.registers_i[2] = ConstInt(_res)
+    i2 = _res
     pc = %d
     continue
-self.registers_i[2] = self.opimpl_instance_ptr_eq(ConstPtr(r0), rr1)
+# fast-path recording, skip heapcache
+_op = self.metainterp.history.record2_int(rop.INSTANCE_PTR_EQ, _b0, _b1, _res)
+self.registers_i[2] = _op
+i2 = _res
 pc = %d
 continue""" % (work_list.OFFSET + max(pc_to_insn) + 1,
                work_list.OFFSET + max(pc_to_insn) + 2)

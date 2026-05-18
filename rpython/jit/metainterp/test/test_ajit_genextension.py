@@ -3129,7 +3129,8 @@ class BasicTests:
                 i += 1
             return sa
         assert self.meta_interp(f, [20]) == f(20)
-        self.check_resops(int_lt=6, int_le=2, int_ge=4, int_gt=5)
+        # genext folds same-box int_ge(x, x), so 2 fewer than vanilla
+        self.check_resops(int_lt=6, int_le=2, int_ge=2, int_gt=5)
 
 
 
