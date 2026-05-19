@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """End-to-end warmup + steady-state A/B benchmark harness for pypy-jit-ext-c.
 
 Each benchmark is run interleaved baseline/candidate per rep, reporting the
@@ -314,9 +314,14 @@ _HAVE_CAFFEINATE = None
 
 
 def _caffeinated(cmd):
-    """Wrap cmd in `caffeinate -dimsu` so no idle/display/disk sleep or
-    App Nap perturbs the timed run. No-op if caffeinate is absent."""
+    """Wrap cmd in macOS `caffeinate -dimsu` so no idle/display/disk sleep or
+    App Nap perturbs the timed run. No-op on non-Darwin or if absent.
+
+    Linux may ship an unrelated `caffeinate` (e.g. cups-of-caffeine); never
+    wrap there."""
     global _HAVE_CAFFEINATE
+    if sys.platform != "darwin":
+        return cmd
     if _HAVE_CAFFEINATE is None:
         path = None
         if os.path.exists("/usr/bin/caffeinate"):
