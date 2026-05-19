@@ -715,7 +715,7 @@ class ResumeDescr(AbstractFailDescr):
         return self
 
 class AbstractResumeGuardDescr(ResumeDescr):
-    _attrs_ = ('status', 'rd_fail_count')
+    _attrs_ = ('status', 'rd_fail_count', 'rd_value_sig')
 
     status = r_uint(0)
     # Adaptive bridge stage-1: per-descr failure counter. Counts every
@@ -723,6 +723,9 @@ class AbstractResumeGuardDescr(ResumeDescr):
     # can keep the interpreter in charge until T_lazy is reached and
     # avoid compiling bridges that only warm-run briefly.
     rd_fail_count = r_uint(0)
+    # Saturating signature of distinct guard_value values seen failing
+    # this guard; popcount estimates the guard's value cardinality.
+    rd_value_sig = r_uint(0)
 
     ST_BUSY_FLAG    = 0x01     # if set, busy tracing from the guard
     ST_TYPE_MASK    = 0x06     # mask for the type (TY_xxx)
@@ -837,6 +840,13 @@ class AbstractResumeGuardDescr(ResumeDescr):
                     intval = llmemory.cast_adr_to_int(
                         llmemory.cast_int_to_adr(intval), "forced")
 
+            # OR one of 64 hash buckets per distinct guard_value value.
+            # Knuth multiply then high 6 bits, so 8-byte-aligned pointers
+            # and integer tags spread without low-bit aliasing. r_uint
+            # keeps the multiply wrapping (no Signed overflow).
+            _sig = r_uint(intval) * r_uint(1442968193)
+            self.rd_value_sig |= r_uint(1) << intmask(_sig >> 58)
+
             hash = r_uint(current_object_addr_as_int(self) * 777767777 +
                           intval * 1442968193)
         #
@@ -894,7 +904,7 @@ class AbstractResumeGuardDescr(ResumeDescr):
             self.status = hash & self.ST_SHIFT_MASK
 
 class ResumeGuardCopiedDescr(AbstractResumeGuardDescr):
-    _attrs_ = ('status', 'rd_fail_count', 'prev')
+    _attrs_ = ('status', 'rd_fail_count', 'rd_value_sig', 'prev')
 
     def __init__(self, prev):
         AbstractResumeGuardDescr.__init__(self)
@@ -916,7 +926,8 @@ class ResumeGuardCopiedDescr(AbstractResumeGuardDescr):
 
 class ResumeGuardDescr(AbstractResumeGuardDescr):
     _attrs_ = ('rd_numb', 'rd_consts', 'rd_virtuals',
-               'rd_pendingfields', 'status', 'rd_fail_count')
+               'rd_pendingfields', 'status', 'rd_fail_count',
+               'rd_value_sig')
     rd_numb = lltype.nullptr(NUMBERING)
     rd_consts = None
     rd_virtuals = None

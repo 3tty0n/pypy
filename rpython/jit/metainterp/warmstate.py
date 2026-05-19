@@ -360,6 +360,9 @@ class WarmEnterState(object):
     hot_bridge_threshold = 1
     hot_bridge_guard_threshold = 50
     hot_bridge_max_variants = 8
+    hot_bridge_max_cardinality = 4
+    # When False the cardinality clause in the HBP gate is vacuously true.
+    enable_hbp_cardinality_gate = False
     enable_adaptive_bridge = False
     adaptive_bridge_lazy_threshold = 50
     enable_tracetree = False
@@ -459,6 +462,9 @@ class WarmEnterState(object):
     def set_param_enable_hot_bridge_promotion(self, value):
         self.enable_hot_bridge_promotion = bool(value)
 
+    def set_param_enable_hbp_cardinality_gate(self, value):
+        self.enable_hbp_cardinality_gate = bool(value)
+
     def set_param_hot_bridge_threshold(self, value):
         if value < 0:
             raise ValueError
@@ -473,6 +479,11 @@ class WarmEnterState(object):
         if value < 1:
             raise ValueError
         self.hot_bridge_max_variants = value
+
+    def set_param_hot_bridge_max_cardinality(self, value):
+        if value < 1:
+            raise ValueError
+        self.hot_bridge_max_cardinality = value
 
     def set_param_enable_adaptive_bridge(self, value):
         # Adaptive Bridge Compilation Strategy (stages 1-2 + HBP, gated on

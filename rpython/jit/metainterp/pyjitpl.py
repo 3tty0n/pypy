@@ -34,6 +34,15 @@ SIZE_LIVE_OP = OFFSET_SIZE + 1
 CONST_0      = ConstInt(0)
 CONST_1      = ConstInt(1)
 
+
+def _hbp_popcount(x):
+    # Kernighan bit-count; cold path, few bits set.
+    count = 0
+    while x:
+        x &= x - r_uint(1)
+        count += 1
+    return count
+
 # ____________________________________________________________
 
 def arguments(*args):
@@ -2925,13 +2934,17 @@ class MetaInterp(object):
         if warmstate.enable_hot_bridge_promotion:
             typetag = resumedescr.status & compile.AbstractResumeGuardDescr.ST_TYPE_MASK
             cell_token = self.resumekey_original_loop_token
-            # hbp stage 1
+            # hbp stage 1: gate promotion on low value-cardinality so
+            # megamorphic guards fall through to generic bridges.
             if (typetag != 0 and cell_token is not None
                     and not cell_token.hbp_megamorphic
                     and cell_token.bridge_count
                         >= warmstate.hot_bridge_threshold
                     and resumedescr.rd_fail_count
-                        >= r_uint(warmstate.hot_bridge_guard_threshold)):
+                        >= r_uint(warmstate.hot_bridge_guard_threshold)
+                    and (not warmstate.enable_hbp_cardinality_gate
+                         or _hbp_popcount(resumedescr.rd_value_sig)
+                            <= warmstate.hot_bridge_max_cardinality)):
                 self.prefer_loop_over_bridge = True
                 cell_token.hbp_variant_count += 1
                 if (cell_token.hbp_variant_count
