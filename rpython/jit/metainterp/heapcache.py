@@ -401,7 +401,8 @@ class HeapCache(object):
         self.clear_caches_varargs(opnum, descr, list(argboxes))
 
     def clear_caches_varargs(self, opnum, descr, argboxes):
-        self.need_guard_not_invalidated = True # can do better, but good start
+        if not self.genext_fastpath_enabled:
+            self.need_guard_not_invalidated = True # can do better, but good start
         if (OpHelpers.is_plain_call(opnum) or
             OpHelpers.is_call_loopinvariant(opnum) or
             OpHelpers.is_cond_call_value(opnum) or
@@ -413,9 +414,11 @@ class HeapCache(object):
                 ef == effectinfo.EF_ELIDABLE_OR_MEMORYERROR or
                 ef == effectinfo.EF_ELIDABLE_CAN_RAISE):
                 return
+            if self.genext_fastpath_enabled:
+                self.need_guard_not_invalidated = True
             # A special case for ll_arraycopy, because it is so common, and its
             # effects are so well defined.
-            elif effectinfo.oopspecindex == effectinfo.OS_ARRAYCOPY:
+            if effectinfo.oopspecindex == effectinfo.OS_ARRAYCOPY:
                 self._clear_caches_arraycopy(opnum, descr, argboxes, effectinfo)
                 return
             elif effectinfo.oopspecindex == effectinfo.OS_ARRAYMOVE:
@@ -459,10 +462,8 @@ class HeapCache(object):
                                 cache.invalidate_unescaped()
                 return
 
-        # XXX not completely sure, but I *think* it is needed to reset() the
-        # state at least in the 'CALL_*' operations that release the GIL.  We
-        # tried to do only the kind of resetting done by the two loops just
-        # above, but hit an assertion in "pypy test_multiprocessing.py".
+        if self.genext_fastpath_enabled:
+            self.need_guard_not_invalidated = True
         self.reset_keep_likely_virtuals()
 
     def _clear_caches_arraycopy(self, opnum, descr, argboxes, effectinfo):
