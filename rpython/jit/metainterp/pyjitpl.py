@@ -38,7 +38,6 @@ def _get_jit_shortcut_flag(name):
     return bool(getattr(translation_config, name, False))
 
 
-SKIP_HEAPCACHE_PURE_INT = _get_jit_shortcut_flag('skip_heapcache_pure_int')
 FAST_INT_RECORD = _get_jit_shortcut_flag('fast_int_record')
 
 
@@ -2952,13 +2951,10 @@ class MetaInterp(object):
             PyjitplCounters._record_helper_calls += 1
         profiler = self.staticdata.profiler
         profiler.count_ops(opnum, Counters.RECORDED_OPS)
-        if SKIP_HEAPCACHE_PURE_INT and self.heapcache._is_pure_int_op(opnum):
-            if not we_are_translated():
-                PyjitplCounters._heapcache_skipped += 1
-        else:
-            if not we_are_translated():
-                PyjitplCounters._heapcache_called += 1
+
+        if not self.heapcache._is_pure_int_op(opnum):
             self.heapcache.invalidate_caches(opnum, descr, *argboxes)
+
         if self.framestack:
             self.framestack[-1].jitcode.traced_operations += 1
 

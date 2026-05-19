@@ -5,6 +5,7 @@ from rpython.jit.metainterp.resoperation import rop, OpHelpers
 from rpython.jit.metainterp.executor import constant_from_op
 from rpython.rlib.rarithmetic import r_uint32, r_uint
 from rpython.rlib.objectmodel import always_inline, specialize
+from rpython.rlib.objectmodel import we_are_translated
 import os
 
 """ A big note: we don't do heap caches on Consts, because it used
@@ -212,11 +213,13 @@ class HeapCache(object):
             ref_frontend_op._heapc_deps = None
 
     def invalidate_caches_varargs(self, opnum, descr, argboxes):
-        if self.genext_fastpath_enabled and self._is_pure_int_op(opnum):
-            self._verify_pure_int_op_invariants(opnum, argboxes)
-            return
-        if self.genext_fastpath_enabled and self._is_invalidate_caches_noop_op(opnum):
-            return
+        if self.genext_fastpath_enabled:
+            if self._is_pure_int_op(opnum):
+                if not we_are_translated():
+                    self._verify_pure_int_op_invariants(opnum, argboxes)
+                return
+            if self._is_invalidate_caches_noop_op(opnum):
+                return
         self.mark_escaped_varargs(opnum, descr, argboxes)
         if self.clear_caches_not_necessary(opnum, descr):
             return
@@ -224,11 +227,13 @@ class HeapCache(object):
 
     @specialize.arg(1)
     def invalidate_caches(self, opnum, descr, *argboxes):
-        if self.genext_fastpath_enabled and self._is_pure_int_op(opnum):
-            self._verify_pure_int_op_invariants_tuple(opnum, *argboxes)
-            return
-        if self.genext_fastpath_enabled and self._is_invalidate_caches_noop_op(opnum):
-            return
+        if self.genext_fastpath_enabled:
+            if self._is_pure_int_op(opnum):
+                if not we_are_translated():
+                    self._verify_pure_int_op_invariants(opnum, argboxes)
+                return
+            if self._is_invalidate_caches_noop_op(opnum):
+                return
         self.mark_escaped(opnum, descr, *argboxes)
         if self.clear_caches_not_necessary(opnum, descr):
             return
@@ -273,15 +278,6 @@ class HeapCache(object):
             if isinstance(box, RefFrontendOp):
                 raise AssertionError(
                     "Pure int op %d has RefFrontendOp arg - _is_pure_int_op is wrong!" % opnum)
-
-    def _verify_pure_int_op_invariants_tuple(self, opnum, *argboxes):
-        if len(argboxes) == 0:
-            return
-        box = argboxes[0]
-        if isinstance(box, RefFrontendOp):
-            raise AssertionError(
-                "Pure int op %d has RefFrontendOp arg - _is_pure_int_op is wrong!" % opnum)
-        self._verify_pure_int_op_invariants_tuple(opnum, *argboxes[1:])
 
     def _escape_from_write(self, box, fieldbox):
         if self.is_unescaped(box) and self.is_unescaped(fieldbox):
