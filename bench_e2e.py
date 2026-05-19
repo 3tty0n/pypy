@@ -1325,10 +1325,11 @@ def main():
                           "Writes e2e_baseline.json + e2e_hbp.json and "
                           "prints the comparison. Tune the two arms with "
                           "--jit-baseline / --jit-hbp."))
-    ap.add_argument("--jit-baseline", default="",
+    ap.add_argument("--jit-baseline", default="retrace_limit=1",
                     help=("--jit param string for the baseline arm of "
-                          "--hbp mode (default: empty = stock JIT "
-                          "defaults, HBP off)."))
+                          "--hbp mode. Default 'retrace_limit=1' "
+                          "retrace-matches the HBP arm. Pass '' for a "
+                          "stock baseline."))
     ap.add_argument("--jit-hbp",
                     default="enable_hot_bridge_promotion=1,"
                             "enable_tracetree=1,"
