@@ -8,6 +8,7 @@ from rpython.flowspace.model import Constant
 from rpython.jit.codewriter.flatten import (
     Register, TLabel, Label, ListOfKind, IndirectCallTargets)
 from rpython.jit.codewriter.jitcode import SwitchDictDescr
+from rpython.config.translationoption import get_translation_config
 from rpython.rtyper.lltypesystem import lltype, llmemory, rstr
 from rpython.rtyper.rclass import OBJECTPTR
 from rpython.rlib import objectmodel
@@ -177,6 +178,19 @@ class GenExtension(object):
         for startpc in self.assembler.startpoints:
             spec = self.work_list.specialize_pc(frozenset(), startpc)
         code_and_spec_per_pc = self.work_list.make_code()
+        cg_cfg = getattr(get_translation_config(), "translation", None)
+        cg_thresh = getattr(_cg_cfg, "genext_cost_gate", 0.0) if cg_cfg is not None else 0.0
+        if cg_thresh > 0.0 and code_and_spec_per_pc:
+            cg_total = len(code_and_spec_per_pc)
+            cg_fast = 0
+            for cg_code, cg_spec in code_and_spec_per_pc.values():
+                if cg_code is not None:
+                    cg_fast += 1
+            # floor cg_total to avoid gating trivial jitcodes where the
+            # per-step overhead is negligible anyway (and the ratio is noisy)
+            if cg_total >= 4 and (cg_fast / float(cg_total)) < _cg_thresh:
+                self.jitcode.genext_function = None
+                return
         assert not self.code
         for pc, (code, spec) in code_and_spec_per_pc.iteritems():
             if code is None:

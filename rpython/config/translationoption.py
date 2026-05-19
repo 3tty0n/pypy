@@ -149,6 +149,13 @@ translation_optiondescription = OptionDescription(
                "debug lever; was PYPY_FAST_INT_RECORD)",
                default=False,
                cmdline="--fast-int-record"),
+    FloatOption("genext_cost_gate",
+                "minimum jit_shortcut fast-path coverage; for a jitcode below "
+                "this fraction, skip installing genext_function so it uses the "
+                "generic tracer (0.0 = disabled). Mitigates un-amortized "
+                "per-step genext overhead on low-coverage / bridge-storm jitcodes",
+                default=0.0,
+                cmdline="--genext-cost-gate"),
     # misc
     BoolOption("verbose", "Print extra information", default=False,
                cmdline="--verbose"),
