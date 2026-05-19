@@ -205,7 +205,6 @@ def run(num, dirname, typ, args):
                         command.append("--benchmark=xml")
                     elif bm == "bm_sympy":
                         command.append("--benchmark=str")
-                    command.extend(["-n", "1"])
                     subprocess.run(command, env=env, stdout=subprocess.DEVNULL)
 
 
