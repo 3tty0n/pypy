@@ -228,7 +228,10 @@ class UnrollOptimizer(Optimizer):
             warmstate = self.jitdriver_sd.warmstate
             selective_retrace = (warmstate.enable_hot_bridge_promotion or
                                  warmstate.enable_adaptive_bridge)
-            do_retrace = (prefer_loop_over_bridge or not selective_retrace)
+            # selective_retrace must stay additive: never deny a
+            # within-budget retrace that plain retrace_limit would do.
+            do_retrace = (prefer_loop_over_bridge or not selective_retrace
+                          or cell_token.retraced_count < limit)
             if do_retrace and cell_token.retraced_count < limit:
                 cell_token.retraced_count += 1
                 debug_print('Retracing (%d/%d)' % (cell_token.retraced_count, limit))
