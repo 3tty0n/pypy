@@ -3155,7 +3155,8 @@ class MetaInterp(object):
                             descr=ptoken)
         try:
             target_token = compile.compile_trace(self, self.resumekey,
-                live_arg_boxes[num_green_args:], ends_with_jump=True)
+                live_arg_boxes[num_green_args:], ends_with_jump=True,
+                procedure_token=ptoken)
         finally:
             self.history.cut(cut_at)  # pop the jump
         self.raise_if_successful(live_arg_boxes, target_token)

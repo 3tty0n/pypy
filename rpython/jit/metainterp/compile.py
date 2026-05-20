@@ -2,7 +2,7 @@ import weakref
 from rpython.rtyper.lltypesystem import lltype, llmemory
 from rpython.rtyper.annlowlevel import (
     cast_instance_to_gcref, cast_gcref_to_instance)
-from rpython.rlib.objectmodel import we_are_translated
+from rpython.rlib.objectmodel import we_are_translated, compute_unique_id
 from rpython.rlib.debug import (
     debug_start, debug_stop, debug_print, have_debug_prints)
 from rpython.rlib.rarithmetic import r_uint, intmask
@@ -1066,7 +1066,8 @@ class ResumeFromInterpDescr(ResumeDescr):
         return None
 
 
-def compile_trace(metainterp, resumekey, runtime_boxes, ends_with_jump=False):
+def compile_trace(metainterp, resumekey, runtime_boxes, ends_with_jump=False,
+                  procedure_token=None):
     """Try to compile a new bridge leading from the beginning of the history
     to some existing place.
     """
@@ -1118,6 +1119,13 @@ def compile_trace(metainterp, resumekey, runtime_boxes, ends_with_jump=False):
         new_trace.quasi_immutable_deps = info.quasi_immutable_deps
     if info.final():
         new_trace.inputargs = info.inputargs
+        # Apply call_assembler rewrite to split-tree guard bridges.
+        if metainterp.threaded_code_gen:
+            from rpython.jit.metainterp.optimizeopt.tracesplit import (
+                rewrite_call_assembler_in_ops)
+            rewrite_call_assembler_in_ops(
+                new_trace.operations, metainterp_sd, jitdriver_sd,
+                loop_token=procedure_token)
         target_token = new_trace.operations[-1].getdescr()
         resumekey.compile_and_attach(metainterp, new_trace, inputargs)
         return target_token
@@ -1136,10 +1144,8 @@ def compile_loop_and_split(metainterp, greenkey, resumekey, runtime_boxes,
     inputargs = metainterp.history.inputargs[:]
     history = metainterp.history
     trace = history.trace
-    # XXX: When applying trace split, turn off all other optimizations
-    enable_opts =  jitdriver_sd.warmstate.enable_opts
-    if 'heap' in enable_opts:
-        del enable_opts['heap'] # heap causes an error
+    # Keep 'heap' enabled: optimize before structural split.
+    enable_opts = jitdriver_sd.warmstate.enable_opts
     call_pure_results = metainterp.call_pure_results
     resumestorage = resumekey.get_resumestorage()
 
@@ -1157,8 +1163,15 @@ def compile_loop_and_split(metainterp, greenkey, resumekey, runtime_boxes,
                                   enable_opts=enable_opts,
                                   body_token=body_token)
     try:
-        splitted = data.optimize_trace(
-            metainterp_sd, jitdriver_sd, metainterp.box_names_memo)
+        try:
+            splitted = data.optimize_trace(
+                metainterp_sd, jitdriver_sd, metainterp.box_names_memo)
+        except InvalidLoop:
+            raise
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise
         last_op_descrs = [ops[-1].getdescr() for _, ops in splitted]
         (new_body_info, new_body_ops), bridges = splitted[0], splitted[1:]
     except InvalidLoop:
@@ -1174,38 +1187,137 @@ def compile_loop_and_split(metainterp, greenkey, resumekey, runtime_boxes,
     #     metainterp_sd.logger_noopt.log_bridge(bridge_info.inputargs, bridge_ops,
     #                                           descr=bridge_info.faildescr)
 
-    # compiling loop body
+    # ---- TRACESPLIT DIAGNOSTICS (temporary; PYPYLOG=jit-tracesplit-diag) ----
+    debug_start("jit-tracesplit-diag")
+    debug_print("split: nsegments", len(splitted))
+    diag_i = 0
+    while diag_i < len(splitted):
+        diag_info, diag_ops = splitted[diag_i]
+        diag_last = diag_ops[-1]
+        diag_lbl_descr = diag_info.label_op.getdescr()
+        diag_is_tgt = 0
+        diag_j = 0
+        while diag_j < len(last_op_descrs):
+            if last_op_descrs[diag_j] is diag_lbl_descr:
+                diag_is_tgt = 1
+                break
+            diag_j += 1
+        debug_print("seg", diag_i,
+                    "nops", len(diag_ops),
+                    "first", diag_ops[0].getopname(),
+                    "last", diag_last.getopname(),
+                    "lbl_id", compute_unique_id(diag_lbl_descr),
+                    "lastdescr_id", compute_unique_id(diag_last.getdescr()),
+                    "is_jump_target", diag_is_tgt)
+        diag_i += 1
+    debug_stop("jit-tracesplit-diag")
+    # ---- END TRACESPLIT DIAGNOSTICS ----
+
+    # Concatenate body + JUMP-target segments into one multi-LABEL loop.
     new_body = create_empty_loop(metainterp)
     new_body.original_jitcell_token = body_jitcell_token
     new_body.inputargs = new_body_info.inputargs
 
-    label_op = new_body_info.label_op
-    if label_op.getdescr() in last_op_descrs:
-        new_body.operations = [label_op] + new_body_ops
+    body_label_op = new_body_info.label_op
+    if body_label_op is not None:
+        ops = [body_label_op] + new_body_ops
+        body_tok = body_label_op.getdescr()
+        if (isinstance(body_tok, TargetToken) and
+                body_tok not in body_jitcell_token.target_tokens):
+            body_jitcell_token.target_tokens.append(body_tok)
     else:
-        new_body.operations = new_body_ops
+        ops = new_body_ops
 
+    guard_only_bridges = []
+    for (bridge_info, bridge_ops) in bridges:
+        if bridge_info.label_op.getdescr() in last_op_descrs:
+            seg_label_op = bridge_info.label_op
+            seg_token = seg_label_op.getdescr()
+            assert isinstance(seg_token, TargetToken)
+            if seg_token not in body_jitcell_token.target_tokens:
+                body_jitcell_token.target_tokens.append(seg_token)
+            ops = ops + [seg_label_op] + bridge_ops
+        else:
+            guard_only_bridges.append((bridge_info, bridge_ops))
+
+    new_body.operations = ops
     if not we_are_translated():
+        import os as osd
+        osd.write(2, "\n[BODY] inputargs=%s nsegs=%d\n" % (
+            [str(arg) for arg in new_body.inputargs], len(splitted)))
+        for bi in range(len(ops)):
+            bop = ops[bi]
+            try:
+                bargs = [str(a) for a in bop.getarglist()]
+            except Exception:
+                bargs = []
+            osd.write(2, "  b[%d] %s -> %s args=%s\n" % (
+                bi, str(bop), bop.getopname(), bargs))
+        for si in range(1, len(splitted)):
+            sinfo, sops = splitted[si]
+            osd.write(2, "[SEG %d] inputargs=%s lbl=%s\n" % (
+                si, [str(arg) for arg in sinfo.inputargs],
+                sinfo.label_op.getopname()))
         new_body.check_consistency()
     send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, new_body, "loop",
                          new_body_info.inputargs, metainterp.box_names_memo)
     record_loop_or_bridge(metainterp_sd, new_body)
 
-    if len(bridges) == 0:
+    if len(guard_only_bridges) == 0:
         return body_token
 
-    # compiling bridge
+    # Attach deopt-only segments as ordinary guard bridges.
     metainterp.resumekey_original_loop_token = body_jitcell_token
-    for (bridge_info, bridge_ops) in bridges:
+    for (bridge_info, bridge_ops) in guard_only_bridges:
         new_bridge = create_empty_loop(metainterp)
         new_bridge.original_jitcell_token = body_jitcell_token
         new_bridge.inputargs = bridge_info.inputargs
-        label_op = bridge_info.label_op
-        if label_op.getdescr() in last_op_descrs:
-            new_bridge.operations = [label_op] + bridge_ops
-        else:
-            new_bridge.operations = bridge_ops
+        new_bridge.operations = bridge_ops
         resumekey = bridge_info.faildescr
+        if not we_are_translated():
+            import os as osd
+            osd.write(2, "\n[BRIDGE] inputargs=%s faildescr=%s\n" % (
+                [str(arg) for arg in new_bridge.inputargs], str(resumekey)))
+            # Dump resume descr internals.
+            try:
+                rdstore = resumekey
+                if isinstance(rdstore, ResumeGuardCopiedDescr):
+                    osd.write(2, "  [RD] copied descr -> prev=%s\n" % str(rdstore.prev))
+                    rdstore = rdstore.prev
+                rd_pf = getattr(rdstore, 'rd_pendingfields', None)
+                if rd_pf and rd_pf != lltype.nullptr(rd_pf._TYPE.TO):
+                    pf_n = len(rd_pf)
+                    osd.write(2, "  [RD] rd_pendingfields n=%d\n" % pf_n)
+                    for pi in range(pf_n):
+                        pf = rd_pf[pi]
+                        osd.write(2, "    pf[%d] lldescr=%s num=%s fieldnum=%s itemindex=%s\n" % (
+                            pi, str(getattr(pf, 'lldescr', '?')),
+                            str(getattr(pf, 'num', '?')),
+                            str(getattr(pf, 'fieldnum', '?')),
+                            str(getattr(pf, 'itemindex', '?'))))
+                else:
+                    osd.write(2, "  [RD] rd_pendingfields=<null/none>\n")
+                rd_numb = getattr(rdstore, 'rd_numb', None)
+                osd.write(2, "  [RD] rd_numb=%s rd_consts.len=%s\n" % (
+                    str(rd_numb),
+                    str(len(getattr(rdstore, 'rd_consts', []) or []))))
+            except Exception as ex:
+                osd.write(2, "  [RD] dump_error=%s\n" % str(ex))
+            for xi in range(len(bridge_ops)):
+                xop = bridge_ops[xi]
+                try:
+                    xargs = [str(a) for a in xop.getarglist()]
+                except Exception:
+                    xargs = []
+                xfail = ""
+                if xop.is_guard():
+                    try:
+                        xfail = " FAIL=%s" % (
+                            [str(y) for y in (xop.getfailargs() or [])],)
+                    except Exception:
+                        xfail = " FAIL=?"
+                osd.write(2, "  x[%d] %s -> %s args=%s%s\n" % (
+                    xi, str(xop), xop.getopname(), xargs, xfail))
         assert isinstance(resumekey, AbstractResumeGuardDescr)
         resumekey.compile_and_attach(metainterp, new_bridge, inputargs)
 
