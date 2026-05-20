@@ -265,6 +265,30 @@ def not_in_trace(func):
     func.oopspec = "jit.not_in_trace()"   # note that 'func' may take arguments
     return func
 
+def enable_shallow_tracing(func):
+    "Wrap func as a handler_<func> shallow-tracing primitive."
+    func._always_inline_ = True
+
+    @dont_look_inside
+    def shallow_hanlder(*args):
+        dummy = args[-1]
+        args = args[:-2]
+        if dummy:
+            return
+        return func(*args)
+
+    shallow_hanlder.func_name = "handler_" + func.func_name
+    shallow_hanlder.oopspec = "jit.enable_shallow_tracing()"
+
+    def call_handler(*args):
+        if we_are_jitted():
+            return shallow_hanlder(*(args + (func, True,)))
+        else:
+            return shallow_hanlder(*(args + (None, False,)))
+    call_handler._always_inline_ = True
+    call_handler.func_name = func.func_name
+    return call_handler
+
 
 @oopspec("jit.isconstant(value)")
 @specialize.call_location()

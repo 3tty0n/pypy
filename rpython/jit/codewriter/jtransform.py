@@ -1781,6 +1781,9 @@ class Transformer(object):
                     % (op.args[0],))
             return self._handle_oopspec_call(op, op.args[1:],
                 EffectInfo.OS_NOT_IN_TRACE)
+        elif oopspec_name == 'jit.enable_shallow_tracing':
+            return self._handle_oopspec_call(op, op.args[1:],
+                EffectInfo.OS_ENABLE_SHALLOW_TRACING)
         else:
             raise AssertionError("missing support for %r" % oopspec_name)
 

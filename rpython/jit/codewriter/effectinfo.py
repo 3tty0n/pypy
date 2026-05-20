@@ -32,6 +32,7 @@ class EffectInfo(object):
     OS_THREADLOCALREF_GET       = 5    # llop.threadlocalref_get
     OS_NOT_IN_TRACE             = 8    # for calls not recorded in the jit trace
     OS_ARRAYMOVE                = 9    # "list.ll_arraymove"
+    OS_ENABLE_SHALLOW_TRACING   = 10   # threaded code leaf primitive
     #
     OS_INT_PY_DIV               = 12   # python signed division (neg. corrected)
     OS_INT_UDIV                 = 13   # regular unsigned division
@@ -108,7 +109,7 @@ class EffectInfo(object):
     _OS_CANRAISE = set([
         OS_NONE, OS_STR2UNICODE, OS_LIBFFI_CALL, OS_RAW_MALLOC_VARSIZE_CHAR,
         OS_JIT_FORCE_VIRTUAL, OS_SHRINK_ARRAY, OS_DICT_LOOKUP,
-        OS_NOT_IN_TRACE,
+        OS_NOT_IN_TRACE, OS_ENABLE_SHALLOW_TRACING,
     ])
 
     _NO_CALL_RELEASE_GIL_TARGET = (llmemory.NULL, 0)
@@ -248,6 +249,9 @@ class EffectInfo(object):
 
     def check_forces_virtual_or_virtualizable(self):
         return self.extraeffect >= self.EF_FORCES_VIRTUAL_OR_VIRTUALIZABLE
+
+    def is_shallow_tracing(self):
+        return self.oopspecindex == EffectInfo.OS_ENABLE_SHALLOW_TRACING
 
     def has_random_effects(self):
         return self.extraeffect >= self.EF_RANDOM_EFFECTS

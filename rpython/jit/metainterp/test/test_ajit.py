@@ -15,7 +15,7 @@ from rpython.rlib.jit import (JitDriver, we_are_jitted, hint, dont_look_inside,
     loop_invariant, elidable, promote, jit_debug, assert_green,
     AssertGreenFailed, unroll_safe, current_trace_length, look_inside_iff,
     isconstant, isvirtual, set_param, record_exact_class, record_known_result,
-    record_exact_value, loop_unrolling_heuristic)
+    record_exact_value, loop_unrolling_heuristic, enable_shallow_tracing)
 from rpython.rlib.longlong2float import float2longlong, longlong2float
 from rpython.rlib.rarithmetic import ovfcheck, is_valid_int, int_force_ge_zero
 from rpython.rtyper.lltypesystem import lltype, rffi
@@ -4351,6 +4351,25 @@ class TestLLtype(BaseLLtypeTests, LLJitMixin):
         self.check_resops(int_add=0, call_i=0, call_may_force_i=0,
                           call_r=0, call_may_force_r=0, call_f=0,
                           call_may_force_f=0)
+
+    def test_enable_shallow_tracing(self):
+        @enable_shallow_tracing
+        def prim_add(x, y):
+            return x + y
+
+        jitdriver = JitDriver(greens=[], reds=['n', 'acc'])
+        def f(n):
+            acc = 0
+            while n >= 0:
+                jitdriver.jit_merge_point(n=n, acc=acc)
+                acc = prim_add(acc, n)
+                n -= 1
+            return acc
+
+        res = self.meta_interp(f, [10])
+        assert res == f(10)
+        self.check_resops(call_i=2)
+        self.check_resops(int_add=0)
 
     def test_not_in_trace_exception(self):
         def g():
