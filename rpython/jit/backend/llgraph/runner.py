@@ -92,6 +92,11 @@ class CallDescr(BackendDescr):
         self.ARGS = ARGS
         self.ABI = ABI
         self.extrainfo = extrainfo
+        self.calldescr_without_flag = None
+        if len(ARGS) >= 2:
+            stripped = tuple(ARGS[:-2])
+            self.calldescr_without_flag = CallDescr(RESULT, stripped,
+                                                   extrainfo, ABI)
 
     def __repr__(self):
         return 'CallDescr(%r, %r, %r)' % (self.RESULT, self.ARGS,
@@ -107,6 +112,9 @@ class CallDescr(BackendDescr):
         return getkind(self.RESULT)[0]
 
     get_normalized_result_type = get_result_type
+
+    def get_calldescr_without_flag(self):
+        return self.calldescr_without_flag
 
 class TypeIDSymbolic(Symbolic):
     def __init__(self, STRUCT_OR_ARRAY):
