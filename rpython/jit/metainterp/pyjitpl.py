@@ -2934,9 +2934,18 @@ class MetaInterp(object):
         if warmstate.enable_hot_bridge_promotion:
             typetag = resumedescr.status & compile.AbstractResumeGuardDescr.ST_TYPE_MASK
             cell_token = self.resumekey_original_loop_token
+            retrace_budget = True
+            if cell_token is not None:
+                warmrunnerdescr = self.staticdata.warmrunnerdesc
+                if (warmrunnerdescr is not None and
+                        warmrunnerdescr.memory_manager is not None):
+                    rl = warmrunnerdescr.memory_manager.retrace_limit
+                    if rl >= 0:
+                        retrace_budget = cell_token.retraced_count < rl
             # hbp stage 1: gate promotion on low value-cardinality so
             # megamorphic guards fall through to generic bridges.
             if (typetag != 0 and cell_token is not None
+                    and retrace_budget
                     and not cell_token.hbp_megamorphic
                     and cell_token.bridge_count
                         >= warmstate.hot_bridge_threshold
@@ -2950,6 +2959,18 @@ class MetaInterp(object):
                 if (cell_token.hbp_variant_count
                         >= warmstate.hot_bridge_max_variants):
                     cell_token.hbp_megamorphic = True
+                debug_print("HBPEV grant")
+            elif (typetag != 0 and cell_token is not None
+                    and not retrace_budget
+                    and not cell_token.hbp_megamorphic
+                    and cell_token.bridge_count
+                        >= warmstate.hot_bridge_threshold
+                    and resumedescr.rd_fail_count
+                        >= r_uint(warmstate.hot_bridge_guard_threshold)
+                    and (not warmstate.enable_hbp_cardinality_gate
+                         or _hbp_popcount(resumedescr.rd_value_sig)
+                            <= warmstate.hot_bridge_max_cardinality)):
+                debug_print("HBPEV deny_budget")
 
         # hbp stage 2
         if warmstate.enable_adaptive_bridge:

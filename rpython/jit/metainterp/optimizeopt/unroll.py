@@ -235,6 +235,17 @@ class UnrollOptimizer(Optimizer):
             if do_retrace and cell_token.retraced_count < limit:
                 cell_token.retraced_count += 1
                 debug_print('Retracing (%d/%d)' % (cell_token.retraced_count, limit))
+            elif prefer_loop_over_bridge:
+                # HBP wanted a loop variant but this cell's retrace budget is
+                # spent.  Skip the force_boxes=True attempt below (which
+                # emits setfields to materialise virtuals defensively before
+                # then falling to preamble anyway) and go straight to a
+                # normal preamble bridge.  Must emit a terminal JUMP — the
+                # backend's patch_jump_for_descr asserts on bridges with no
+                # terminator (rc=-6 on go/deltablue under HBP otherwise).
+                self.jump_to_preamble(cell_token, jump_op)
+                self._deep_clean_newops()
+                return info, self._newoperations[:]
             else:
                 # Try forcing boxes to avoid jumping to the preamble
                 try:
