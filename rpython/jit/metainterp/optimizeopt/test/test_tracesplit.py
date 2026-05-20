@@ -118,6 +118,13 @@ class FakeJitDriverSD(test_util.FakeJitDriverStaticData):
 
 class BaseTestTraceSplit(test_dependency.DependencyBaseTest):
 
+    # BaseTest.cls_attributes (autouse) resets self.jitdriver_sd to a plain
+    # FakeJitDriverStaticData without a .jitdriver; OptTraceSplit needs one
+    # carrying .conditions.  Re-apply FakeJitDriverSD after that fixture.
+    @pytest.fixture(autouse=True)
+    def tracesplit_jitdriver(self, cls_attributes):
+        self.jitdriver_sd = FakeJitDriverSD()
+
     enable_opts = "intbounds:rewrite:string:earlyforce:pure:heap"
 
     cpu = runner.LLGraphCPU(None)
@@ -577,23 +584,23 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         debug_merge_point(0, 0, 0, 23, '23: ADD ')
         call_n(ConstClass(func_ptr), p0, 24, 0, descr=calldescr)
         guard_no_exception(descr=<Guard0x7f68864604a0>) [p0]
+        label(p0)
         debug_merge_point(0, 0, 0, 24, '24: RET 1')
         p32 = call_r(ConstClass(func_ptr), p0, 25, 0, descr=calldescr)
         leave_portal_frame(0)
         finish(p32, descr=<DoneWithThisFrameDescrRef object at 0x55c0fa2d98e0>)
         """
 
+        # Trace-merging: the RET epilogue at pc 24 (the diamond's E) is now
+        # emitted once, in the body, behind the inserted label above.  The
+        # bridge no longer duplicates it -- it jumps to that shared label.
         bridgeops = """
         [p0]
         debug_merge_point(0, 0, 0, 10, '10: CONST_INT 1')
         call_n(ConstClass(func_ptr), p0, 11, 0, descr=calldescr)
         guard_no_exception(descr=<Guard0x7f6886460560>) [p0]
         debug_merge_point(0, 0, 0, 12, '12: JUMP 24')
-        debug_merge_point(0, 0, 0, 24, '24: RET 1')
-        p44 = call_r(ConstClass(func_ptr), p0, 25, 0, descr=calldescr)
-        guard_no_exception(descr=<Guard0x7f68864605c0>) [p44]
-        leave_portal_frame(0)
-        finish(p44, descr=<DoneWithThisFrameDescrRef object at 0x55c0fa2d98e0>)
+        jump(p0)
         """
 
         self.assert_equal_split(ops, bodyops, bridgeops)
@@ -680,23 +687,23 @@ class TestOptTraceSplit(BaseTestTraceSplit):
         debug_merge_point(0, 0, 0, 23, '23: ADD ')
         call_n(ConstClass(func_ptr), p0, 24, 0, descr=calldescr)
         guard_no_exception(descr=<Guard0x7f68864604a0>) [p0]
+        label(p0)
         debug_merge_point(0, 0, 0, 24, '24: RET 1')
         p32 = call_r(ConstClass(func_ptr), p0, 25, 0, descr=calldescr)
         leave_portal_frame(0)
         finish(p32, descr=<DoneWithThisFrameDescrRef object at 0x55c0fa2d98e0>)
         """
 
+        # Trace-merging: the RET epilogue at pc 24 (the diamond's E) is now
+        # emitted once, in the body, behind the inserted label above.  The
+        # bridge no longer duplicates it -- it jumps to that shared label.
         bridgeops = """
         [p0]
         debug_merge_point(0, 0, 0, 10, '10: CONST_INT 1')
         call_n(ConstClass(func_ptr), p0, 11, 0, descr=calldescr)
         guard_no_exception(descr=<Guard0x7f6886460560>) [p0]
         debug_merge_point(0, 0, 0, 12, '12: JUMP 24')
-        debug_merge_point(0, 0, 0, 24, '24: RET 1')
-        p44 = call_r(ConstClass(func_ptr), p0, 25, 0, descr=calldescr)
-        guard_no_exception(descr=<Guard0x7f68864605c0>) [p44]
-        leave_portal_frame(0)
-        finish(p44, descr=<DoneWithThisFrameDescrRef object at 0x55c0fa2d98e0>)
+        jump(p0)
         """
 
         self.assert_equal_split(ops, bodyops, bridgeops)
