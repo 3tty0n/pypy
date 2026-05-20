@@ -586,9 +586,6 @@ PARAMETER_DOCS = {
     'enable_hbp_cardinality_gate': 'apply the hot_bridge_max_cardinality popcount gate to HBP promotion (0=off, 1=on; off makes the cardinality clause vacuously true)',
     'enable_adaptive_bridge': 'adaptive bridge strategy: lazy-defer compilation then promote to loop on threshold (0=off, 1=on). Implies enable_hot_bridge_promotion semantics for stage 3.',
     'adaptive_bridge_lazy_threshold': 'number of guard failures before adaptive-bridge stage-1 lets compilation proceed',
-    'enable_tracetree': 'TraceTree: one loop per red-arg shape per greenkey (0=off, 1=on); needs shapes= on the JitDriver',
-    'tracetree_max_specializations': 'max distinct shape specializations per greenkey before megamorphic fallback',
-    'tracetree_activation_threshold': 'dispatch misses before polyvariant mode (0 = always on when enable_tracetree=1)',
     'vec': 'turn on the vectorization optimization (vecopt). ' \
            'Supports x86 (SSE 4.1), powerpc (SVX), s390x SIMD',
     'vec_cost': 'threshold for which traces to bail. Unpacking increases the counter,'\
@@ -618,9 +615,6 @@ PARAMETERS = {'threshold': 1039, # just above 1024, prime
               'enable_hbp_cardinality_gate': 0,
               'enable_adaptive_bridge': 0,
               'adaptive_bridge_lazy_threshold': 50,
-              'enable_tracetree': 0,
-              'tracetree_max_specializations': 4,
-              'tracetree_activation_threshold': 1,
               'vec': 0,
               'vec_all': 0,
               'vec_cost': 0,

@@ -443,7 +443,6 @@ class JitCellToken(AbstractDescr):
     bridge_count = 0
     hbp_variant_count = 0
     hbp_megamorphic = False
-    wref_jitcell = None
     invalidated = False
     outermost_jitdriver_sd = None
     # and more data specified by the backend when the loop is compiled

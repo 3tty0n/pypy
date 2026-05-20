@@ -54,7 +54,7 @@ Usage:
 
   # Same, but tune the two JIT arms explicitly:
   bench_e2e.py --hbp --pypy ./pypy/goal/pypy-c \\
-      --jit-hbp enable_hot_bridge_promotion=1,enable_tracetree=1 \\
+      --jit-hbp enable_hot_bridge_promotion=1,retrace_limit=1 \\
       --reps 10 -n 50
 
   # Fast HBP-vs-baseline iteration loop (curated representative set;
@@ -152,9 +152,9 @@ BENCHMARKS = [
 # Cost tiers for benchmark-validation iteration speed. Classified by
 # steady-state cost/iter + warmup/trace weight (relative at a fixed -n):
 #   small  -- sub-~50ms/iter, tiny traces, ~instant steady state
-#             (smoke tier; cheapest HBP/TT-validation loop)
-#   medium -- tens-to-low-hundreds ms/iter, real trace trees + some
-#             bridge churn (where HBP/TraceTree effects show clearest)
+#             (smoke tier; cheapest HBP-validation loop)
+#   medium -- tens-to-low-hundreds ms/iter, real warmup + some
+#             bridge churn (where HBP effects show clearest)
 #   large  -- hundreds-of-ms+/iter or very long JIT warmup (big libs,
 #             megamorphic call sites); dominates a full run's wall time
 TIERS = {
@@ -184,7 +184,7 @@ TIERS = {
 # One representative per behavior family (numeric loop, AI search,
 # HOF-heavy raytracer, OO-dispatch, serialization, ...) at small/medium
 # cost -- the recommended fast HBP-vs-baseline iteration set; exercises
-# the HOF-monomorphism + TraceTree paths without the multi-hour
+# the HOF-monomorphism paths without the multi-hour
 # sympy_*/sqlalchemy_*/django tail.
 QUICK = [
     "hof_mono",
@@ -472,7 +472,7 @@ def run_one(pypy, script, env_extra, extra_args, n, warmup_iters=0,
     """Run a single (binary, benchmark) once. Returns dict of metrics.
 
     `jit_params`: optional comma-separated `--jit` parameter string
-    (e.g. "enable_hot_bridge_promotion=1,enable_tracetree=1"). When set
+    (e.g. "enable_hot_bridge_promotion=1,retrace_limit=1"). When set
     (and jit_off is False) it is passed verbatim as `--jit <params>`,
     so the SAME binary can be A/B'd under different JIT policies (the
     HBP-vs-baseline mode). Ignored when jit_off=True (`--jit off` wins).
@@ -1332,12 +1332,11 @@ def main():
                           "stock baseline."))
     ap.add_argument("--jit-hbp",
                     default="enable_hot_bridge_promotion=1,"
-                            "enable_tracetree=1,"
                             "retrace_limit=1",
                     help=("--jit param string for the HBP arm of --hbp "
                           "mode (default: "
                           "enable_hot_bridge_promotion=1,"
-                          "enable_tracetree=1)."))
+                          "retrace_limit=1)."))
     ap.add_argument("--break-even", action="store_true",
                     help=("also run each benchmark with `--jit off` and "
                           "report the cumulative JIT-on-vs-interpreter "
