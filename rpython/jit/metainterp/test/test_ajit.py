@@ -3167,6 +3167,53 @@ class BasicTests:
             "enable_hot_bridge_promotion should not reduce target_tokens: "
             "baseline=%d, with_promotion=%d" % (baseline, with_promotion))
 
+    def test_hbp_cardinality_gate_blocks_megamorphic(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(i) for i in range(8)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                v = promote(obj.v)
+                total += v + i
+                i += 1
+            return total
+
+        def run(card_gate, n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 5)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'enable_hbp_cardinality_gate', card_gate)
+            set_param(None, 'hot_bridge_max_cardinality', 4)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            for obj in objs:
+                hot_loop(obj, n)
+            return hot_loop(objs[0], n)
+
+        res = self.meta_interp(run, [0, 80])
+        assert res == run(0, 80)
+        tokens_off = get_stats().get_all_jitcell_tokens()
+        tt_off = max(len(t.target_tokens) for t in tokens_off if t.target_tokens)
+
+        res = self.meta_interp(run, [1, 80])
+        assert res == run(1, 80)
+        tokens_on = get_stats().get_all_jitcell_tokens()
+        tt_on = max(len(t.target_tokens) for t in tokens_on if t.target_tokens)
+
+        assert tt_on <= tt_off, (
+            "cardinality gate should not increase target_tokens on "
+            "megamorphic guard_value: gate_off=%d gate_on=%d"
+            % (tt_off, tt_on))
+
     def test_adaptive_bridge_lazy_defers_cold_bridges(self):
         # Stage 1: with a high lazy threshold (T_lazy >> n), the second
         # and third objects should NEVER cause a bridge to compile; they
