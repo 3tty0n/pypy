@@ -1,6 +1,5 @@
 import py
 import re
-import os
 import collections
 from rpython.jit.metainterp.history import (Const, ConstInt, ConstPtr,
     ConstFloat, CONST_NULL, CONST_FALSE, CONST_FZERO, getkind, AbstractDescr)
@@ -52,8 +51,8 @@ def can_skip_heapcache(opname):
 
 
 def _portal_relax_level():
-    raw = os.environ.get('GENEXT_PORTAL_RELAX', '')
-    return int(raw) if raw.isdigit() else 0
+    cfg = getattr(get_translation_config(), "translation", None)
+    return getattr(cfg, "genext_portal_relax", 0) if cfg is not None else 0
 
 
 def _is_guard_resume_op(opname):
@@ -132,8 +131,7 @@ class GenExtension(object):
         from rpython.jit.codewriter.jitcode import JitCode
         from rpython.jit.metainterp.pyjitpl import ChangeFrame
         self._compute_hbp_signals()
-        _lvl_raw = os.environ.get('GENEXT_PORTAL_RELAX', '')
-        _PORTAL_RELAX_LVL = int(_lvl_raw) if _lvl_raw.isdigit() else 0
+        _PORTAL_RELAX_LVL = _portal_relax_level()
         _PORTAL_RELAX = _PORTAL_RELAX_LVL >= 1
         _PORTAL_RELAX_VAB = _PORTAL_RELAX_LVL >= 2
         _relax_has_ic = False
@@ -206,7 +204,8 @@ class GenExtension(object):
                         return
 
         self.work_list = WorkList(self.pc_to_insn, self.assembler.label_positions, self.pc_to_nextpc, self.globals)
-        _APROBE = os.environ.get('GENEXT_APROBE', '') == '1'
+        _ap_cfg = getattr(get_translation_config(), "translation", None)
+        _APROBE = getattr(_ap_cfg, "genext_aprobe", False) if _ap_cfg is not None else False
         _APROBE_NAMES = ('W_ListObject.getitem', 'W_FloatObject._to_float',
                          'comparison_eq_impl')
         self._aprobe_entry = {}

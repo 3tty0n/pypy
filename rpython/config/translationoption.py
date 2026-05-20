@@ -156,6 +156,19 @@ translation_optiondescription = OptionDescription(
                 "per-step genext overhead on low-coverage / bridge-storm jitcodes",
                 default=0.0,
                 cmdline="--genext-cost-gate"),
+    IntOption("genext_portal_relax",
+              "relax genextension's whole-jitcode early-bail to admit the "
+              "green-bearing portal: 0 = original behaviour (off-path "
+              "byte-identical), 1 = admit inline_call_*, 2 = also admit "
+              "raise/reraise and {get,set}arrayitem_vable_* and route portal "
+              "inline_call_* / guard / resume ops through the generic path",
+              default=0,
+              cmdline="--genext-portal-relax"),
+    BoolOption("genext_aprobe",
+               "enable A-probe: proactive entry binding-time seeding for an "
+               "allowlist of hot jitcodes (runtime-checked Const dispatch)",
+               default=False,
+               cmdline="--genext-aprobe"),
     # misc
     BoolOption("verbose", "Print extra information", default=False,
                cmdline="--verbose"),
