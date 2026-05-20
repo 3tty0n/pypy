@@ -2,7 +2,7 @@ import py
 import re
 import collections
 from rpython.jit.metainterp.history import (Const, ConstInt, ConstPtr,
-    ConstFloat, CONST_NULL, CONST_FALSE, CONST_FZERO, getkind, AbstractDescr)
+    ConstFloat, CONST_NULL, getkind, AbstractDescr)
 from rpython.jit.metainterp import support
 from rpython.flowspace.model import Constant
 from rpython.jit.codewriter.flatten import (
@@ -55,10 +55,6 @@ def _portal_relax_level():
     return getattr(cfg, "genext_portal_relax", 0) if cfg is not None else 0
 
 
-def _is_guard_resume_op(opname):
-    return opname.startswith('goto_if_not_') or opname.startswith('guard_')
-
-
 def _genext_compile_target():
     """Return the detected target CPU model, or None if detection fails.
 
@@ -87,7 +83,6 @@ class GenExtension(object):
         self.pc_to_index = {}
         self.code = []
         self.globals = {}
-        self._hybrid_portal = False
         self._reset_insn()
 
     def _reset_insn(self):
@@ -131,27 +126,21 @@ class GenExtension(object):
         from rpython.jit.codewriter.jitcode import JitCode
         from rpython.jit.metainterp.pyjitpl import ChangeFrame
         self._compute_hbp_signals()
-        _PORTAL_RELAX_LVL = _portal_relax_level()
-        _PORTAL_RELAX = _PORTAL_RELAX_LVL >= 1
-        _PORTAL_RELAX_VAB = _PORTAL_RELAX_LVL >= 2
-        _relax_has_ic = False
-        _is_portal = False
+        portal_relax_lvl = _portal_relax_level()
+        portal_relax = portal_relax_lvl >= 1
+        portal_relax_vab = portal_relax_lvl >= 2
         for insn in self.ssarepr.insns:
             if isinstance(insn[0], Label) or insn[0] == '---':
                 continue
             opname = insn[0]
-            if 'jit_merge_point' in opname:
-                _is_portal = True
-            _ic = opname.startswith('inline_call_')
-            if _ic and _PORTAL_RELAX:
-                _relax_has_ic = True
-            _is_raise = opname in ('raise', 'reraise')
-            _is_vab_arr = (opname.startswith('getarrayitem_vable_') or
-                           opname.startswith('setarrayitem_vable_'))
+            is_ic = opname.startswith('inline_call_')
+            is_raise = opname in ('raise', 'reraise')
+            is_vab_arr = (opname.startswith('getarrayitem_vable_') or
+                          opname.startswith('setarrayitem_vable_'))
             if (
-                    (_is_raise and not _PORTAL_RELAX_VAB) or
-                    (_ic and not _PORTAL_RELAX) or
-                    (_is_vab_arr and not _PORTAL_RELAX_VAB)
+                    (is_raise and not portal_relax_vab) or
+                    (is_ic and not portal_relax) or
+                    (is_vab_arr and not portal_relax_vab)
                 ):
                 # VAB-1 stages 1-2: get/setfield_vable_ are no longer
                 # whole-jitcode disqualifiers. They route through
@@ -159,13 +148,13 @@ class GenExtension(object):
                 # _shortcut_{get,set}field_vable, which return None/False on
                 # any uncertainty (UNKNOWN vable status) so the emitted code
                 # falls back to the full opimpl_*field_vable_* path --
-                # identical to the non-genext tracer. The array-item case is
-                # admitted only at LEVEL>=2, through the analogous per-op
-                # graceful handlers (05a325e3eb's -1 path); below that it
-                # still whole-jitcode-bails as before.
+                # identical to the non-genext tracer. These are *field* ops
+                # with a fixed field index (no unboxed array index), hence
+                # none of the OOB hazard that the array-item bail-out (still
+                # in place, gated by 05a325e3eb's -1 path) guards against.
+                # setfield's standard case preserves synchronize_virtualizable.
                 self.jitcode.genext_function = None
                 return
-        self._hybrid_portal = (_PORTAL_RELAX_LVL >= 2)
         for index, insn in enumerate(self.ssarepr.insns):
             self._reset_insn()
             if isinstance(insn[0], Label) or insn[0] == '---':
@@ -196,22 +185,22 @@ class GenExtension(object):
                     starting_points.add(nextpc)
             last_was_live = insn[0] == '-live-'
 
-        if _PORTAL_RELAX and _relax_has_ic:
-            for _pc, _ins in self.pc_to_insn.iteritems():
-                if _ins[0].startswith('inline_call_'):
-                    if self.pc_to_nextpc[_pc] not in starting_points:
+        if portal_relax:
+            for ic_pc, ic_insn in self.pc_to_insn.iteritems():
+                if ic_insn[0].startswith('inline_call_'):
+                    if self.pc_to_nextpc[ic_pc] not in starting_points:
                         self.jitcode.genext_function = None
                         return
 
         self.work_list = WorkList(self.pc_to_insn, self.assembler.label_positions, self.pc_to_nextpc, self.globals)
-        _ap_cfg = getattr(get_translation_config(), "translation", None)
-        _APROBE = getattr(_ap_cfg, "genext_aprobe", False) if _ap_cfg is not None else False
-        _APROBE_NAMES = ('W_ListObject.getitem', 'W_FloatObject._to_float',
-                         'comparison_eq_impl')
-        self._aprobe_entry = {}
+        ap_cfg = getattr(get_translation_config(), "translation", None)
+        aprobe = getattr(ap_cfg, "genext_aprobe", False) if ap_cfg is not None else False
+        aprobe_names = ('W_ListObject.getitem', 'W_FloatObject._to_float',
+                        'comparison_eq_impl')
+        self.aprobe_entry = {}
         for startpc in self.assembler.startpoints:
             spec = self.work_list.specialize_pc(frozenset(), startpc)
-            if (_APROBE and self.jitcode.name in _APROBE_NAMES
+            if (aprobe and self.jitcode.name in aprobe_names
                     and startpc in self.pc_to_insn):
                 ins = self.pc_to_insn[startpc]
                 seed = frozenset([a for a in ins[1:]
@@ -221,7 +210,7 @@ class GenExtension(object):
                 if seed:
                     sspec = self.work_list.specialize_pc(seed, startpc)
                     if sspec.get_pc() != startpc:
-                        self._aprobe_entry[startpc] = (
+                        self.aprobe_entry[startpc] = (
                             sspec.get_pc(),
                             sorted([(r.kind, r.index) for r in seed]))
         code_and_spec_per_pc = self.work_list.make_code()
@@ -305,26 +294,26 @@ class GenExtension(object):
                 default = '0.0'
             self.precode.append("    %s = %s" % (name, default))
         prefix = ""
-        _AP_KMAP = {'int': ('i', 'ConstInt', 'getint'),
-                    'ref': ('r', 'ConstPtr', 'getref_base'),
-                    'float': ('f', 'ConstFloat', 'getfloat')}
+        ap_kmap = {'int': ('i', 'ConstInt', 'getint'),
+                   'ref': ('r', 'ConstPtr', 'getref_base'),
+                   'float': ('f', 'ConstFloat', 'getfloat')}
         for pc in sorted(starting_points):
-            if pc in self._aprobe_entry:
-                spc, regs = self._aprobe_entry[pc]
+            if pc in self.aprobe_entry:
+                spc, regs = self.aprobe_entry[pc]
                 self.precode.append("    %sif pc == %s:" % (prefix, pc))
-                self.precode.append("        _ap_ok = True")
+                self.precode.append("        ap_ok = True")
                 for kind, idx in regs:
-                    t, cc, _ub = _AP_KMAP[kind]
+                    t, cc, ub = ap_kmap[kind]
                     self.precode.append(
-                        "        _apb_%s%d = self.registers_%s[%d]" % (t, idx, t, idx))
+                        "        apb_%s%d = self.registers_%s[%d]" % (t, idx, t, idx))
                     self.precode.append(
-                        "        if not isinstance(_apb_%s%d, %s): _ap_ok = False"
+                        "        if not isinstance(apb_%s%d, %s): ap_ok = False"
                         % (t, idx, cc))
-                self.precode.append("        if _ap_ok:")
+                self.precode.append("        if ap_ok:")
                 for kind, idx in regs:
-                    t, _cc, ub = _AP_KMAP[kind]
+                    t, cc, ub = ap_kmap[kind]
                     self.precode.append(
-                        "            %s%d = _apb_%s%d.%s()" % (t, idx, t, idx, ub))
+                        "            %s%d = apb_%s%d.%s()" % (t, idx, t, idx, ub))
                 self.precode.append("            pc = %s" % spc)
                 self.precode.append("        else:")
                 self.precode.append("            pc = %s" % pc)
@@ -340,7 +329,6 @@ class GenExtension(object):
         # Import rop for opnum constants used in type-specialized recording
         from rpython.jit.metainterp.resoperation import rop
         d = {"Const": Const, "ConstInt": ConstInt, "ConstPtr": ConstPtr, "ConstFloat": ConstFloat,
-             "CONST_FALSE": CONST_FALSE, "CONST_NULL": CONST_NULL, "CONST_FZERO": CONST_FZERO,
              "JitCode": JitCode, "ChangeFrame": ChangeFrame,
              "lltype": lltype, "rstr": rstr, 'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR, 'support': support,
              'rop': rop, 'r_uint': r_uint, 'int_signext': int_signext}
@@ -1051,18 +1039,7 @@ class GenExtension(object):
         return lines, needed_orgpc, needed_label
 
     def emit_newframe_function(self):
-        if self._hybrid_portal:
-            return self.emit_default()
-        lines = []
-        if self.returncode == 'i':
-            lines.append("self.registers_i[%s] = CONST_FALSE" % (self.resindex,))
-        elif self.returncode == 'r':
-            lines.append("self.registers_r[%s] = CONST_NULL" % (self.resindex,))
-        elif self.returncode == 'f':
-            lines.append("self.registers_f[%s] = CONST_FZERO" % (self.resindex,))
-        lines.append("self._result_argcode = %r" % (self.returncode,))
-        lines.append("return # change frame")
-        return lines
+        return ["self._result_argcode = %r" % (self.returncode, ), "return # change frame"]
     emit_inline_call_r_i = emit_newframe_function
     emit_inline_call_r_r = emit_newframe_function
     emit_inline_call_r_v = emit_newframe_function
@@ -1320,8 +1297,6 @@ class Specializer(object):
         return arg in self.constant_registers
 
     def make_code(self):
-        if _portal_relax_level() >= 2 and _is_guard_resume_op(self.name):
-            return None
         args = self._get_args()
         try:
             if not self._check_all_constant_args(args):
@@ -1331,8 +1306,6 @@ class Specializer(object):
             return None
 
     def make_code_with_profiling(self):
-        if _portal_relax_level() >= 2 and _is_guard_resume_op(self.name):
-            return None
         profiler = get_profiler()
         opname = self.name.strip('-')
         args = self._get_args()
@@ -2755,7 +2728,6 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
     emit_unspecialized_getarrayitem_vable_r = emit_unspecialized_getarrayitem_vable_i
-    emit_unspecialized_getarrayitem_vable_f = emit_unspecialized_getarrayitem_vable_i
 
     def emit_unspecialized_setarrayitem_vable_i(self):
         arg, index, value, descr1, descr2 = self._get_args()
@@ -2785,7 +2757,6 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
     emit_unspecialized_setarrayitem_vable_r = emit_unspecialized_setarrayitem_vable_i
-    emit_unspecialized_setarrayitem_vable_f = emit_unspecialized_setarrayitem_vable_i
 
     def emit_unspecialized_getarrayitem_gc_i_pure(self):
         lines = []
