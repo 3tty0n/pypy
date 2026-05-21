@@ -1019,6 +1019,72 @@ class OptTraceSplit(Optimizer):
         newop = op.copy_and_change(opnum, args, new_token)
         op.set_forwarded(newop)
         self.emit(newop)
+        self._emit_call_assembler_stack_effect(arglist, newop)
+
+    def _frame_stack_descriptors(self, frame_box):
+        sp_field_descr = None
+        stack_field_descr = None
+        stack_box = None
+        arr_descr = None
+        for op in self._newoperations:
+            if (op.getopnum() == rop.GETFIELD_GC_I and op.numargs() == 1 and
+                    op.getarg(0) is frame_box):
+                sp_field_descr = op.getdescr()
+            elif (op.getopnum() == rop.GETFIELD_GC_R and op.numargs() == 1 and
+                    op.getarg(0) is frame_box):
+                candidate_stack = op
+                for use in self._newoperations:
+                    if (use.numargs() > 0 and use.getarg(0) is candidate_stack and
+                            use.getopnum() in (rop.GETARRAYITEM_GC_R,
+                                               rop.SETARRAYITEM_GC,
+                                               rop.ARRAYLEN_GC)):
+                        stack_field_descr = op.getdescr()
+                        stack_box = candidate_stack
+                        if use.getopnum() in (rop.GETARRAYITEM_GC_R,
+                                              rop.SETARRAYITEM_GC):
+                            arr_descr = use.getdescr()
+                        break
+            if (sp_field_descr is not None and stack_field_descr is not None
+                    and arr_descr is not None):
+                return sp_field_descr, stack_field_descr, arr_descr
+        return sp_field_descr, stack_field_descr, arr_descr
+
+    def _emit_call_assembler_stack_effect(self, arglist, call_result):
+        if len(arglist) < 5:
+            return
+        frame_box = arglist[2]
+        argnum_box = arglist[4]
+        if not isinstance(argnum_box, ConstInt):
+            return
+        sp_field_descr, stack_field_descr, arr_descr = \
+            self._frame_stack_descriptors(frame_box)
+        if sp_field_descr is None or stack_field_descr is None or arr_descr is None:
+            return
+
+        old_sp = ResOperation(rop.GETFIELD_GC_I, [frame_box],
+                              descr=sp_field_descr)
+        drop_count = ConstInt(argnum_box.getint())
+        new_sp = ResOperation(rop.INT_SUB, [old_sp, drop_count])
+        set_sp = ResOperation(rop.SETFIELD_GC, [frame_box, new_sp],
+                              descr=sp_field_descr)
+        self.emit(old_sp)
+        self.emit(new_sp)
+        self.emit(set_sp)
+
+        if call_result.type == 'v':
+            return
+        stack_box = ResOperation(rop.GETFIELD_GC_R, [frame_box],
+                                 descr=stack_field_descr)
+        set_result = ResOperation(rop.SETARRAYITEM_GC,
+                                  [stack_box, new_sp, call_result],
+                                  descr=arr_descr)
+        pushed_sp = ResOperation(rop.INT_ADD, [new_sp, ConstInt(1)])
+        set_pushed_sp = ResOperation(rop.SETFIELD_GC, [frame_box, pushed_sp],
+                                     descr=sp_field_descr)
+        self.emit(stack_box)
+        self.emit(set_result)
+        self.emit(pushed_sp)
+        self.emit(set_pushed_sp)
 
     def _handle_dummy_flag(self, op):
         numargs = op.numargs()
