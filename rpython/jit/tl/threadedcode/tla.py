@@ -978,24 +978,21 @@ class Frame(object):
 
 
 def run(bytecode, w_arg, debug=False, tier=1):
+    "tier 0=interp, tier 1=threaded code, tier 2=inlined threaded code."
     frame = Frame(bytecode)
     frame.push(w_arg)
-    if tier >= 2:
-        w_result = frame._interp()
-        return w_result
-    else:
-        pc = 0
-        while True:
-            try:
-                w_result = frame.interp(pc=pc)
-                return w_result
-            except ContinueInTracingJIT as e:
-                print "switching to tracing", e.pc
-                pc = e.pc
+    if tier == 0:
+        return frame._interp()
+    pc = 0
+    while True:
+        try:
+            return frame.interp(pc=pc)
+        except ContinueInTracingJIT as e:
+            print "switching to tracing", e.pc
+            pc = e.pc
 
-            try:
-                w_result = frame._interp(pc=pc)
-                return w_result
-            except ContinueInThreadedJIT as e:
-                print "swiching to threaded", e.pc
-                pc = e.pc
+        try:
+            return frame._interp(pc=pc)
+        except ContinueInThreadedJIT as e:
+            print "swiching to threaded", e.pc
+            pc = e.pc

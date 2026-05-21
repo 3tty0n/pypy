@@ -14,9 +14,9 @@ CACHE = '/tmp/tla_bench'
 DEFAULT_BIN = os.path.join(THIS, 'targettla-c')
 
 CONFIGS = [
-    ('interp',    ['--tier', '2']),
-    ('threaded',  ['--tier', '1', '--jit', 'inlining=0']),
-    ('inline1',   ['--tier', '1', '--jit', 'inlining=1']),
+    ('interp',   ['--tier', '0']),
+    ('threaded', ['--tier', '1']),
+    ('inlined',  ['--tier', '2']),
 ]
 
 PROGRAMS = [
@@ -64,8 +64,8 @@ def assemble(name):
 
 
 def ground_truth(binary, prog, x):
-    "Use the translated binary in --tier 2 (pure interp, no JIT) as reference."
-    result, times, raw = run_once(binary, ['--tier', '2'], prog, x, 1)
+    "Use the translated binary in --tier 0 (pure interp, no JIT) as reference."
+    result, times, raw = run_once(binary, ['--tier', '0'], prog, x, 1)
     if result is None:
         return '<gt-err:no-result>'
     return result

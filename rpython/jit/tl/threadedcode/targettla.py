@@ -45,8 +45,12 @@ def entry_point(args):
     if len(args) > 3:
         n = int(args[3])
 
-    if tier >= 2:
+    if tier == 0:
         jit.set_user_param(None, "off")
+    elif tier == 1:
+        jit.set_user_param(None, "inlining=0")
+    elif tier == 2:
+        jit.set_user_param(None, "inlining=1")
 
     w_x = tla.W_IntObject(x)
     bytecode = load_bytecode(filename)
