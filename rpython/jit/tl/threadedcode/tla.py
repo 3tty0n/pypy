@@ -14,7 +14,7 @@ from rpython.jit.tl.threadedcode.bytecode import *
 
 
 TRACE_THRESHOLD = -1
-MAX_INTERP_DEPTH = 100
+MAX_INTERP_DEPTH = 50
 
 class ContinueInTracingJIT(Exception):
     def __init__(self, pc):
