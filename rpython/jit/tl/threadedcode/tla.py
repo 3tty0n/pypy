@@ -86,7 +86,9 @@ tier2driver = JitDriver(
 
 
 class Frame(object):
-    def __init__(self, bytecode, stack=[None] * 64, stackpos=0, depth=0):
+    def __init__(self, bytecode, stack=None, stackpos=0, depth=0):
+        if stack is None:
+            stack = [None] * 64
         self.bytecode = bytecode
         self.stack = stack
         self.stackpos = stackpos
@@ -826,10 +828,6 @@ class Frame(object):
                 if we_are_jitted():
                     frame.CALL_ASSEMBLER(self, t, argnum, bytecode, t_empty(), dummy=True)
                 else:
-                    entry = t
-                    if t < pc:
-                        tier1driver.can_enter_jit(
-                            bytecode=bytecode, entry=t, pc=t, tstack=tstack, self=frame)
                     frame.CALL_ASSEMBLER(self, t, argnum, bytecode, t_empty(), dummy=False)
 
             elif opcode == RET:
@@ -851,12 +849,6 @@ class Frame(object):
             elif opcode == JUMP:
                 t = ord(bytecode[pc])
 
-                if t < pc:
-                    # pc is incremented just after fetching opcode
-                    if bytecode.counts[pc-1] == TRACE_THRESHOLD:
-                        raise ContinueInTracingJIT(pc-1)
-                    bytecode.counts[pc-1] += 1
-
                 if we_are_jitted():
                     if tstack.t_is_empty():
                         if t < pc:
@@ -869,6 +861,11 @@ class Frame(object):
                     if t < pc:
                         emit_jump(pc, t)
                 else:
+                    if t < pc:
+                        # pc is incremented just after fetching opcode
+                        if bytecode.counts[pc-1] == TRACE_THRESHOLD:
+                            raise ContinueInTracingJIT(pc-1)
+                        bytecode.counts[pc-1] += 1
                     if t < pc:
                         tier1driver.can_enter_jit(
                             bytecode=bytecode, entry=entry, pc=t, tstack=tstack, self=self)
@@ -979,6 +976,7 @@ class Frame(object):
 
 def run(bytecode, w_arg, debug=False, tier=1):
     "tier 0=interp, tier 1=threaded code, tier 2=inlined threaded code."
+    bytecode = Bytecode(bytecode.code)
     frame = Frame(bytecode)
     frame.push(w_arg)
     if tier == 0:

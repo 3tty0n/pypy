@@ -1,12 +1,14 @@
 SOURCE = lang/sum.tla.py lang/fact.tla.py lang/fib.tla.py lang/ack.tla.py \
 	lang/tak.tla.py lang/gcd.tla.py lang/sum-tail.tla.py lang/fib-tail.tla.py
 
+RPYTHON = ../../../bin/rpython
+
 .PHONY: compile
 compile: targettla-c targettla_bench-c
 
 .PHONY: targettla-c
 targettla-c: targettla.py tla.py
-	rpython -Ojit --make-jobs=12 $<
+	$(RPYTHON) -Ojit $<
 
 %.tla: %.tla.py
 	./tla_assembler.py $<

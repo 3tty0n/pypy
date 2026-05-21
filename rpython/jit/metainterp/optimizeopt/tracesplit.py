@@ -92,6 +92,62 @@ def prepend_stackpos_entry_shim(operations):
     return True
 
 
+def _find_frame_stack_descrs(operations, frame_box):
+    sp_field_descr = None
+    stack_field_descr = None
+    arr_descr = None
+    for op in operations:
+        if (op.getopnum() == rop.GETFIELD_GC_I and op.numargs() == 1 and
+                op.getarg(0) is frame_box):
+            sp_field_descr = op.getdescr()
+        elif (op.getopnum() == rop.GETFIELD_GC_R and op.numargs() == 1 and
+                op.getarg(0) is frame_box):
+            stack_box = op
+            for use in operations:
+                if (use.numargs() > 0 and use.getarg(0) is stack_box and
+                        use.getopnum() in (rop.GETARRAYITEM_GC_R,
+                                           rop.SETARRAYITEM_GC)):
+                    stack_field_descr = op.getdescr()
+                    arr_descr = use.getdescr()
+                    break
+        if (sp_field_descr is not None and stack_field_descr is not None
+                and arr_descr is not None):
+            return sp_field_descr, stack_field_descr, arr_descr
+    return sp_field_descr, stack_field_descr, arr_descr
+
+
+def _call_assembler_stack_effect_ops(operations, arglist, call_result):
+    if len(arglist) < 5:
+        return []
+    frame_box = arglist[2]
+    argnum_box = arglist[4]
+    if not isinstance(argnum_box, ConstInt):
+        return []
+    sp_field_descr, stack_field_descr, arr_descr = \
+        _find_frame_stack_descrs(operations, frame_box)
+    if sp_field_descr is None or stack_field_descr is None or arr_descr is None:
+        return []
+
+    old_sp = ResOperation(rop.GETFIELD_GC_I, [frame_box],
+                          descr=sp_field_descr)
+    new_sp = ResOperation(rop.INT_SUB, [old_sp, ConstInt(argnum_box.getint())])
+    set_sp = ResOperation(rop.SETFIELD_GC, [frame_box, new_sp],
+                          descr=sp_field_descr)
+    effect = [old_sp, new_sp, set_sp]
+    if call_result.type == 'v':
+        return effect
+    stack_box = ResOperation(rop.GETFIELD_GC_R, [frame_box],
+                             descr=stack_field_descr)
+    set_result = ResOperation(rop.SETARRAYITEM_GC,
+                              [stack_box, new_sp, call_result],
+                              descr=arr_descr)
+    pushed_sp = ResOperation(rop.INT_ADD, [new_sp, ConstInt(1)])
+    set_pushed_sp = ResOperation(rop.SETFIELD_GC, [frame_box, pushed_sp],
+                                 descr=sp_field_descr)
+    effect.extend([stack_box, set_result, pushed_sp, set_pushed_sp])
+    return effect
+
+
 def rewrite_call_assembler_in_ops(operations, metainterp_sd, jitdriver_sd,
                                   loop_token=None):
     "Rewrite residual interp_CALL_ASSEMBLER calls into call_assembler_*."
@@ -149,6 +205,9 @@ def rewrite_call_assembler_in_ops(operations, metainterp_sd, jitdriver_sd,
         new_opnum = OpHelpers.call_assembler_for_descr(op.getdescr())
         newop = op.copy_and_change(new_opnum, args, new_token)
         operations[idx] = newop
+        effect = _call_assembler_stack_effect_ops(operations, arglist, newop)
+        if effect:
+            operations[idx + 1:idx + 1] = effect
         repl_old.append(op)
         repl_new.append(newop)
         changed = True
@@ -235,6 +294,11 @@ class OptTraceSplit(Optimizer):
         # boxes exist in no segment, so any guard failarg still referencing
         # one is stale Pass-1 residue and must be scrubbed.
         self._consumed_marker_boxes = []
+        self._pending_is_true_frame = None
+        self._shift_after_is_true_frame = None
+        self._shift_after_is_true_spdescr = None
+        self._shift_after_is_true_stackdescr = None
+        self._shift_after_is_true_stackboxes = []
 
         self.set_optimizations(optimizations)
         self.setup()
@@ -628,9 +692,6 @@ class OptTraceSplit(Optimizer):
             newops.append(ops[0])
         newops.append(zero_box)
         newops.append(zero_setfield)
-        newops.append(ResOperation(rop.SETFIELD_GC,
-                                   [frame_box, ConstInt(callee_sp)],
-                                   descr=sp_field_descr))
         newops.append(leave_op)
         newops.append(ResOperation(rop.FINISH, [zero_box],
                                    descr=finish_op.getdescr()))
@@ -879,11 +940,88 @@ class OptTraceSplit(Optimizer):
                 lastarg = op.getarg(numargs - 1)
                 if isinstance(lastarg, ConstInt) and lastarg.getint() == 1:
                     op.setarg(numargs - 1, ConstInt(0))
+            elif endswith(name, "Frame.is_true") or endswith(name, ".is_true"):
+                lastarg = op.getarg(numargs - 1)
+                if isinstance(lastarg, ConstInt) and lastarg.getint() == 1:
+                    op.setarg(numargs - 1, ConstInt(0))
+                    self._pending_is_true_frame = op.getarg(1)
+            elif (self._shift_after_is_true_frame is not None and
+                    (endswith(name, "Frame.FRAME_RESET") or
+                     endswith(name, ".FRAME_RESET"))):
+                lastarg = op.getarg(numargs - 1)
+                if isinstance(lastarg, ConstInt) and lastarg.getint() == 1:
+                    op.setarg(numargs - 1, ConstInt(0))
             if endswith(name, "emit_ptr_eq"):
                 self._slow_path_emit_ptr_eq = op
         elif opnum in (rop.GUARD_VALUE, rop.GUARD_TRUE, rop.GUARD_FALSE):
+            if (opnum == rop.GUARD_TRUE and
+                    op.numargs() >= 1 and
+                    op.getarg(0) is not None and
+                    op.getarg(0).getopnum() == rop.CALL_I and
+                    self._pending_is_true_frame is not None):
+                self._activate_after_is_true_shift(self._pending_is_true_frame)
+                self._pending_is_true_frame = None
             self._mark_guard(op)
+        if self._shift_after_is_true_frame is not None:
+            self._adjust_after_is_true_pop(op)
         self._newoperations.append(op)
+
+    def _shift_const_arg_down(self, op, index):
+        arg = op.getarg(index)
+        if isinstance(arg, ConstInt):
+            op.setarg(index, ConstInt(arg.getint() - 1))
+
+    def _reset_after_is_true_shift(self):
+        self._pending_is_true_frame = None
+        self._shift_after_is_true_frame = None
+        self._shift_after_is_true_spdescr = None
+        self._shift_after_is_true_stackdescr = None
+        self._shift_after_is_true_stackboxes = []
+
+    def _activate_after_is_true_shift(self, frame_box):
+        self._shift_after_is_true_frame = frame_box
+        self._shift_after_is_true_spdescr = None
+        self._shift_after_is_true_stackdescr = None
+        self._shift_after_is_true_stackboxes = []
+        for prev in self._newoperations:
+            if (prev.getopnum() == rop.GETFIELD_GC_I and
+                    prev.numargs() == 1 and prev.getarg(0) is frame_box):
+                self._shift_after_is_true_spdescr = prev.getdescr()
+            elif (prev.getopnum() == rop.GETFIELD_GC_R and
+                    prev.numargs() == 1 and prev.getarg(0) is frame_box):
+                self._shift_after_is_true_stackdescr = prev.getdescr()
+                self._shift_after_is_true_stackboxes.append(prev)
+
+    def _adjust_after_is_true_pop(self, op):
+        frame_box = self._shift_after_is_true_frame
+        opnum = op.getopnum()
+        if (opnum == rop.GETFIELD_GC_I and op.numargs() == 1 and
+                op.getarg(0) is frame_box):
+            self._shift_after_is_true_spdescr = op.getdescr()
+            return
+        if (opnum == rop.GETFIELD_GC_R and op.numargs() == 1 and
+                op.getarg(0) is frame_box):
+            self._shift_after_is_true_stackdescr = op.getdescr()
+            self._shift_after_is_true_stackboxes.append(op)
+            return
+        spdescr = self._shift_after_is_true_spdescr
+        if spdescr is not None:
+            if (opnum == rop.SETFIELD_GC and op.numargs() == 2 and
+                    op.getarg(0) is frame_box and op.getdescr() is spdescr):
+                self._shift_const_arg_down(op, 1)
+                return
+            if (opnum == rop.GUARD_VALUE and op.numargs() == 2 and
+                    op.getarg(0).getopnum() == rop.GETFIELD_GC_I and
+                    op.getarg(0).numargs() == 1 and
+                    op.getarg(0).getarg(0) is frame_box and
+                    op.getarg(0).getdescr() is spdescr):
+                self._shift_const_arg_down(op, 1)
+                return
+        if opnum in (rop.GETARRAYITEM_GC_R, rop.SETARRAYITEM_GC):
+            for stack_box in self._shift_after_is_true_stackboxes:
+                if op.numargs() >= 2 and op.getarg(0) is stack_box:
+                    self._shift_const_arg_down(op, 1)
+                    return
 
     def _mark_guard(self, op):
         if self._check_if_guard_marked(op):
@@ -961,6 +1099,7 @@ class OptTraceSplit(Optimizer):
         self._newoperations = []
 
         self._already_setup_current_token = False
+        self._reset_after_is_true_shift()
 
         if len(self._fdescrstack) > 0:
             self.resumekey = self._fdescrstack.pop()
@@ -993,6 +1132,7 @@ class OptTraceSplit(Optimizer):
         self._newoperations = []
 
         self._already_setup_current_token = False
+        self._reset_after_is_true_shift()
 
         if len(self._fdescrstack) > 0:
             self.resumekey = self._fdescrstack.pop()
@@ -1103,6 +1243,10 @@ class OptTraceSplit(Optimizer):
         assert offset >= 0
         newargs = arglist[:offset]
         newargs[0] = newfunc
+        if len(newargs) > 1:
+            lastarg = newargs[-1]
+            if isinstance(lastarg, ConstInt) and lastarg.getint() == 1:
+                newargs[-1] = ConstInt(0)
 
         descr = op.getdescr()
         newdescr = descr.get_calldescr_without_flag()
