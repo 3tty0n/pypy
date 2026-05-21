@@ -16,7 +16,9 @@ from rpython.jit.metainterp.history import (Const, ConstInt, ConstPtr,
 from rpython.jit.metainterp.jitprof import EmptyProfiler
 from rpython.jit.metainterp.logger import Logger
 from rpython.jit.metainterp.optimizeopt.util import args_dict
-from rpython.jit.metainterp.resoperation import rop, OpHelpers, GuardResOp
+from rpython.jit.metainterp.resoperation import rop, OpHelpers, GuardResOp, optypes
+from rpython.rlib.rarithmetic import intmask, r_uint, uint_mul_high
+from rpython.jit.metainterp.support import int_signext
 from rpython.jit.metainterp.support import adr2int, ptr2int
 from rpython.rlib.rjitlog import rjitlog as jl
 from rpython.rlib import nonconst, rstack
@@ -39,6 +41,7 @@ def _get_jit_shortcut_flag(name):
 
 
 FAST_INT_RECORD = _get_jit_shortcut_flag('fast_int_record')
+SKIP_HEAPCACHE_PURE_INT = _get_jit_shortcut_flag('skip_heapcache_pure_int')
 
 
 class PyjitplCounters(object):
@@ -2903,13 +2906,203 @@ class MetaInterp(object):
                 return False
         return True
 
+    def _use_fast_pure_record(self):
+        """Use record2_int/float (skip generic _record_helper) for pure ops.
+
+        Enabled when heapcache_genext_fastpath is on (pypy-jit-ext-c default)
+        or fast_int_record is explicitly set at translation time.
+        """
+        if FAST_INT_RECORD:
+            return True
+        return self.heapcache.genext_fastpath_enabled
+
+    @specialize.arg(1)
+    def _fast_pure_record_float_binop(self, opnum, resvalue, b1, b2):
+        # Normalize executor result to FLOATSTORAGE for RPython typing.
+        fv = longlong.getfloatstorage(longlong.getrealfloat(resvalue))
+        return self._record_float_binop(opnum, fv, b1, b2)
+
+    @specialize.arg(1)
+    def _fast_pure_record_float_unop(self, opnum, resvalue, b1, descr):
+        fv = longlong.getfloatstorage(longlong.getrealfloat(resvalue))
+        return self.history.record1_float(opnum, b1, fv, descr)
+
+    @specialize.arg(1)
+    def _fast_compute_float_arith_binop(self, opnum, b1, b2):
+        """Float arithmetic binops; result type is always floatstorage."""
+        f0 = b1.getfloatstorage()
+        f1 = b2.getfloatstorage()
+        a = longlong.getrealfloat(f0)
+        b = longlong.getrealfloat(f1)
+        if opnum == rop.FLOAT_ADD:
+            return longlong.getfloatstorage(a + b)
+        if opnum == rop.FLOAT_SUB:
+            return longlong.getfloatstorage(a - b)
+        if opnum == rop.FLOAT_MUL:
+            return longlong.getfloatstorage(a * b)
+        if opnum == rop.FLOAT_TRUEDIV:
+            return longlong.getfloatstorage(a / b)
+        return None
+
+    @specialize.arg(1)
+    def _fast_compute_float_cmp_binop(self, opnum, b1, b2):
+        """Float comparison binops; result type is always int/bool."""
+        f0 = b1.getfloatstorage()
+        f1 = b2.getfloatstorage()
+        a = longlong.getrealfloat(f0)
+        b = longlong.getrealfloat(f1)
+        if opnum == rop.FLOAT_LT:
+            return a < b
+        if opnum == rop.FLOAT_LE:
+            return a <= b
+        if opnum == rop.FLOAT_EQ:
+            return a == b
+        if opnum == rop.FLOAT_NE:
+            return a != b
+        if opnum == rop.FLOAT_GT:
+            return a > b
+        if opnum == rop.FLOAT_GE:
+            return a >= b
+        return None
+
+    @specialize.arg(1)
+    def _fast_compute_int_binop(self, opnum, b1, b2):
+        """Integer/uint binops; result type is always int."""
+        if opnum == rop.INT_ADD:
+            return intmask(b1.getint() + b2.getint())
+        if opnum == rop.INT_SUB:
+            return intmask(b1.getint() - b2.getint())
+        if opnum == rop.INT_MUL:
+            return intmask(b1.getint() * b2.getint())
+        if opnum == rop.INT_AND:
+            return intmask(b1.getint() & b2.getint())
+        if opnum == rop.INT_OR:
+            return intmask(b1.getint() | b2.getint())
+        if opnum == rop.INT_XOR:
+            return intmask(b1.getint() ^ b2.getint())
+        if opnum == rop.INT_RSHIFT:
+            return intmask(b1.getint() >> b2.getint())
+        if opnum == rop.INT_LSHIFT:
+            return intmask(b1.getint() << b2.getint())
+        if opnum == rop.UINT_RSHIFT:
+            return intmask(r_uint(b1.getint()) >> r_uint(b2.getint()))
+        if opnum == rop.UINT_MUL_HIGH:
+            return intmask(uint_mul_high(b1.getint(), b2.getint()))
+        if opnum == rop.INT_LT:
+            return b1.getint() < b2.getint()
+        if opnum == rop.INT_LE:
+            return b1.getint() <= b2.getint()
+        if opnum == rop.INT_EQ:
+            return b1.getint() == b2.getint()
+        if opnum == rop.INT_NE:
+            return b1.getint() != b2.getint()
+        if opnum == rop.INT_GT:
+            return b1.getint() > b2.getint()
+        if opnum == rop.INT_GE:
+            return b1.getint() >= b2.getint()
+        if opnum == rop.UINT_LT:
+            return r_uint(b1.getint()) < r_uint(b2.getint())
+        if opnum == rop.UINT_LE:
+            return r_uint(b1.getint()) <= r_uint(b2.getint())
+        if opnum == rop.UINT_GT:
+            return r_uint(b1.getint()) > r_uint(b2.getint())
+        if opnum == rop.UINT_GE:
+            return r_uint(b1.getint()) >= r_uint(b2.getint())
+        if opnum == rop.INT_SIGNEXT:
+            return int_signext(b1.getint(), b2.getint())
+        return None
+
+    @specialize.arg(1)
+    def _fast_compute_int_unop(self, opnum, b1):
+        if opnum == rop.INT_NEG:
+            return intmask(-b1.getint())
+        if opnum == rop.INT_INVERT:
+            return intmask(~b1.getint())
+        if opnum == rop.INT_IS_ZERO:
+            return not b1.getint()
+        if opnum == rop.INT_IS_TRUE:
+            return bool(b1.getint())
+        if opnum == rop.INT_FORCE_GE_ZERO:
+            v = b1.getint()
+            return 0 if v < 0 else v
+        if opnum == rop.CAST_FLOAT_TO_INT:
+            return int(longlong.getrealfloat(b1.getfloatstorage()))
+        return None
+
+    @specialize.arg(1)
+    def _fast_compute_float_unop(self, opnum, b1):
+        if opnum == rop.CAST_INT_TO_FLOAT:
+            return longlong.getfloatstorage(float(b1.getint()))
+        if opnum == rop.FLOAT_NEG:
+            a = longlong.getrealfloat(b1.getfloatstorage())
+            return longlong.getfloatstorage(-a)
+        if opnum == rop.FLOAT_ABS:
+            a = longlong.getrealfloat(b1.getfloatstorage())
+            return longlong.getfloatstorage(abs(a))
+        return None
+
+    @specialize.arg(1)
+    def _try_fast_pure_execute_and_record(self, opnum, descr, *argboxes):
+        """Fast execute+record for pure int/float ops (genext slow-path parity)."""
+        n = len(argboxes)
+        if n == 2:
+            b1, b2 = argboxes[0], argboxes[1]
+            if optypes[opnum] == 'f':
+                fv = self._fast_compute_float_arith_binop(opnum, b1, b2)
+                if fv is None:
+                    return None
+                if (OpHelpers.is_pure_with_descr(opnum, descr) and
+                        self._all_constants(b1, b2)):
+                    return executor.wrap_constant(fv)
+                return self._record_float_binop(opnum, fv, b1, b2)
+            if (opnum == rop.FLOAT_LT or opnum == rop.FLOAT_LE or
+                    opnum == rop.FLOAT_EQ or opnum == rop.FLOAT_NE or
+                    opnum == rop.FLOAT_GT or opnum == rop.FLOAT_GE):
+                resvalue = self._fast_compute_float_cmp_binop(opnum, b1, b2)
+                if resvalue is None:
+                    return None
+                if (OpHelpers.is_pure_with_descr(opnum, descr) and
+                        self._all_constants(b1, b2)):
+                    return executor.wrap_constant(resvalue)
+                return self._record_int_binop(opnum, resvalue, b1, b2)
+            resvalue = self._fast_compute_int_binop(opnum, b1, b2)
+            if resvalue is None:
+                return None
+            if (OpHelpers.is_pure_with_descr(opnum, descr) and
+                    self._all_constants(b1, b2)):
+                return executor.wrap_constant(resvalue)
+            return self._record_int_binop(opnum, resvalue, b1, b2)
+        if n == 1:
+            b1, = argboxes
+            if optypes[opnum] == 'f':
+                fv = self._fast_compute_float_unop(opnum, b1)
+                if fv is None:
+                    return None
+                if (OpHelpers.is_pure_with_descr(opnum, descr) and
+                        self._all_constants(b1)):
+                    return executor.wrap_constant(fv)
+                return self.history.record1_float(opnum, b1, fv, descr)
+            resvalue = self._fast_compute_int_unop(opnum, b1)
+            if resvalue is None:
+                return None
+            if (OpHelpers.is_pure_with_descr(opnum, descr) and
+                    self._all_constants(b1)):
+                return executor.wrap_constant(resvalue)
+            return self._record_int_unop(opnum, resvalue, b1)
+        return None
+
     @specialize.arg(1)
     def execute_and_record(self, opnum, descr, *argboxes):
         history.check_descr(descr)
         assert not (rop._CANRAISE_FIRST <= opnum <= rop._CANRAISE_LAST)
-        # execute the operation
         profiler = self.staticdata.profiler
         profiler.count_ops(opnum)
+        if (self._use_fast_pure_record() and
+                self.heapcache._is_pure_int_op(opnum)):
+            resbox = self._try_fast_pure_execute_and_record(
+                opnum, descr, *argboxes)
+            if resbox is not None:
+                return resbox
         resvalue = executor.execute(self.cpu, self, opnum, descr, *argboxes)
         canfold = False
         if (OpHelpers.is_pure_with_descr(opnum, descr) or # pure case
@@ -2952,7 +3145,11 @@ class MetaInterp(object):
         profiler = self.staticdata.profiler
         profiler.count_ops(opnum, Counters.RECORDED_OPS)
 
-        if not self.heapcache._is_pure_int_op(opnum):
+        if (self.heapcache.genext_fastpath_enabled or SKIP_HEAPCACHE_PURE_INT):
+            skip_heapcache = self.heapcache._is_pure_int_op(opnum)
+        else:
+            skip_heapcache = False
+        if not skip_heapcache:
             self.heapcache.invalidate_caches(opnum, descr, *argboxes)
 
         if self.framestack:
