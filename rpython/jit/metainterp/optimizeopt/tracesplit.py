@@ -126,15 +126,16 @@ def rewrite_call_assembler_in_ops(operations, metainterp_sd, jitdriver_sd,
         opnum = op.getopnum()
         if not (rop.is_call_may_force(opnum) or rop.is_plain_call(opnum)):
             continue
-        numargs = op.numargs()
-        lastarg = op.getarg(numargs - 1)
-        if isinstance(lastarg, ConstInt) and lastarg.getint() == 1:
-            op.setarg(numargs - 1, ConstInt(0))
         arg0 = op.getarg(0)
         if not isinstance(arg0, ConstInt):
             continue
         adr = cast_int_to_adr(arg0.getint())
         name = metainterp_sd.get_name_from_address(adr)
+        if startswith(name, "handler_"):
+            numargs = op.numargs()
+            lastarg = op.getarg(numargs - 1)
+            if isinstance(lastarg, ConstInt) and lastarg.getint() == 1:
+                op.setarg(numargs - 1, ConstInt(0))
         if not endswith(name, mark.CALL_ASSEMBLER):
             continue
         arglist = op.getarglist()
@@ -511,7 +512,8 @@ class OptTraceSplit(Optimizer):
 
             ops = self._drop_bridge_recorded_stack_bookkeeping(
                 ops, frame_box, stack_field_descr, sp_field_descr, arr_descr)
-            ops = self._trim_base_case_zero_return_bridge(ops)
+            ops = self._trim_base_case_zero_return_bridge(
+                ops, frame_box, callee_sp, sp_field_descr)
 
             has_call_asm = False
             for op in ops:
@@ -583,7 +585,8 @@ class OptTraceSplit(Optimizer):
             newops.append(op)
         return newops
 
-    def _trim_base_case_zero_return_bridge(self, ops):
+    def _trim_base_case_zero_return_bridge(self, ops, frame_box, callee_sp,
+                                           sp_field_descr):
         finish_op = None
         leave_op = None
         for op in ops:
@@ -625,6 +628,9 @@ class OptTraceSplit(Optimizer):
             newops.append(ops[0])
         newops.append(zero_box)
         newops.append(zero_setfield)
+        newops.append(ResOperation(rop.SETFIELD_GC,
+                                   [frame_box, ConstInt(callee_sp)],
+                                   descr=sp_field_descr))
         newops.append(leave_op)
         newops.append(ResOperation(rop.FINISH, [zero_box],
                                    descr=finish_op.getdescr()))
@@ -868,10 +874,11 @@ class OptTraceSplit(Optimizer):
         opnum = op.getopnum()
         if rop.is_plain_call(opnum) or rop.is_call_may_force(opnum):
             numargs = op.numargs()
-            lastarg = op.getarg(numargs - 1)
-            if isinstance(lastarg, ConstInt) and lastarg.getint() == 1:
-                op.setarg(numargs - 1, ConstInt(0))
             name = self._get_name_from_op(op)
+            if startswith(name, "handler_"):
+                lastarg = op.getarg(numargs - 1)
+                if isinstance(lastarg, ConstInt) and lastarg.getint() == 1:
+                    op.setarg(numargs - 1, ConstInt(0))
             if endswith(name, "emit_ptr_eq"):
                 self._slow_path_emit_ptr_eq = op
         elif opnum in (rop.GUARD_VALUE, rop.GUARD_TRUE, rop.GUARD_FALSE):
