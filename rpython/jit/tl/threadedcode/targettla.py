@@ -45,6 +45,9 @@ def entry_point(args):
     if len(args) > 3:
         n = int(args[3])
 
+    if tier >= 2:
+        jit.set_user_param(None, "off")
+
     w_x = tla.W_IntObject(x)
     bytecode = load_bytecode(filename)
     w_res = tla.W_IntObject(0)
