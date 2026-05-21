@@ -13,6 +13,14 @@ def test_no_gcrootfinder_with_boehm():
     config.translation.gcrootfinder = "shadowstack"
     py.test.raises(ConflictConfigError, set_opt_level, config, '0')
 
+
+def test_heapcache_genext_fastpath_default_off():
+    config = get_combined_translation_config()
+    assert config.translation.heapcache_genext_fastpath is False
+    assert config.translation.genext_cost_gate == 0.0
+    config.translation.heapcache_genext_fastpath = True
+    assert config.translation.heapcache_genext_fastpath is True
+
 def test_get_translation_config():
     from rpython.translator.interactive import Translation
     from rpython.config import config

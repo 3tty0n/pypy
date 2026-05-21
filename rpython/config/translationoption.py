@@ -135,8 +135,10 @@ translation_optiondescription = OptionDescription(
                default=True,
                cmdline="--gen-extension"),
     BoolOption("heapcache_genext_fastpath",
-               "heapcache fast-path for pure int ops",
-               default=True,
+               "heapcache fast-path for pure int/no-op heapcache operations "
+               "(experimental; default off because it regresses warmup on "
+               "real genextension workloads)",
+               default=False,
                cmdline="--heapcache-genext-fastpath"),
     BoolOption("skip_heapcache_pure_int",
                "skip heapcache invalidation for pure-int ops in record_helper "
