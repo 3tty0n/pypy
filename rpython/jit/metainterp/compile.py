@@ -1163,15 +1163,8 @@ def compile_loop_and_split(metainterp, greenkey, resumekey, runtime_boxes,
                                   enable_opts=enable_opts,
                                   body_token=body_token)
     try:
-        try:
-            splitted = data.optimize_trace(
-                metainterp_sd, jitdriver_sd, metainterp.box_names_memo)
-        except InvalidLoop:
-            raise
-        except Exception:
-            import traceback
-            traceback.print_exc()
-            raise
+        splitted = data.optimize_trace(
+            metainterp_sd, jitdriver_sd, metainterp.box_names_memo)
         last_op_descrs = [ops[-1].getdescr() for _, ops in splitted]
         (new_body_info, new_body_ops), bridges = splitted[0], splitted[1:]
     except InvalidLoop:

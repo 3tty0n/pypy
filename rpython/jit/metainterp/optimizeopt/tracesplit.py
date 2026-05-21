@@ -418,6 +418,7 @@ class OptTraceSplit(Optimizer):
         self._apply_body_contract_shims()
 
     def _body_contract_for_guard(self, faildescr):
+        empty = (None, -1, -1, None, None, None)
         body_ops = None
         for (bi, bops) in self._newopsandinfo:
             for bop in bops:
@@ -427,7 +428,7 @@ class OptTraceSplit(Optimizer):
             if body_ops is not None:
                 break
         if body_ops is None:
-            return None
+            return empty
 
         frame_box = None
         stack_box = None
@@ -454,7 +455,7 @@ class OptTraceSplit(Optimizer):
                     break
 
         if frame_box is None:
-            return None
+            return empty
 
         for i in range(len(body_ops)):
             op = body_ops[i]
@@ -473,7 +474,7 @@ class OptTraceSplit(Optimizer):
             if stack_box is not None:
                 break
         if stack_box is None:
-            return None
+            return empty
 
         for op in body_ops:
             if (op.getopnum() == rop.GETARRAYITEM_GC_R and
@@ -483,7 +484,7 @@ class OptTraceSplit(Optimizer):
                 arr_descr = op.getdescr()
                 break
         if arg_slot < 0 or arr_descr is None:
-            return None
+            return empty
 
         return (frame_box, callee_sp, arg_slot,
                 stack_field_descr, sp_field_descr, arr_descr)
@@ -503,11 +504,10 @@ class OptTraceSplit(Optimizer):
             if not isinstance(faildescr, compile.AbstractResumeGuardDescr):
                 continue
 
-            contract = self._body_contract_for_guard(faildescr)
-            if contract is None:
-                continue
             (frame_box, callee_sp, arg_slot, stack_field_descr,
-             sp_field_descr, arr_descr) = contract
+             sp_field_descr, arr_descr) = self._body_contract_for_guard(faildescr)
+            if frame_box is None:
+                continue
 
             ops = self._drop_bridge_recorded_stack_bookkeeping(
                 ops, frame_box, stack_field_descr, sp_field_descr, arr_descr)
