@@ -192,6 +192,16 @@ class HeapCache(object):
         self.heap_cache = {}
         self.heap_array_cache = {}
 
+    def expire_likely_virtuals(self):
+        """Drop LIKELY_VIRTUAL flags without clearing heap getfield caches.
+
+        Genext keeps selective heap-cache entries across calls for resume
+        speed; bumping only likely_virtual_version ends artificially long
+        virtual lifetimes (steady/backend cost) without re-recording getfields.
+        """
+        assert self.likely_virtual_version < _HF_VERSION_MAX
+        self.likely_virtual_version += _HF_VERSION_INC
+
     @always_inline
     def test_head_version(self, ref_frontend_op):
         return ref_frontend_op._get_heapc_flags() >= self.head_version
@@ -456,6 +466,8 @@ class HeapCache(object):
                         if effectinfo.check_write_descr_array(descr):
                             for cache in indices.itervalues():
                                 cache.invalidate_unescaped()
+                if self.genext_fastpath_enabled:
+                    self.expire_likely_virtuals()
                 return
 
         if self.genext_fastpath_enabled:

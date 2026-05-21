@@ -867,6 +867,17 @@ class TestHeapCache(object):
         assert not h.is_unescaped(box1)
         assert h.is_likely_virtual(box1)
 
+    def test_expire_likely_virtuals_keeps_heap_cache(self):
+        h = HeapCache(genext_fastpath_enabled=True)
+        box1 = RefFrontendOp(1)
+        box2 = RefFrontendOp(2)
+        h.new(box1)
+        h.getfield_now_known(box1, descr1, box2)
+        assert h.getfield(box1, descr1) is box2
+        h.expire_likely_virtuals()
+        assert h.getfield(box1, descr1) is box2
+        assert not h.is_likely_virtual(box1)
+
     def test_is_likely_virtual_array(self):
         h = HeapCache()
         box1 = RefFrontendOp(1)
