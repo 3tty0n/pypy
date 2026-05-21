@@ -14,6 +14,7 @@ from rpython.jit.tl.threadedcode.bytecode import *
 
 
 TRACE_THRESHOLD = -1
+MAX_INTERP_DEPTH = 100
 
 class ContinueInTracingJIT(Exception):
     def __init__(self, pc):
@@ -85,10 +86,11 @@ tier2driver = JitDriver(
 
 
 class Frame(object):
-    def __init__(self, bytecode, stack=[None] * 64, stackpos=0):
+    def __init__(self, bytecode, stack=[None] * 64, stackpos=0, depth=0):
         self.bytecode = bytecode
         self.stack = stack
         self.stackpos = stackpos
+        self.depth = depth
 
     @jit.unroll_safe
     def copy_frame(self, argnum, retaddr, dummy=False):
@@ -105,7 +107,7 @@ class Frame(object):
         newstack[argnum + 1] = W_IntObject(retaddr)
 
         bytecode = jit.promote(self.bytecode)
-        return Frame(bytecode, newstack, argnum + 2)
+        return Frame(bytecode, newstack, argnum + 2, depth=self.depth + 1)
 
     @jit.dont_look_inside
     def push(self, w_x):
@@ -488,6 +490,8 @@ class Frame(object):
 
     def _interp(self, pc=0):
         "tracing interpreter"
+        if self.depth > MAX_INTERP_DEPTH:
+            raise OperationError
         bytecode = self.bytecode
 
         while pc < len(bytecode):
@@ -593,7 +597,6 @@ class Frame(object):
                 argnum = ord(bytecode[pc + 1])
                 pc += 2
 
-                # create a new frame
                 frame = self.copy_frame(argnum, pc)
                 frame._CALL(self, t, argnum)
 
@@ -602,7 +605,6 @@ class Frame(object):
                 argnum = ord(bytecode[pc + 4])
                 pc += 5
 
-                # create a new frame
                 frame = self.copy_frame(argnum, pc)
                 frame._CALL(self, t, argnum)
 
@@ -669,6 +671,8 @@ class Frame(object):
 
 
     def interp(self, pc=0):
+        if self.depth > MAX_INTERP_DEPTH:
+            raise OperationError
         tstack = t_empty()
         entry = pc
         bytecode = jit.promote(self.bytecode)
