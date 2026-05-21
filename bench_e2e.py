@@ -248,6 +248,14 @@ def analyze_warmup(iter_times):
         if stable_from(i):
             start = i
             break
+    start_tail = n - len(tail)
+    # Reject an early plateau whose suffix is still slower than the true
+    # tail (common when warmup has a temporary stable band well above the
+    # eventual asymptote, e.g. spambayes with genext's faster early tracing).
+    if start >= 0 and start < start_tail:
+        suffix_med = median(t[start:])
+        if suffix_med > smed * 1.02:
+            start = start_tail
     out["steady_perf"] = smed
     if start < 0:
         out["classification"] = "no_steady"
@@ -398,15 +406,20 @@ def run_one(pypy, script, env_extra, extra_args, n, warmup_iters=10,
     # detector locate the steady suffix.
     wm = analyze_warmup(iter_times)
     steady_i = wm["steady_start_iter"]
-    if steady_i >= 0:
-        steady = iter_times[steady_i:]
-    else:
-        # no detected steady state -> fall back to the legacy fixed drop
-        # purely for the regression-guard number (flagged via classif.)
-        steady = (iter_times[warmup_iters:]
-                  if len(iter_times) > warmup_iters else iter_times)
-    running_med = median(steady) if steady else float("nan")
-    running_sum = sum(steady) if steady else float("nan")
+    # Steady-state regression guard: use the asymptotic tail (same window
+    # as analyze_warmup's band), not the full suffix from an early
+    # changepoint.  Warmup scalars still come from steady_i above.
+    n_iters = len(iter_times)
+    tail_len = max(4, n_iters // 3) if n_iters else 0
+    steady_tail = (iter_times[-tail_len:] if tail_len else [])
+    if not steady_tail:
+        if steady_i >= 0:
+            steady_tail = iter_times[steady_i:]
+        else:
+            steady_tail = (iter_times[warmup_iters:]
+                           if len(iter_times) > warmup_iters else iter_times)
+    running_med = median(steady_tail) if steady_tail else float("nan")
+    running_sum = sum(steady_tail) if steady_tail else float("nan")
     out = {
         "wall": wall,
         # primary (JIT-self-measured) warmup metrics:
@@ -967,10 +980,24 @@ def _compare_two_paths(baseline_path, optim_path):
     base_raw = base.get("raw", {}) or {}
     opt_raw = opt.get("raw", {}) or {}
 
+    def _steady_running(sample):
+        """Asymptotic per-iter time from iter_times (tail window)."""
+        t = sample.get("iter_times")
+        if not t:
+            v = sample.get("running")
+            return v if isinstance(v, (int, float)) and v == v else None
+        n = len(t)
+        tail_len = max(4, n // 3)
+        tail = t[-tail_len:]
+        return median(tail) if tail else float("nan")
+
     def _series(raw, b, rk):
         out = []
         for s in (raw.get(b) or []):
-            v = s.get(rk)
+            if rk == "running":
+                v = _steady_running(s)
+            else:
+                v = s.get(rk)
             out.append(v if isinstance(v, (int, float)) and v == v else None)
         return out
 
@@ -1149,6 +1176,10 @@ def main():
     # preset into the same comma-separated form every run path reads.
     if not args.benchmarks and args.preset:
         args.benchmarks = ",".join(PRESETS[args.preset])
+    if args.preset == "genext" and args.n < 30:
+        print("[bench_e2e] warning: -n %d is short for genext A/B; "
+              "use -n 50+ so warmup/steady metrics stabilize." % args.n,
+              file=sys.stderr)
     if not (args.all or args.pypy):
         ap.error("one of --pypy / --all / --compare required")
     if not args.all and len(args.pypy) == 1 and not args.out:
