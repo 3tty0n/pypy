@@ -11,8 +11,9 @@ from rpython.jit.codewriter.jitcode import SwitchDictDescr
 from rpython.rtyper.lltypesystem import lltype, llmemory, rstr
 from rpython.rtyper.rclass import OBJECTPTR
 from rpython.rlib import objectmodel
-from rpython.rlib.rarithmetic import r_uint
+from rpython.rlib.rarithmetic import intmask, r_uint, uint_mul_high, r_singlefloat
 from rpython.jit.metainterp.support import int_signext
+from rpython.jit.codewriter import longlong
 from rpython.jit.codewriter.genextprof import (
     SLOWPATH_PROFILE_ENABLED, get_profiler, classify_opcode,
     REASON_NO_UNSPEC_METHOD, REASON_NO_SPEC_METHOD,
@@ -130,17 +131,13 @@ class GenExtension(object):
                     opname.startswith('getarrayitem_vable_') or
                     opname.startswith('setarrayitem_vable_')
                 ):
-                # VAB-1 stages 1-2: get/setfield_vable_ are no longer
-                # whole-jitcode disqualifiers. They route through
-                # emit_unspecialized_{get,set}field_vable_* ->
-                # _shortcut_{get,set}field_vable, which return None/False on
-                # any uncertainty (UNKNOWN vable status) so the emitted code
-                # falls back to the full opimpl_*field_vable_* path --
-                # identical to the non-genext tracer. These are *field* ops
-                # with a fixed field index (no unboxed array index), hence
-                # none of the OOB hazard that the array-item bail-out (still
-                # in place, gated by 05a325e3eb's -1 path) guards against.
-                # setfield's standard case preserves synchronize_virtualizable.
+                # Whole-jitcode disqualifiers.  The arrayitem_vable shortcut
+                # can only avoid guards when the array index is statically
+                # constant.  If it falls back for an out-of-range constant
+                # index, the generic opimpl path asserts in
+                # _get_arrayitem_vable_index_unboxed(), so keep these jitcodes
+                # on the standard tracer until that fallback can be made
+                # guard-safe.
                 self.jitcode.genext_function = None
                 return
         for index, insn in enumerate(self.ssarepr.insns):
@@ -257,7 +254,10 @@ class GenExtension(object):
         from rpython.jit.metainterp.resoperation import rop
         d = {"Const": Const, "ConstInt": ConstInt, "ConstPtr": ConstPtr, "ConstFloat": ConstFloat, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
              "lltype": lltype, "rstr": rstr, 'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR, 'support': support,
-             'rop': rop, 'r_uint': r_uint, 'int_signext': int_signext}
+             'rop': rop, 'intmask': intmask, 'r_uint': r_uint,
+             'uint_mul_high': uint_mul_high,
+             'int_signext': int_signext,
+             'longlong': longlong, 'r_singlefloat': r_singlefloat}
         d.update(self.globals)
         source = py.code.Source(self.jitcode._genext_source)
         exec source.compile() in d
@@ -697,6 +697,16 @@ class GenExtension(object):
                     arg0 = _load_int(op.getarg(0))
                     _spill_cached_xmm()
                     assembler.genop_cast_int_to_float(op, [arg0], xmm0)
+                    _publish_float_result(op, op_index)
+                elif opnum == rop.CAST_FLOAT_TO_SINGLEFLOAT:
+                    arg0 = _load_float(op.getarg(0))
+                    _spill_cached_int()
+                    assembler.genop_cast_float_to_singlefloat(op, [arg0], eax)
+                    _publish_int_result(op, op_index)
+                elif opnum == rop.CAST_SINGLEFLOAT_TO_FLOAT:
+                    arg0 = _load_int(op.getarg(0))
+                    _spill_cached_xmm()
+                    assembler.genop_cast_singlefloat_to_float(op, [arg0], xmm0)
                     _publish_float_result(op, op_index)
                 else:
                     raise CannotCompileGenExt(
@@ -1347,6 +1357,14 @@ class Specializer(object):
     def emit_specialized_int_rshift(self):
         return self._emit_specialized_int_binary(">>")
 
+    def emit_specialized_uint_rshift(self):
+        arg0, arg1, result = self._get_args_and_res()
+        lines = ["i%s = int(r_uint(%s) >> r_uint(%s))" % (
+            result.index, self._get_as_unboxed(arg0),
+            self._get_as_unboxed(arg1))]
+        self._emit_jump(lines)
+        return lines
+
     def emit_specialized_int_lshift(self):
         return self._emit_specialized_int_binary("<<")
 
@@ -1370,6 +1388,41 @@ class Specializer(object):
 
     def emit_specialized_int_xor(self):
         return self._emit_specialized_int_binary("^")
+
+    def _emit_specialized_uint_comparison(self, py_op):
+        arg0, arg1 = self._get_args()
+        result = self.insn[self.resindex]
+        lines = ['i%s = int(r_uint(%s) %s r_uint(%s))' % (
+            result.index,
+            self._get_as_unboxed(arg0),
+            py_op,
+            self._get_as_unboxed(arg1),
+        )]
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({result}))
+        return lines
+
+    def emit_specialized_uint_lt(self):
+        return self._emit_specialized_uint_comparison("<")
+
+    def emit_specialized_uint_le(self):
+        return self._emit_specialized_uint_comparison("<=")
+
+    def emit_specialized_uint_gt(self):
+        return self._emit_specialized_uint_comparison(">")
+
+    def emit_specialized_uint_ge(self):
+        return self._emit_specialized_uint_comparison(">=")
+
+    def emit_specialized_uint_mul_high(self):
+        arg0, arg1 = self._get_args()
+        result = self.insn[self.resindex]
+        lines = ['i%s = intmask(uint_mul_high(%s, %s))' % (
+            result.index,
+            self._get_as_unboxed(arg0),
+            self._get_as_unboxed(arg1),
+        )]
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({result}))
+        return lines
 
     def emit_specialized_int_mod(self):
         return self._emit_specialized_int_binary("%")
@@ -1663,6 +1716,62 @@ class Specializer(object):
     def emit_unspecialized_int_ge(self):
         return self._emit_unspecialized_int_comparison_fast("INT_GE", ">=")
 
+    def _emit_unspecialized_uint_comparison_fast(self, rop_name, py_op):
+        arg0, arg1, result = self._get_args_and_res()
+        lines = []
+        promoted = self._emit_runtime_const_promotion([arg0, arg1], lines)
+        if promoted:
+            lines.append("else:")
+            indent = "    "
+        else:
+            indent = ""
+        box0 = self._get_as_box_nosync(arg0)
+        box1 = self._get_as_box_nosync(arg1)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
+        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_nosync(arg1)))
+        lines.append("%s_res = int(r_uint(_v0) %s r_uint(_v1))" % (indent, py_op))
+        lines.append("%s_op = self.metainterp.history.record2_int(rop.%s, %s, %s, _res)" % (
+            indent, rop_name, box0, box1))
+        lines.append("%sself.registers_i[%d] = _op" % (indent, result.index))
+        lines.append("%si%d = _res" % (indent, result.index))
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts, indent=indent)
+        return lines
+
+    def emit_unspecialized_uint_lt(self):
+        return self._emit_unspecialized_uint_comparison_fast("UINT_LT", "<")
+
+    def emit_unspecialized_uint_le(self):
+        return self._emit_unspecialized_uint_comparison_fast("UINT_LE", "<=")
+
+    def emit_unspecialized_uint_gt(self):
+        return self._emit_unspecialized_uint_comparison_fast("UINT_GT", ">")
+
+    def emit_unspecialized_uint_ge(self):
+        return self._emit_unspecialized_uint_comparison_fast("UINT_GE", ">=")
+
+    def emit_unspecialized_uint_mul_high(self):
+        arg0, arg1, result = self._get_args_and_res()
+        lines = []
+        promoted = self._emit_runtime_const_promotion([arg0, arg1], lines)
+        if promoted:
+            lines.append("else:")
+            indent = "    "
+        else:
+            indent = ""
+        box0 = self._get_as_box_nosync(arg0)
+        box1 = self._get_as_box_nosync(arg1)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
+        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_nosync(arg1)))
+        lines.append("%s_res = intmask(uint_mul_high(_v0, _v1))" % indent)
+        lines.append("%s_op = self.metainterp.history.record2_int(rop.UINT_MUL_HIGH, %s, %s, _res)" % (
+            indent, box0, box1))
+        lines.append("%sself.registers_i[%d] = _op" % (indent, result.index))
+        lines.append("%si%d = _res" % (indent, result.index))
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts, indent=indent)
+        return lines
+
     def emit_unspecialized_float_add(self):
         return self._emit_unspecialized_float_binary_fast("FLOAT_ADD", "+")
 
@@ -1788,6 +1897,44 @@ class Specializer(object):
         lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
         lines.append("%s_res = float(_v0)" % indent)
         lines.append("%s_op = self.metainterp.history.record1_float(rop.CAST_INT_TO_FLOAT, %s, _res)" % (indent, box0))
+        lines.append("%sself.registers_f[%d] = _op" % (indent, result.index))
+        lines.append("%sf%d = _res" % (indent, result.index))
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts, indent=indent)
+        return lines
+
+    def emit_unspecialized_cast_float_to_singlefloat(self):
+        arg0, result = self._get_args_and_res()
+        lines = []
+        promoted = self._emit_runtime_const_promotion([arg0], lines)
+        if promoted:
+            lines.append("else:")
+            indent = "    "
+        else:
+            indent = ""
+        box0 = self._get_as_box_nosync(arg0)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
+        lines.append("%s_res = longlong.singlefloat2int(r_singlefloat(longlong.getrealfloat(_v0)))" % indent)
+        lines.append("%s_op = self.metainterp.history.record1_int(rop.CAST_FLOAT_TO_SINGLEFLOAT, %s, _res)" % (indent, box0))
+        lines.append("%sself.registers_i[%d] = _op" % (indent, result.index))
+        lines.append("%si%d = _res" % (indent, result.index))
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts, indent=indent)
+        return lines
+
+    def emit_unspecialized_cast_singlefloat_to_float(self):
+        arg0, result = self._get_args_and_res()
+        lines = []
+        promoted = self._emit_runtime_const_promotion([arg0], lines)
+        if promoted:
+            lines.append("else:")
+            indent = "    "
+        else:
+            indent = ""
+        box0 = self._get_as_box_nosync(arg0)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
+        lines.append("%s_res = longlong.getfloatstorage(float(longlong.int2singlefloat(_v0)))" % indent)
+        lines.append("%s_op = self.metainterp.history.record1_float(rop.CAST_SINGLEFLOAT_TO_FLOAT, %s, _res)" % (indent, box0))
         lines.append("%sself.registers_f[%d] = _op" % (indent, result.index))
         lines.append("%sf%d = _res" % (indent, result.index))
         next_consts = self.constant_registers - {result}
@@ -1989,6 +2136,24 @@ class Specializer(object):
     emit_specialized_getarrayitem_raw_r_pure = emit_specialized_getarrayitem_raw_i_pure
     emit_specialized_getarrayitem_raw_f_pure = emit_specialized_getarrayitem_raw_i_pure
 
+    def emit_specialized_getinteriorfield_gc_i(self):
+        arg0, arg1, descr, res = self._get_args_and_res()
+        boxvar = self._get_new_temp_variable()
+        descrglob = self._add_global(descr)
+        lines = []
+        lines.append("%s = self.%s(%s, %s, %s)" % (
+            boxvar, self.methodname,
+            self._get_as_box(arg0), self._get_as_box(arg1), descrglob))
+        lines.append("%s = %s.%s()" % (
+            self._get_as_unboxed(res), boxvar, _get_primval_by_kind(res.kind)))
+        lines.append("self.registers_%s[%s] = %s" % (
+            res.kind[0], res.index, boxvar))
+        next_consts = self.constant_registers - {res}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+    emit_specialized_getinteriorfield_gc_r = emit_specialized_getinteriorfield_gc_i
+    emit_specialized_getinteriorfield_gc_f = emit_specialized_getinteriorfield_gc_i
+
     def emit_specialized_getfield_gc_i(self):
         arg, descr = self._get_args()
         res = self.insn[self.resindex]
@@ -2021,6 +2186,103 @@ class Specializer(object):
         return lines
     emit_specialized_setfield_gc_r = emit_specialized_setfield_gc_i
     emit_specialized_setfield_gc_f = emit_specialized_setfield_gc_i
+
+    def emit_specialized_raw_load_i(self):
+        arg0, arg1, descr, result = self._get_args_and_res()
+        descrglob = self._add_global(descr)
+        boxvar = self._get_new_temp_variable()
+        lines = []
+        lines.append("%s = self.%s(%s, %s, %s)" % (
+            boxvar, self.methodname,
+            self._get_as_box(arg0), self._get_as_box(arg1), descrglob))
+        lines.append("%s = %s.%s()" % (
+            self._get_as_unboxed(result), boxvar, _get_primval_by_kind(result.kind)))
+        lines.append("self.registers_%s[%s] = %s" % (
+            result.kind[0], result.index, boxvar))
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+    emit_specialized_raw_load_f = emit_specialized_raw_load_i
+
+    def emit_specialized_raw_store_i(self):
+        arg0, arg1, arg2, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box(arg0),
+            self._get_as_box(arg1),
+            self._get_as_box(arg2),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_specialized_raw_store_f = emit_specialized_raw_store_i
+
+    def emit_specialized_setinteriorfield_gc_i(self):
+        arg0, arg1, arg2, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box(arg0),
+            self._get_as_box(arg1),
+            self._get_as_box(arg2),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_specialized_setinteriorfield_gc_r = emit_specialized_setinteriorfield_gc_i
+    emit_specialized_setinteriorfield_gc_f = emit_specialized_setinteriorfield_gc_i
+
+    def emit_specialized_setarrayitem_gc_i(self):
+        arg0, arg1, arg2, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box(arg0),
+            self._get_as_box(arg1),
+            self._get_as_box(arg2),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_specialized_setarrayitem_gc_r = emit_specialized_setarrayitem_gc_i
+    emit_specialized_setarrayitem_gc_f = emit_specialized_setarrayitem_gc_i
+
+    def emit_specialized_gc_load_indexed_i(self):
+        arg0, arg1, arg2, arg3, arg4, result = self._get_args_and_res()
+        boxvar = self._get_new_temp_variable()
+        lines = []
+        lines.append("%s = self.%s(%s, %s, %s, %s, %s)" % (
+            boxvar, self.methodname,
+            self._get_as_box(arg0), self._get_as_box(arg1),
+            self._get_as_box(arg2), self._get_as_box(arg3),
+            self._get_as_box(arg4)))
+        lines.append("%s = %s.%s()" % (
+            self._get_as_unboxed(result), boxvar, _get_primval_by_kind(result.kind)))
+        lines.append("self.registers_%s[%s] = %s" % (
+            result.kind[0], result.index, boxvar))
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+    emit_specialized_gc_load_indexed_f = emit_specialized_gc_load_indexed_i
+
+    def emit_specialized_gc_store_indexed_i(self):
+        arg0, arg1, arg2, arg3, arg4, arg5, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s, %s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box(arg0), self._get_as_box(arg1),
+            self._get_as_box(arg2), self._get_as_box(arg3),
+            self._get_as_box(arg4), self._get_as_box(arg5),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_specialized_gc_store_indexed_f = emit_specialized_gc_store_indexed_i
 
     def emit_specialized_arraylen_gc(self):
         lines = []
@@ -2069,6 +2331,61 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
 
+    def emit_specialized_float_neg(self):
+        arg0, result = self._get_args_and_res()
+        lines = ["f%s = -%s" % (result.index, self._get_as_unboxed(arg0))]
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_float_abs(self):
+        arg0, result = self._get_args_and_res()
+        lines = ["f%s = abs(%s)" % (result.index, self._get_as_unboxed(arg0))]
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_int_force_ge_zero(self):
+        arg0, result = self._get_args_and_res()
+        v = self._get_as_unboxed(arg0)
+        lines = ["i%s = %s if %s >= 0 else 0" % (result.index, v, v)]
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_int_signext(self):
+        arg0, arg1, result = self._get_args_and_res()
+        lines = ["i%s = int_signext(%s, %s)" % (
+            result.index, self._get_as_unboxed(arg0),
+            self._get_as_unboxed(arg1))]
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_cast_float_to_int(self):
+        arg0, result = self._get_args_and_res()
+        lines = ["i%s = int(%s)" % (result.index, self._get_as_unboxed(arg0))]
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_cast_int_to_float(self):
+        arg0, result = self._get_args_and_res()
+        lines = ["f%s = float(%s)" % (result.index, self._get_as_unboxed(arg0))]
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_cast_float_to_singlefloat(self):
+        arg0, result = self._get_args_and_res()
+        lines = [
+            "i%s = longlong.singlefloat2int(r_singlefloat(longlong.getrealfloat(%s)))" % (
+                result.index, self._get_as_unboxed(arg0))]
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_cast_singlefloat_to_float(self):
+        arg0, result = self._get_args_and_res()
+        lines = [
+            "f%s = longlong.getfloatstorage(float(longlong.int2singlefloat(%s)))" % (
+                result.index, self._get_as_unboxed(arg0))]
+        self._emit_jump(lines)
+        return lines
+
     def emit_specialized_int_copy(self):
         arg0, = self._get_args()
         res = self.insn[self.resindex]
@@ -2076,6 +2393,7 @@ class Specializer(object):
         self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
         return lines
     emit_specialized_ref_copy = emit_specialized_int_copy
+    emit_specialized_float_copy = emit_specialized_int_copy
 
     def emit_specialized_int_pop(self):
         lines = []
@@ -2166,6 +2484,34 @@ class Specializer(object):
     def emit_specialized_goto_if_not_ptr_iszero(self):
         return self.emit_specialized_goto_if_not_absolute('ptr_iszero', 'not %s')
 
+    def emit_specialized_goto_if_not_ptr_eq(self):
+        lines = []
+        arg0, arg1, label = self._get_args()
+        lines.append("cond = %s == %s" % (
+            self._get_as_unboxed(arg0), self._get_as_unboxed(arg1)))
+        lines.append("if not cond:")
+        label_pc = self.get_target_pc(label)
+        target_spec = self.work_list.specialize_pc(
+            self.constant_registers, label_pc)
+        lines.append("    pc = %d" % (target_spec.spec_pc,))
+        lines.append("    continue")
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_goto_if_not_ptr_ne(self):
+        lines = []
+        arg0, arg1, label = self._get_args()
+        lines.append("cond = %s != %s" % (
+            self._get_as_unboxed(arg0), self._get_as_unboxed(arg1)))
+        lines.append("if not cond:")
+        label_pc = self.get_target_pc(label)
+        target_spec = self.work_list.specialize_pc(
+            self.constant_registers, label_pc)
+        lines.append("    pc = %d" % (target_spec.spec_pc,))
+        lines.append("    continue")
+        self._emit_jump(lines)
+        return lines
+
     def emit_specialized_goto_if_not(self):
         return self.emit_specialized_goto_if_not_absolute('', '%s')
 
@@ -2198,6 +2544,37 @@ class Specializer(object):
 
     def emit_specialized_goto_if_not_int_eq(self):
         return self.emit_specialized_goto_if_not_int_comparison('int_eq', '==')
+
+    def emit_specialized_goto_if_not_float_comparison(self, name, symbol):
+        lines = []
+        arg0, arg1, label = self._get_args()
+        lines.append("cond = %s %s %s" % (
+            self._get_as_unboxed(arg0), symbol, self._get_as_unboxed(arg1)))
+        lines.append("if not cond:")
+        label_pc = self.get_target_pc(label)
+        target_spec = self.work_list.specialize_pc(self.constant_registers, label_pc)
+        lines.append("    pc = %d" % (target_spec.spec_pc,))
+        lines.append("    continue")
+        self._emit_jump(lines)
+        return lines
+
+    def emit_specialized_goto_if_not_float_lt(self):
+        return self.emit_specialized_goto_if_not_float_comparison('float_lt', '<')
+
+    def emit_specialized_goto_if_not_float_gt(self):
+        return self.emit_specialized_goto_if_not_float_comparison('float_gt', '>')
+
+    def emit_specialized_goto_if_not_float_ge(self):
+        return self.emit_specialized_goto_if_not_float_comparison('float_ge', '>=')
+
+    def emit_specialized_goto_if_not_float_le(self):
+        return self.emit_specialized_goto_if_not_float_comparison('float_le', '<=')
+
+    def emit_specialized_goto_if_not_float_ne(self):
+        return self.emit_specialized_goto_if_not_float_comparison('float_ne', '!=')
+
+    def emit_specialized_goto_if_not_float_eq(self):
+        return self.emit_specialized_goto_if_not_float_comparison('float_eq', '==')
 
     def emit_specialized_switch(self):
         lines = []
@@ -2430,7 +2807,9 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
 
-    # fall back to generic binary handler
+    # int_mod/int_floordiv have no rop.* ops; jtransform normally lowers them to
+    # residual_call.  Keep the generic binary handler (opimpl_* via emit_default
+    # fallback when make_code returns None, or opimpl if added later).
     emit_unspecialized_int_mod = _emit_unspecialized_binary
     emit_unspecialized_int_floordiv = _emit_unspecialized_binary
 
@@ -2473,6 +2852,21 @@ class Specializer(object):
         lines.append("    continue")
         lines.append("else:")
         lines.append("    self.registers_i[%d] = self.opimpl_strgetitem(%s, %s)" % (
+            result.index, self._get_as_box(arg0), self._get_as_box(arg1)))
+        self._emit_jump(lines)
+        return lines
+
+    def emit_unspecialized_unicodegetitem(self):
+        lines = []
+        arg0, arg1 = self.insn[1], self.insn[2]
+        result = self.insn[self.resindex]
+        self._emit_n_ary_if([arg0, arg1], lines)
+        specializer = self.work_list.specialize_insn(
+            self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
+        lines.append("    pc = %d" % (specializer.get_pc()))
+        lines.append("    continue")
+        lines.append("else:")
+        lines.append("    self.registers_i[%d] = self.opimpl_unicodegetitem(%s, %s)" % (
             result.index, self._get_as_box(arg0), self._get_as_box(arg1)))
         self._emit_jump(lines)
         return lines
@@ -2602,6 +2996,38 @@ class Specializer(object):
     emit_unspecialized_getfield_vable_r = emit_unspecialized_getfield_vable_i
     emit_unspecialized_getfield_vable_f = emit_unspecialized_getfield_vable_i
 
+    def emit_specialized_getfield_vable_i(self):
+        arg, descr, result = self._get_args_and_res()
+        boxvar = self._get_new_temp_variable()
+        descrglob = self._add_global(descr)
+        lines = []
+        lines.append("%s = self.%s(%s, %s, %s)" % (
+            boxvar, self.methodname,
+            self._get_as_box(arg), descrglob, self.orig_pc))
+        lines.append("%s = %s.%s()" % (
+            self._get_as_unboxed(result), boxvar, _get_primval_by_kind(result.kind)))
+        lines.append("self.registers_%s[%s] = %s" % (
+            result.kind[0], result.index, boxvar))
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+    emit_specialized_getfield_vable_r = emit_specialized_getfield_vable_i
+    emit_specialized_getfield_vable_f = emit_specialized_getfield_vable_i
+
+    def emit_specialized_setfield_vable_i(self):
+        arg0, arg1, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box(arg0),
+            self._get_as_box(arg1),
+            descrglob, self.orig_pc))
+        self._emit_jump(lines)
+        return lines
+    emit_specialized_setfield_vable_r = emit_specialized_setfield_vable_i
+
     def emit_unspecialized_setfield_vable_i(self):
         arg0, arg1, descr = self._get_args()
         lines = []
@@ -2700,6 +3126,175 @@ class Specializer(object):
         return lines
     emit_unspecialized_getarrayitem_gc_r_pure = emit_unspecialized_getarrayitem_gc_i_pure
     emit_unspecialized_getarrayitem_gc_f_pure = emit_unspecialized_getarrayitem_gc_i_pure
+
+    def emit_unspecialized_getarrayitem_raw_i_pure(self):
+        lines = []
+        array, index, descr, result = self._get_args_and_res()
+        self._emit_n_ary_if([array, index], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({array, index}),
+                        indent='    ', target_pc=self.orig_pc)
+        self._emit_box_by_type(array, lines)
+        self._emit_box_by_type(index, lines)
+        lines.append("self.registers_%s[%s] = self.%s(%s, %s, %s)" % (
+            result.kind[0], result.index,
+            self.methodname, self._get_as_box(array), self._get_as_box(index),
+            self._add_global(descr)))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_getarrayitem_raw_f_pure = emit_unspecialized_getarrayitem_raw_i_pure
+
+    def emit_unspecialized_getinteriorfield_gc_i(self):
+        lines = []
+        obj, index, descr, result = self._get_args_and_res()
+        self._emit_n_ary_if([obj, index], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({obj, index}),
+                        indent='    ', target_pc=self.orig_pc)
+        self._emit_box_by_type(obj, lines)
+        self._emit_box_by_type(index, lines)
+        lines.append("self.registers_%s[%s] = self.%s(%s, %s, %s)" % (
+            result.kind[0], result.index,
+            self.methodname, self._get_as_box(obj), self._get_as_box(index),
+            self._add_global(descr)))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_getinteriorfield_gc_r = emit_unspecialized_getinteriorfield_gc_i
+    emit_unspecialized_getinteriorfield_gc_f = emit_unspecialized_getinteriorfield_gc_i
+
+    def emit_unspecialized_setinteriorfield_gc_i(self):
+        arg0, arg1, arg2, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_n_ary_if([arg0, arg1, arg2], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0, arg1, arg2}),
+                        indent='    ', target_pc=self.orig_pc)
+        self._emit_box_by_type(arg0, lines)
+        self._emit_box_by_type(arg1, lines)
+        self._emit_box_by_type(arg2, lines)
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box_after_sync(arg0),
+            self._get_as_box_after_sync(arg1),
+            self._get_as_box_after_sync(arg2),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_setinteriorfield_gc_r = emit_unspecialized_setinteriorfield_gc_i
+    emit_unspecialized_setinteriorfield_gc_f = emit_unspecialized_setinteriorfield_gc_i
+
+    def emit_unspecialized_setarrayitem_gc_i(self):
+        arg0, arg1, arg2, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_n_ary_if([arg0, arg1, arg2], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0, arg1, arg2}),
+                        indent='    ', target_pc=self.orig_pc)
+        self._emit_box_by_type(arg0, lines)
+        self._emit_box_by_type(arg1, lines)
+        self._emit_box_by_type(arg2, lines)
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box_after_sync(arg0),
+            self._get_as_box_after_sync(arg1),
+            self._get_as_box_after_sync(arg2),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_setarrayitem_gc_r = emit_unspecialized_setarrayitem_gc_i
+    emit_unspecialized_setarrayitem_gc_f = emit_unspecialized_setarrayitem_gc_i
+
+    def emit_unspecialized_raw_load_i(self):
+        arg0, arg1, descr, result = self._get_args_and_res()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_n_ary_if([arg0, arg1], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0, arg1}),
+                        indent='    ', target_pc=self.orig_pc)
+        self._emit_box_by_type(arg0, lines)
+        self._emit_box_by_type(arg1, lines)
+        lines.append("self.registers_%s[%s] = self.%s(%s, %s, %s)" % (
+            result.kind[0], result.index,
+            self.methodname, self._get_as_box(arg0), self._get_as_box(arg1),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_raw_load_f = emit_unspecialized_raw_load_i
+
+    def emit_unspecialized_raw_store_i(self):
+        arg0, arg1, arg2, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_n_ary_if([arg0, arg1, arg2], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0, arg1, arg2}),
+                        indent='    ', target_pc=self.orig_pc)
+        self._emit_box_by_type(arg0, lines)
+        self._emit_box_by_type(arg1, lines)
+        self._emit_box_by_type(arg2, lines)
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box_after_sync(arg0),
+            self._get_as_box_after_sync(arg1),
+            self._get_as_box_after_sync(arg2),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_raw_store_f = emit_unspecialized_raw_store_i
+
+    def emit_unspecialized_gc_load_indexed_i(self):
+        arg0, arg1, arg2, arg3, arg4, result = self._get_args_and_res()
+        lines = []
+        self._emit_n_ary_if([arg0, arg1], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0, arg1}),
+                        indent='    ', target_pc=self.orig_pc)
+        self._emit_box_by_type(arg0, lines)
+        self._emit_box_by_type(arg1, lines)
+        lines.append("self.registers_%s[%s] = self.%s(%s, %s, %s, %s, %s)" % (
+            result.kind[0], result.index,
+            self.methodname, self._get_as_box(arg0), self._get_as_box(arg1),
+            self._get_as_box(arg2), self._get_as_box(arg3),
+            self._get_as_box(arg4)))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_gc_load_indexed_f = emit_unspecialized_gc_load_indexed_i
+
+    def emit_unspecialized_gc_store_indexed_i(self):
+        arg0, arg1, arg2, arg3, arg4, arg5, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_n_ary_if([arg0, arg1, arg2], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg0, arg1, arg2}),
+                        indent='    ', target_pc=self.orig_pc)
+        self._emit_box_by_type(arg0, lines)
+        self._emit_box_by_type(arg1, lines)
+        self._emit_box_by_type(arg2, lines)
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s, %s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box_after_sync(arg0), self._get_as_box_after_sync(arg1),
+            self._get_as_box_after_sync(arg2), self._get_as_box_after_sync(arg3),
+            self._get_as_box_after_sync(arg4), self._get_as_box_after_sync(arg5),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_gc_store_indexed_f = emit_unspecialized_gc_store_indexed_i
+
+    def emit_unspecialized_getfield_raw_i(self):
+        arg, descr, result = self._get_args_and_res()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_n_ary_if([arg], lines)
+        self._emit_jump(lines, constant_registers=self.constant_registers.union({arg}),
+                        indent='    ', target_pc=self.orig_pc)
+        self._emit_box_by_type(arg, lines)
+        lines.append("self.registers_%s[%s] = self.%s(%s, %s)" % (
+            result.kind[0], result.index,
+            self.methodname, self._get_as_box(arg), descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_unspecialized_getfield_raw_r = emit_unspecialized_getfield_raw_i
+    emit_unspecialized_getfield_raw_f = emit_unspecialized_getfield_raw_i
 
     def emit_unspecialized_arraylen_gc(self):
         lines = []
@@ -2817,6 +3412,63 @@ class Specializer(object):
     def emit_unspecialized_goto_if_not_ptr_iszero(self):
         return self.emit_unspecialized_goto_if_not_absolute("ptr_iszero")
 
+    def _emit_goto_if_not_ptr_comparison_fast(self, rop_name, py_op):
+        lines = []
+        _, arg0, arg1, arg2 = self.insn
+
+        target_pc = self.get_target_pc(arg2)
+
+        self._emit_n_ary_if([arg0, arg1], lines)
+        specializer = self.work_list.specialize_insn(
+            self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
+        lines.append("    pc = %d" % (specializer.get_pc(),))
+        lines.append("    continue")
+
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        box1 = self._get_as_box_after_sync(arg1)
+        lines.append("_b0 = %s" % box0)
+        lines.append("_b1 = %s" % box1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
+        lines.append("_cond = int(_v0 %s _v1)" % py_op)
+        lines.append("if isinstance(_b0, Const) and isinstance(_b1, Const):")
+        lines.append("    pc = self.pc")
+        const_true_target = target_pc if py_op == '!=' else self.work_list.pc_to_nextpc[self.orig_pc]
+        const_false_target = self.work_list.pc_to_nextpc[self.orig_pc] if py_op == '!=' else target_pc
+        const_true_spec = self.work_list.specialize_pc(
+            self.constant_registers, const_true_target)
+        const_false_spec = self.work_list.specialize_pc(
+            self.constant_registers, const_false_target)
+        lines.append("    if _cond:")
+        lines.append("        pc = %s" % const_true_spec.spec_pc)
+        lines.append("    else:")
+        lines.append("        pc = %s" % const_false_spec.spec_pc)
+        lines.append("    continue")
+        lines.append("condbox = self.metainterp.history.record2_int(rop.%s, _b0, _b1, _cond)" % (
+            rop_name,))
+        lines.append("self.opimpl_goto_if_not(condbox, %d, %d, replace=False)" % (
+            target_pc, self.orig_pc))
+        lines.append("pc = self.pc")
+        lines.append("if pc == %s:" % (target_pc,))
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers, target_pc)
+        lines.append("    pc = %s" % (specializer.spec_pc,))
+        lines.append("else:")
+        next_pc = self.work_list.pc_to_nextpc[self.orig_pc]
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers, next_pc)
+        lines.append("    assert self.pc == %s" % (specializer.orig_pc,))
+        lines.append("    pc = %s" % (specializer.spec_pc,))
+        lines.append("continue")
+        return lines
+
+    def emit_unspecialized_goto_if_not_ptr_eq(self):
+        return self._emit_goto_if_not_ptr_comparison_fast("PTR_EQ", "==")
+
+    def emit_unspecialized_goto_if_not_ptr_ne(self):
+        return self._emit_goto_if_not_ptr_comparison_fast("PTR_NE", "!=")
+
     def emit_unspecialized_goto_if_not(self):
         return self.emit_unspecialized_goto_if_not_absolute("")
 
@@ -2883,7 +3535,6 @@ class Specializer(object):
         lines.append("_cond = int(_v0 %s _v1)" % py_op)
         lines.append("condbox = self.metainterp.history.record2_int(rop.%s, _b0, _b1, _cond)" % (
             rop_name,))
-
         self._emit_sync_registers(lines)
         lines.append("self.opimpl_goto_if_not(condbox, %d, %d, replace=False)" % (target_pc, self.orig_pc))
         lines.append("pc = self.pc")
@@ -2917,6 +3568,71 @@ class Specializer(object):
 
     def emit_unspecialized_goto_if_not_int_eq(self):
         return self._emit_goto_if_not_int_comparison_fast("INT_EQ", "==")
+
+    def _emit_goto_if_not_float_comparison_fast(self, rop_name, py_op):
+        lines = []
+        _, arg0, arg1, arg2 = self.insn
+
+        target_pc = self.get_target_pc(arg2)
+
+        self._emit_n_ary_if([arg0, arg1], lines)
+        specializer = self.work_list.specialize_insn(
+            self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
+        lines.append("    pc = %d" % (specializer.get_pc(),))
+        lines.append("    continue")
+
+        box0 = self._get_as_box_nosync(arg0)
+        box1 = self._get_as_box_nosync(arg1)
+        same_box_true = rop_name in ("FLOAT_LE", "FLOAT_EQ", "FLOAT_GE")
+        if same_box_true:
+            same_box_pc = self.work_list.pc_to_nextpc[self.orig_pc]
+        else:
+            same_box_pc = target_pc
+        same_box_spec = self.work_list.specialize_pc(
+            self.constant_registers, same_box_pc)
+        lines.append("_b0 = %s" % box0)
+        lines.append("_b1 = %s" % box1)
+        lines.append("if _b0 is _b1:")
+        lines.append("    pc = %s" % (same_box_spec.spec_pc,))
+        lines.append("    continue")
+        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_nosync(arg1))
+        lines.append("_cond = int(_v0 %s _v1)" % py_op)
+        lines.append("condbox = self.metainterp.history.record2_int(rop.%s, _b0, _b1, _cond)" % (
+            rop_name,))
+        self._emit_sync_registers(lines)
+        lines.append("self.opimpl_goto_if_not(condbox, %d, %d, replace=False)" % (target_pc, self.orig_pc))
+        lines.append("pc = self.pc")
+        lines.append("if pc == %s:" % (target_pc,))
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers, target_pc)
+        lines.append("    pc = %s" % (specializer.spec_pc,))
+        lines.append("else:")
+        next_pc = self.work_list.pc_to_nextpc[self.orig_pc]
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers, next_pc)
+        lines.append("    assert self.pc == %s" % (specializer.orig_pc,))
+        lines.append("    pc = %s" % (specializer.spec_pc,))
+        lines.append("continue")
+        return lines
+
+    def emit_unspecialized_goto_if_not_float_lt(self):
+        return self._emit_goto_if_not_float_comparison_fast("FLOAT_LT", "<")
+
+    def emit_unspecialized_goto_if_not_float_gt(self):
+        return self._emit_goto_if_not_float_comparison_fast("FLOAT_GT", ">")
+
+    def emit_unspecialized_goto_if_not_float_ge(self):
+        return self._emit_goto_if_not_float_comparison_fast("FLOAT_GE", ">=")
+
+    def emit_unspecialized_goto_if_not_float_le(self):
+        return self._emit_goto_if_not_float_comparison_fast("FLOAT_LE", "<=")
+
+    def emit_unspecialized_goto_if_not_float_ne(self):
+        return self._emit_goto_if_not_float_comparison_fast("FLOAT_NE", "!=")
+
+    def emit_unspecialized_goto_if_not_float_eq(self):
+        return self._emit_goto_if_not_float_comparison_fast("FLOAT_EQ", "==")
 
     def emit_unspecialized_switch(self):
         lines = []
@@ -2959,6 +3675,8 @@ class Specializer(object):
     emit_unspecialized_ref_return = emit_return
     emit_specialized_int_return = emit_return
     emit_specialized_ref_return = emit_return
+    emit_unspecialized_float_return = emit_return
+    emit_specialized_float_return = emit_return
 
     def emit_void_return(self):
         lines = []

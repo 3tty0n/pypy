@@ -1688,6 +1688,60 @@ i2 = i0 // i1
 pc = 118
 continue"""
 
+def test_uint_lt():
+    i0, i1, i2, i3 = Register('int', 0), Register('int', 1), Register('int', 2), Register('int', 3)
+    insn = ('uint_lt', i0, i1, '->', i2)
+    pc_to_insn = {5: insn, 17: ('int_add', i0, i1, '->', i2), 6: ('int_return', i3)}
+
+    work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
+    insn_specializer = work_list.specialize_pc(set(), 5)
+    s = insn_specializer.make_code()
+    assert '_res = int(r_uint(_v0) < r_uint(_v1))' in s
+    assert 'rop.UINT_LT' in s
+
+    work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
+    insn_specializer = work_list.specialize_pc({i0, i1, i2, i3}, 5)
+    s = insn_specializer.make_code()
+    assert s == """\
+i2 = int(r_uint(i0) < r_uint(i1))
+pc = 118
+continue"""
+
+
+def test_uint_mul_high_masks_to_signed_int():
+    i0, i1, i2, i3 = Register('int', 0), Register('int', 1), Register('int', 2), Register('int', 3)
+    insn = ('uint_mul_high', i0, i1, '->', i2)
+    pc_to_insn = {5: insn, 6: ('int_return', i3)}
+
+    work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
+    insn_specializer = work_list.specialize_pc(set(), 5)
+    s = insn_specializer.make_code()
+    assert '_res = intmask(uint_mul_high(_v0, _v1))' in s
+    assert 'record2_int(rop.UINT_MUL_HIGH' in s
+
+    work_list = WorkList(pc_to_insn, pc_to_nextpc={5: 6})
+    insn_specializer = work_list.specialize_pc({i0, i1, i2, i3}, 5)
+    s = insn_specializer.make_code()
+    assert s == """\
+i2 = intmask(uint_mul_high(i0, i1))
+pc = 107
+continue"""
+
+
+def test_goto_if_not_float_lt():
+    f0, f1, i2 = Register('float', 0), Register('float', 1), Register('int', 2)
+    L1 = TLabel('L1')
+    insn = ('goto_if_not_float_lt', f0, f1, L1)
+    pc_to_insn = {5: insn, 17: ('int_add', i2, i2, '->', i2), 6: ('int_return', i2)}
+    work_list = WorkList(pc_to_insn, label_to_pc={'L1': 17}, pc_to_nextpc={5: 6})
+
+    insn_specializer = work_list.specialize_pc(set(), 5)
+    s = insn_specializer.make_code()
+    assert 'rop.FLOAT_LT' in s
+    assert 'record2_int' in s
+    assert 'self.opimpl_goto_if_not(condbox' in s
+
+
 def test_int_guard_value():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
     insn = ('int_guard_value', i0)
@@ -2076,6 +2130,36 @@ def test_inline_call_disables_genextension(enable_genextension):
         ]
     assembler = Assembler()
     jitcode = assembler.assemble(ssarepr, num_regs={'int': 2, 'ref': 1})
+    assert jitcode.genext_function is None
+    assert not hasattr(jitcode, '_genext_source')
+
+
+def test_arrayitem_vable_disables_genextension(enable_genextension):
+    ssarepr = SSARepr("arrayitem_vable_test", genextension=True)
+    r0, r1 = Register('ref', 0), Register('ref', 1)
+    i0 = Register('int', 0)
+    fdescr = AbstractDescr()
+    adescr = AbstractDescr()
+    ssarepr.insns = [
+        ('getarrayitem_vable_r', r0, i0, fdescr, adescr, '->', r1),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 1, 'ref': 2})
+    assert jitcode.genext_function is None
+    assert not hasattr(jitcode, '_genext_source')
+
+
+def test_setarrayitem_vable_disables_genextension(enable_genextension):
+    ssarepr = SSARepr("setarrayitem_vable_test", genextension=True)
+    r0, r1 = Register('ref', 0), Register('ref', 1)
+    i0 = Register('int', 0)
+    fdescr = AbstractDescr()
+    adescr = AbstractDescr()
+    ssarepr.insns = [
+        ('setarrayitem_vable_r', r0, i0, r1, fdescr, adescr),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 1, 'ref': 2})
     assert jitcode.genext_function is None
     assert not hasattr(jitcode, '_genext_source')
 
