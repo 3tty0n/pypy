@@ -145,7 +145,8 @@ class FieldUpdater(object):
 
 
 class HeapCache(object):
-    def __init__(self, genext_fastpath_enabled=True):
+    def __init__(self, genext_fastpath_enabled=True,
+                 invalidation_skip_enabled=True):
         # Works with flags stored on RefFrontendOp._heapc_flags.
         # There are two ways to do a global resetting of these flags:
         # reset() and reset_keep_likely_virtual().  The basic idea is
@@ -161,6 +162,7 @@ class HeapCache(object):
         self.likely_virtual_version = r_uint(0)
         # Flag to enable/disable genextension-specific fast-path for pure int ops
         self.genext_fastpath_enabled = genext_fastpath_enabled
+        self.invalidation_skip_enabled = invalidation_skip_enabled
         self.reset()
 
     def reset(self):
@@ -401,7 +403,7 @@ class HeapCache(object):
         self.clear_caches_varargs(opnum, descr, list(argboxes))
 
     def clear_caches_varargs(self, opnum, descr, argboxes):
-        if not self.genext_fastpath_enabled:
+        if not self.invalidation_skip_enabled:
             self.need_guard_not_invalidated = True # can do better, but good start
         if (OpHelpers.is_plain_call(opnum) or
             OpHelpers.is_call_loopinvariant(opnum) or
@@ -414,7 +416,7 @@ class HeapCache(object):
                 ef == effectinfo.EF_ELIDABLE_OR_MEMORYERROR or
                 ef == effectinfo.EF_ELIDABLE_CAN_RAISE):
                 return
-            if self.genext_fastpath_enabled:
+            if self.invalidation_skip_enabled:
                 self.need_guard_not_invalidated = True
             # A special case for ll_arraycopy, because it is so common, and its
             # effects are so well defined.
@@ -462,7 +464,7 @@ class HeapCache(object):
                                 cache.invalidate_unescaped()
                 return
 
-        if self.genext_fastpath_enabled:
+        if self.invalidation_skip_enabled:
             self.need_guard_not_invalidated = True
         self.reset_keep_likely_virtuals()
 

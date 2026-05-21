@@ -171,6 +171,13 @@ translation_optiondescription = OptionDescription(
                "allowlist of hot jitcodes (runtime-checked Const dispatch)",
                default=False,
                cmdline="--genext-aprobe"),
+    BoolOption("heapcache_invalidation_skip",
+               "skip the unconditional need_guard_not_invalidated set during "
+               "clear_caches; instead set it only inside per-opcode-type "
+               "branches. Trades guard_not_invalidated emissions for wider "
+               "live-value sets across the elided guard points",
+               default=True,
+               cmdline="--heapcache-invalidation-skip"),
     # misc
     BoolOption("verbose", "Print extra information", default=False,
                cmdline="--verbose"),

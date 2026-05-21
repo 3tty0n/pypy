@@ -2643,7 +2643,9 @@ class MetaInterp(object):
         self.partial_trace = None
         self.retracing_from = (-1, -1, -1, -1, -1)
         self.call_pure_results = args_dict()
-        self.heapcache = HeapCache(staticdata.config.translation.heapcache_genext_fastpath)
+        self.heapcache = HeapCache(
+            staticdata.config.translation.heapcache_genext_fastpath,
+            staticdata.config.translation.heapcache_invalidation_skip)
 
         self.call_ids = []
         self.current_call_id = 0
