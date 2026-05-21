@@ -835,12 +835,12 @@ class Frame(object):
                 pc += 1
                 if we_are_jitted():
                     if tstack.t_is_empty():
-                        w_x = self.POP(dummy=True)
+                        w_x = self._POP()
                         pc = emit_ret(entry, w_x)
                         tier1driver.can_enter_jit(
                             bytecode=bytecode, entry=entry, pc=pc, tstack=tstack, self=self)
                     else:
-                        w_x = self.POP(dummy=True)
+                        w_x = self._POP()
                         pc, tstack = tstack.t_pop()
                         pc = emit_ret(pc, w_x)
                 else:
@@ -897,7 +897,7 @@ class Frame(object):
                 pc += 1
 
                 if we_are_jitted():
-                    if self.is_true(dummy=True):
+                    if self._is_true():
                         tstack = t_push(pc, tstack)
                         pc = target
                     else:
@@ -915,7 +915,7 @@ class Frame(object):
                 pc += 4
 
                 if we_are_jitted():
-                    if self.is_true(dummy=True):
+                    if self._is_true():
                         tstack = t_push(pc, tstack)
                         pc = target
                     else:
@@ -932,13 +932,13 @@ class Frame(object):
             elif opcode == EXIT:
                 if we_are_jitted():
                     if tstack.t_is_empty():
-                        w_x = self.POP(dummy=True)
+                        w_x = self._POP()
                         pc = entry
                         pc = emit_ret(pc, w_x)
                         tier1driver.can_enter_jit(
                             bytecode=bytecode, entry=entry, pc=pc, tstack=tstack, self=self)
                     else:
-                        w_x = self.POP(dummy=True)
+                        w_x = self._POP()
                         pc, tstack = tstack.t_pop()
                         pc = emit_ret(pc, w_x)
                 else:
@@ -953,7 +953,7 @@ class Frame(object):
                 new_arity = ord(bytecode[pc+2])
                 pc += 3
                 if we_are_jitted():
-                    self.FRAME_RESET(old_arity, local_size, new_arity, dummy=True)
+                    self._FRAME_RESET(old_arity, local_size, new_arity)
                 else:
                     self.FRAME_RESET(old_arity, local_size, new_arity, dummy=False)
 
