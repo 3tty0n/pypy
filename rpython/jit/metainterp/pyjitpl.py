@@ -2032,12 +2032,13 @@ class MIFrame(object):
         staticdata = self.metainterp.staticdata
         try:
             if self.jitcode.genext_function:
-                # O(1) per-jitcode int counter (was a per-call string-keyed
-                # dict membership test + insert + increment -- symmetric
-                # overhead on both tracer paths, see followup doc S24).
-                self.jitcode.genext_fast_exec_count += 1
-                staticdata.profiler.count(Counters.FAST_TRACING_FUNCTION_EXECUTIONS)
-                return self.jitcode.genext_function(self)
+                threshold = staticdata.genext_warmup_threshold
+                if threshold > 0 and self.jitcode.genext_warmup_counter < threshold:
+                    self.jitcode.genext_warmup_counter += 1
+                else:
+                    self.jitcode.genext_fast_exec_count += 1
+                    staticdata.profiler.count(Counters.FAST_TRACING_FUNCTION_EXECUTIONS)
+                    return self.jitcode.genext_function(self)
 
             self.jitcode.genext_slow_exec_count += 1
             staticdata.profiler.count(Counters.SLOW_TRACING_FUNCTION_EXECUTIONS)
@@ -2457,6 +2458,7 @@ class MetaInterpStaticData(object):
         else:
             from rpython.config.translationoption import get_combined_translation_config
             self.config = get_combined_translation_config(translating=True)
+        self.genext_warmup_threshold = self.config.translation.genext_warmup_threshold
 
         backendmodule = self.cpu.__module__
         backendmodule = backendmodule.split('.')[-2]

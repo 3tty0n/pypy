@@ -178,6 +178,13 @@ translation_optiondescription = OptionDescription(
                "live-value sets across the elided guard points",
                default=True,
                cmdline="--heapcache-invalidation-skip"),
+    IntOption("genext_warmup_threshold",
+              "skip genext fast-path for the first N MIFrame.run_one_step "
+              "entries per jitcode; cold jitcodes use the generic dispatcher "
+              "until the counter exceeds the threshold. 0 disables the gate "
+              "(legacy behaviour)",
+              default=0,
+              cmdline="--genext-warmup-threshold"),
     # misc
     BoolOption("verbose", "Print extra information", default=False,
                cmdline="--verbose"),

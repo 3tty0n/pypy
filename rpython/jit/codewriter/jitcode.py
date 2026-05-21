@@ -17,6 +17,7 @@ class JitCode(AbstractDescr):
     genext_hbp_candidate = False
     genext_fast_exec_count = 0
     genext_slow_exec_count = 0
+    genext_warmup_counter = 0
 
     def __init__(self, name, fnaddr=None, calldescr=None, called_from=None):
         self.name = name
@@ -32,6 +33,7 @@ class JitCode(AbstractDescr):
         self.genext_hbp_candidate = False
         self.genext_fast_exec_count = 0
         self.genext_slow_exec_count = 0
+        self.genext_warmup_counter = 0
         self.bytecodes_counter = 0
         self.number_calls = 0
         self.traced_operations = 0
