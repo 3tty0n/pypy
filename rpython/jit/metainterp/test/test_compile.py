@@ -9,6 +9,7 @@ from rpython.jit.metainterp import jitprof, compile
 from rpython.jit.metainterp.optimizeopt.test.test_util import LLtypeMixin
 from rpython.jit.tool.oparser import parse, convert_loop_to_trace
 from rpython.jit.metainterp.optimizeopt import ALL_OPTS_DICT
+from rpython.jit.metainterp.resoperation import rop
 
 class FakeCPU(object):
     supports_guard_gc_type = True
@@ -76,6 +77,16 @@ class FakeMetaInterp:
         warmstate = FakeState()
         virtualizable_info = None
         vec = False
+
+
+def test_genext_pure_arithmetic_shortcut_rejects_unsupported_ops():
+    assert compile._is_pure_arithmetic_trace_op(rop.INT_ADD)
+    assert compile._is_pure_arithmetic_trace_op(rop.FLOAT_TRUEDIV)
+    assert compile._is_pure_arithmetic_trace_op(rop.GUARD_NO_OVERFLOW)
+    assert not compile._is_pure_arithmetic_trace_op(rop.INT_LT)
+    assert not compile._is_pure_arithmetic_trace_op(rop.FLOAT_EQ)
+    assert not compile._is_pure_arithmetic_trace_op(rop.GUARD_TRUE)
+    assert not compile._is_pure_arithmetic_trace_op(rop.UINT_MUL_HIGH)
 
 def test_compile_loop():
     cpu = FakeCPU()

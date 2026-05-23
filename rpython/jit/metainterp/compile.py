@@ -34,31 +34,28 @@ class CannotSpecializePure(Exception):
     pass
 
 
+_GENEXT_COMPILE_SHORTCUT_OPS = (
+    rop.LABEL, rop.JUMP,
+    rop.INT_ADD, rop.INT_SUB, rop.INT_MUL,
+    rop.INT_ADD_OVF, rop.INT_SUB_OVF, rop.INT_MUL_OVF,
+    rop.GUARD_NO_OVERFLOW, rop.GUARD_OVERFLOW,
+    rop.INT_AND, rop.INT_OR, rop.INT_XOR,
+    rop.INT_LSHIFT, rop.INT_RSHIFT, rop.UINT_RSHIFT,
+    rop.INT_NEG, rop.INT_INVERT,
+    rop.INT_FORCE_GE_ZERO, rop.INT_SIGNEXT,
+    rop.FLOAT_ADD, rop.FLOAT_SUB, rop.FLOAT_MUL, rop.FLOAT_TRUEDIV,
+    rop.FLOAT_NEG, rop.FLOAT_ABS,
+    rop.CAST_FLOAT_TO_INT, rop.CAST_INT_TO_FLOAT,
+    rop.CAST_FLOAT_TO_SINGLEFLOAT, rop.CAST_SINGLEFLOAT_TO_FLOAT,
+)
+
+
 def _is_pure_arithmetic_trace_op(opnum):
-    if opnum == rop.LABEL or opnum == rop.JUMP:
-        return True
-    if (opnum == rop.INT_ADD_OVF or opnum == rop.INT_SUB_OVF or
-            opnum == rop.INT_MUL_OVF):
-        return True
-    if opnum == rop.GUARD_NO_OVERFLOW or opnum == rop.GUARD_OVERFLOW:
-        return True
-    if not rop.is_always_pure(opnum):
-        return False
-    # Exclude operations that touch GC pointers
-    if opnum in (rop.PTR_EQ, rop.PTR_NE,
-                 rop.INSTANCE_PTR_EQ, rop.INSTANCE_PTR_NE,
-                 rop.CAST_PTR_TO_INT, rop.CAST_INT_TO_PTR,
-                 rop.NURSERY_PTR_INCREMENT,
-                 rop.SAME_AS_R):
-        return False
-    # Exclude heap-reading pure ops
-    if opnum in (rop.ARRAYLEN_GC, rop.STRLEN, rop.STRGETITEM,
-                 rop.GETARRAYITEM_GC_PURE_I, rop.GETARRAYITEM_GC_PURE_F,
-                 rop.GETARRAYITEM_GC_PURE_R,
-                 rop.UNICODELEN, rop.UNICODEGETITEM,
-                 rop.LOAD_FROM_GC_TABLE):
-        return False
-    return True
+    # Keep this whitelist in sync with genextension.compile_shortcut().
+    # A broader "pure op" test lets unsupported comparisons/guards enter the
+    # x86 shortcut, emit partial code, raise CannotCompileGenExt, truncate the
+    # assembler buffer, and then re-run the normal backend path.
+    return opnum in _GENEXT_COMPILE_SHORTCUT_OPS
 
 
 def compile_pure_arithmetic_loop(metainterp, greenkey, trace, runtime_args,
