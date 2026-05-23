@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """End-to-end warmup + steady-state A/B benchmark harness for pypy-jit-ext-c.
 
-Each benchmark is run interleaved baseline/candidate per rep, reporting the
+Each benchmark is run as matched baseline/candidate pairs, reporting the
 JIT-self-measured warmup phase decomposition, changepoint-derived warmup
 scalars, and a steady-state regression guard. Comparisons are paired
-(per-rep log-ratios) because the harness interleaves A/B/A/B.
+(per-rep log-ratios) because each rep includes both binaries. The default
+pair order alternates A/B then B/A to avoid fixed-order bias.
 
 Examples:
   bench_e2e.py --all --preset genext --reps 10 -n 50 --warmup-iters 0
@@ -16,6 +17,7 @@ import argparse
 import json
 import math
 import os
+import random
 import re
 import subprocess
 import sys
@@ -346,8 +348,19 @@ def _caffeinated(cmd):
     return cmd
 
 
+def _wrapped_child_cmd(cmd, cpu=None):
+    if cpu is not None:
+        if sys.platform.startswith("linux"):
+            cmd = ["taskset", "-c", str(cpu)] + cmd
+        else:
+            print("[bench_e2e] warning: --cpu is only implemented via "
+                  "taskset on Linux; ignoring on %s" % sys.platform,
+                  file=sys.stderr)
+    return _caffeinated(cmd)
+
+
 def run_one(pypy, script, env_extra, extra_args, n, warmup_iters=10,
-            jit_off=False):
+            jit_off=False, jit_log=True, cpu=None):
     """Run a single (binary, benchmark) once. Returns dict of metrics.
 
     Stable-setting hygiene: deterministic child env and a caffeinate
@@ -370,29 +383,37 @@ def run_one(pypy, script, env_extra, extra_args, n, warmup_iters=10,
                 + list(extra_args))
 
     def _exec():
-        tmp = tempfile.NamedTemporaryFile(prefix="pypylog_e2e_",
-                                          suffix=".txt", delete=False)
-        tmp.close()
+        tmp = None
+        if jit_log:
+            tmp = tempfile.NamedTemporaryFile(prefix="pypylog_e2e_",
+                                              suffix=".txt", delete=False)
+            tmp.close()
         e = dict(env)
-        e["PYPYLOG"] = "jit-summary:%s" % tmp.name
-        t0 = time.time()
+        if jit_log:
+            e["PYPYLOG"] = "jit-summary:%s" % tmp.name
+        else:
+            e.pop("PYPYLOG", None)
+        t0 = time.perf_counter()
         try:
-            p = subprocess.Popen(_caffeinated(base_cmd),
+            p = subprocess.Popen(_wrapped_child_cmd(base_cmd, cpu=cpu),
                                   stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, env=e)
             stdout, _ = p.communicate()
             rc = p.returncode
         except OSError as ex:
-            try: os.unlink(tmp.name)
-            except OSError: pass
+            if tmp is not None:
+                try: os.unlink(tmp.name)
+                except OSError: pass
             return None, None, None, ("OSError: %s" % ex)
-        wall = time.time() - t0
-        try:
-            with open(tmp.name) as f:
-                logtxt = f.read()
-        finally:
-            try: os.unlink(tmp.name)
-            except OSError: pass
+        wall = time.perf_counter() - t0
+        logtxt = ""
+        if tmp is not None:
+            try:
+                with open(tmp.name) as f:
+                    logtxt = f.read()
+            finally:
+                try: os.unlink(tmp.name)
+                except OSError: pass
         if rc != 0:
             return None, None, wall, ("rc=%d" % rc)
         return stdout, logtxt, wall, None
@@ -433,6 +454,7 @@ def run_one(pypy, script, env_extra, extra_args, n, warmup_iters=10,
         "steady_start_iter": wm["steady_start_iter"],
         "wall_to_steady": wm["wall_to_steady"],
         "speedup_vs_first": wm["speedup_vs_first"],
+        "n_iters": wm["n_iters"],
         # steady-state regression guard (secondary, NOT the headline):
         "running": running_med,
         "running_sum": running_sum,
@@ -490,6 +512,10 @@ def _build_summary(samples):
     """
     classes = [s.get("warmup_class") for s in samples if s.get("warmup_class")]
     cls = max(set(classes), key=classes.count) if classes else "n/a"
+    iter_counts = [s.get("n_iters", len(s.get("iter_times", [])))
+                   for s in samples]
+    iter_med = median(iter_counts) if iter_counts else 0
+    run_metric = "cold" if iter_med < 8 else "steady"
     be = [s["break_even"] for s in samples
           if isinstance(s.get("break_even"), int) and s["break_even"] >= 0]
     run_vals = [s["running"] for s in samples
@@ -528,6 +554,8 @@ def _build_summary(samples):
         "steady_perf_var": run_var,
         "steady_perf_cv": run_cv,           # robustness of the steady est.
         "steady_reliable": steady_reliable, # False -> steady_perf is n/a
+        "run_metric": run_metric,
+        "n_iters_med": iter_med,
         # back-compat alias (older report code / external readers):
         "running_med": run_med,
         "running_min": (min(run_vals) if run_vals else float("nan")),
@@ -558,16 +586,28 @@ def _thermal_guard(label, cooldown=8, max_wait=120):
 
 
 def run_all_interleaved(base, cand, names, reps, n, warmup_iters=10,
-                        break_even=False):
-    """stable-setting comparison: for each (benchmark, rep) run the
-    BASELINE then the CANDIDATE back to back (A,B,A,B...), never
-    all-A-then-all-B -- so slow thermal/DVFS drift hits both arms
-    symmetrically instead of confounding the A/B delta. Serial only
-    (jobs=1) for decision-grade signal. Returns {pypy: (raw, summary)}."""
+                        break_even=False, jit_log=True, cpu=None,
+                        cooldown=0.0, order="alternating", seed=None):
+    """Stable-setting comparison: for each (benchmark, rep) run one baseline
+    and one candidate process as a matched pair.  The pair order is
+    alternating by default (A,B then B,A) so fixed-order cache/thermal/DVFS
+    effects do not systematically favor either binary.  Serial only (jobs=1)
+    for decision-grade signal.  Returns {pypy: (raw, summary)}."""
     by_name = dict((b[0], b) for b in BENCHMARKS)
     valid = [nm for nm in names if nm in by_name]
     sp = {base: dict((nm, []) for nm in valid),
           cand: dict((nm, []) for nm in valid)}
+    rng = random.Random(seed)
+    first_child = True
+
+    def _run_with_cooldown(who, script, env, extra, jit_off=False):
+        nonlocal first_child
+        if not first_child and cooldown > 0.0:
+            time.sleep(cooldown)
+        first_child = False
+        return run_one(who, script, env, extra, n, warmup_iters,
+                       jit_off=jit_off, jit_log=jit_log, cpu=cpu)
+
     for nm in valid:
         _, script, env, extra = by_name[nm]
         print("[%s] %d reps (interleaved baseline/candidate)" % (nm, reps))
@@ -575,14 +615,21 @@ def run_all_interleaved(base, cand, names, reps, n, warmup_iters=10,
         be_cache = {}
         if break_even:
             for who in (base, cand):
-                ro = run_one(who, script, env, extra, n, warmup_iters,
-                             jit_off=True)
+                ro = _run_with_cooldown(who, script, env, extra,
+                                        jit_off=True)
                 be_cache[who] = (ro.get("iter_times")
                                  if "error" not in ro else None)
         for i in range(reps):
-            for who in (base, cand):
+            if order == "fixed":
+                pair = (base, cand)
+            elif order == "random":
+                pair = [base, cand]
+                rng.shuffle(pair)
+            else:
+                pair = (base, cand) if i % 2 == 0 else (cand, base)
+            for who in pair:
                 thr = _thermal_guard("%s/%s" % (nm, os.path.basename(who)))
-                r = run_one(who, script, env, extra, n, warmup_iters)
+                r = _run_with_cooldown(who, script, env, extra)
                 if "error" in r:
                     print("  [%s] rep %d %s ERROR %s" %
                           (nm, i, os.path.basename(who), r["error"]))
@@ -615,18 +662,21 @@ def run_all_interleaved(base, cand, names, reps, n, warmup_iters=10,
 
 def _run_one_task(task):
     """Worker for parallel execution; returns (name, rep_idx, result)."""
-    name, rep_idx, pypy, script, env, extra, n, warmup_iters = task
-    return (name, rep_idx, run_one(pypy, script, env, extra, n, warmup_iters))
+    name, rep_idx, pypy, script, env, extra, n, warmup_iters, jit_log, cpu = task
+    return (name, rep_idx, run_one(pypy, script, env, extra, n, warmup_iters,
+                                   jit_log=jit_log, cpu=cpu))
 
 
 def _run_one_task_multi(task):
     """Worker for cross-binary parallel execution; returns (pypy, name, rep_idx, result)."""
-    pypy, name, rep_idx, script, env, extra, n, warmup_iters = task
+    pypy, name, rep_idx, script, env, extra, n, warmup_iters, jit_log, cpu = task
     return (pypy, name, rep_idx,
-            run_one(pypy, script, env, extra, n, warmup_iters))
+            run_one(pypy, script, env, extra, n, warmup_iters,
+                    jit_log=jit_log, cpu=cpu))
 
 
-def run_all(pypy, names, reps, n, warmup_iters=10, jobs=1):
+def run_all(pypy, names, reps, n, warmup_iters=10, jobs=1,
+            jit_log=True, cpu=None, cooldown=0.0):
     by_name = dict((b[0], b) for b in BENCHMARKS)
     valid_names = []
     for name in names:
@@ -642,7 +692,7 @@ def run_all(pypy, names, reps, n, warmup_iters=10, jobs=1):
             _, script, env, extra = by_name[name]
             for i in range(reps):
                 tasks.append((name, i, pypy, script, env, extra, n,
-                              warmup_iters))
+                              warmup_iters, jit_log, cpu))
         print("[parallel] %d tasks across %d workers" % (len(tasks), jobs))
         sys.stdout.flush()
         from multiprocessing import Pool
@@ -672,7 +722,10 @@ def run_all(pypy, names, reps, n, warmup_iters=10, jobs=1):
             print("[%s] %d reps..." % (name, reps))
             sys.stdout.flush()
             for i in range(reps):
-                r = run_one(pypy, script, env, extra, n, warmup_iters)
+                if i > 0 and cooldown > 0.0:
+                    time.sleep(cooldown)
+                r = run_one(pypy, script, env, extra, n, warmup_iters,
+                            jit_log=jit_log, cpu=cpu)
                 if "error" in r:
                     print("  rep %d ERROR: %s" % (i, r["error"]))
                     sys.stdout.flush()
@@ -697,7 +750,8 @@ def run_all(pypy, names, reps, n, warmup_iters=10, jobs=1):
     return raw, summary
 
 
-def run_all_binaries(pypys, names, reps, n, warmup_iters=10, jobs=1):
+def run_all_binaries(pypys, names, reps, n, warmup_iters=10, jobs=1,
+                     jit_log=True, cpu=None):
     """Run all (binary, benchmark, rep) tasks in a single shared pool; returns {pypy: (raw, summary)}."""
     by_name = dict((b[0], b) for b in BENCHMARKS)
     valid_names = []
@@ -717,7 +771,7 @@ def run_all_binaries(pypys, names, reps, n, warmup_iters=10, jobs=1):
             _, script, env, extra = by_name[name]
             for i in range(reps):
                 tasks.append((pypy, name, i, script, env, extra, n,
-                              warmup_iters))
+                              warmup_iters, jit_log, cpu))
 
     print("[parallel-binaries] %d tasks across %d binaries, %d workers" %
           (len(tasks), len(pypys), jobs))
@@ -778,6 +832,15 @@ def _binary_short_name(pypy_path):
     return name
 
 
+def _pypy_version(pypy_path):
+    try:
+        out = subprocess.check_output([pypy_path, "--version"],
+                                      stderr=subprocess.STDOUT)
+        return out.decode("utf-8", "replace").strip()
+    except Exception as ex:
+        return "unknown: %s" % (ex,)
+
+
 def _resolve_names(args):
     """The explicit --benchmarks subset, else every name in BENCHMARKS."""
     if args.benchmarks:
@@ -792,7 +855,12 @@ def _write_interleaved(res, base, cand, out_paths, args):
         raw, summary = res[who]
         with open(op, "w") as f:
             json.dump({"pypy": who, "reps": args.reps, "n": args.n,
+                       "pypy_version": _pypy_version(who),
                        "warmup_iters": args.warmup_iters,
+                       "jit_log": args.jit_log,
+                       "cpu": args.cpu,
+                       "cooldown": args.cooldown,
+                       "order": args.order,
                        "interleaved": True,
                        "benchmarks": sorted(summary.keys()),
                        "raw": raw, "summary": summary}, f, indent=2)
@@ -808,10 +876,16 @@ def cmd_run_one(pypy, out_path, args):
         sys.exit(2)
     names = _resolve_names(args)
     raw, summary = run_all(pypy, names, args.reps, args.n,
-                           args.warmup_iters, jobs=args.jobs)
+                           args.warmup_iters, jobs=args.jobs,
+                           jit_log=args.jit_log, cpu=args.cpu,
+                           cooldown=args.cooldown)
     out = {
         "pypy": pypy, "reps": args.reps, "n": args.n,
+        "pypy_version": _pypy_version(pypy),
         "warmup_iters": args.warmup_iters,
+        "jit_log": args.jit_log,
+        "cpu": args.cpu,
+        "cooldown": args.cooldown,
         "jobs": args.jobs,
         "benchmarks": sorted(summary.keys()),
         "raw": raw, "summary": summary,
@@ -833,12 +907,16 @@ def cmd_run(args):
                 sys.stderr.write("not executable: %s\n" % p); sys.exit(2)
         names = _resolve_names(args)
         print("\n%s\nstable interleaved A/B: baseline=%s candidate=%s\n"
-              "reps=%d n=%d break_even=%s\n%s" %
+              "reps=%d n=%d break_even=%s jit_log=%s order=%s cpu=%s cooldown=%.2f\n%s" %
               ("=" * 70, base, cand, args.reps, args.n,
-               args.break_even, "=" * 70))
+               args.break_even, args.jit_log, args.order, args.cpu,
+               args.cooldown, "=" * 70))
         res = run_all_interleaved(base, cand, names, args.reps, args.n,
                                   args.warmup_iters,
-                                  break_even=args.break_even)
+                                  break_even=args.break_even,
+                                  jit_log=args.jit_log, cpu=args.cpu,
+                                  cooldown=args.cooldown,
+                                  order=args.order, seed=args.seed)
         out_paths = ["e2e_baseline.json", "e2e_proposed.json"]
         _write_interleaved(res, base, cand, out_paths, args)
         print("\n%s\nComparison: %s vs %s\n%s\n" %
@@ -870,12 +948,16 @@ def cmd_run(args):
             print("  %s -> %s" % (p, op))
         print("=" * 70)
         results = run_all_binaries(pypys_abs, names, args.reps, args.n,
-                                   args.warmup_iters, jobs=args.jobs)
+                                   args.warmup_iters, jobs=args.jobs,
+                                   jit_log=args.jit_log, cpu=args.cpu)
         for pypy, out_path in zip(pypys_abs, out_paths):
             raw, summary = results[pypy]
             out = {
                 "pypy": pypy, "reps": args.reps, "n": args.n,
+                "pypy_version": _pypy_version(pypy),
                 "warmup_iters": args.warmup_iters,
+                "jit_log": args.jit_log,
+                "cpu": args.cpu,
                 "jobs": args.jobs,
                 "parallel_binaries": True,
                 "benchmarks": sorted(summary.keys()),
@@ -886,9 +968,9 @@ def cmd_run(args):
             print("\nWrote %s" % out_path)
             print_summary_table(out)
     elif len(pypys) == 2:
-        # Exactly two binaries: interleave A,B,A,B,... (baseline then
-        # candidate back to back per rep) instead of all-A-then-all-B,
-        # so thermal/DVFS drift hits both arms symmetrically.
+        # Exactly two binaries: run matched A/B pairs.  The default pair
+        # order alternates A,B then B,A so fixed-order thermal/cache effects
+        # do not systematically favor one binary.
         base = os.path.abspath(pypys[0])
         cand = os.path.abspath(pypys[1])
         for p in (base, cand):
@@ -896,12 +978,16 @@ def cmd_run(args):
                 sys.stderr.write("not executable: %s\n" % p); sys.exit(2)
         names = _resolve_names(args)
         print("\n%s\nstable interleaved A/B: baseline=%s candidate=%s\n"
-              "reps=%d n=%d break_even=%s\n%s" %
+              "reps=%d n=%d break_even=%s jit_log=%s order=%s cpu=%s cooldown=%.2f\n%s" %
               ("=" * 70, base, cand, args.reps, args.n,
-               args.break_even, "=" * 70))
+               args.break_even, args.jit_log, args.order, args.cpu,
+               args.cooldown, "=" * 70))
         res = run_all_interleaved(base, cand, names, args.reps, args.n,
                                   args.warmup_iters,
-                                  break_even=args.break_even)
+                                  break_even=args.break_even,
+                                  jit_log=args.jit_log, cpu=args.cpu,
+                                  cooldown=args.cooldown,
+                                  order=args.order, seed=args.seed)
         _write_interleaved(res, base, cand, out_paths, args)
     else:
         for i, (pypy, out_path) in enumerate(zip(pypys, out_paths)):
@@ -922,10 +1008,11 @@ def print_summary_table(out):
     # Two co-equal metric families: WARMUP (JIT-self-measured
     # transient cost) | STEADY-STATE (stable per-iter perf, '*' = no
     # genuine steady state reached -> steady value not trustworthy).
+    run_label = "COLD" if out.get("n", 0) < 8 else "STEADY"
     print("\n%-20s | WARMUP: %7s %7s %7s %7s %8s %-9s %6s %6s | "
-          "STEADY: %10s %6s"
+          "%-6s: %10s %6s"
           % ("benchmark", "trace", "resume", "opt", "backnd", "jit_tot",
-             "class", "loops", "bridg", "perf", "cv%"))
+             "class", "loops", "bridg", run_label, "perf", "cv%"))
     for name in sorted(out["summary"].keys()):
         s = out["summary"][name]
         rel = "" if s.get("steady_reliable", True) else "*"
@@ -940,8 +1027,12 @@ def print_summary_table(out):
                s.get("loops_med", -1), s.get("bridges_med", -1),
                s.get("steady_perf_med", float("nan")), rel,
                (cv * 100.0) if cv == cv else float("nan")))
-    print("  ('*' on STEADY = no genuine steady state reached for the "
-          "majority of reps; that steady number is not trustworthy.)")
+    if run_label == "COLD":
+        print("  (COLD = one/few measured iterations; this is cold latency, "
+              "not steady-state machine-code speed.)")
+    else:
+        print("  ('*' on STEADY = no genuine steady state reached for the "
+              "majority of reps; that steady number is not trustworthy.)")
 
 
 def cmd_compare(args):
@@ -952,6 +1043,9 @@ def _compare_two_paths(baseline_path, optim_path):
     base = json.load(open(baseline_path))
     opt = json.load(open(optim_path))
     common = sorted(set(base["summary"]) & set(opt["summary"]))
+    cold_run = min(base.get("n", 0), opt.get("n", 0)) < 8
+    jit_log_available = bool(base.get("jit_log", True) and
+                             opt.get("jit_log", True))
 
     def pct(b, x):
         if b == 0 or x == 0 or b != b or x != x:
@@ -962,13 +1056,23 @@ def _compare_two_paths(baseline_path, optim_path):
           (base.get("pypy"), base.get("reps"), base.get("n"), base.get("warmup_iters", 1)))
     print("Optim:    %s (reps=%d, n=%d, warmup=%d)" %
           (opt.get("pypy"), opt.get("reps"), opt.get("n"), opt.get("warmup_iters", 1)))
+    bv = base.get("pypy_version")
+    ov = opt.get("pypy_version")
+    if bv and ov and bv != ov:
+        print("[warn] binaries report different --version strings:")
+        print("       baseline: %s" % bv.replace("\n", " | "))
+        print("       optim:    %s" % ov.replace("\n", " | "))
+    if cold_run:
+        print("[note] n<8: RUNNING is cold iteration latency, not steady-state speed.")
+    if not jit_log_available:
+        print("[note] jit_log=false: JIT phase metrics are unavailable for this comparison.")
     print("Common benchmarks: %d" % len(common))
 
     # ---- Paired computation -------------------------------------------
-    # The harness runs interleaved A/B/A/B per rep (run_all_interleaved),
-    # so raw[bench][i] for baseline and optim is a MATCHED pair taken
-    # back-to-back under the same thermal/load state.  The correct effect
-    # is therefore paired, not a comparison of two marginal medians:
+    # The harness runs one baseline and one optim sample per rep
+    # (run_all_interleaved), so raw[bench][i] is a MATCHED pair taken
+    # close together under similar thermal/load state.  The correct effect is
+    # therefore paired, not a comparison of two marginal medians:
     #   - point estimate = geomean of per-rep ratios base_i/opt_i
     #     (+ve % => optim faster), scale-robust;
     #   - significance    = paired t on the log-ratios + a sign-consistency
@@ -1034,9 +1138,12 @@ def _compare_two_paths(baseline_path, optim_path):
         ("resume_data",  "Δresume%", "resume_data_med",  "RESUME DATA TIME"),
         ("optimization", "Δopt%",    "optimization_med", "OPTIMIZATION TIME"),
         ("backend",      "Δback%",   "backend_med",      "BACKEND CODEGEN TIME"),
-        ("running",      "Δrun%",    "running_med",      "RUNNING TIME"),
+        ("running",      "Δrun%",    "running_med",
+         "COLD ITERATION TIME" if cold_run else "RUNNING TIME"),
         ("jit_total",    "Δjit%",    "jit_total_med",    "JIT TOTAL"),
     ]
+    if not jit_log_available:
+        METRICS = [m for m in METRICS if m[0] == "running"]
     MED_KEY = dict((rk, mk) for rk, _h, mk, _l in METRICS)
     P = {}
     for rk, _h, _mk, _lbl in METRICS:
@@ -1049,7 +1156,7 @@ def _compare_two_paths(baseline_path, optim_path):
 
     def _classify(b, rk, reliability_guard):
         """-> ('win'|'reg'|'noise', eff%, t).  noise = effect does not
-        clear the paired test, or (running) an unreliable steady arm."""
+        clear the paired test, or (steady running) an unreliable steady arm."""
         ps = P[rk].get(b)
         if ps is None:                       # no raw -> marginal fallback
             mk = MED_KEY[rk]
@@ -1058,7 +1165,7 @@ def _compare_two_paths(baseline_path, optim_path):
             d = pct(sb, so) if isinstance(sb, (int, float)) and \
                 isinstance(so, (int, float)) else float("nan")
             return ("noise", d, float("nan"))
-        if reliability_guard:
+        if reliability_guard and not cold_run:
             sb = base["summary"].get(b, {}); so = opt["summary"].get(b, {})
             if not (sb.get("steady_reliable", True) and
                     so.get("steady_reliable", True)):
@@ -1076,6 +1183,8 @@ def _compare_two_paths(baseline_path, optim_path):
            "Δback%", "Δrun%", "Δjit%"))
 
     def _cell(b, rk):
+        if rk not in P:
+            return "   n/a "
         kind, eff, _t = _classify(b, rk, rk == "running")
         if eff != eff:
             return "   n/a "
@@ -1139,6 +1248,22 @@ def main():
                           "report the cumulative JIT-on-vs-interpreter "
                           "break-even iteration (robust warmup scalar; "
                           "doubles run cost)."))
+    ap.add_argument("--no-jit-log", dest="jit_log", action="store_false",
+                    default=True,
+                    help=("disable PYPYLOG=jit-summary. Use this for "
+                          "steady-state/runtime measurements; JIT phase "
+                          "columns will be NaN."))
+    ap.add_argument("--order", choices=("alternating", "random", "fixed"),
+                    default="alternating",
+                    help=("A/B order for two-binary runs. alternating runs "
+                          "AB,BA,AB...; random shuffles each pair; fixed "
+                          "keeps the old baseline-then-candidate order."))
+    ap.add_argument("--seed", type=int,
+                    help="random seed used by --order=random")
+    ap.add_argument("--cpu", type=int,
+                    help="pin child benchmark processes to this Linux CPU via taskset")
+    ap.add_argument("--cooldown", type=float, default=0.0,
+                    help="seconds to sleep between child benchmark processes")
     ap.add_argument("--reps", type=int, default=10,
                     help="reps per (binary, benchmark) (default: 10)")
     ap.add_argument("-n", type=int, default=50,
