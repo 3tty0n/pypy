@@ -3434,8 +3434,8 @@ class Specializer(object):
         lines.append("_cond = int(_v0 %s _v1)" % py_op)
         lines.append("if isinstance(_b0, Const) and isinstance(_b1, Const):")
         lines.append("    pc = self.pc")
-        const_true_target = target_pc if py_op == '!=' else self.work_list.pc_to_nextpc[self.orig_pc]
-        const_false_target = self.work_list.pc_to_nextpc[self.orig_pc] if py_op == '!=' else target_pc
+        const_true_target = self.work_list.pc_to_nextpc[self.orig_pc]
+        const_false_target = target_pc
         const_true_spec = self.work_list.specialize_pc(
             self.constant_registers, const_true_target)
         const_false_spec = self.work_list.specialize_pc(
@@ -3583,18 +3583,8 @@ class Specializer(object):
 
         box0 = self._get_as_box_nosync(arg0)
         box1 = self._get_as_box_nosync(arg1)
-        same_box_true = rop_name in ("FLOAT_LE", "FLOAT_EQ", "FLOAT_GE")
-        if same_box_true:
-            same_box_pc = self.work_list.pc_to_nextpc[self.orig_pc]
-        else:
-            same_box_pc = target_pc
-        same_box_spec = self.work_list.specialize_pc(
-            self.constant_registers, same_box_pc)
         lines.append("_b0 = %s" % box0)
         lines.append("_b1 = %s" % box1)
-        lines.append("if _b0 is _b1:")
-        lines.append("    pc = %s" % (same_box_spec.spec_pc,))
-        lines.append("    continue")
         lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
         lines.append("_v1 = %s" % self._get_as_unboxed_nosync(arg1))
         lines.append("_cond = int(_v0 %s _v1)" % py_op)

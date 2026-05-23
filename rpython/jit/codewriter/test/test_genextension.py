@@ -1542,6 +1542,23 @@ pc = 123
 continue"""
 
 
+def test_goto_if_not_ptr_ne_const_path_falls_through_on_true():
+    r0, r1, i2 = Register('ref', 0), Register('ref', 1), Register('int', 2)
+    L1 = TLabel('L1')
+    insn = ('goto_if_not_ptr_ne', r0, r1, L1)
+    pc_to_insn = {5: insn, 17: ('int_return', i2), 6: ('int_return', i2)}
+    work_list = WorkList(pc_to_insn, label_to_pc={'L1': 17},
+                         pc_to_nextpc={5: 6})
+
+    s = work_list.specialize_pc(set(), 5).make_code()
+    assert "if isinstance(_b0, Const) and isinstance(_b1, Const):" in s
+    assert """\
+    if _cond:
+        pc = 6
+    else:
+        pc = 17""" in s
+
+
 def test_int_between():
     i0, i1, i2, i3 = Register('int', 0), Register('int', 1), Register('int', 2), Register('int', 3)
     insn = ('int_between', i0, i1, i2, '->', i3)
@@ -1740,6 +1757,20 @@ def test_goto_if_not_float_lt():
     assert 'rop.FLOAT_LT' in s
     assert 'record2_int' in s
     assert 'self.opimpl_goto_if_not(condbox' in s
+
+
+def test_goto_if_not_float_comparison_keeps_same_box_recording():
+    f0, i2 = Register('float', 0), Register('int', 2)
+    L1 = TLabel('L1')
+    insn = ('goto_if_not_float_eq', f0, f0, L1)
+    pc_to_insn = {5: insn, 17: ('int_add', i2, i2, '->', i2), 6: ('int_return', i2)}
+    work_list = WorkList(pc_to_insn, label_to_pc={'L1': 17}, pc_to_nextpc={5: 6})
+
+    insn_specializer = work_list.specialize_pc(set(), 5)
+    s = insn_specializer.make_code()
+    assert "if _b0 is _b1:" not in s
+    assert "record2_int(rop.FLOAT_EQ" in s
+    assert "self.opimpl_goto_if_not(condbox, 17, 5, replace=False)" in s
 
 
 def test_int_guard_value():
