@@ -174,9 +174,9 @@ class Frame(object):
 
     @jit.dont_look_inside
     def is_true(self, dummy):
+        w_x = self.pop()
         if dummy:
             return True
-        w_x = self.pop()
         return w_x.is_true()
 
     def _is_true(self):
@@ -383,9 +383,6 @@ class Frame(object):
 
     @jit.dont_look_inside
     def FRAME_RESET(self, o, l, n, dummy):
-        if dummy:
-            return
-
         ret = self.stack[self.stackpos - n - 1]
         old_base = self.stackpos - n
         new_base = self.stackpos - o - n - l - 1

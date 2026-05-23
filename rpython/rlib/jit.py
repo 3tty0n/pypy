@@ -268,14 +268,10 @@ def not_in_trace(func):
 def enable_shallow_tracing(func):
     "Wrap func as a handler_<func> shallow-tracing primitive."
     func._always_inline_ = True
-
     @dont_look_inside
     def shallow_hanlder(*args):
-        dummy = args[-1]
-        args = args[:-2]
-        if dummy:
-            return
-        return func(*args)
+        real_args = args[:-2]
+        return func(*real_args)
 
     shallow_hanlder.func_name = "handler_" + func.func_name
     shallow_hanlder.oopspec = "jit.enable_shallow_tracing()"

@@ -940,30 +940,25 @@ class OptTraceSplit(Optimizer):
                 lastarg = op.getarg(numargs - 1)
                 if isinstance(lastarg, ConstInt) and lastarg.getint() == 1:
                     op.setarg(numargs - 1, ConstInt(0))
-            elif endswith(name, "Frame.is_true") or endswith(name, ".is_true"):
-                lastarg = op.getarg(numargs - 1)
-                if isinstance(lastarg, ConstInt) and lastarg.getint() == 1:
-                    op.setarg(numargs - 1, ConstInt(0))
-                    self._pending_is_true_frame = op.getarg(1)
-            elif (self._shift_after_is_true_frame is not None and
-                    (endswith(name, "Frame.FRAME_RESET") or
-                     endswith(name, ".FRAME_RESET"))):
+            elif (endswith(name, "Frame.is_true") or
+                  endswith(name, ".is_true") or
+                  endswith(name, "Frame.FRAME_RESET") or
+                  endswith(name, ".FRAME_RESET") or
+                  endswith(name, "Frame.POP") or
+                  endswith(name, ".POP") or
+                  endswith(name, "Frame.DROP") or
+                  endswith(name, ".DROP") or
+                  endswith(name, "Frame.PUSH") or
+                  endswith(name, ".PUSH") or
+                  endswith(name, "Frame.RET") or
+                  endswith(name, ".RET")):
                 lastarg = op.getarg(numargs - 1)
                 if isinstance(lastarg, ConstInt) and lastarg.getint() == 1:
                     op.setarg(numargs - 1, ConstInt(0))
             if endswith(name, "emit_ptr_eq"):
                 self._slow_path_emit_ptr_eq = op
         elif opnum in (rop.GUARD_VALUE, rop.GUARD_TRUE, rop.GUARD_FALSE):
-            if (opnum == rop.GUARD_TRUE and
-                    op.numargs() >= 1 and
-                    op.getarg(0) is not None and
-                    op.getarg(0).getopnum() == rop.CALL_I and
-                    self._pending_is_true_frame is not None):
-                self._activate_after_is_true_shift(self._pending_is_true_frame)
-                self._pending_is_true_frame = None
             self._mark_guard(op)
-        if self._shift_after_is_true_frame is not None:
-            self._adjust_after_is_true_pop(op)
         self._newoperations.append(op)
 
     def _shift_const_arg_down(self, op, index):
