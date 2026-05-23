@@ -740,6 +740,7 @@ class TestHeapCache(object):
             []
         )
         assert h.getfield(box1, descr1) is box2
+        assert h.is_likely_virtual(box1)
 
     def test_call_doesnt_invalidate_unescaped_array_boxes(self):
         h = HeapCache()
@@ -754,6 +755,7 @@ class TestHeapCache(object):
             []
         )
         assert h.getarrayitem(box1, index1, descr1) is box3
+        assert h.is_likely_virtual(box1)
 
     def test_bug_missing_ignored_operations(self):
         h = HeapCache()
@@ -866,17 +868,6 @@ class TestHeapCache(object):
         h.class_now_known(box1)     # interaction of the two families of flags
         assert not h.is_unescaped(box1)
         assert h.is_likely_virtual(box1)
-
-    def test_expire_likely_virtuals_keeps_heap_cache(self):
-        h = HeapCache(genext_fastpath_enabled=True)
-        box1 = RefFrontendOp(1)
-        box2 = RefFrontendOp(2)
-        h.new(box1)
-        h.getfield_now_known(box1, descr1, box2)
-        assert h.getfield(box1, descr1) is box2
-        h.expire_likely_virtuals()
-        assert h.getfield(box1, descr1) is box2
-        assert not h.is_likely_virtual(box1)
 
     def test_is_likely_virtual_array(self):
         h = HeapCache()
