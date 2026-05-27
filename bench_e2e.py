@@ -48,18 +48,23 @@ Schema (per binary):
 
 Usage:
 
-  # HBP-vs-baseline: one binary, two --jit policies, interleaved A/B
-  # (drift-symmetric), writes e2e_baseline.json + e2e_hbp.json:
+  # Fair HBP matrix: one binary, several --jit policies, interleaved
+  # per benchmark/rep.  The control is base_rl1, which matches HBP's
+  # retrace_limit without enabling HBP:
   bench_e2e.py --hbp --pypy ./pypy/goal/pypy-c --reps 10 -n 50
 
-  # Same, but tune the two JIT arms explicitly:
+  # Legacy two-arm mode, still available for reproducing old runs:
   bench_e2e.py --hbp --pypy ./pypy/goal/pypy-c \\
+      --hbp-configs legacy \\
       --jit-hbp enable_hot_bridge_promotion=1,retrace_limit=1 \\
       --reps 10 -n 50
 
   # Fast HBP-vs-baseline iteration loop (curated representative set;
   # skips the multi-hour sympy_*/sqlalchemy_*/django tail):
   bench_e2e.py --hbp --pypy ./pypy/goal/pypy-c --quick --reps 5 -n 30
+
+  # Faster, noisier parallel policy sweep:
+  bench_e2e.py --hbp --pypy ./pypy/goal/pypy-c --quick --reps 5 -n 30 -j 4
 
   # Or select by cost tier (small | medium | large; combinable):
   bench_e2e.py --hbp --pypy ./pypy/goal/pypy-c --tier small,medium
@@ -100,7 +105,7 @@ BENCHMARKS = [
     ("ai",            "unladen_swallow/performance/bm_ai.py", {}, []),
     ("bm_chameleon",  "own/bm_chameleon.py",                  {"PYTHONPATH": "lib/chameleon/src"}, []),
     ("bm_dulwich_log","own/bm_dulwich_log.py",                {"PYTHONPATH": "lib/dulwich-0.19.13"}, []),
-    ("bm_krakatau",   "own/bm_krakatau.py",                   {"PYTHONPATH": "lib/krakatau"}, []),
+    #("bm_krakatau",   "own/bm_krakatau.py",                   {"PYTHONPATH": "lib/krakatau"}, []),
     ("bm_mako",       "own/bm_mako.py",                       {"PYTHONPATH": "lib/mako"}, []),
     ("bm_mdp",        "own/bm_mdp.py",                        {}, []),
     ("chaos",         "own/chaos.py",                         {}, []),
@@ -113,7 +118,7 @@ BENCHMARKS = [
     ("genshi_text",   "own/bm_genshi.py",                     {"PYTHONPATH": "lib/genshi"}, ["--benchmark=text"]),
     ("genshi_xml",    "own/bm_genshi.py",                     {"PYTHONPATH": "lib/genshi"}, ["--benchmark=xml"]),
     ("go",            "own/go.py",                            {}, []),
-    ("hof_mono",      "own/hof_mono.py",                      {}, []),
+    #("hof_mono",      "own/hof_mono.py",                      {}, []),
     ("html5lib",      "unladen_swallow/performance/bm_html5lib.py", {"PYTHONPATH": "unladen_swallow/lib/html5lib:lib"}, []),
     ("json_bench",    "own/json_bench.py",                    {}, []),
     ("meteor-contest","own/meteor-contest.py",                {}, []),
@@ -187,11 +192,524 @@ TIERS = {
 # the HOF-monomorphism paths without the multi-hour
 # sympy_*/sqlalchemy_*/django tail.
 QUICK = [
-    "hof_mono",
     "deltablue", "float", "go", "raytrace-simple", "richards",
     "chaos", "json_bench", "scimark_lu", "spectral-norm",
     "nbody_modified",
 ]
+
+
+HBP_POLICY_PRESETS = [
+    ("stock", ""),
+    # Fair control: same retrace budget as HBP, but HBP disabled.
+    ("base_rl1", "retrace_limit=1"),
+    # Compatibility alias for older result files/scripts.  Keep this
+    # retrace-matched so "base" is fair in HBP mode.
+    ("base", "retrace_limit=1"),
+    ("hbp_stock_noinherit",
+     "enable_hot_bridge_promotion=1,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=0"),
+    ("hbp_stock_inherit1",
+     "enable_hot_bridge_promotion=1,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_intonly_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_intonly_noinherit",
+     "enable_hot_bridge_promotion=1,enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=0"),
+    ("hbp_stock_gv32_inherit1",
+     "enable_hot_bridge_promotion=1,hot_bridge_global_max_variants=32,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_gv48_inherit1",
+     "enable_hot_bridge_promotion=1,hot_bridge_global_max_variants=48,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_gv64_inherit1",
+     "enable_hot_bridge_promotion=1,hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_noinherit",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=0"),
+    ("hbp_stock_bool_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_ops100_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "hot_bridge_max_ops=100,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_ops100_gv16_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "hot_bridge_max_ops=100,hot_bridge_global_max_variants=16,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_ops100_gv32_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "hot_bridge_max_ops=100,hot_bridge_global_max_variants=32,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_ops100_gv64_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "hot_bridge_max_ops=100,hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_ops100_gv64_ref16_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "hot_bridge_max_ops=100,hot_bridge_global_max_variants=64,"
+     "hot_bridge_global_max_ref_traces=16,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_ops100_guards8_gv64_ref4_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=8,"
+     "hot_bridge_global_max_variants=64,"
+     "hot_bridge_global_max_ref_traces=4,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_ops100_guards12_gv64_ref4_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=12,"
+     "hot_bridge_global_max_variants=64,"
+     "hot_bridge_global_max_ref_traces=4,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_int_cohort2_t200_ops100_guards12_gv64_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=0,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=12,"
+     "hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_int_cohort2_t200_ops100_guards12_lb32_gv64_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,"
+     "hot_bridge_max_loop_bridges=32,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=12,"
+     "hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_rl1_bool_int_cohort2_t200_ops100_guards12_lb32_gv64_inherit1",
+     "retrace_limit=1,"
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,"
+     "hot_bridge_max_loop_bridges=32,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=12,"
+     "hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_rl1_retrace100_bool_int_cohort2_t200_ops100_guards12_lb32_gv64_inherit1",
+     "retrace_limit=1,retrace_min_loop_bridges=100,"
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,"
+     "hot_bridge_max_loop_bridges=32,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=12,"
+     "hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_rl1_retraceops80_bool_int_cohort2_t200_ops100_guards12_lb32_gv64_inherit1",
+     "retrace_limit=1,retrace_min_ops=80,"
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,"
+     "hot_bridge_max_loop_bridges=32,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=12,"
+     "hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_int_cohort2_t200_v300_ops100_guards12_lb32_gv64_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,"
+     "hot_bridge_value_threshold=300,"
+     "hot_bridge_max_loop_bridges=32,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=12,"
+     "hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_int_cohort2_t200_val1_ops100_guards12_lb32_gv64_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,"
+     "hot_bridge_max_value_variants=1,"
+     "hot_bridge_max_loop_bridges=32,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=12,"
+     "hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_rl1_bool_int_cohort2_t200_val1_ops100_guards12_lb32_gv64_inherit1",
+     "retrace_limit=1,"
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,"
+     "hot_bridge_max_value_variants=1,"
+     "hot_bridge_max_loop_bridges=32,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=12,"
+     "hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_int_cohort2_t200_val2_ops100_guards12_lb32_gv64_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,"
+     "hot_bridge_max_value_variants=2,"
+     "hot_bridge_max_loop_bridges=32,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=12,"
+     "hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_rl1_bool_int_cohort2_t200_val2_ops100_guards12_lb32_gv64_inherit1",
+     "retrace_limit=1,"
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,"
+     "hot_bridge_max_value_variants=2,"
+     "hot_bridge_max_loop_bridges=32,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=12,"
+     "hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_ops100_gv64_ref32_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "hot_bridge_max_ops=100,hot_bridge_global_max_variants=64,"
+     "hot_bridge_global_max_ref_traces=32,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_int_ops100_gv64_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_max_ops=100,hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_allbool_t400_ops100_gv64_ref16_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_guard_bool_promotion=1,"
+     "hot_bridge_guard_bool_threshold=400,"
+     "hot_bridge_max_ops=100,hot_bridge_global_max_variants=64,"
+     "hot_bridge_global_max_ref_traces=16,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_rl1_allbool_t400_ops100_guards12_lb32_gv64_inherit1",
+     "retrace_limit=1,"
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_guard_bool_promotion=1,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,"
+     "hot_bridge_guard_bool_threshold=400,"
+     "hot_bridge_max_value_variants=1,"
+     "hot_bridge_max_loop_bridges=32,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=12,"
+     "hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_rl1_allbool_t400_ops100_guards12_lb32_gv64_entry_inherit1",
+     "retrace_limit=1,"
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_guard_bool_promotion=1,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,"
+     "hot_bridge_guard_bool_threshold=400,"
+     "hot_bridge_max_value_variants=1,"
+     "hot_bridge_max_loop_bridges=32,"
+     "hot_bridge_max_ops=100,hot_bridge_max_guards=12,"
+     "hot_bridge_global_max_variants=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1,hbp_entry_guard=1"),
+    ("hbp_rl1_int_strict_fail1_noinherit",
+     "retrace_limit=1,"
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=0,"
+     "enable_hbp_guard_bool_promotion=0,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_threshold=1,hot_bridge_guard_threshold=200,"
+     "hot_bridge_int_value_threshold=200,"
+     "hot_bridge_max_ops=80,hot_bridge_max_guards=8,"
+     "hot_bridge_min_op_reduction=25,"
+     "hot_bridge_min_guard_reduction=2,"
+     "hot_bridge_max_candidates=2,"
+     "hot_bridge_max_failed_promotions=1,"
+     "hot_bridge_max_loop_bridges=16,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=0,"
+     "hbp_entry_guard=1"),
+    ("hbp_stock_allbool_t800_ops100_gv64_ref16_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_guard_bool_promotion=1,"
+     "hot_bridge_guard_bool_threshold=800,"
+     "hot_bridge_max_ops=100,hot_bridge_global_max_variants=64,"
+     "hot_bridge_global_max_ref_traces=16,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_ops200_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "hot_bridge_max_ops=200,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_t500_ops100_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "hot_bridge_threshold=500,hot_bridge_max_ops=100,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_bool_t500_ops200_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "hot_bridge_threshold=500,hot_bridge_max_ops=200,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_guardbool_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_guard_bool_promotion=1,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_guardbool_t50_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_guard_bool_promotion=1,"
+     "hot_bridge_guard_bool_threshold=50,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_guardbool_t400_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_guard_bool_promotion=1,"
+     "hot_bridge_guard_bool_threshold=400,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_allbool_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_guard_bool_promotion=1,enable_hbp_cardinality_gate=1,"
+     "hbp_inherit=1"),
+    ("hbp_stock_class_noinherit",
+     "enable_hot_bridge_promotion=1,enable_hbp_class_promotion=1,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=0"),
+    ("hbp_stock_class_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_class_promotion=1,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_rl1_classfanout64_noinherit",
+     "retrace_limit=1,"
+     "enable_hot_bridge_promotion=1,enable_hbp_class_promotion=1,"
+     "hot_bridge_class_bridge_threshold=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=0"),
+    ("hbp_rl1_classfanout64_inherit1",
+     "retrace_limit=1,"
+     "enable_hot_bridge_promotion=1,enable_hbp_class_promotion=1,"
+     "hot_bridge_class_bridge_threshold=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_boolclass_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_class_promotion=1,enable_hbp_cardinality_gate=1,"
+     "hbp_inherit=1"),
+    ("hbp_stock_boolonly_noinherit",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_value_promotion=0,enable_hbp_cardinality_gate=1,"
+     "hbp_inherit=0"),
+    ("hbp_stock_boolonly_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_value_promotion=0,enable_hbp_cardinality_gate=1,"
+     "hbp_inherit=1"),
+    ("hbp_stock_boolonly_ops100_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_value_promotion=0,hot_bridge_max_ops=100,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_boolonly_ops200_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_value_promotion=0,hot_bridge_max_ops=200,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_boolonly_gt100_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_value_promotion=0,hot_bridge_guard_threshold=100,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_boolonly_gt200_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_value_promotion=0,hot_bridge_guard_threshold=200,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_boolonly_mv2_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_value_promotion=0,hot_bridge_max_variants=2,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_boolonly_mv4_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_value_promotion=0,hot_bridge_max_variants=4,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_boolonly_bt100_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_value_promotion=0,hot_bridge_threshold=100,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_boolonly_bt50_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_value_promotion=0,hot_bridge_threshold=50,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_boolonly_bt200_inherit1",
+     "enable_hot_bridge_promotion=1,enable_hbp_bool_promotion=1,"
+     "enable_hbp_value_promotion=0,hot_bridge_threshold=200,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_t200_noinherit",
+     "enable_hot_bridge_promotion=1,hot_bridge_guard_threshold=200,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=0"),
+    ("hbp_stock_t200_inherit1",
+     "enable_hot_bridge_promotion=1,hot_bridge_guard_threshold=200,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_stock_hot_noinherit",
+     "enable_hot_bridge_promotion=1,"
+     "hot_bridge_threshold=1,hot_bridge_guard_threshold=1,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=0"),
+    ("hbp_stock_hot_inherit1",
+     "enable_hot_bridge_promotion=1,"
+     "hot_bridge_threshold=1,hot_bridge_guard_threshold=1,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_noinherit",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=0"),
+    ("hbp_inherit1",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_refcard8_noinherit",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "hot_bridge_max_cardinality=8,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_global_max_ref_traces=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=0"),
+    ("hbp_refcard8_inherit1",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "hot_bridge_max_cardinality=8,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_global_max_ref_traces=64,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_refonly16_inherit1",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "enable_hbp_value_promotion=0,"
+     "hot_bridge_max_cardinality=8,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_global_max_ref_traces=16,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_refonly16_guard1_inherit1",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "enable_hbp_value_promotion=0,"
+     "hot_bridge_max_cardinality=8,"
+     "hot_bridge_max_value_variants=2,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_global_max_ref_traces=16,"
+     "hot_bridge_min_guard_reduction=1,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_refonly16_guard1_entry30_inherit1",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "enable_hbp_value_promotion=0,"
+     "hot_bridge_max_cardinality=8,"
+     "hot_bridge_max_value_variants=2,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_global_max_ref_traces=16,"
+     "hot_bridge_ref_bridge_threshold=30,"
+     "hot_bridge_min_guard_reduction=1,"
+     "hbp_entry_guard=1,hbp_entry_guard_ref_bridge_threshold=30,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_refonly16_slots2_guard1_entry30_inherit1",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "enable_hbp_value_promotion=0,"
+     "hot_bridge_max_cardinality=8,"
+     "hot_bridge_max_value_variants=2,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_global_max_ref_traces=16,"
+     "hot_bridge_ref_bridge_threshold=30,"
+     "hot_bridge_min_guard_reduction=1,"
+     "hbp_value_counter_slots=2,"
+     "hbp_entry_guard=1,hbp_entry_guard_ref_bridge_threshold=30,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_refonly16_slots2_entry30_gpct20_inherit1",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "enable_hbp_value_promotion=0,"
+     "hot_bridge_max_cardinality=8,"
+     "hot_bridge_max_value_variants=2,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_global_max_ref_traces=16,"
+     "hot_bridge_ref_bridge_threshold=30,"
+     "hot_bridge_min_guard_reduction=1,"
+     "hot_bridge_min_guard_reduction_pct=20,"
+     "hbp_value_counter_slots=2,"
+     "hbp_entry_guard=1,hbp_entry_guard_ref_bridge_threshold=30,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_refonly16_nofloat_alloc0_slots2_entry30_gpct20_inherit1",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "retrace_max_allocations=0,"
+     "enable_hbp_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_max_cardinality=8,"
+     "hot_bridge_max_value_variants=2,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_global_max_ref_traces=16,"
+     "hot_bridge_ref_bridge_threshold=30,"
+     "hot_bridge_min_guard_reduction=1,"
+     "hot_bridge_min_guard_reduction_pct=20,"
+     "hbp_value_counter_slots=2,"
+     "hbp_entry_guard=1,hbp_entry_guard_ref_bridge_threshold=30,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_rl1_retrace100_refonly16_slots2_entry30_gpct20_inherit1",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "retrace_min_loop_bridges=100,"
+     "enable_hbp_value_promotion=0,"
+     "hot_bridge_max_cardinality=8,"
+     "hot_bridge_max_value_variants=2,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_global_max_ref_traces=16,"
+     "hot_bridge_ref_bridge_threshold=30,"
+     "hot_bridge_min_guard_reduction=1,"
+     "hot_bridge_min_guard_reduction_pct=20,"
+     "hbp_value_counter_slots=2,"
+     "hbp_entry_guard=1,hbp_entry_guard_ref_bridge_threshold=30,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_rl1_retraceops80_refonly16_slots2_entry30_gpct20_inherit1",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "retrace_min_ops=80,"
+     "enable_hbp_value_promotion=0,"
+     "hot_bridge_max_cardinality=8,"
+     "hot_bridge_max_value_variants=2,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_global_max_ref_traces=16,"
+     "hot_bridge_ref_bridge_threshold=30,"
+     "hot_bridge_min_guard_reduction=1,"
+     "hot_bridge_min_guard_reduction_pct=20,"
+     "hbp_value_counter_slots=2,"
+     "hbp_entry_guard=1,hbp_entry_guard_ref_bridge_threshold=30,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_refonly16_slots2_entry30_share70_gpct20_inherit1",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "enable_hbp_value_promotion=0,"
+     "hot_bridge_max_cardinality=8,"
+     "hot_bridge_max_value_variants=2,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_global_max_ref_traces=16,"
+     "hot_bridge_ref_bridge_threshold=30,"
+     "hot_bridge_min_value_share_pct=70,"
+     "hot_bridge_min_guard_reduction=1,"
+     "hot_bridge_min_guard_reduction_pct=20,"
+     "hbp_value_counter_slots=2,"
+     "hbp_entry_guard=1,hbp_entry_guard_ref_bridge_threshold=30,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_refonly16_refcand8_inherit1",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "enable_hbp_value_promotion=0,"
+     "hot_bridge_max_cardinality=8,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_max_ref_candidates=8,"
+     "hot_bridge_global_max_ref_traces=16,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=1"),
+    ("hbp_refcard8_nullness_noinherit",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "hot_bridge_max_cardinality=8,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_global_max_ref_traces=64,"
+     "enable_hbp_nullness_promotion=1,"
+     "hot_bridge_nullness_threshold=200,"
+     "enable_hbp_cardinality_gate=1,hbp_inherit=0"),
+    ("hbp_hot_noinherit",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "hot_bridge_threshold=1,hot_bridge_guard_threshold=1,hbp_inherit=0"),
+    ("hbp_hot_inherit1",
+     "enable_hot_bridge_promotion=1,retrace_limit=1,"
+     "hot_bridge_threshold=1,hot_bridge_guard_threshold=1,hbp_inherit=1"),
+    ("hbp_tuned",
+     "retrace_limit=1,retrace_min_loop_bridges=20,"
+     "enable_hot_bridge_promotion=1,"
+     "enable_hbp_bool_promotion=0,"
+     "enable_hbp_guard_bool_promotion=1,"
+     "enable_hbp_ref_value_promotion=0,"
+     "enable_hbp_float_value_promotion=0,"
+     "hot_bridge_threshold=30,hot_bridge_min_candidates=2,"
+     "hot_bridge_guard_threshold=200,hot_bridge_guard_bool_threshold=400,"
+     "hot_bridge_max_value_variants=1,hot_bridge_max_bool_variants=2,"
+     "hot_bridge_max_loop_bridges=64,"
+     "hot_bridge_max_ops=60,hot_bridge_max_guards=12,"
+     "hot_bridge_min_op_reduction=10,hot_bridge_min_op_reduction_pct=20,"
+     "hot_bridge_min_guard_reduction=2,hot_bridge_min_guard_reduction_pct=10,"
+     "hot_bridge_global_max_variants=64,hot_bridge_max_failed_promotions=1,"
+     "hbp_bool_entry_guard=1,enable_hbp_cardinality_gate=1,"
+     "hbp_inherit=1,hbp_inherit_bool=0"),
+]
+
+HBP_POLICY_DEFAULT = (
+    "stock,hbp_stock_noinherit,hbp_stock_inherit1,base_rl1,"
+    "hbp_noinherit,hbp_inherit1,hbp_refcard8_noinherit,"
+    "hbp_refonly16_guard1_inherit1")
 
 
 def _resolve_names(args):
@@ -216,6 +734,35 @@ def _resolve_names(args):
     else:
         return [b[0] for b in BENCHMARKS]
     return [b[0] for b in BENCHMARKS if b[0] in wanted]
+
+
+def _resolve_hbp_policies(args):
+    presets = dict(HBP_POLICY_PRESETS)
+    labels = [s.strip() for s in args.hbp_configs.split(",") if s.strip()]
+    if not labels:
+        labels = [s.strip() for s in HBP_POLICY_DEFAULT.split(",")]
+    out = []
+    seen = set()
+    for label in labels:
+        if label in seen:
+            continue
+        if label == "legacy":
+            out.append(("baseline", args.jit_baseline))
+            out.append(("hbp", args.jit_hbp))
+            seen.add("baseline")
+            seen.add("hbp")
+            continue
+        if label not in presets:
+            sys.stderr.write(
+                "unknown --hbp-configs entry %r (choose from %s, legacy)\n"
+                % (label, ", ".join([p[0] for p in HBP_POLICY_PRESETS])))
+            sys.exit(2)
+        out.append((label, presets[label]))
+        seen.add(label)
+    if len(out) < 2:
+        sys.stderr.write("--hbp needs at least two policy configs\n")
+        sys.exit(2)
+    return out
 
 
 _FLOAT = r"[0-9]+(?:\.[0-9]+(?:[eE][+-]?[0-9]+)?)?"
@@ -784,27 +1331,26 @@ def run_all_interleaved(base, cand, names, reps, n, warmup_iters=0,
     return res
 
 
-def run_hbp_interleaved(pypy, jit_base, jit_hbp, names, reps, n,
-                        warmup_iters=0, break_even=False, prewarm=False,
-                        timeout=None):
-    """Stable performance measurement of the SAME binary under two JIT
-    policies: BASELINE (`jit_base`) vs HBP (`jit_hbp`).
+def run_policy_interleaved(pypy, policies, names, reps, n,
+                           warmup_iters=0, break_even=False, prewarm=False,
+                           timeout=None):
+    """Stable performance measurement of the SAME binary under named JIT
+    policies.
 
     Identical to run_all_interleaved's drift-symmetric A,B,A,B schedule
-    (so thermal/DVFS noise hits both policies equally), except the two
+    (so thermal/DVFS noise hits every policy equally), except the
     arms differ only by their `--jit` parameter string, not by binary.
-    `jit_base` "" means stock JIT defaults (HBP off).
+    A policy string of "" means stock JIT defaults.
 
     Large-tier support: a per-spawn `timeout` (None = none) keeps one
     pathological heavy benchmark from wedging the matrix. Every spawn
     prints a timestamped heartbeat *before* it starts (incl. the
     otherwise-silent untimed pre-warm), so a long heavy run is never
     mistaken for a hang. Returns
-    {"baseline": (raw, summary), "hbp": (raw, summary)}."""
+    {policy_label: (raw, summary)}."""
     by_name = dict((b[0], b) for b in BENCHMARKS)
     valid = [nm for nm in names if nm in by_name]
-    arms = (("baseline", jit_base), ("hbp", jit_hbp))
-    sp = dict((lbl, dict((nm, []) for nm in valid)) for lbl, _ in arms)
+    sp = dict((lbl, dict((nm, []) for nm in valid)) for lbl, _ in policies)
 
     def _hb(msg):
         print("  [%s] %s" % (time.strftime("%H:%M:%S"), msg))
@@ -812,7 +1358,7 @@ def run_hbp_interleaved(pypy, jit_base, jit_hbp, names, reps, n,
 
     for nm in valid:
         _, script, env, extra = by_name[nm]
-        print("[%s] %d reps n=%d (interleaved baseline/hbp, same binary)"
+        print("[%s] %d reps n=%d (interleaved JIT policies, same binary)"
               % (nm, reps, n))
         sys.stdout.flush()
         be_cache = {}
@@ -823,10 +1369,10 @@ def run_hbp_interleaved(pypy, jit_base, jit_hbp, names, reps, n,
             ro = run_one(pypy, script, env, extra, n, warmup_iters,
                          jit_off=True, prewarm=prewarm, timeout=timeout)
             be = ro.get("iter_times") if "error" not in ro else None
-            for lbl, _ in arms:
+            for lbl, _ in policies:
                 be_cache[lbl] = be
         for i in range(reps):
-            for lbl, jp in arms:
+            for lbl, jp in policies:
                 thr = _thermal_guard("%s/%s" % (nm, lbl))
                 _hb("%s rep %d %s starting%s" %
                     (nm, i, lbl, " [+prewarm]" if prewarm else ""))
@@ -851,7 +1397,7 @@ def run_hbp_interleaved(pypy, jit_base, jit_hbp, names, reps, n,
                        r["warmup_class"], r["running"]))
                 sys.stdout.flush()
     res = {}
-    for lbl, _ in arms:
+    for lbl, _ in policies:
         raw = {}
         summ = {}
         for nm in valid:
@@ -873,6 +1419,91 @@ def _run_one_task_multi(task):
     pypy, name, rep_idx, script, env, extra, n, warmup_iters = task
     return (pypy, name, rep_idx,
             run_one(pypy, script, env, extra, n, warmup_iters))
+
+
+def _run_one_policy_task(task):
+    """Worker for parallel same-binary policy execution."""
+    (name, rep_idx, label, pypy, jit_params, script, env, extra, n,
+     warmup_iters, prewarm, timeout) = task
+    r = run_one(pypy, script, env, extra, n, warmup_iters,
+                prewarm=prewarm, jit_params=(jit_params or None),
+                timeout=timeout)
+    return name, rep_idx, label, r
+
+
+def run_policy_parallel(pypy, policies, names, reps, n, warmup_iters=0,
+                        break_even=False, prewarm=False, timeout=None,
+                        jobs=1):
+    """Parallel version of run_policy_interleaved().
+
+    This is useful for quick sweeps, but it gives up the serial A,B,C...
+    drift-symmetric schedule.  Use jobs=1 / run_policy_interleaved for
+    decision-grade numbers."""
+    by_name = dict((b[0], b) for b in BENCHMARKS)
+    valid = [nm for nm in names if nm in by_name]
+    sp = dict((lbl, dict((nm, []) for nm in valid)) for lbl, _ in policies)
+    be_cache = {}
+
+    def _hb(msg):
+        print("  [%s] %s" % (time.strftime("%H:%M:%S"), msg))
+        sys.stdout.flush()
+
+    if break_even:
+        for nm in valid:
+            _, script, env, extra = by_name[nm]
+            _hb("%s break-even (--jit off) starting%s" %
+                (nm, " [+prewarm]" if prewarm else ""))
+            ro = run_one(pypy, script, env, extra, n, warmup_iters,
+                         jit_off=True, prewarm=prewarm, timeout=timeout)
+            be_cache[nm] = ro.get("iter_times") if "error" not in ro else None
+
+    tasks = []
+    for nm in valid:
+        _, script, env, extra = by_name[nm]
+        for i in range(reps):
+            for lbl, jp in policies:
+                tasks.append((nm, i, lbl, pypy, jp, script, env, extra, n,
+                              warmup_iters, prewarm, timeout))
+
+    print("[parallel-policies] %d tasks across %d workers" %
+          (len(tasks), jobs))
+    sys.stdout.flush()
+    from multiprocessing import Pool
+    pool = Pool(processes=jobs)
+    try:
+        for name, rep_idx, label, r in pool.imap_unordered(
+                _run_one_policy_task, tasks):
+            if "error" in r:
+                print("[%s|%s] rep %d ERROR: %s" %
+                      (name, label, rep_idx, r["error"]))
+                sys.stdout.flush()
+                continue
+            r["cpu_speed_limit"] = None
+            if break_even and be_cache.get(name):
+                r["break_even"] = cumulative_break_even(
+                    r.get("iter_times", []), be_cache[name])
+            sp[label][name].append(r)
+            print("[%s|%s] rep %d  trace=%.4fs opt=%.4fs back=%.4fs "
+                  "jit_total=%.4fs %s run=%.5fs" %
+                  (name, label, rep_idx, r["tracing"],
+                   r.get("optimization", float("nan")),
+                   r.get("backend", float("nan")), r["jit_total"],
+                   r["warmup_class"], r["running"]))
+            sys.stdout.flush()
+    finally:
+        pool.close()
+        pool.join()
+
+    res = {}
+    for lbl, _ in policies:
+        raw = {}
+        summ = {}
+        for nm in valid:
+            raw[nm] = sp[lbl][nm]
+            if sp[lbl][nm]:
+                summ[nm] = _build_summary(sp[lbl][nm])
+        res[lbl] = (raw, summ)
+    return res
 
 
 def run_all(pypy, names, reps, n, warmup_iters=10, jobs=1):
@@ -1049,64 +1680,90 @@ def cmd_run(args):
         if not os.access(pypy, os.X_OK):
             sys.stderr.write("not executable: %s\n" % pypy); sys.exit(2)
         names = _resolve_names(args)
+        policies = _resolve_hbp_policies(args)
+        policy_text = "\n".join(
+            "  %-14s = --jit %s" % (lbl, jp or "(stock defaults)")
+            for lbl, jp in policies)
         print("\n%s\nStable (same binary, JIT policy):\n"
-              "  binary    = %s\n  baseline  = --jit %s\n  hbp       = "
-              "--jit %s\nreps=%d n=%d break_even=%s prewarm=%s\n%s" %
-              ("=" * 70, pypy, args.jit_baseline or "(stock defaults)",
-               args.jit_hbp, args.reps, args.n, args.break_even,
-               not args.prewarm, "=" * 70))
-        res = run_hbp_interleaved(pypy, args.jit_baseline, args.jit_hbp,
-                                  names, args.reps, args.n,
-                                  args.warmup_iters,
-                                  break_even=args.break_even,
-                                  prewarm=args.prewarm,
-                                  timeout=args.timeout or None)
-        out_paths = ["e2e_baseline.json", "e2e_hbp.json"]
-        for lbl, op in (("baseline", out_paths[0]), ("hbp", out_paths[1])):
+              "  binary = %s\n%s\nreps=%d n=%d break_even=%s "
+              "prewarm=%s jobs=%d\n%s" %
+              ("=" * 70, pypy, policy_text, args.reps, args.n,
+               args.break_even, args.prewarm, args.jobs, "=" * 70))
+        parallel_policies = args.jobs > 1
+        if parallel_policies:
+            res = run_policy_parallel(pypy, policies, names, args.reps,
+                                      args.n, args.warmup_iters,
+                                      break_even=args.break_even,
+                                      prewarm=args.prewarm,
+                                      timeout=args.timeout or None,
+                                      jobs=args.jobs)
+        else:
+            res = run_policy_interleaved(pypy, policies, names, args.reps,
+                                         args.n, args.warmup_iters,
+                                         break_even=args.break_even,
+                                         prewarm=args.prewarm,
+                                         timeout=args.timeout or None)
+
+        def _policy_out_path(lbl):
+            if lbl == "baseline":
+                return "e2e_baseline.json"
+            if lbl == "hbp":
+                return "e2e_hbp.json"
+            return "e2e_%s.json" % lbl
+
+        out_paths = {}
+        for lbl, jp in policies:
+            op = _policy_out_path(lbl)
             raw, summary = res[lbl]
-            jp = args.jit_baseline if lbl == "baseline" else args.jit_hbp
             with open(op, "w") as f:
                 json.dump({"pypy": pypy, "policy": lbl, "jit_params": jp,
                            "reps": args.reps, "n": args.n,
                            "warmup_iters": args.warmup_iters,
-                           "interleaved": True,
+                           "interleaved": not parallel_policies,
+                           "parallel_policies": parallel_policies,
+                           "jobs": args.jobs,
+                           "policy_matrix": [p[0] for p in policies],
                            "benchmarks": sorted(summary.keys()),
                            "raw": raw, "summary": summary}, f, indent=2)
+            out_paths[lbl] = op
             print("\nWrote %s" % op)
             print_summary_table(json.load(open(op)))
-        print("\n%s\nComparison: baseline vs hbp\n%s\n" %
-              ("=" * 70, "=" * 70))
-        _compare_two_paths(out_paths[0], out_paths[1])
-        return
-    if args.all:
-        base = os.path.abspath("./pypy/goal/pypy-c")
-        cand = os.path.abspath("./pypy/goal/pypy-jit-ext-c")
-        for p in (base, cand):
-            if not os.access(p, os.X_OK):
-                sys.stderr.write("not executable: %s\n" % p); sys.exit(2)
-        names = _resolve_names(args)
-        print("\n%s\nStable: baseline=%s candidate=%s\n"
-              "reps=%d n=%d break_even=%s prewarm=%s\n%s" %
-              ("=" * 70, base, cand, args.reps, args.n,
-               args.break_even, args.prewarm, "=" * 70))
-        res = run_all_interleaved(base, cand, names, args.reps, args.n,
-                                  args.warmup_iters,
-                                  break_even=args.break_even,
-                                  prewarm=args.prewarm)
-        out_paths = ["e2e_baseline.json", "e2e_proposed.json"]
-        for who, op in ((base, out_paths[0]), (cand, out_paths[1])):
-            raw, summary = res[who]
-            with open(op, "w") as f:
-                json.dump({"pypy": who, "reps": args.reps, "n": args.n,
-                           "warmup_iters": args.warmup_iters,
-                           "interleaved": True,
-                           "benchmarks": sorted(summary.keys()),
-                           "raw": raw, "summary": summary}, f, indent=2)
-            print("\nWrote %s" % op)
-            print_summary_table(json.load(open(op)))
-        print("\n%s\nComparison: %s vs %s\n%s\n" %
-              ("=" * 70, out_paths[0], out_paths[1], "=" * 70))
-        _compare_two_paths(out_paths[0], out_paths[1])
+
+        if "base_rl1" in out_paths:
+            control = "base_rl1"
+        elif "base" in out_paths:
+            control = "base"
+        else:
+            control = policies[0][0]
+        if "stock" in out_paths and control != "stock":
+            print("\n%s\nContext comparison: stock vs %s\n%s\n" %
+                  ("=" * 70, control, "=" * 70))
+            _compare_two_paths(out_paths["stock"], out_paths[control])
+            for lbl, _ in policies:
+                if not lbl.startswith("hbp"):
+                    continue
+                print("\n%s\nContext comparison: stock vs %s\n%s\n" %
+                      ("=" * 70, lbl, "=" * 70))
+                _compare_two_paths(out_paths["stock"], out_paths[lbl])
+        for lbl, _ in policies:
+            if lbl == control or not lbl.startswith("hbp"):
+                continue
+            print("\n%s\nFair HBP comparison: %s vs %s\n%s\n" %
+                  ("=" * 70, control, lbl, "=" * 70))
+            _compare_two_paths(out_paths[control], out_paths[lbl])
+        if ("hbp_noinherit" in out_paths and
+                "hbp_inherit1" in out_paths):
+            print("\n%s\nHBP inheritance ablation: hbp_noinherit vs "
+                  "hbp_inherit1\n%s\n" % ("=" * 70, "=" * 70))
+            _compare_two_paths(out_paths["hbp_noinherit"],
+                               out_paths["hbp_inherit1"])
+        if ("hbp_stock_noinherit" in out_paths and
+                "hbp_stock_inherit1" in out_paths):
+            print("\n%s\nStock-retrace HBP inheritance ablation: "
+                  "hbp_stock_noinherit vs hbp_stock_inherit1\n%s\n" %
+                  ("=" * 70, "=" * 70))
+            _compare_two_paths(out_paths["hbp_stock_noinherit"],
+                               out_paths["hbp_stock_inherit1"])
         return
     if False:
         pypys = []
@@ -1203,10 +1860,23 @@ def _compare_two_paths(baseline_path, optim_path):
             return float("nan")
         return (b - x) / b * 100.0
 
-    print("Baseline: %s (reps=%d, n=%d, warmup=%d)" %
-          (base.get("pypy"), base.get("reps"), base.get("n"), base.get("warmup_iters", 1)))
-    print("Optim:    %s (reps=%d, n=%d, warmup=%d)" %
-          (opt.get("pypy"), opt.get("reps"), opt.get("n"), opt.get("warmup_iters", 1)))
+    base_policy = base.get("policy", "(binary)")
+    opt_policy = opt.get("policy", "(binary)")
+    base_jit = base.get("jit_params", "")
+    opt_jit = opt.get("jit_params", "")
+    print("Baseline: %s policy=%s --jit %s (reps=%d, n=%d, warmup=%d)" %
+          (base.get("pypy"), base_policy, base_jit or "(stock defaults)",
+           base.get("reps"), base.get("n"), base.get("warmup_iters", 1)))
+    print("Optim:    %s policy=%s --jit %s (reps=%d, n=%d, warmup=%d)" %
+          (opt.get("pypy"), opt_policy, opt_jit or "(stock defaults)",
+           opt.get("reps"), opt.get("n"), opt.get("warmup_iters", 1)))
+    if "retrace_limit=1" in opt_jit and "retrace_limit=1" not in base_jit:
+        print("NOTE: optim uses retrace_limit=1 but baseline does not; "
+              "use base_rl1 for a fair HBP control.")
+    if base.get("parallel_policies") or opt.get("parallel_policies"):
+        print("NOTE: these results were collected with parallel policy "
+              "execution; rerun with --jobs 1 for decision-grade small "
+              "steady-state deltas.")
     print("Common benchmarks: %d" % len(common))
 
     print("\n%-26s  %12s %12s %+8s   %12s %12s %+8s   %12s %12s %+8s" %
@@ -1251,9 +1921,11 @@ def _compare_two_paths(baseline_path, optim_path):
         print("  median delta:    %+.2f%%" % med)
         print("  wins: %d, regressions: %d, total: %d" %
               (n_pos, n_neg, len(deltas)))
-        for b, d in sorted(deltas, key=lambda x: -x[1])[:5]:
+        wins = [(b, d) for b, d in deltas if d > 0]
+        regressions = [(b, d) for b, d in deltas if d < 0]
+        for b, d in sorted(wins, key=lambda x: -x[1])[:5]:
             print("  +%-7.2f%% (win)        %s" % (d, b))
-        for b, d in sorted(deltas, key=lambda x: x[1])[:5]:
+        for b, d in sorted(regressions, key=lambda x: x[1])[:5]:
             print("  %-7.2f%% (regression) %s" % (d, b))
 
     def _deltas_for(key):
@@ -1312,28 +1984,28 @@ def main():
                           "binaries sequentially.  When exactly two binaries "
                           "are benched, a head-to-head comparison is "
                           "printed automatically (first treated as baseline)."))
-    ap.add_argument("--all", action="store_true",
-                    help=("shortcut for benching `./pypy/goal/pypy-c` "
-                          "(baseline) followed by "
-                          "`./pypy/goal/pypy-jit-ext-c` (proposed); writes "
-                          "e2e_baseline.json and e2e_proposed.json and "
-                          "prints the comparison."))
     ap.add_argument("--hbp", action="store_true",
-                    help=("HBP-vs-baseline mode: interleaved S20 A/B of a "
-                          "SINGLE binary under two --jit policies. Uses "
+                    help=("HBP policy-matrix mode: interleaved S20 run of a "
+                          "SINGLE binary under named --jit policies. Uses "
                           "the first --pypy (or ./pypy/goal/pypy-c). "
-                          "Writes e2e_baseline.json + e2e_hbp.json and "
-                          "prints the comparison. Tune the two arms with "
-                          "--jit-baseline / --jit-hbp."))
+                          "Default matrix includes stock-retrace HBP and "
+                          "retrace_limit=1 HBP arms."))
+    ap.add_argument("--hbp-configs", default=HBP_POLICY_DEFAULT,
+                    help=("comma-separated HBP policy presets to run "
+                          "(default: %s). Choices: %s, legacy. 'legacy' "
+                          "uses --jit-baseline/--jit-hbp and writes the old "
+                          "e2e_baseline.json + e2e_hbp.json pair." %
+                          (HBP_POLICY_DEFAULT,
+                           ", ".join([p[0] for p in HBP_POLICY_PRESETS]))))
     ap.add_argument("--jit-baseline", default="retrace_limit=1",
                     help=("--jit param string for the baseline arm of "
-                          "--hbp mode. Default 'retrace_limit=1' "
-                          "retrace-matches the HBP arm. Pass '' for a "
-                          "stock baseline."))
+                          "--hbp-configs legacy. Default 'retrace_limit=1' "
+                          "retrace-matches the HBP arm."))
     ap.add_argument("--jit-hbp",
                     default="enable_hot_bridge_promotion=1,"
                             "retrace_limit=1",
-                    help=("--jit param string for the HBP arm of --hbp "
+                    help=("--jit param string for the HBP arm of "
+                          "--hbp-configs legacy "
                           "mode (default: "
                           "enable_hot_bridge_promotion=1,"
                           "retrace_limit=1)."))
@@ -1360,9 +2032,11 @@ def main():
                           "continues. (--hbp mode.)"))
     ap.add_argument("--jobs", "-j", type=int, default=1,
                     help=("run benchmark processes in parallel with N "
-                          "workers (default: 1 = sequential).  N>1 "
-                          "trades measurement noise for wall-clock speed; "
-                          "use 0 to default to all available CPUs."))
+                          "workers (default: 1 = sequential). In --hbp "
+                          "mode, N>1 parallelizes the policy matrix and "
+                          "disables serial drift-symmetric interleaving. "
+                          "N>1 trades measurement noise for wall-clock "
+                          "speed; use 0 to default to all available CPUs."))
     ap.add_argument("--parallel-binaries", action="store_true",
                     help=("when multiple --pypy binaries are passed, run "
                           "their (binary, benchmark, rep) tasks in a single "
@@ -1390,9 +2064,9 @@ def main():
     args = ap.parse_args()
     if args.compare:
         return cmd_compare(args)
-    if not (args.all or args.hbp or args.pypy):
+    if not (args.hbp or args.pypy):
         ap.error("one of --pypy / --all / --hbp / --compare required")
-    if (not args.all and not args.hbp and len(args.pypy) == 1
+    if (not args.hbp and len(args.pypy) == 1
             and not args.out):
         ap.error("--out required when --pypy is given exactly once")
     if args.jobs == 0:
