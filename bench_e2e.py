@@ -704,12 +704,35 @@ HBP_POLICY_PRESETS = [
      "hot_bridge_global_max_variants=64,hot_bridge_max_failed_promotions=1,"
      "hbp_bool_entry_guard=1,enable_hbp_cardinality_gate=1,"
      "hbp_inherit=1,hbp_inherit_bool=0"),
+    ("hbp_aggressive",
+     "retrace_limit=1,retrace_min_loop_bridges=20,"
+     "enable_hot_bridge_promotion=1,"
+     "enable_hbp_class_promotion=1,"
+     "enable_hbp_bool_promotion=1,"
+     "enable_hbp_guard_bool_promotion=1,"
+     "enable_hbp_nullness_promotion=1,"
+     "enable_hbp_ref_value_promotion=1,"
+     "enable_hbp_float_value_promotion=1,"
+     "hot_bridge_threshold=15,hot_bridge_min_candidates=2,"
+     "hot_bridge_guard_threshold=100,hot_bridge_guard_bool_threshold=200,"
+     "hot_bridge_max_value_variants=3,hot_bridge_max_bool_variants=3,"
+     "hot_bridge_max_ref_value_variants=2,"
+     "hot_bridge_max_loop_bridges=128,"
+     "hot_bridge_max_ops=80,hot_bridge_max_guards=16,"
+     "hot_bridge_min_op_reduction=5,hot_bridge_min_op_reduction_pct=10,"
+     "hot_bridge_min_guard_reduction=1,hot_bridge_min_guard_reduction_pct=5,"
+     "hot_bridge_global_max_variants=128,hot_bridge_max_failed_promotions=2,"
+     "hot_bridge_max_cardinality=16,"
+     "enable_hbp_cardinality_gate=1,"
+     "hbp_inherit=1,hbp_inherit_bool=1"),
 ]
 
-HBP_POLICY_DEFAULT = (
-    "stock,hbp_stock_noinherit,hbp_stock_inherit1,base_rl1,"
-    "hbp_noinherit,hbp_inherit1,hbp_refcard8_noinherit,"
-    "hbp_refonly16_guard1_inherit1")
+#HBP_POLICY_DEFAULT = (
+#    "stock,hbp_stock_noinherit,hbp_stock_inherit1,base_rl1,"
+#    "hbp_noinherit,hbp_inherit1,hbp_refcard8_noinherit,"
+#    "hbp_refonly16_guard1_inherit1")
+
+HBP_POLICY_DEFAULT = ("stock,hbp_tuned,hbp_aggressive")
 
 
 def _resolve_names(args):
