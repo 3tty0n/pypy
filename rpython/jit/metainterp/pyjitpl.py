@@ -42,6 +42,8 @@ def _get_jit_shortcut_flag(name):
 
 FAST_INT_RECORD = _get_jit_shortcut_flag('fast_int_record')
 SKIP_HEAPCACHE_PURE_INT = _get_jit_shortcut_flag('skip_heapcache_pure_int')
+HEAPCACHE_GENEXT_FASTPATH = _get_jit_shortcut_flag('heapcache_genext_fastpath')
+USE_FAST_PURE_RECORD = FAST_INT_RECORD or HEAPCACHE_GENEXT_FASTPATH
 
 
 class PyjitplCounters(object):
@@ -68,8 +70,22 @@ class PyjitplCounters(object):
                     PyjitplCounters._heapcache_skipped,
                     PyjitplCounters._heapcache_called))
 
+CONST_M1     = ConstInt(-1)
 CONST_0      = ConstInt(0)
 CONST_1      = ConstInt(1)
+CONST_2      = ConstInt(2)
+
+
+def const_int(value):
+    if value == 0:
+        return CONST_0
+    if value == 1:
+        return CONST_1
+    if value == -1:
+        return CONST_M1
+    if value == 2:
+        return CONST_2
+    return ConstInt(value)
 
 # ____________________________________________________________
 
@@ -108,22 +124,10 @@ class MIFrame(object):
         self.registers_i = None
         self.registers_r = None
         self.registers_f = None
-        # Parallel unboxed storage for int/float/ref registers, used by
-        # GenExtension. Holds (value, trace_position) pairs so pure
-        # arithmetic can flow without allocating FrontendOp boxes until a
-        # materialization point (guard, opimpl call). `raw_positions_*[idx]
-        # == -1` means "no tracked position" (e.g. a compile-time constant).
-        self.raw_values_i = None
-        self.raw_positions_i = None
-        self.raw_values_f = None
-        self.raw_positions_f = None
-        self.raw_values_r = None
-        self.raw_positions_r = None
 
     def setup(self, jitcode, greenkey=None):
         # if not translated, fill the registers with MissingValue()
         assert isinstance(jitcode, JitCode)
-        jitcode.number_calls += 1
         self.jitcode = jitcode
         self.bytecode = jitcode.code
         # this is not None for frames that are recursive portal calls
@@ -134,23 +138,10 @@ class MIFrame(object):
         num_regs_and_consts_f = jitcode.num_regs_and_consts_f()
         if num_regs_and_consts_i:
             self.registers_i = self.copy_constants(self.registers_i, jitcode.constants_i, jitcode.num_regs_i(), ConstInt)
-            # Allocate parallel unboxed arrays sized to match registers_i.
-            n = len(self.registers_i)
-            if self.raw_values_i is None or len(self.raw_values_i) < n:
-                self.raw_values_i = [0] * n
-                self.raw_positions_i = [-1] * n
         if num_regs_and_consts_r:
             self.registers_r = self.copy_constants(self.registers_r, jitcode.constants_r, jitcode.num_regs_r(), ConstPtrJitCode)
-            n = len(self.registers_r)
-            if self.raw_values_r is None or len(self.raw_values_r) < n:
-                self.raw_values_r = [lltype.nullptr(llmemory.GCREF.TO)] * n
-                self.raw_positions_r = [-1] * n
         if num_regs_and_consts_f:
             self.registers_f = self.copy_constants(self.registers_f, jitcode.constants_f, jitcode.num_regs_f(), ConstFloat)
-            n = len(self.registers_f)
-            if self.raw_values_f is None or len(self.raw_values_f) < n:
-                self.raw_values_f = [longlong.ZEROF] * n
-                self.raw_positions_f = [-1] * n
         self._result_argcode = 'v'
         # for resume.py operation
         self.parent_snapshot = -1
@@ -180,67 +171,6 @@ class MIFrame(object):
             registers[targetindex] = ConstClass(constants[i])
             targetindex += 1
         return registers
-
-    def write_int_unboxed(self, index, value, position):
-        """Store a dynamic int register in unboxed form.
-
-        `value` is the concrete int; `position` is the trace index that
-        produced it (or -1 for values with no tracked position, like
-        fresh constants). The boxed slot `registers_i[index]` is left
-        intact so that code paths that still read it (opimpls, the
-        generic interpreter) continue to work.
-        """
-        self.raw_values_i[index] = value
-        self.raw_positions_i[index] = position
-
-    def write_float_unboxed(self, index, value, position):
-        """Store a dynamic float register in unboxed form (value is a
-        longlong.FLOATSTORAGE)."""
-        self.raw_values_f[index] = value
-        self.raw_positions_f[index] = position
-
-    def write_ref_unboxed(self, index, value, position):
-        """Store a dynamic ref register in unboxed form (value is a GCREF)."""
-        self.raw_values_r[index] = value
-        self.raw_positions_r[index] = position
-
-    def materialize_int(self, index):
-        """Ensure `registers_i[index]` contains a Box that reflects the
-        value stored in the unboxed arrays.
-
-        If a tracked trace position is present, build an IntFrontendOp
-        at that position; otherwise wrap the raw value in a ConstInt.
-        """
-        pos = self.raw_positions_i[index]
-        value = self.raw_values_i[index]
-        if pos >= 0:
-            box = history.IntFrontendOp(pos, value)
-        else:
-            box = ConstInt(value)
-        self.registers_i[index] = box
-        return box
-
-    def materialize_float(self, index):
-        """Same as materialize_int but for float registers."""
-        pos = self.raw_positions_f[index]
-        value = self.raw_values_f[index]
-        if pos >= 0:
-            box = history.FloatFrontendOp(pos, value)
-        else:
-            box = history.ConstFloat(value)
-        self.registers_f[index] = box
-        return box
-
-    def materialize_ref(self, index):
-        """Same as materialize_int but for ref registers."""
-        pos = self.raw_positions_r[index]
-        value = self.raw_values_r[index]
-        if pos >= 0:
-            box = history.RefFrontendOp(pos, value)
-        else:
-            box = history.ConstPtr(value)
-        self.registers_r[index] = box
-        return box
 
     def cleanup_registers(self):
         # To avoid keeping references alive, this cleans up the registers_r.
@@ -298,9 +228,9 @@ class MIFrame(object):
     def get_current_position_info(self):
         return self.jitcode.get_live_vars_info(self.pc, self.metainterp.staticdata.op_live)
 
+    @always_inline
     def get_list_of_active_boxes(self, in_a_call, new_array, add_box_to_storage, after_residual_call=False):
         from rpython.jit.codewriter.liveness import decode_offset
-        from rpython.jit.codewriter.liveness import LivenessIterator
         if in_a_call:
             # If we are not the topmost frame, self._result_argcode contains
             # the type of the result of the call instruction in the bytecode.
@@ -330,31 +260,49 @@ class MIFrame(object):
         length_f = ord(all_liveness[offset + 2])
         offset += 3
 
-        start_i = 0
-        start_r = start_i + length_i
-        start_f = start_r + length_r
-        total   = start_f + length_f
+        total = length_i + length_r + length_f
         # allocate a list of the correct size
         storage = new_array(total)
         # fill it now
+        registers_i = self.registers_i
+        registers_r = self.registers_r
+        registers_f = self.registers_f
         if length_i:
-            it = LivenessIterator(offset, length_i, all_liveness)
-            for index in it:
-                add_box_to_storage(self.registers_i[index])
-                start_i += 1
-            offset = it.offset
+            count = 0
+            curr_byte = 0
+            remaining = length_i
+            while remaining:
+                if (count & 7) == 0:
+                    curr_byte = ord(all_liveness[offset])
+                    offset += 1
+                if (curr_byte >> (count & 7)) & 1:
+                    add_box_to_storage(registers_i[count])
+                    remaining -= 1
+                count += 1
         if length_r:
-            it = LivenessIterator(offset, length_r, all_liveness)
-            for index in it:
-                add_box_to_storage(self.registers_r[index])
-                start_r += 1
-            offset = it.offset
+            count = 0
+            curr_byte = 0
+            remaining = length_r
+            while remaining:
+                if (count & 7) == 0:
+                    curr_byte = ord(all_liveness[offset])
+                    offset += 1
+                if (curr_byte >> (count & 7)) & 1:
+                    add_box_to_storage(registers_r[count])
+                    remaining -= 1
+                count += 1
         if length_f:
-            it = LivenessIterator(offset, length_f, all_liveness)
-            for index in it:
-                add_box_to_storage(self.registers_f[index])
-                start_f += 1
-            offset = it.offset
+            count = 0
+            curr_byte = 0
+            remaining = length_f
+            while remaining:
+                if (count & 7) == 0:
+                    curr_byte = ord(all_liveness[offset])
+                    offset += 1
+                if (curr_byte >> (count & 7)) & 1:
+                    add_box_to_storage(registers_f[count])
+                    remaining -= 1
+                count += 1
         return storage
 
     def replace_active_box_in_frame(self, oldbox, newbox):
@@ -434,14 +382,14 @@ class MIFrame(object):
             assert isinstance(b1, ConstInt)
             val = b1.getint()
             resvalue = val + c
-            resbox = ConstInt(resvalue)
+            resbox = const_int(resvalue)
         else:
             assert isinstance(b1, IntFrontendOp)
             resvalue = b1.getint() + c
             if FAST_INT_RECORD:
-                resbox = self.metainterp._record_int_binop(rop.INT_ADD, resvalue, b1, ConstInt(c))
+                resbox = self.metainterp._record_int_binop(rop.INT_ADD, resvalue, b1, const_int(c))
             else:
-                resbox = self.metainterp._record_helper(rop.INT_ADD, resvalue, None, b1, ConstInt(c))
+                resbox = self.metainterp._record_helper(rop.INT_ADD, resvalue, None, b1, const_int(c))
         regs[ord(code[position])] = resbox
         self.pc = position + 1
 
@@ -2034,31 +1982,26 @@ class MIFrame(object):
         staticdata = self.metainterp.staticdata
         try:
             if self.jitcode.genext_function:
-                # O(1) per-jitcode int counter (was a per-call string-keyed
-                # dict membership test + insert + increment -- symmetric
-                # overhead on both tracer paths, see followup doc S24).
-                self.jitcode.genext_fast_exec_count += 1
                 staticdata.profiler.count(Counters.FAST_TRACING_FUNCTION_EXECUTIONS)
                 return self.jitcode.genext_function(self)
 
-            self.jitcode.genext_slow_exec_count += 1
             staticdata.profiler.count(Counters.SLOW_TRACING_FUNCTION_EXECUTIONS)
             pc = self.pc
+            bytecode = self.bytecode
+            op_live = staticdata.op_live
+            op_goto = staticdata.op_goto
+            opcode_implementations = staticdata.opcode_implementations
             while True:
-                bytecode = self.bytecode
                 op = ord(bytecode[pc])
-                self.jitcode.bytecodes_counter += 1
-                staticdata.opcode_counters[op] += 1
-
-                if op == staticdata.op_live:
+                if op == op_live:
                     pc += OFFSET_SIZE + 1
                     self.pc = pc
                     continue
-                elif op == staticdata.op_goto:
+                elif op == op_goto:
                     pc = ord(bytecode[pc + 1]) | (ord(bytecode[pc + 2])<<8)
                     self.pc = pc
                     continue
-                staticdata.opcode_implementations[op](self, pc)
+                opcode_implementations[op](self, pc)
                 pc = self.pc
         except ChangeFrame:
             pass
@@ -2490,8 +2433,6 @@ class MetaInterpStaticData(object):
         self.op_float_return = insns.get('float_return/f', -1)
         self.op_void_return = insns.get('void_return/', -1)
 
-        self.opcode_counters = [0] * len(insns)
-
     def setup_descrs(self, descrs):
         self.opcode_descrs = descrs
 
@@ -2652,10 +2593,6 @@ class MetaInterp(object):
 
         self.box_names_memo = {}
 
-        # Batched profiler counting for fast-path operations
-        # Instead of calling profiler.count_ops() for every operation,
-        # we batch counts and flush them at strategic points (guards, end of trace)
-        self._batched_ops_count = 0
         self._batched_recorded_ops_count = 0
 
         self.aborted_tracing_jitdriver = None
@@ -2669,24 +2606,10 @@ class MetaInterp(object):
 
     @always_inline
     def batch_op_count(self):
-        """Batch an operation count instead of calling profiler directly.
-
-        This is used by fast-path recording methods to avoid the overhead
-        of calling profiler.count_ops() for every operation. Counts are
-        flushed at strategic points (guards, end of trace).
-        """
-        self._batched_ops_count += 1
         self._batched_recorded_ops_count += 1
 
     def flush_batched_counts(self):
-        """Flush batched operation counts to the profiler.
-
-        Called before guards and at end of trace to ensure accurate counting.
-        """
         profiler = self.staticdata.profiler
-        if self._batched_ops_count > 0:
-            profiler.count(Counters.OPS, self._batched_ops_count)
-            self._batched_ops_count = 0
         if self._batched_recorded_ops_count > 0:
             profiler.count(Counters.RECORDED_OPS, self._batched_recorded_ops_count)
             self._batched_recorded_ops_count = 0
@@ -2836,7 +2759,6 @@ class MetaInterp(object):
             raise AssertionError
 
     def generate_guard(self, opnum, box=None, extraarg=None, resumepc=-1):
-        # Flush batched counts before guard to ensure accurate profiling
         self.flush_batched_counts()
         if isinstance(box, Const):    # no need for a guard
             return
@@ -2896,9 +2818,20 @@ class MetaInterp(object):
         self.history = history.History(max_num_inputargs, self.staticdata)
 
     def _all_constants(self, *boxes):
-        if len(boxes) == 0:
+        n = len(boxes)
+        if n == 0:
             return True
-        return isinstance(boxes[0], Const) and self._all_constants(*boxes[1:])
+        if n == 1:
+            return isinstance(boxes[0], Const)
+        if n == 2:
+            return isinstance(boxes[0], Const) and isinstance(boxes[1], Const)
+        if n == 3:
+            return (isinstance(boxes[0], Const) and isinstance(boxes[1], Const)
+                    and isinstance(boxes[2], Const))
+        for b in boxes:
+            if not isinstance(b, Const):
+                return False
+        return True
 
     def _all_constants_varargs(self, boxes):
         for box in boxes:
@@ -2909,12 +2842,10 @@ class MetaInterp(object):
     def _use_fast_pure_record(self):
         """Use record2_int/float (skip generic _record_helper) for pure ops.
 
-        Enabled when heapcache_genext_fastpath is on (pypy-jit-ext-c default)
-        or fast_int_record is explicitly set at translation time.
+        Translation-time constant (FAST_INT_RECORD or HEAPCACHE_GENEXT_FASTPATH
+        as set in the translation config). RPython folds this away.
         """
-        if FAST_INT_RECORD:
-            return True
-        return self.heapcache.genext_fastpath_enabled
+        return USE_FAST_PURE_RECORD
 
     @specialize.arg(1)
     def _fast_pure_record_float_binop(self, opnum, resvalue, b1, b2):
@@ -3140,20 +3071,10 @@ class MetaInterp(object):
 
     @specialize.arg(1)
     def _record_helper(self, opnum, resvalue, descr, *argboxes):
-        if not we_are_translated():
-            PyjitplCounters._record_helper_calls += 1
         profiler = self.staticdata.profiler
         profiler.count_ops(opnum, Counters.RECORDED_OPS)
 
-        if (self.heapcache.genext_fastpath_enabled or SKIP_HEAPCACHE_PURE_INT):
-            skip_heapcache = self.heapcache._is_pure_int_op(opnum)
-        else:
-            skip_heapcache = False
-        if not skip_heapcache:
-            self.heapcache.invalidate_caches(opnum, descr, *argboxes)
-
-        if self.framestack:
-            self.framestack[-1].jitcode.traced_operations += 1
+        self.heapcache.invalidate_caches(opnum, descr, *argboxes)
 
         if len(argboxes) == 0:
             op = self.history.record0(
@@ -3176,34 +3097,19 @@ class MetaInterp(object):
 
     @always_inline
     def _record_int_binop(self, opnum, resvalue, b1, b2):
-        if not we_are_translated():
-            PyjitplCounters._record_int_binop_calls += 1
-        # Use batched counting instead of calling profiler directly
         self.batch_op_count()
-        if self.framestack:
-            self.framestack[-1].jitcode.traced_operations += 1
         op = self.history.record2_int(opnum, b1, b2, resvalue)
         return op
 
     @always_inline
     def _record_int_unop(self, opnum, resvalue, b1):
-        if not we_are_translated():
-            PyjitplCounters._record_int_binop_calls += 1
-        # Use batched counting instead of calling profiler directly
         self.batch_op_count()
-        if self.framestack:
-            self.framestack[-1].jitcode.traced_operations += 1
         op = self.history.record1_int(opnum, b1, resvalue)
         return op
 
     @always_inline
     def _record_float_binop(self, opnum, resvalue, b1, b2):
-        if not we_are_translated():
-            PyjitplCounters._record_int_binop_calls += 1
-        # Use batched counting instead of calling profiler directly
         self.batch_op_count()
-        if self.framestack:
-            self.framestack[-1].jitcode.traced_operations += 1
         op = self.history.record2_float(opnum, b1, b2, resvalue)
         return op
 
@@ -3250,6 +3156,7 @@ class MetaInterp(object):
                                 addrbox, offsetbox, valuebox)
 
 
+    @always_inline
     def attach_debug_info(self, op):
         if (not we_are_translated() and op is not None
             and getattr(self, 'framestack', None)):

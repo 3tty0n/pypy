@@ -612,6 +612,7 @@ class Trace(BaseTrace):
             box.opencoder_index = v
         return v
 
+    @always_inline
     def _encode(self, box):
         if isinstance(box, Const):
             if (isinstance(box, ConstInt) and
@@ -764,11 +765,12 @@ class Trace(BaseTrace):
         self.append_snapshot_array_data_int(lgt)
         return res
 
+    @always_inline
     def _add_box_to_storage(self, box):
         self.append_snapshot_array_data_int(self._encode(box))
 
+    @always_inline
     def _append_snapshot_array_data_int(self, i):
-        """Write varint to snapshot_array_data using pre-allocated buffer."""
         if not MIN_VALUE <= i <= MAX_VALUE:
             self.tag_overflow = True
             i = 0
@@ -795,8 +797,8 @@ class Trace(BaseTrace):
     # Alias for compatibility
     append_snapshot_array_data_int = _append_snapshot_array_data_int
 
+    @always_inline
     def _append_snapshot_data_int(self, i):
-        """Write varint to snapshot_data using pre-allocated buffer."""
         if not MIN_VALUE <= i <= MAX_VALUE:
             self.tag_overflow = True
             i = 0
@@ -970,4 +972,3 @@ class Trace(BaseTrace):
         except IndexError:
             pass
         return iter.inputargs, ops
-

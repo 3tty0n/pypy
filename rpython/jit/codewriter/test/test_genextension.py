@@ -60,11 +60,11 @@ def jit_shortcut(self): # test
                             pc = 116
                             continue
                         _b0 = self.registers_i[22]
-                        _b1 = ConstInt(4)
+                        _b1 = const_int(4)
                         if _b0 is _b1:
                             pc = 16
                             continue
-                        _v0 = self.registers_i[22].getint()
+                        _v0 = ri22.getint()
                         _v1 = 4
                         _cond = int(_v0 > _v1)
                         condbox = self.metainterp.history.record2_int(rop.INT_GT, _b0, _b1, _cond)
@@ -90,10 +90,10 @@ def jit_shortcut(self): # test
                                 pc = 117
                                 continue
                             else:
-                                _v0 = self.registers_i[23].getint()
-                                _v1 = self.registers_i[22].getint()
+                                _v0 = ri23.getint()
+                                _v1 = ri22.getint()
                                 _res = _v0 + _v1
-                                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[23], self.registers_i[22], _res)
+                                _op = self.metainterp.history.record2_int(rop.INT_ADD, ri23, ri22, _res)
                                 self.registers_i[23] = _op
                                 i23 = _res
                                 pc = 9
@@ -109,10 +109,10 @@ def jit_shortcut(self): # test
                                 pc = 116
                                 continue
                             else:
-                                _v0 = self.registers_i[22].getint()
+                                _v0 = ri22.getint()
                                 _v1 = 1
                                 _res = _v0 - _v1
-                                _op = self.metainterp.history.record2_int(rop.INT_SUB, self.registers_i[22], ConstInt(1), _res)
+                                _op = self.metainterp.history.record2_int(rop.INT_SUB, ri22, const_int(1), _res)
                                 self.registers_i[22] = _op
                                 i22 = _res
                                 pc = 0
@@ -179,10 +179,10 @@ def jit_shortcut(self): # test
                                 pc = 117
                                 continue
                             else:
-                                _v0 = self.registers_i[23].getint()
+                                _v0 = ri23.getint()
                                 _v1 = i22
                                 _res = _v0 + _v1
-                                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[23], ConstInt(i22), _res)
+                                _op = self.metainterp.history.record2_int(rop.INT_ADD, ri23, const_int(i22), _res)
                                 self.registers_i[23] = _op
                                 i23 = _res
                                 pc = 121
@@ -215,7 +215,7 @@ def jit_shortcut(self): # test
                         if pc == 122: # ('int_return', %i23) frozenset([%i23, %i22])
                             self.pc = 18
                             try:
-                                self.opimpl_int_return(ConstInt(i23))
+                                self.opimpl_int_return(const_int(i23))
                             except ChangeFrame: return
                             assert 0, 'unreachable'
                         else:
@@ -299,7 +299,7 @@ def jit_shortcut(self): # test
                     if pc == 7: # ('int_return', (42)) frozenset([])
                         self.pc = 9
                         try:
-                            self.opimpl_int_return(ConstInt(42))
+                            self.opimpl_int_return(const_int(42))
                         except ChangeFrame: return
                         assert 0, 'unreachable'
                     else:
@@ -316,7 +316,7 @@ def jit_shortcut(self): # test
                         if pc == 12: # ('int_return', (12)) frozenset([])
                             self.pc = 14
                             try:
-                                self.opimpl_int_return(ConstInt(12))
+                                self.opimpl_int_return(const_int(12))
                             except ChangeFrame: return
                             assert 0, 'unreachable'
                         else:
@@ -335,7 +335,7 @@ def jit_shortcut(self): # test
                         if pc == 17: # ('int_return', (51)) frozenset([])
                             self.pc = 19
                             try:
-                                self.opimpl_int_return(ConstInt(51))
+                                self.opimpl_int_return(const_int(51))
                             except ChangeFrame: return
                             assert 0, 'unreachable'
                         else:
@@ -352,7 +352,7 @@ def jit_shortcut(self): # test
                     if pc == 22: # ('int_return', (1212)) frozenset([])
                         self.pc = 24
                         try:
-                            self.opimpl_int_return(ConstInt(1212))
+                            self.opimpl_int_return(const_int(1212))
                         except ChangeFrame: return
                         assert 0, 'unreachable'
                     else:
@@ -378,7 +378,7 @@ def jit_shortcut(self): # test
                         if pc == 123: # ('int_return', (42)) frozenset([%i22])
                             self.pc = 9
                             try:
-                                self.opimpl_int_return(ConstInt(42))
+                                self.opimpl_int_return(const_int(42))
                             except ChangeFrame: return
                             assert 0, 'unreachable'
                         else:
@@ -421,10 +421,10 @@ def jit_shortcut(self): # test
                             pc = 119
                             continue
                         else:
-                            _v0 = self.registers_i[0].getint()
+                            _v0 = ri0.getint()
                             _v1 = 1
                             _res = _v0 - _v1
-                            _op = self.metainterp.history.record2_int(rop.INT_SUB, self.registers_i[0], ConstInt(1), _res)
+                            _op = self.metainterp.history.record2_int(rop.INT_SUB, ri0, const_int(1), _res)
                             self.registers_i[0] = _op
                             i0 = _res
                             pc = 4
@@ -443,10 +443,10 @@ def jit_shortcut(self): # test
                                 pc = 120
                                 continue
                             else:
-                                _v0 = self.registers_i[1].getint()
-                                _v1 = self.registers_i[0].getint()
+                                _v0 = ri1.getint()
+                                _v1 = ri0.getint()
                                 _res = _v0 + _v1
-                                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], self.registers_i[0], _res)
+                                _op = self.metainterp.history.record2_int(rop.INT_ADD, ri1, ri0, _res)
                                 self.registers_i[1] = _op
                                 i1 = _res
                                 pc = 11
@@ -470,10 +470,10 @@ def jit_shortcut(self): # test
                                 i0 = ri0.getint()
                                 pc = 121
                                 continue
-                            _v0 = self.registers_i[0].getint()
+                            _v0 = ri0.getint()
                             _v1 = 0
                             _cond = int(_v0 > _v1)
-                            condbox = self.metainterp.history.record2_int(rop.INT_GT, self.registers_i[0], ConstInt(0), _cond)
+                            condbox = self.metainterp.history.record2_int(rop.INT_GT, self.registers_i[0], const_int(0), _cond)
                             self.opimpl_goto_if_not(condbox, 19, 11, replace=False)
                             pc = self.pc
                             if pc == 19:
@@ -511,10 +511,10 @@ def jit_shortcut(self): # test
                                 pc = 120
                                 continue
                             else:
-                                _v0 = self.registers_i[1].getint()
+                                _v0 = ri1.getint()
                                 _v1 = i0
                                 _res = _v0 + _v1
-                                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], ConstInt(i0), _res)
+                                _op = self.metainterp.history.record2_int(rop.INT_ADD, ri1, const_int(i0), _res)
                                 self.registers_i[1] = _op
                                 i1 = _res
                                 pc = 121
@@ -550,7 +550,7 @@ def jit_shortcut(self): # test
                         if pc == 122: # ('int_return', %i1) frozenset([%i1, %i0])
                             self.pc = 21
                             try:
-                                self.opimpl_int_return(ConstInt(i1))
+                                self.opimpl_int_return(const_int(i1))
                             except ChangeFrame: return
                             assert 0, 'unreachable'
                         else:
@@ -637,10 +637,10 @@ def jit_shortcut(self): # test
                                 pc = 125
                                 continue
                             else:
-                                _v0 = self.registers_i[0].getint()
+                                _v0 = ri0.getint()
                                 _v1 = 1
                                 _res = _v0 - _v1
-                                _op = self.metainterp.history.record2_int(rop.INT_SUB, self.registers_i[0], ConstInt(1), _res)
+                                _op = self.metainterp.history.record2_int(rop.INT_SUB, ri0, const_int(1), _res)
                                 self.registers_i[0] = _op
                                 i0 = _res
                                 pc = 4
@@ -658,10 +658,10 @@ def jit_shortcut(self): # test
                                 pc = 126
                                 continue
                             else:
-                                _v0 = self.registers_i[1].getint()
-                                _v1 = self.registers_i[0].getint()
+                                _v0 = ri1.getint()
+                                _v1 = ri0.getint()
                                 _res = _v0 + _v1
-                                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], self.registers_i[0], _res)
+                                _op = self.metainterp.history.record2_int(rop.INT_ADD, ri1, ri0, _res)
                                 self.registers_i[1] = _op
                                 i1 = _res
                                 pc = 11
@@ -684,10 +684,10 @@ def jit_shortcut(self): # test
                                 i0 = ri0.getint()
                                 pc = 127
                                 continue
-                            _v0 = self.registers_i[0].getint()
+                            _v0 = ri0.getint()
                             _v1 = 0
                             _cond = int(_v0 > _v1)
-                            condbox = self.metainterp.history.record2_int(rop.INT_GT, self.registers_i[0], ConstInt(0), _cond)
+                            condbox = self.metainterp.history.record2_int(rop.INT_GT, self.registers_i[0], const_int(0), _cond)
                             self.opimpl_goto_if_not(condbox, 19, 11, replace=False)
                             pc = self.pc
                             if pc == 19:
@@ -742,10 +742,10 @@ def jit_shortcut(self): # test
                                     pc = 126
                                     continue
                                 else:
-                                    _v0 = self.registers_i[1].getint()
+                                    _v0 = ri1.getint()
                                     _v1 = i0
                                     _res = _v0 + _v1
-                                    _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], ConstInt(i0), _res)
+                                    _op = self.metainterp.history.record2_int(rop.INT_ADD, ri1, const_int(i0), _res)
                                     self.registers_i[1] = _op
                                     i1 = _res
                                     pc = 127
@@ -815,7 +815,7 @@ def jit_shortcut(self): # test
                         if pc == 132: # ('int_return', %i1) frozenset([%i1, %i0])
                             self.pc = 27
                             try:
-                                self.opimpl_int_return(ConstInt(i1))
+                                self.opimpl_int_return(const_int(i1))
                             except ChangeFrame: return
                             assert 0, 'unreachable'
                         else:
@@ -879,10 +879,10 @@ def jit_shortcut(self): # test
                             pc = 120
                             continue
                         else:
-                            _v0 = self.registers_i[0].getint()
+                            _v0 = ri0.getint()
                             _v1 = 1
                             _res = _v0 - _v1
-                            _op = self.metainterp.history.record2_int(rop.INT_SUB, self.registers_i[0], ConstInt(1), _res)
+                            _op = self.metainterp.history.record2_int(rop.INT_SUB, ri0, const_int(1), _res)
                             self.registers_i[0] = _op
                             i0 = _res
                             pc = 4
@@ -900,10 +900,10 @@ def jit_shortcut(self): # test
                             pc = 121
                             continue
                         else:
-                            _v0 = self.registers_i[1].getint()
-                            _v1 = self.registers_i[0].getint()
+                            _v0 = ri1.getint()
+                            _v1 = ri0.getint()
                             _res = _v0 + _v1
-                            _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], self.registers_i[0], _res)
+                            _op = self.metainterp.history.record2_int(rop.INT_ADD, ri1, ri0, _res)
                             self.registers_i[1] = _op
                             i1 = _res
                             pc = 0
@@ -962,10 +962,10 @@ def jit_shortcut(self): # test
                                 pc = 121
                                 continue
                             else:
-                                _v0 = self.registers_i[1].getint()
+                                _v0 = ri1.getint()
                                 _v1 = i0
                                 _res = _v0 + _v1
-                                _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], ConstInt(i0), _res)
+                                _op = self.metainterp.history.record2_int(rop.INT_ADD, ri1, const_int(i0), _res)
                                 self.registers_i[1] = _op
                                 i1 = _res
                                 pc = 122
@@ -1040,10 +1040,10 @@ if isinstance(ri1, ConstInt) and isinstance(ri0, ConstInt):
     pc = 109
     continue
 else:
-    _v0 = self.registers_i[1].getint()
-    _v1 = self.registers_i[0].getint()
+    _v0 = ri1.getint()
+    _v1 = ri0.getint()
     _res = _v0 + _v1
-    _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], self.registers_i[0], _res)
+    _op = self.metainterp.history.record2_int(rop.INT_ADD, ri1, ri0, _res)
     self.registers_i[1] = _op
     i1 = _res
     pc = 6
@@ -1062,10 +1062,10 @@ if isinstance(ri1, ConstInt) and isinstance(ri0, ConstInt):
     pc = 113
     continue
 else:
-    _v0 = self.registers_i[1].getint()
-    _v1 = self.registers_i[0].getint()
+    _v0 = ri1.getint()
+    _v1 = ri0.getint()
     _res = _v0 + _v1
-    _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[1], self.registers_i[0], _res)
+    _op = self.metainterp.history.record2_int(rop.INT_ADD, ri1, ri0, _res)
     self.registers_i[1] = _op
     i1 = _res
     pc = 114
@@ -1100,10 +1100,10 @@ if isinstance(ri0, ConstInt):
     pc = 109
     continue
 else:
-    _v0 = self.registers_i[0].getint()
+    _v0 = ri0.getint()
     _v1 = 1
     _res = _v0 + _v1
-    _op = self.metainterp.history.record2_int(rop.INT_ADD, self.registers_i[0], ConstInt(1), _res)
+    _op = self.metainterp.history.record2_int(rop.INT_ADD, ri0, const_int(1), _res)
     self.registers_i[1] = _op
     i1 = _res
     pc = 7
@@ -1138,10 +1138,10 @@ if isinstance(ri0, ConstInt):
     pc = 109
     continue
 else:
-    _v0 = self.registers_i[0].getint()
+    _v0 = ri0.getint()
     _v1 = 1
     _res = _v0 >> _v1
-    _op = self.metainterp.history.record2_int(rop.INT_RSHIFT, self.registers_i[0], ConstInt(1), _res)
+    _op = self.metainterp.history.record2_int(rop.INT_RSHIFT, ri0, const_int(1), _res)
     self.registers_i[1] = _op
     i1 = _res
     pc = 7
@@ -1176,9 +1176,9 @@ if isinstance(ri0, ConstInt):
     pc = 109
     continue
 else:
-    _v0 = self.registers_i[0].getint()
+    _v0 = ri0.getint()
     _res = ~_v0
-    _op = self.metainterp.history.record1_int(rop.INT_INVERT, self.registers_i[0], _res)
+    _op = self.metainterp.history.record1_int(rop.INT_INVERT, ri0, _res)
     self.registers_i[1] = _op
     i1 = _res
     pc = 7
@@ -1244,8 +1244,8 @@ _b1 = self.registers_i[1]
 if _b0 is _b1:
     pc = 17
     continue
-_v0 = self.registers_i[0].getint()
-_v1 = self.registers_i[1].getint()
+_v0 = ri0.getint()
+_v1 = ri1.getint()
 _cond = int(_v0 < _v1)
 condbox = self.metainterp.history.record2_int(rop.INT_LT, _b0, _b1, _cond)
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
@@ -1274,8 +1274,8 @@ _b1 = self.registers_i[1]
 if _b0 is _b1:
     pc = 120
     continue
-_v0 = self.registers_i[0].getint()
-_v1 = self.registers_i[1].getint()
+_v0 = ri0.getint()
+_v1 = ri1.getint()
 _cond = int(_v0 < _v1)
 condbox = self.metainterp.history.record2_int(rop.INT_LT, _b0, _b1, _cond)
 glob0(self, i2) # jit_sync_regs_i2
@@ -1320,7 +1320,11 @@ if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
     pc = 117
     continue
-self.opimpl_goto_if_not_int_is_true(ri0, 17, 5)
+_b0 = ri0
+_v0 = ri0.getint()
+_cond = int(bool(_v0))
+condbox = self.metainterp.history.record1_int(rop.INT_IS_TRUE, _b0, _cond)
+self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
     pc = 17
@@ -1338,8 +1342,12 @@ if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
     pc = 119
     continue
+_b0 = ri0
+_v0 = ri0.getint()
+_cond = int(bool(_v0))
+condbox = self.metainterp.history.record1_int(rop.INT_IS_TRUE, _b0, _cond)
 glob0(self, i2) # jit_sync_regs_i2
-self.opimpl_goto_if_not_int_is_true(ri0, 17, 5)
+self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
     pc = 120
@@ -1380,7 +1388,11 @@ if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
     pc = 117
     continue
-self.opimpl_goto_if_not_int_is_zero(ri0, 17, 5)
+_b0 = ri0
+_v0 = ri0.getint()
+_cond = int(_v0 == 0)
+condbox = self.metainterp.history.record1_int(rop.INT_IS_ZERO, _b0, _cond)
+self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
     pc = 17
@@ -1398,8 +1410,12 @@ if isinstance(ri0, ConstInt):
     i0 = ri0.getint()
     pc = 119
     continue
+_b0 = ri0
+_v0 = ri0.getint()
+_cond = int(_v0 == 0)
+condbox = self.metainterp.history.record1_int(rop.INT_IS_ZERO, _b0, _cond)
 glob0(self, i2) # jit_sync_regs_i2
-self.opimpl_goto_if_not_int_is_zero(ri0, 17, 5)
+self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
     pc = 120
@@ -1616,10 +1632,10 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
     pc = 117
     continue
 else:
-    _v0 = self.registers_i[0].getint()
-    _v1 = self.registers_i[1].getint()
+    _v0 = ri0.getint()
+    _v1 = ri1.getint()
     _res = _v0 ^ _v1
-    _op = self.metainterp.history.record2_int(rop.INT_XOR, self.registers_i[0], self.registers_i[1], _res)
+    _op = self.metainterp.history.record2_int(rop.INT_XOR, ri0, ri1, _res)
     self.registers_i[2] = _op
     i2 = _res
     pc = 6
@@ -1842,7 +1858,7 @@ _v0 = self.registers_r[0].getref_base()
 _v1 = self.registers_r[1].getref_base()
 _res = int(_v0 == _v1)
 if isinstance(_b0, Const) and isinstance(_b1, Const):
-    self.registers_i[2] = ConstInt(_res)
+    self.registers_i[2] = const_int(_res)
     i2 = _res
     pc = %d
     continue
@@ -1866,7 +1882,7 @@ _v0 = r0
 _v1 = self.registers_r[1].getref_base()
 _res = int(_v0 == _v1)
 if isinstance(_b0, Const) and isinstance(_b1, Const):
-    self.registers_i[2] = ConstInt(_res)
+    self.registers_i[2] = const_int(_res)
     i2 = _res
     pc = %d
     continue
@@ -2119,9 +2135,9 @@ if isinstance(ri0, ConstInt):
     pc = 109
     continue
 else:
-    _v0 = self.registers_i[0].getint()
+    _v0 = ri0.getint()
     _res = int(bool(_v0))
-    _op = self.metainterp.history.record1_int(rop.INT_IS_TRUE, self.registers_i[0], _res)
+    _op = self.metainterp.history.record1_int(rop.INT_IS_TRUE, ri0, _res)
     self.registers_i[1] = _op
     i1 = _res
     pc = 7
@@ -2267,7 +2283,7 @@ def test_residual_call():
     work_list = WorkList({5: insn, 7: ('int_return', i1)}, pc_to_nextpc={5: 7})
     insn_specializer = work_list.specialize_insn(insn, {i0, i1}, 5)
     s = insn_specializer.make_code()
-    assert s == """v0 = self.do_residual_call(ConstPtr(lltype.cast_opaque_ptr(llmemory.GCREF, glob1)), [ConstInt(i0)], glob0, 5)
+    assert s == """v0 = self.do_residual_call(ConstPtr(lltype.cast_opaque_ptr(llmemory.GCREF, glob1)), [const_int(i0)], glob0, 5)
 i1 = v0.getint()
 pc = 108
 continue"""

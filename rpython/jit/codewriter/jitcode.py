@@ -15,8 +15,6 @@ class JitCode(AbstractDescr):
     genext_is_pure_arithmetic = False
     genext_hbp_score = 0.0
     genext_hbp_candidate = False
-    genext_fast_exec_count = 0
-    genext_slow_exec_count = 0
 
     def __init__(self, name, fnaddr=None, calldescr=None, called_from=None):
         self.name = name
@@ -30,11 +28,6 @@ class JitCode(AbstractDescr):
         self.genext_compile_function = None
         self.genext_hbp_score = 0.0
         self.genext_hbp_candidate = False
-        self.genext_fast_exec_count = 0
-        self.genext_slow_exec_count = 0
-        self.bytecodes_counter = 0
-        self.number_calls = 0
-        self.traced_operations = 0
 
     def setup(self, code='', constants_i=[], constants_r=[], constants_f=[],
               num_regs_i=255, num_regs_r=255, num_regs_f=255,

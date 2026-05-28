@@ -49,6 +49,47 @@ def maybe_replace_with_const(box):
         return box
 
 
+def _build_pure_int_op_bitmap():
+    from rpython.jit.metainterp.resoperation import opclasses
+    n = len(opclasses)
+    bitmap = [False] * n
+    for opnum in range(rop._ALWAYS_PURE_FIRST + 1, rop._ALWAYS_PURE_LAST):
+        if 0 <= opnum < n:
+            bitmap[opnum] = True
+    for opnum in (rop.PTR_EQ, rop.PTR_NE,
+                  rop.INSTANCE_PTR_EQ, rop.INSTANCE_PTR_NE,
+                  rop.CAST_PTR_TO_INT, rop.CAST_INT_TO_PTR,
+                  rop.NURSERY_PTR_INCREMENT, rop.SAME_AS_R):
+        if 0 <= opnum < n:
+            bitmap[opnum] = False
+    for opnum in (rop.ARRAYLEN_GC, rop.STRLEN, rop.STRGETITEM,
+                  rop.GETARRAYITEM_GC_PURE_I,
+                  rop.GETARRAYITEM_GC_PURE_F,
+                  rop.GETARRAYITEM_GC_PURE_R,
+                  rop.UNICODELEN, rop.UNICODEGETITEM,
+                  rop.LOAD_FROM_GC_TABLE):
+        if 0 <= opnum < n:
+            bitmap[opnum] = False
+    return bitmap
+
+
+def _build_invalidate_noop_bitmap():
+    from rpython.jit.metainterp.resoperation import opclasses
+    n = len(opclasses)
+    bitmap = [False] * n
+    for opnum in (rop.PTR_EQ, rop.PTR_NE,
+                  rop.INSTANCE_PTR_EQ, rop.INSTANCE_PTR_NE,
+                  rop.GETFIELD_GC_R, rop.GETFIELD_GC_I, rop.GETFIELD_GC_F,
+                  rop.ASSERT_NOT_NONE):
+        if 0 <= opnum < n:
+            bitmap[opnum] = True
+    return bitmap
+
+
+_PURE_INT_OP_BITMAP = _build_pure_int_op_bitmap()
+_INVALIDATE_NOOP_BITMAP = _build_invalidate_noop_bitmap()
+
+
 class CacheEntry(object):
     def __init__(self, heapcache):
         # both are {from_ref_box: to_field_box} dicts
@@ -241,37 +282,18 @@ class HeapCache(object):
 
     @always_inline
     def _is_pure_int_op(self, opnum):
-        """Check if opnum is a pure integer/float operation with no heap effects."""
-        # The ALWAYS_PURE range includes pure int/float ops, but also some
-        # pointer ops and heap-reading ops that we must NOT skip
-        if not (rop._ALWAYS_PURE_FIRST <= opnum <= rop._ALWAYS_PURE_LAST):
-            return False
-        # Exclude pointer operations - they may have RefFrontendOp args
-        if (opnum == rop.PTR_EQ or opnum == rop.PTR_NE or
-            opnum == rop.INSTANCE_PTR_EQ or opnum == rop.INSTANCE_PTR_NE or
-            opnum == rop.CAST_PTR_TO_INT or opnum == rop.CAST_INT_TO_PTR or
-            opnum == rop.NURSERY_PTR_INCREMENT or opnum == rop.SAME_AS_R):
-            return False
-        # Exclude heap-reading operations - they access GC objects
-        if (opnum == rop.ARRAYLEN_GC or opnum == rop.STRLEN or
-            opnum == rop.STRGETITEM or
-            opnum == rop.GETARRAYITEM_GC_PURE_I or
-            opnum == rop.GETARRAYITEM_GC_PURE_F or
-            opnum == rop.GETARRAYITEM_GC_PURE_R or
-            opnum == rop.UNICODELEN or opnum == rop.UNICODEGETITEM or
-            opnum == rop.LOAD_FROM_GC_TABLE):
-            return False
-        return True
+        if opnum < len(_PURE_INT_OP_BITMAP):
+            return _PURE_INT_OP_BITMAP[opnum]
+        return False
 
     @always_inline
     def _is_invalidate_caches_noop_op(self, opnum):
         # mark_escaped excludes these and clear_caches_not_necessary is
         # True for them, so invalidate_caches is a no-op; their heap
         # bookkeeping is done by the opimpls, not here.
-        return (opnum == rop.PTR_EQ or opnum == rop.PTR_NE or
-                opnum == rop.INSTANCE_PTR_EQ or opnum == rop.INSTANCE_PTR_NE or
-                opnum == rop.GETFIELD_GC_R or opnum == rop.GETFIELD_GC_I or
-                opnum == rop.GETFIELD_GC_F or opnum == rop.ASSERT_NOT_NONE)
+        if opnum < len(_INVALIDATE_NOOP_BITMAP):
+            return _INVALIDATE_NOOP_BITMAP[opnum]
+        return False
 
     def _verify_pure_int_op_invariants(self, opnum, argboxes):
         for box in argboxes:
@@ -306,7 +328,20 @@ class HeapCache(object):
               opnum != rop.INSTANCE_PTR_EQ and
               opnum != rop.INSTANCE_PTR_NE and
               opnum != rop.ASSERT_NOT_NONE):
-            self._escape_argboxes(*argboxes)
+            n = len(argboxes)
+            if n == 0:
+                pass
+            elif n == 1:
+                self._escape_box(argboxes[0])
+            elif n == 2:
+                self._escape_box(argboxes[0])
+                self._escape_box(argboxes[1])
+            elif n == 3:
+                self._escape_box(argboxes[0])
+                self._escape_box(argboxes[1])
+                self._escape_box(argboxes[2])
+            else:
+                self._escape_argboxes(*argboxes)
 
     def _escape_argboxes(self, *argboxes):
         if len(argboxes) == 0:

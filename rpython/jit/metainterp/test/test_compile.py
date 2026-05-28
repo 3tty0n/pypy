@@ -80,6 +80,7 @@ class FakeMetaInterp:
 
 
 def test_genext_pure_arithmetic_shortcut_rejects_unsupported_ops():
+    assert compile.GENEXT_PURE_COMPILE_SHORTCUT is False
     assert compile._is_pure_arithmetic_trace_op(rop.INT_ADD)
     assert compile._is_pure_arithmetic_trace_op(rop.FLOAT_TRUEDIV)
     assert compile._is_pure_arithmetic_trace_op(rop.GUARD_NO_OVERFLOW)

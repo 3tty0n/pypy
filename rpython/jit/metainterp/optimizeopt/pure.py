@@ -8,6 +8,18 @@ from rpython.jit.metainterp.optimizeopt.shortpreamble import PreambleOp
 from rpython.jit.metainterp.optimize import SpeculativeError
 
 
+def _genextension_enabled():
+    from rpython.config.translationoption import get_translation_config
+    config = get_translation_config()
+    translation_config = getattr(config, "translation", None)
+    return bool(getattr(translation_config, 'genextension', False))
+
+
+_GENEXT_PUREOP_BOOST = 2 if _genextension_enabled() else 1
+
+
+
+
 class DefaultOptimizationResult(OptimizationResult):
     def __init__(self, opt, op, save, nextop):
         OptimizationResult.__init__(self, opt, op)
@@ -179,6 +191,7 @@ class OptPure(Optimization):
         recentops = self._pure_operations[opnum]
         if recentops is None and create:
             length = self.optimizer.jitdriver_sd.warmstate.pureop_historylength
+            length = length * _GENEXT_PUREOP_BOOST
             self._pure_operations[opnum] = recentops = RecentPureOps(length)
         return recentops
 

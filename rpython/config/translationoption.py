@@ -132,11 +132,11 @@ translation_optiondescription = OptionDescription(
 
     # JIT shortcut
     BoolOption("genextension", "generate JIT extension by specializing the tracer",
-               default=True,
+               default=False,
                cmdline="--gen-extension"),
     BoolOption("heapcache_genext_fastpath",
                "heapcache fast-path for pure int ops",
-               default=True,
+               default=False,
                cmdline="--heapcache-genext-fastpath"),
     BoolOption("skip_heapcache_pure_int",
                "skip heapcache invalidation for pure-int ops in record_helper "
@@ -149,6 +149,12 @@ translation_optiondescription = OptionDescription(
                "debug lever; was PYPY_FAST_INT_RECORD)",
                default=False,
                cmdline="--fast-int-record"),
+    BoolOption("genext_pure_compile_shortcut",
+               "compile pure-arithmetic genextension traces with the "
+               "experimental backend shortcut instead of the normal JIT "
+               "optimizer/backend path",
+               default=False,
+               cmdline="--genext-pure-compile-shortcut"),
     # misc
     BoolOption("verbose", "Print extra information", default=False,
                cmdline="--verbose"),

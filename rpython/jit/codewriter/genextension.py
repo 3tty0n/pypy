@@ -252,7 +252,9 @@ class GenExtension(object):
         self.jitcode._genext_source = "\n".join(allcode)
         # Import rop for opnum constants used in type-specialized recording
         from rpython.jit.metainterp.resoperation import rop
-        d = {"Const": Const, "ConstInt": ConstInt, "ConstPtr": ConstPtr, "ConstFloat": ConstFloat, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
+        from rpython.jit.metainterp.pyjitpl import const_int
+        d = {"Const": Const, "ConstInt": ConstInt, "const_int": const_int,
+             "ConstPtr": ConstPtr, "ConstFloat": ConstFloat, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
              "lltype": lltype, "rstr": rstr, 'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR, 'support': support,
              'rop': rop, 'intmask': intmask, 'r_uint': r_uint,
              'uint_mul_high': uint_mul_high,
@@ -836,7 +838,7 @@ class GenExtension(object):
                 if argcode == 'i':
                     value = self._read_reg_i(ord(code[position]))
                 elif argcode == 'c':
-                    value = "ConstInt(%s)" % signedord(code[position])
+                    value = "const_int(%s)" % signedord(code[position])
                 elif argcode == 'r':
                     value = self._read_reg_r(ord(code[position]))
                 elif argcode == 'f':
@@ -1037,7 +1039,7 @@ class GenExtension(object):
         if pos >= self.jitcode.num_regs_i():
             const_pos = pos - self.jitcode.num_regs_i()
             value = self.jitcode.constants_i[const_pos]
-            return "ConstInt(%s)" % (_int_as_str(value, lltype.typeOf(value), self._add_global), )
+            return "const_int(%s)" % (_int_as_str(value, lltype.typeOf(value), self._add_global), )
         else:
             return "self.registers_i[%s]" % (pos, )
 
@@ -1524,6 +1526,27 @@ class Specializer(object):
         self._emit_jump(lines, constant_registers=next_consts, indent='    ')
         return True
 
+    def _get_as_box_after_promote(self, arg, promoted):
+        if not promoted:
+            return self._get_as_box_nosync(arg)
+        if isinstance(arg, Constant) or arg in self.constant_registers:
+            return self._get_as_box(arg)
+        t = self._get_type_prefix(arg)
+        return "r%s%d" % (t, arg.index)
+
+    def _get_as_unboxed_after_promote(self, arg, promoted):
+        if not promoted:
+            return self._get_as_unboxed_nosync(arg)
+        if isinstance(arg, Constant) or arg in self.constant_registers:
+            return self._get_as_unboxed(arg)
+        t = self._get_type_prefix(arg)
+        if t == 'i':
+            return "ri%d.getint()" % arg.index
+        elif t == 'f':
+            return "rf%d.getfloatstorage()" % arg.index
+        else:
+            return "rr%d.getref_base()" % arg.index
+
     def _emit_unspecialized_int_binary_fast(self, rop_name, py_op):
         """Generate fast-path code for integer binary ops with non-constant args."""
         arg0, arg1, result = self._get_args_and_res()
@@ -1534,10 +1557,10 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        box1 = self._get_as_box_nosync(arg1)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
-        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_nosync(arg1)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        box1 = self._get_as_box_after_promote(arg1, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
+        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_after_promote(arg1, promoted)))
         lines.append("%s_res = _v0 %s _v1" % (indent, py_op))
         lines.append("%s_op = self.metainterp.history.record2_int(rop.%s, %s, %s, _res)" % (
             indent, rop_name, box0, box1))
@@ -1557,10 +1580,10 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        box1 = self._get_as_box_nosync(arg1)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
-        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_nosync(arg1)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        box1 = self._get_as_box_after_promote(arg1, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
+        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_after_promote(arg1, promoted)))
         lines.append("%s_res = int(_v0 %s _v1)" % (indent, py_op))
         lines.append("%s_op = self.metainterp.history.record2_int(rop.%s, %s, %s, _res)" % (
             indent, rop_name, box0, box1))
@@ -1580,10 +1603,10 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        box1 = self._get_as_box_nosync(arg1)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
-        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_nosync(arg1)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        box1 = self._get_as_box_after_promote(arg1, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
+        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_after_promote(arg1, promoted)))
         lines.append("%s_res = _v0 %s _v1" % (indent, py_op))
         lines.append("%s_op = self.metainterp.history.record2_float(rop.%s, %s, %s, _res)" % (
             indent, rop_name, box0, box1))
@@ -1603,10 +1626,10 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        box1 = self._get_as_box_nosync(arg1)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
-        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_nosync(arg1)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        box1 = self._get_as_box_after_promote(arg1, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
+        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_after_promote(arg1, promoted)))
         lines.append("%s_res = int(_v0 %s _v1)" % (indent, py_op))
         lines.append("%s_op = self.metainterp.history.record2_int(rop.%s, %s, %s, _res)" % (
             indent, rop_name, box0, box1))
@@ -1632,7 +1655,7 @@ class Specializer(object):
         # constant-fold when both args are constant at runtime, like
         # execute_and_record's canfold (no op recorded, no later guard)
         lines.append("if isinstance(_b0, Const) and isinstance(_b1, Const):")
-        lines.append("    self.registers_i[%d] = ConstInt(_res)" % result.index)
+        lines.append("    self.registers_i[%d] = const_int(_res)" % result.index)
         lines.append("    i%d = _res" % result.index)
         self._emit_jump(
             lines,
@@ -1725,10 +1748,10 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        box1 = self._get_as_box_nosync(arg1)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
-        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_nosync(arg1)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        box1 = self._get_as_box_after_promote(arg1, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
+        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_after_promote(arg1, promoted)))
         lines.append("%s_res = int(r_uint(_v0) %s r_uint(_v1))" % (indent, py_op))
         lines.append("%s_op = self.metainterp.history.record2_int(rop.%s, %s, %s, _res)" % (
             indent, rop_name, box0, box1))
@@ -1759,10 +1782,10 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        box1 = self._get_as_box_nosync(arg1)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
-        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_nosync(arg1)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        box1 = self._get_as_box_after_promote(arg1, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
+        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_after_promote(arg1, promoted)))
         lines.append("%s_res = intmask(uint_mul_high(_v0, _v1))" % indent)
         lines.append("%s_op = self.metainterp.history.record2_int(rop.UINT_MUL_HIGH, %s, %s, _res)" % (
             indent, box0, box1))
@@ -1811,10 +1834,10 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        box1 = self._get_as_box_nosync(arg1)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
-        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_nosync(arg1)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        box1 = self._get_as_box_after_promote(arg1, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
+        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_after_promote(arg1, promoted)))
         lines.append("%s_res = int(r_uint(_v0) >> r_uint(_v1))" % indent)
         lines.append("%s_op = self.metainterp.history.record2_int(rop.UINT_RSHIFT, %s, %s, _res)" % (
             indent, box0, box1))
@@ -1833,8 +1856,8 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
         lines.append("%s_res = _v0 if _v0 >= 0 else 0" % indent)
         lines.append("%s_op = self.metainterp.history.record1_int(rop.INT_FORCE_GE_ZERO, %s, _res)" % (indent, box0))
         lines.append("%sself.registers_i[%d] = _op" % (indent, result.index))
@@ -1852,10 +1875,10 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        box1 = self._get_as_box_nosync(arg1)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
-        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_nosync(arg1)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        box1 = self._get_as_box_after_promote(arg1, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
+        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_after_promote(arg1, promoted)))
         lines.append("%s_res = int_signext(_v0, _v1)" % indent)
         lines.append("%s_op = self.metainterp.history.record2_int(rop.INT_SIGNEXT, %s, %s, _res)" % (
             indent, box0, box1))
@@ -1874,8 +1897,8 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
         lines.append("%s_res = int(_v0)" % indent)
         lines.append("%s_op = self.metainterp.history.record1_int(rop.CAST_FLOAT_TO_INT, %s, _res)" % (indent, box0))
         lines.append("%sself.registers_i[%d] = _op" % (indent, result.index))
@@ -1893,8 +1916,8 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
         lines.append("%s_res = float(_v0)" % indent)
         lines.append("%s_op = self.metainterp.history.record1_float(rop.CAST_INT_TO_FLOAT, %s, _res)" % (indent, box0))
         lines.append("%sself.registers_f[%d] = _op" % (indent, result.index))
@@ -1912,8 +1935,8 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
         lines.append("%s_res = longlong.singlefloat2int(r_singlefloat(longlong.getrealfloat(_v0)))" % indent)
         lines.append("%s_op = self.metainterp.history.record1_int(rop.CAST_FLOAT_TO_SINGLEFLOAT, %s, _res)" % (indent, box0))
         lines.append("%sself.registers_i[%d] = _op" % (indent, result.index))
@@ -1931,8 +1954,8 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
         lines.append("%s_res = longlong.getfloatstorage(float(longlong.int2singlefloat(_v0)))" % indent)
         lines.append("%s_op = self.metainterp.history.record1_float(rop.CAST_SINGLEFLOAT_TO_FLOAT, %s, _res)" % (indent, box0))
         lines.append("%sself.registers_f[%d] = _op" % (indent, result.index))
@@ -1950,8 +1973,8 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
         lines.append("%s_res = %s_v0" % (indent, py_op))
         lines.append("%s_op = self.metainterp.history.record1_int(rop.%s, %s, _res)" % (
             indent, rop_name, box0))
@@ -1970,8 +1993,8 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
         lines.append("%s_res = %s_v0" % (indent, py_op))
         lines.append("%s_op = self.metainterp.history.record1_float(rop.%s, %s, _res)" % (
             indent, rop_name, box0))
@@ -1990,8 +2013,8 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
         lines.append("%s_res = int(bool(_v0))" % indent)
         lines.append("%s_op = self.metainterp.history.record1_int(rop.INT_IS_TRUE, %s, _res)" % (indent, box0))
         lines.append("%sself.registers_i[%d] = _op" % (indent, result.index))
@@ -2009,8 +2032,8 @@ class Specializer(object):
             indent = "    "
         else:
             indent = ""
-        box0 = self._get_as_box_nosync(arg0)
-        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_nosync(arg0)))
+        box0 = self._get_as_box_after_promote(arg0, promoted)
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_promote(arg0, promoted)))
         lines.append("%s_res = int(_v0 == 0)" % indent)
         lines.append("%s_op = self.metainterp.history.record1_int(rop.INT_IS_ZERO, %s, _res)" % (indent, box0))
         lines.append("%sself.registers_i[%d] = _op" % (indent, result.index))
@@ -2661,7 +2684,7 @@ class Specializer(object):
         if isinstance(arg, Constant):
             kind = getkind(arg.concretetype)
             if kind == 'int':
-                return "ConstInt(%s)" % (_int_as_str(arg.value, arg.concretetype, self._add_global), )
+                return "const_int(%s)" % (_int_as_str(arg.value, arg.concretetype, self._add_global), )
             elif kind == 'ref':
                 return "ConstPtr(lltype.cast_opaque_ptr(llmemory.GCREF, %s))" % self._add_global(arg.value)
             elif kind == 'float':
@@ -2670,7 +2693,7 @@ class Specializer(object):
                 assert False
         elif arg in self.constant_registers:
             if arg.kind == 'int':
-                return "ConstInt(i%d)" % arg.index
+                return "const_int(i%d)" % arg.index
             elif arg.kind == 'ref':
                 return "ConstPtr(r%d)" % arg.index
             elif arg.kind == 'float':
@@ -3400,11 +3423,47 @@ class Specializer(object):
         lines.append("continue")
         return lines
 
+    def _emit_goto_if_not_int_unary_fast(self, rop_name, py_expr):
+        lines = []
+        _, arg0, arg1 = self.insn
+
+        target_pc = self.get_target_pc(arg1)
+
+        self._emit_n_ary_if([arg0], lines)
+        specializer = self.work_list.specialize_insn(
+            self.insn, self.constant_registers.union({arg0}), self.orig_pc)
+        lines.append("    pc = %d" % (specializer.get_pc(),))
+        lines.append("    continue")
+
+        box0 = self._get_as_box_after_promote(arg0, True)
+        lines.append("_b0 = %s" % box0)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_promote(arg0, True))
+        lines.append("_cond = int(%s)" % (py_expr % "_v0",))
+        lines.append("condbox = self.metainterp.history.record1_int(rop.%s, _b0, _cond)" % (
+            rop_name,))
+        self._emit_sync_registers(lines)
+        lines.append("self.opimpl_goto_if_not(condbox, %d, %d, replace=False)" % (
+            target_pc, self.orig_pc))
+        lines.append("pc = self.pc")
+        lines.append("if pc == %s:" % (target_pc,))
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers, target_pc)
+        lines.append("    pc = %s" % (specializer.spec_pc,))
+        lines.append("else:")
+        next_pc = self.work_list.pc_to_nextpc[self.orig_pc]
+        specializer = self.work_list.specialize_pc(
+            self.constant_registers, next_pc)
+        lines.append("    assert self.pc == %s" % (specializer.orig_pc,))
+        lines.append("    pc = %s" % (specializer.spec_pc,))
+        lines.append("continue")
+        return lines
+
     def emit_unspecialized_goto_if_not_int_is_true(self):
-        return self.emit_unspecialized_goto_if_not_absolute("int_is_true")
+        return self._emit_goto_if_not_int_unary_fast("INT_IS_TRUE", "bool(%s)")
 
     def emit_unspecialized_goto_if_not_int_is_zero(self):
-        return self.emit_unspecialized_goto_if_not_absolute("int_is_zero")
+        return self._emit_goto_if_not_int_unary_fast("INT_IS_ZERO", "%s == 0")
+
 
     def emit_unspecialized_goto_if_not_ptr_nonzero(self):
         return self.emit_unspecialized_goto_if_not_absolute("ptr_nonzero")
@@ -3530,8 +3589,8 @@ class Specializer(object):
         lines.append("if _b0 is _b1:")
         lines.append("    pc = %s" % (same_box_spec.spec_pc,))
         lines.append("    continue")
-        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
-        lines.append("_v1 = %s" % self._get_as_unboxed_nosync(arg1))
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_promote(arg0, True))
+        lines.append("_v1 = %s" % self._get_as_unboxed_after_promote(arg1, True))
         lines.append("_cond = int(_v0 %s _v1)" % py_op)
         lines.append("condbox = self.metainterp.history.record2_int(rop.%s, _b0, _b1, _cond)" % (
             rop_name,))
@@ -3585,8 +3644,8 @@ class Specializer(object):
         box1 = self._get_as_box_nosync(arg1)
         lines.append("_b0 = %s" % box0)
         lines.append("_b1 = %s" % box1)
-        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
-        lines.append("_v1 = %s" % self._get_as_unboxed_nosync(arg1))
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_promote(arg0, True))
+        lines.append("_v1 = %s" % self._get_as_unboxed_after_promote(arg1, True))
         lines.append("_cond = int(_v0 %s _v1)" % py_op)
         lines.append("condbox = self.metainterp.history.record2_int(rop.%s, _b0, _b1, _cond)" % (
             rop_name,))
@@ -3897,7 +3956,7 @@ def _make_register_syncer(constant_registers, cache={}):
         if reg.kind == 'int':
             lines.append('    _old = self.registers_i[%d]' % idx)
             lines.append('    if not isinstance(_old, ConstInt) or _old.getint() != i%d:' % idx)
-            lines.append('        self.registers_i[%d] = ConstInt(i%d)' % (idx, idx))
+            lines.append('        self.registers_i[%d] = const_int(i%d)' % (idx, idx))
         elif reg.kind == 'ref':
             lines.append('    self.registers_%s[%d] = ConstPtr(r%d)' % (kind_char, idx, idx))
         elif reg.kind == 'float':
@@ -3905,7 +3964,9 @@ def _make_register_syncer(constant_registers, cache={}):
         else:
             assert 0
     source = py.code.Source("\n".join(lines))
-    d = {"ConstInt": ConstInt, "ConstPtr": ConstPtr, "ConstFloat": ConstFloat}
+    from rpython.jit.metainterp.pyjitpl import const_int
+    d = {"ConstInt": ConstInt, "const_int": const_int,
+         "ConstPtr": ConstPtr, "ConstFloat": ConstFloat}
     exec source.compile() in d
     res = objectmodel.dont_inline(d[name])
     cache[key] = res, args

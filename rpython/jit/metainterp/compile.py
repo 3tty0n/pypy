@@ -24,6 +24,17 @@ from rpython.jit.metainterp.support import adr2int
 from rpython.jit.codewriter import longlong
 
 
+def _get_translation_flag(name):
+    from rpython.config.translationoption import get_translation_config
+    config = get_translation_config()
+    translation_config = getattr(config, "translation", None)
+    return bool(getattr(translation_config, name, False))
+
+
+GENEXT_PURE_COMPILE_SHORTCUT = _get_translation_flag(
+    'genext_pure_compile_shortcut')
+
+
 def giveup():
     from rpython.jit.metainterp.pyjitpl import SwitchToBlackhole
     raise SwitchToBlackhole(Counters.ABORT_BRIDGE)
@@ -60,6 +71,9 @@ def _is_pure_arithmetic_trace_op(opnum):
 
 def compile_pure_arithmetic_loop(metainterp, greenkey, trace, runtime_args,
                                  cut_at):
+    if not GENEXT_PURE_COMPILE_SHORTCUT:
+        return None
+
     jitdriver_sd = metainterp.jitdriver_sd
     metainterp_sd = metainterp.staticdata
 
@@ -309,7 +323,6 @@ def record_loop_or_bridge(metainterp_sd, loop):
 
 def compile_simple_loop(metainterp, greenkey, trace, runtime_args, enable_opts,
                         cut_at, patch_jumpop_at_end=True):
-    # Fast path: pure arithmetic loops skip all optimizer passes
     result = compile_pure_arithmetic_loop(
         metainterp, greenkey, trace, runtime_args, cut_at)
     if result is not None:
