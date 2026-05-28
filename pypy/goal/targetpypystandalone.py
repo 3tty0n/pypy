@@ -324,6 +324,12 @@ class PyPyTarget(object):
         elif config.objspace.usemodules.pypyjit:
             config.translation.jit = True
 
+        if config.translation.genextension:
+            from rpython.rlib.jit import PARAMETERS
+            PARAMETERS['threshold'] = 384
+            PARAMETERS['function_threshold'] = 640
+            PARAMETERS['trace_eagerness'] = 80
+
         if config.translation.sandbox:
             assert 0, ("--sandbox is not tested nor maintained.  If you "
                        "really want to try it anyway, remove this line in "
@@ -412,4 +418,3 @@ class PyPyTarget(object):
         ns['get_gchooks'] = self.get_gchooks
 
 PyPyTarget().interface(globals())
-
