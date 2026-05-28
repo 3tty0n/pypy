@@ -3160,6 +3160,145 @@ class BasicTests:
             "enable_hot_bridge_promotion should not reduce target_tokens: "
             "baseline=%d, with_promotion=%d" % (baseline, with_promotion))
 
+    def test_hot_bridge_promotion_with_stock_retrace_limit(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2), Obj(3)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                total += promote(obj.v) + i
+                i += 1
+            return total
+
+        def run(enable, n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', enable)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            for obj in objs:
+                hot_loop(obj, n)
+            return hot_loop(objs[0], n)
+
+        res = self.meta_interp(run, [0, 50])
+        assert res == run(0, 50)
+        tokens = get_stats().get_all_jitcell_tokens()
+        baseline = max(len(t.target_tokens) for t in tokens if t.target_tokens)
+
+        res = self.meta_interp(run, [1, 50])
+        assert res == run(1, 50)
+        tokens = get_stats().get_all_jitcell_tokens()
+        promoted = max(len(t.target_tokens) for t in tokens if t.target_tokens)
+
+        assert promoted >= baseline, (
+            "HBP should not require global retrace budget: "
+            "baseline=%d promoted=%d" % (baseline, promoted))
+
+    def test_hot_bridge_promotion_guard_class(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Base(object):
+            def value(self):
+                return 0
+        class A(Base):
+            def value(self):
+                return 1
+        class B(Base):
+            def value(self):
+                return 2
+        class C(Base):
+            def value(self):
+                return 3
+
+        objs = [A(), B(), C()]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                total += obj.value() + i
+                i += 1
+            return total
+
+        def run(enable, n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', enable)
+            set_param(None, 'enable_hbp_class_promotion', enable)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            for obj in objs:
+                hot_loop(obj, n)
+            return hot_loop(objs[0], n)
+
+        res = self.meta_interp(run, [0, 50])
+        assert res == run(0, 50)
+        tokens = get_stats().get_all_jitcell_tokens()
+        baseline = max(len(t.target_tokens) for t in tokens if t.target_tokens)
+
+        res = self.meta_interp(run, [1, 50])
+        assert res == run(1, 50)
+        tokens = get_stats().get_all_jitcell_tokens()
+        promoted = max(len(t.target_tokens) for t in tokens if t.target_tokens)
+
+        assert promoted >= baseline, (
+            "HBP should consider guard_class failures: "
+            "baseline=%d promoted=%d" % (baseline, promoted))
+
+    def test_hbp_class_bridge_threshold_blocks_small_fanout(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Base(object):
+            def value(self):
+                return 0
+        class A(Base):
+            def value(self):
+                return 1
+        class B(Base):
+            def value(self):
+                return 2
+
+        objs = [A(), B()]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                total += obj.value() + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'enable_hbp_class_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_class_bridge_threshold', n + 1)
+            return hot_loop(objs[0], n) + hot_loop(objs[1], n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            variant_count += cell.hbp_variant_count
+        assert variant_count == 0
+
     def test_hbp_cardinality_gate_blocks_megamorphic(self):
         myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
 
@@ -3206,6 +3345,831 @@ class BasicTests:
             "cardinality gate should not increase target_tokens on "
             "megamorphic guard_value: gate_off=%d gate_on=%d"
             % (tt_off, tt_on))
+
+    def test_hbp_size_budget_fallback_does_not_count_variant(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                total += promote(obj.v) + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_max_ops', 1)
+            hot_loop(objs[0], n)
+            return hot_loop(objs[1], n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            variant_count += cell.hbp_variant_count
+        assert variant_count == 0
+
+    def test_hbp_guard_budget_fallback_does_not_count_variant(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                v = promote(obj.v)
+                if i & 1:
+                    total += v
+                if i < n - 2:
+                    total += i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_max_guards', 1)
+            hot_loop(objs[0], n)
+            return hot_loop(objs[1], n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            variant_count += cell.hbp_variant_count
+        assert variant_count == 0
+
+    def test_hbp_op_reduction_fallback_does_not_count_variant(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                total += promote(obj.v) + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_min_op_reduction', 1000)
+            hot_loop(objs[0], n)
+            return hot_loop(objs[1], n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            variant_count += cell.hbp_variant_count
+        assert variant_count == 0
+
+    def test_hbp_guard_reduction_fallback_does_not_count_variant(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                total += promote(obj.v) + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_min_guard_reduction', 1000)
+            hot_loop(objs[0], n)
+            return hot_loop(objs[1], n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            variant_count += cell.hbp_variant_count
+        assert variant_count == 0
+
+    def test_hbp_failed_promotion_budget_stops_loop(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2), Obj(3)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                total += promote(obj.v) + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_min_guard_reduction', 1000)
+            set_param(None, 'hot_bridge_max_failed_promotions', 1)
+            total = 0
+            for obj in objs:
+                total += hot_loop(obj, n)
+            return total
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        failed_count = 0
+        megamorphic_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            failed_count += cell.hbp_failed_promotion_count
+            if cell.hbp_megamorphic:
+                megamorphic_count += 1
+        assert failed_count >= 1
+        assert megamorphic_count >= 1
+
+    def test_hbp_min_candidates_delays_isolated_guard(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                total += promote(obj.v) + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_min_candidates', 2)
+            hot_loop(objs[0], n)
+            return hot_loop(objs[1], n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        variant_count = 0
+        candidate_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            variant_count += cell.hbp_variant_count
+            candidate_count += cell.hbp_candidate_count
+        assert variant_count == 0
+        assert candidate_count >= 1
+
+    def test_hbp_max_candidates_limits_candidate_sites(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v', 'w']
+            def __init__(self, v, w):
+                self.v = v
+                self.w = w
+
+        objs = [Obj(1, 10), Obj(2, 20), Obj(3, 30)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                total += promote(obj.v) + promote(obj.w) + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_max_candidates', 1)
+            total = 0
+            for obj in objs:
+                total += hot_loop(obj, n)
+            return total
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        candidate_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            candidate_count += cell.hbp_candidate_count
+        assert candidate_count <= 1
+
+    def test_hbp_entry_guard_exact_int_variant(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                total += promote(obj.v) + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hbp_entry_guard', 1)
+            return hot_loop(objs[0], n) + hot_loop(objs[1], n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+
+    def test_hbp_entry_guard_bool_variant(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'flag'])
+
+        def hot_loop(flag, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, flag=flag)
+                if promote(flag):
+                    total += i
+                else:
+                    total -= i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'enable_hbp_bool_promotion', 1)
+            set_param(None, 'enable_hbp_value_promotion', 0)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hbp_entry_guard', 1)
+            set_param(None, 'hbp_bool_entry_guard', 1)
+            return hot_loop(True, n) + hot_loop(False, n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+
+    def test_hbp_nullness_guard_variant(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        obj = Obj(3)
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                if obj is not None:
+                    total += obj.v + i
+                else:
+                    total -= i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'enable_hbp_nullness_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_nullness_threshold', 1)
+            return hot_loop(obj, n) + hot_loop(None, n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            variant_count += cell.hbp_variant_count
+        assert variant_count > 0
+
+    def test_hbp_max_loop_bridges_blocks_broad_loop(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2), Obj(3)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                total += promote(obj.v) + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_max_loop_bridges', 1)
+            total = 0
+            for obj in objs:
+                total += hot_loop(obj, n)
+            return total
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            variant_count += cell.hbp_variant_count
+        assert variant_count <= 1
+
+    def test_hbp_value_threshold_blocks_exact_value_variant(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                total += promote(obj.v) + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_value_threshold', n + 1)
+            return hot_loop(objs[0], n) + hot_loop(objs[1], n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            variant_count += cell.hbp_variant_count
+        assert variant_count == 0
+
+    def test_hbp_int_value_threshold_does_not_block_refs(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                promoted = promote(obj)
+                total += promoted.v + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_int_value_threshold', n + 1)
+            return hot_loop(objs[0], n) + hot_loop(objs[1], n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+
+    def test_hbp_max_value_variants_limits_exact_values(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2), Obj(3)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                total += promote(obj.v) + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_max_value_variants', 1)
+            set_param(None, 'hbp_entry_guard', 0)
+            total = 0
+            for obj in objs:
+                total += hot_loop(obj, n)
+            return total
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        value_variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            value_variant_count += cell.hbp_value_variant_count
+        assert value_variant_count <= 1
+
+    def test_hbp_ref_trace_budget_limits_ref_value_attempts(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2), Obj(3), Obj(4)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                promoted = promote(obj)
+                total += promoted.v + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_global_max_ref_traces', 1)
+            total = 0
+            for obj in objs:
+                total += hot_loop(obj, n)
+            return total
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            variant_count += cell.hbp_variant_count
+        assert variant_count <= 1
+
+    def test_hbp_ref_value_threshold_blocks_ref_value_variant(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                promoted = promote(obj)
+                total += promoted.v + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_ref_value_threshold', n + 1)
+            return hot_loop(objs[0], n) + hot_loop(objs[1], n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            variant_count += cell.hbp_variant_count
+        assert variant_count == 0
+
+    def test_hbp_bool_value_threshold_blocks_bool_variant(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'flag'])
+
+        def hot_loop(flag, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, flag=flag)
+                if promote(flag):
+                    total += i
+                else:
+                    total -= i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'enable_hbp_bool_promotion', 1)
+            set_param(None, 'enable_hbp_value_promotion', 0)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_bool_value_threshold', n + 1)
+            return hot_loop(True, n) + hot_loop(False, n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            variant_count += cell.hbp_variant_count
+        assert variant_count == 0
+
+    def test_hbp_max_bool_variants_limits_bool_values(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'flag'])
+
+        def hot_loop(flag, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, flag=flag)
+                if promote(flag):
+                    total += i
+                else:
+                    total -= i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'enable_hbp_bool_promotion', 1)
+            set_param(None, 'enable_hbp_value_promotion', 0)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_max_bool_variants', 1)
+            return hot_loop(True, n) + hot_loop(False, n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        bool_variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            bool_variant_count += cell.hbp_bool_variant_count
+        assert bool_variant_count <= 1
+
+    def test_hbp_max_ref_value_variants_limits_ref_values(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2), Obj(3)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                promoted = promote(obj)
+                total += promoted.v + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_max_ref_value_variants', 1)
+            total = 0
+            for obj in objs:
+                total += hot_loop(obj, n)
+            return total
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        ref_value_variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            ref_value_variant_count += cell.hbp_ref_value_variant_count
+        assert ref_value_variant_count <= 1
+
+    def test_hbp_max_ref_candidates_limits_ref_sites(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'a', 'b'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2), Obj(3)]
+
+        def hot_loop(a, b, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, a=a, b=b)
+                total += promote(a).v + promote(b).v + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_max_ref_candidates', 1)
+            return (hot_loop(objs[0], objs[1], n) +
+                    hot_loop(objs[1], objs[2], n))
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        candidate_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            candidate_count += cell.hbp_candidate_count
+        assert candidate_count <= 1
+
+    def test_hbp_entry_guard_exact_ref_variant(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                promoted = promote(obj)
+                total += promoted.v + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hbp_entry_guard', 1)
+            return hot_loop(objs[0], n) + hot_loop(objs[1], n)
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        ref_value_variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            ref_value_variant_count += cell.hbp_ref_value_variant_count
+        assert ref_value_variant_count > 0
+
+    def test_hbp_ref_bridge_threshold_blocks_low_pressure_ref_values(self):
+        myjitdriver = JitDriver(greens=[], reds=['n', 'i', 'total', 'obj'])
+
+        class Obj(object):
+            _immutable_fields_ = ['v']
+            def __init__(self, v):
+                self.v = v
+
+        objs = [Obj(1), Obj(2), Obj(3)]
+
+        def hot_loop(obj, n):
+            total = 0
+            i = 0
+            while i < n:
+                myjitdriver.jit_merge_point(n=n, i=i, total=total, obj=obj)
+                promoted = promote(obj)
+                total += promoted.v + i
+                i += 1
+            return total
+
+        def run(n):
+            set_param(None, 'threshold', 3)
+            set_param(None, 'trace_eagerness', 1)
+            set_param(None, 'retrace_limit', 0)
+            set_param(None, 'enable_hot_bridge_promotion', 1)
+            set_param(None, 'hot_bridge_threshold', 1)
+            set_param(None, 'hot_bridge_guard_threshold', 1)
+            set_param(None, 'hot_bridge_ref_bridge_threshold', 99)
+            total = 0
+            for obj in objs:
+                total += hot_loop(obj, n)
+            return total
+
+        res = self.meta_interp(run, [50])
+        assert res == run(50)
+        variant_count = 0
+        for cell in get_stats().get_all_jitcell_tokens():
+            variant_count += cell.hbp_variant_count
+        assert variant_count == 0
 
     def test_adaptive_bridge_lazy_defers_cold_bridges(self):
         # Stage 1: with a high lazy threshold (T_lazy >> n), the second

@@ -27,13 +27,24 @@ class FakeOptimizer(object):
     metainterp_sd = None
     optheap = None
     optrewrite = None
+    # bridgeopt's hbp_inherit lookup (pypy/pypy#5184) goes through
+    # optimizer.jitdriver_sd.warmstate.hbp_inherit; None short-circuits.
+    jitdriver_sd = None
 
     def __init__(self, cpu=None):
         self.constant_classes = {}
+        self.intbounds = {}
+        self.nonnulls = set()
         self.cpu = cpu
 
     def make_constant_class(self, arg, cls):
         self.constant_classes[arg] = cls
+
+    def setintbound(self, box, bound):
+        self.intbounds[box] = bound
+
+    def make_nonnull(self, box):
+        self.nonnulls.add(box)
 
 class FakeClass(object):
     pass

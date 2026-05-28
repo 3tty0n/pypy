@@ -3,7 +3,15 @@ optimizer of the bridge attached to a guard. """
 
 from rpython.jit.metainterp import resumecode
 from rpython.jit.metainterp.history import Const, ConstInt, CONST_NULL
+from rpython.jit.metainterp.optimizeopt.intutils import IntBound, MININT, MAXINT
+from rpython.jit.metainterp.resoperation import rop
 from .info import getptrinfo
+
+
+# Range for HBP intbound inheritance.  resumecode stores signed shorts; keep
+# this section compact and skip wider bounds, which the bridge can rediscover.
+_INTBOUND_SHORT_MIN = -(1 << 15)
+_INTBOUND_SHORT_MAX = (1 << 15) - 1
 
 
 # adds the following sections at the end of the resume code:
@@ -30,7 +38,109 @@ from .info import getptrinfo
 # <length>
 # (<const> <box2>) length times, if call_loopinvariant(const) == box2
 #                  box2 should be in liveboxes
+#
+# ---- integer-bound knowledge (pypy/pypy#5184; gated at write time by
+#      warmstate.hbp_inherit >= 1 and enable_hot_bridge_promotion)
+# <length>
+# (<box_idx> <lower> <upper>) length times
+#                             all three values are signed-short sized.
+#
+# ---- nullness-only knowledge (pypy/pypy#5184 phase B; gated identically)
+# <length>
+# (<box_idx>) length times       ref boxes that are non-null but whose
+#                                class section 1 did NOT cover (i.e.,
+#                                class still unknown).  When class is
+#                                known the parent's bit in section 1
+#                                already implies non-null, so this section
+#                                stays length 0.
 # ----
+
+
+def _hbp_inherit_level(optimizer):
+    """Return active hbp_inherit level, or 0 outside HBP inheritance."""
+    jd = optimizer.jitdriver_sd
+    if jd is None:
+        return 0
+    warmstate = jd.warmstate
+    if not warmstate.enable_hot_bridge_promotion:
+        return 0
+    return warmstate.hbp_inherit
+
+
+def _reader_has_more(reader):
+    return reader.cur_pos < len(reader.code.code)
+
+
+def _guard_may_use_hbp_inherit(optimizer, guard_op):
+    if guard_op is None:
+        return True
+    warmstate = optimizer.jitdriver_sd.warmstate
+    opnum = guard_op.getopnum()
+    if opnum == rop.GUARD_VALUE:
+        arg = guard_op.getarg(0)
+        if arg.type == "i":
+            if optimizer.getintbound(arg).is_bool():
+                return (warmstate.enable_hbp_bool_promotion and
+                        warmstate.hbp_inherit_bool)
+            return warmstate.enable_hbp_value_promotion
+        if arg.type == "r":
+            return warmstate.enable_hbp_ref_value_promotion
+        if arg.type == "f":
+            return warmstate.enable_hbp_float_value_promotion
+        return False
+    if opnum == rop.GUARD_CLASS:
+        return warmstate.enable_hbp_class_promotion
+    if opnum == rop.GUARD_TRUE or opnum == rop.GUARD_FALSE:
+        return (warmstate.enable_hbp_guard_bool_promotion and
+                warmstate.hbp_inherit_bool)
+    return False
+
+
+def _collect_intbound_entries(optimizer, liveboxes, skip_boxes):
+    """Return (box_idx, lower, upper) triples for liveboxes whose IntBound
+    is narrower than the universe and fits signed-short resume slots."""
+    entries = []
+    for idx, box in enumerate(liveboxes):
+        if box is None or box.type != "i":
+            continue
+        if box in skip_boxes:
+            continue
+        if idx > _INTBOUND_SHORT_MAX:
+            break  # liveboxes longer than 32767; can't encode the index
+        fw = box.get_forwarded()
+        if fw is None or not isinstance(fw, IntBound):
+            continue
+        # Universe range carries no usable info; skip.
+        if fw.lower == MININT and fw.upper == MAXINT:
+            continue
+        if (fw.lower < _INTBOUND_SHORT_MIN or
+                fw.upper > _INTBOUND_SHORT_MAX):
+            continue
+        entries.append((idx, fw.lower, fw.upper))
+    return entries
+
+
+def _collect_nullness_entries(optimizer, liveboxes, skip_boxes):
+    """Return livebox indices for ref boxes the parent proved non-null but
+    did NOT establish a known class (the class case is already covered by
+    section 1)."""
+    entries = []
+    for idx, box in enumerate(liveboxes):
+        if box is None or box.type != "r":
+            continue
+        if box in skip_boxes:
+            continue
+        if idx > _INTBOUND_SHORT_MAX:
+            break
+        info = getptrinfo(box)
+        if info is None:
+            continue
+        if info.get_known_class(optimizer.cpu) is not None:
+            continue  # section 1 already flipped the class bit for this box
+        if not info.is_nonnull():
+            continue
+        entries.append(idx)
+    return entries
 
 
 # maybe should be delegated to the optimization classes?
@@ -60,7 +170,8 @@ def decode_box(resumestorage, tagged, liveboxes, cpu):
         raise AssertionError("unreachable")
     return box
 
-def serialize_optimizer_knowledge(optimizer, numb_state, liveboxes, liveboxes_from_env, memo):
+def serialize_optimizer_knowledge(optimizer, numb_state, liveboxes,
+                                  liveboxes_from_env, memo, guard_op=None):
     available_boxes = {}
     for box in liveboxes:
         if box is not None and box in liveboxes_from_env:
@@ -121,7 +232,44 @@ def serialize_optimizer_knowledge(optimizer, numb_state, liveboxes, liveboxes_fr
     else:
         numb_state.append_int(0)
 
-def deserialize_optimizer_knowledge(optimizer, resumestorage, frontend_boxes, liveboxes):
+    if (_hbp_inherit_level(optimizer) < 1 or
+            not _guard_may_use_hbp_inherit(optimizer, guard_op)):
+        return
+    max_liveboxes = optimizer.jitdriver_sd.warmstate.hbp_inherit_max_liveboxes
+    if max_liveboxes > 0 and len(liveboxes) > max_liveboxes:
+        return
+
+    skip_boxes = {}
+    if guard_op is not None:
+        for i in range(guard_op.numargs()):
+            box = guard_op.getarg(i)
+            if not isinstance(box, Const):
+                skip_boxes[box] = None
+
+    intbound_entries = _collect_intbound_entries(
+        optimizer, liveboxes, skip_boxes)
+    nullness_entries = _collect_nullness_entries(
+        optimizer, liveboxes, skip_boxes)
+    if not intbound_entries and not nullness_entries:
+        return
+
+    # integer-bound knowledge.  Only emitted when HBP inheritance is enabled
+    # and this guard has inheritable state; the default hbp_inherit=0 stream
+    # stays byte-identical to bridgeopt's baseline sections.  See
+    # pypy/pypy#5184.
+    numb_state.append_int(len(intbound_entries))
+    for idx, lower, upper in intbound_entries:
+        numb_state.append_int(idx)
+        numb_state.append_int(lower)
+        numb_state.append_int(upper)
+
+    # nullness-only knowledge (pypy/pypy#5184 phase B).
+    numb_state.append_int(len(nullness_entries))
+    for idx in nullness_entries:
+        numb_state.append_int(idx)
+
+def deserialize_optimizer_knowledge(optimizer, resumestorage, frontend_boxes,
+                                    liveboxes, use_hbp_inherit=False):
     reader = resumecode.Reader(resumestorage.rd_numb)
     assert len(frontend_boxes) == len(liveboxes)
     metainterp_sd = optimizer.metainterp_sd
@@ -183,3 +331,41 @@ def deserialize_optimizer_knowledge(optimizer, resumestorage, frontend_boxes, li
         result_loopinvariant.append((i, box))
     if optimizer.optrewrite:
         optimizer.optrewrite.deserialize_optrewrite(result_loopinvariant)
+
+    if (not use_hbp_inherit or _hbp_inherit_level(optimizer) < 1 or
+            not _reader_has_more(reader)):
+        return
+
+    # integer-bound knowledge (pypy/pypy#5184).  Older/default resume data
+    # has no section here; _reader_has_more() above keeps that path valid.
+    length = reader.next_item()
+    for i in range(length):
+        idx = reader.next_item()
+        lower = reader.next_item()
+        upper = reader.next_item()
+        if idx < 0 or idx >= len(liveboxes):
+            continue
+        if lower > upper:
+            continue
+        box = liveboxes[idx]
+        if box.type != "i":
+            continue
+        optimizer.setintbound(box, IntBound(lower=lower, upper=upper))
+
+    if not _reader_has_more(reader):
+        return
+
+    # nullness-only knowledge (pypy/pypy#5184 phase B).
+    length = reader.next_item()
+    for i in range(length):
+        idx = reader.next_item()
+        if idx < 0 or idx >= len(liveboxes):
+            continue
+        box = liveboxes[idx]
+        if box.type != "r":
+            continue
+        # If section 1 already installed info (which subsumes nullness),
+        # leave it alone; optimizer.make_nonnull would no-op anyway.
+        if box.get_forwarded() is not None:
+            continue
+        optimizer.make_nonnull(box)

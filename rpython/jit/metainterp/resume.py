@@ -571,7 +571,8 @@ class ResumeDataVirtualAdder(VirtualVisitor):
         # add extra information about things the optimizer learned
         from rpython.jit.metainterp.optimizeopt.bridgeopt import serialize_optimizer_knowledge
         serialize_optimizer_knowledge(
-            self.optimizer, numb_state, liveboxes, liveboxes_from_env, self.memo)
+            self.optimizer, numb_state, liveboxes, liveboxes_from_env,
+            self.memo, self.guard_op)
 
 class AbstractVirtualInfo(object):
     kind = REF

@@ -230,19 +230,69 @@ class BaseJitCell(object):
 
 class WarmEnterState(object):
     enable_hot_bridge_promotion = False
+    enable_hbp_class_promotion = False
+    enable_hbp_bool_promotion = False
+    enable_hbp_guard_bool_promotion = False
+    enable_hbp_value_promotion = True
+    enable_hbp_ref_value_promotion = True
+    enable_hbp_float_value_promotion = True
+    hbp_any_promotion = False
     hot_bridge_threshold = 1
     hot_bridge_guard_threshold = 50
+    hot_bridge_value_threshold = 0
+    hot_bridge_int_value_threshold = 0
+    hot_bridge_ref_value_threshold = 0
+    hot_bridge_min_value_share_pct = 0
+    hot_bridge_bool_value_threshold = 0
+    hot_bridge_guard_bool_threshold = 200
+    hot_bridge_nullness_threshold = 200
     hot_bridge_max_variants = 8
+    hot_bridge_max_value_variants = 0
+    hot_bridge_max_bool_variants = 0
+    hot_bridge_max_ref_value_variants = 0
     hot_bridge_max_cardinality = 4
+    hot_bridge_min_candidates = 1
+    hot_bridge_max_candidates = 0
+    hot_bridge_max_ref_candidates = 0
+    hot_bridge_max_loop_bridges = 0
+    hot_bridge_global_max_variants = 0
+    hbp_global_variant_count = 0
+    hot_bridge_global_max_ref_traces = 0
+    hbp_global_ref_trace_count = 0
+    hot_bridge_ref_bridge_threshold = 0
+    hot_bridge_class_bridge_threshold = 0
+    hot_bridge_max_ops = 0
+    hot_bridge_max_guards = 0
+    hot_bridge_min_op_reduction = 0
+    hot_bridge_min_guard_reduction = 0
+    hot_bridge_min_op_reduction_pct = 0
+    hot_bridge_min_guard_reduction_pct = 0
+    hbp_entry_guard = False
+    hbp_entry_guard_ref_bridge_threshold = 0
+    hbp_bool_entry_guard = False
+    hbp_value_counter_slots = 1
+    hbp_inherit_max_liveboxes = 0
     # When False the cardinality clause in the HBP gate is vacuously true.
-    enable_hbp_cardinality_gate = False
+    enable_hbp_cardinality_gate = True
     enable_adaptive_bridge = False
     adaptive_bridge_lazy_threshold = 50
+    retrace_min_loop_bridges = 0
+    retrace_min_float_loop_bridges = 0
+    retrace_min_loop_bridges_for_allocations = 0
+    retrace_min_ops = 0
+    retrace_max_allocations = -1
+    # 0 = off, 1 = inherit guard facts (integer bounds and nullness) for
+    # HBP-promoted bridges (pypy/pypy#5184).  Read by bridgeopt.
+    hbp_inherit = 0
+    hbp_inherit_bool = True
 
     def __init__(self, warmrunnerdesc, jitdriver_sd):
         "NOT_RPYTHON"
         self.warmrunnerdesc = warmrunnerdesc
         self.jitdriver_sd = jitdriver_sd
+        self.hbp_global_variant_count = 0
+        self.hbp_global_ref_trace_count = 0
+        self._update_hbp_any_promotion()
         if warmrunnerdesc is not None:       # for tests
             self.cpu = warmrunnerdesc.cpu
         try:
@@ -330,6 +380,46 @@ class WarmEnterState(object):
 
     def set_param_enable_hot_bridge_promotion(self, value):
         self.enable_hot_bridge_promotion = bool(value)
+        self._update_hbp_any_promotion()
+
+    def set_param_enable_hbp_class_promotion(self, value):
+        self.enable_hbp_class_promotion = bool(value)
+        self._update_hbp_any_promotion()
+
+    def set_param_enable_hbp_bool_promotion(self, value):
+        self.enable_hbp_bool_promotion = bool(value)
+        self._update_hbp_any_promotion()
+
+    def set_param_enable_hbp_guard_bool_promotion(self, value):
+        self.enable_hbp_guard_bool_promotion = bool(value)
+        self._update_hbp_any_promotion()
+
+    def set_param_enable_hbp_nullness_promotion(self, value):
+        self.enable_hbp_nullness_promotion = bool(value)
+        self._update_hbp_any_promotion()
+
+    def set_param_enable_hbp_value_promotion(self, value):
+        self.enable_hbp_value_promotion = bool(value)
+        self._update_hbp_any_promotion()
+
+    def set_param_enable_hbp_ref_value_promotion(self, value):
+        self.enable_hbp_ref_value_promotion = bool(value)
+        self._update_hbp_any_promotion()
+
+    def set_param_enable_hbp_float_value_promotion(self, value):
+        self.enable_hbp_float_value_promotion = bool(value)
+        self._update_hbp_any_promotion()
+
+    def _update_hbp_any_promotion(self):
+        self.hbp_any_promotion = (
+            self.enable_hot_bridge_promotion and
+            (self.enable_hbp_value_promotion or
+             self.enable_hbp_ref_value_promotion or
+             self.enable_hbp_float_value_promotion or
+             self.enable_hbp_class_promotion or
+             self.enable_hbp_bool_promotion or
+             self.enable_hbp_guard_bool_promotion or
+             self.enable_hbp_nullness_promotion))
 
     def set_param_enable_hbp_cardinality_gate(self, value):
         self.enable_hbp_cardinality_gate = bool(value)
@@ -344,15 +434,163 @@ class WarmEnterState(object):
             raise ValueError
         self.hot_bridge_guard_threshold = value
 
+    def set_param_hot_bridge_value_threshold(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_value_threshold = value
+
+    def set_param_hot_bridge_int_value_threshold(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_int_value_threshold = value
+
+    def set_param_hot_bridge_ref_value_threshold(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_ref_value_threshold = value
+
+    def set_param_hot_bridge_min_value_share_pct(self, value):
+        if value < 0 or value > 100:
+            raise ValueError
+        self.hot_bridge_min_value_share_pct = value
+
+    def set_param_hot_bridge_bool_value_threshold(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_bool_value_threshold = value
+
+    def set_param_hot_bridge_guard_bool_threshold(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_guard_bool_threshold = value
+
+    def set_param_hot_bridge_nullness_threshold(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_nullness_threshold = value
+
     def set_param_hot_bridge_max_variants(self, value):
         if value < 1:
             raise ValueError
         self.hot_bridge_max_variants = value
 
+    def set_param_hot_bridge_max_value_variants(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_max_value_variants = value
+
+    def set_param_hot_bridge_max_bool_variants(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_max_bool_variants = value
+
+    def set_param_hot_bridge_max_ref_value_variants(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_max_ref_value_variants = value
+
     def set_param_hot_bridge_max_cardinality(self, value):
         if value < 1:
             raise ValueError
         self.hot_bridge_max_cardinality = value
+
+    def set_param_hot_bridge_min_candidates(self, value):
+        if value < 1:
+            raise ValueError
+        self.hot_bridge_min_candidates = value
+
+    def set_param_hot_bridge_max_candidates(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_max_candidates = value
+
+    def set_param_hot_bridge_max_ref_candidates(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_max_ref_candidates = value
+
+    def set_param_hot_bridge_max_failed_promotions(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_max_failed_promotions = value
+
+    def set_param_hot_bridge_max_loop_bridges(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_max_loop_bridges = value
+
+    def set_param_hot_bridge_global_max_variants(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_global_max_variants = value
+        self.hbp_global_variant_count = 0
+
+    def set_param_hot_bridge_global_max_ref_traces(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_global_max_ref_traces = value
+        self.hbp_global_ref_trace_count = 0
+
+    def set_param_hot_bridge_ref_bridge_threshold(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_ref_bridge_threshold = value
+
+    def set_param_hot_bridge_class_bridge_threshold(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_class_bridge_threshold = value
+
+    def set_param_hot_bridge_max_ops(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_max_ops = value
+
+    def set_param_hot_bridge_max_guards(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_max_guards = value
+
+    def set_param_hot_bridge_min_op_reduction(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_min_op_reduction = value
+
+    def set_param_hot_bridge_min_guard_reduction(self, value):
+        if value < 0:
+            raise ValueError
+        self.hot_bridge_min_guard_reduction = value
+
+    def set_param_hot_bridge_min_op_reduction_pct(self, value):
+        if value < 0 or value > 100:
+            raise ValueError
+        self.hot_bridge_min_op_reduction_pct = value
+
+    def set_param_hot_bridge_min_guard_reduction_pct(self, value):
+        if value < 0 or value > 100:
+            raise ValueError
+        self.hot_bridge_min_guard_reduction_pct = value
+
+    def set_param_hbp_entry_guard(self, value):
+        self.hbp_entry_guard = bool(value)
+
+    def set_param_hbp_entry_guard_ref_bridge_threshold(self, value):
+        if value < 0:
+            raise ValueError
+        self.hbp_entry_guard_ref_bridge_threshold = value
+
+    def set_param_hbp_bool_entry_guard(self, value):
+        self.hbp_bool_entry_guard = bool(value)
+
+    def set_param_hbp_value_counter_slots(self, value):
+        if value < 1 or value > 2:
+            raise ValueError
+        self.hbp_value_counter_slots = value
+
+    def set_param_hbp_inherit_max_liveboxes(self, value):
+        if value < 0:
+            raise ValueError
+        self.hbp_inherit_max_liveboxes = value
 
     def set_param_enable_adaptive_bridge(self, value):
         # Adaptive Bridge Compilation Strategy (stages 1-2 + HBP, gated on
@@ -367,6 +605,39 @@ class WarmEnterState(object):
         if value < 0:
             raise ValueError
         self.adaptive_bridge_lazy_threshold = value
+
+    def set_param_retrace_min_loop_bridges(self, value):
+        if value < 0:
+            raise ValueError
+        self.retrace_min_loop_bridges = value
+
+    def set_param_retrace_min_float_loop_bridges(self, value):
+        if value < 0:
+            raise ValueError
+        self.retrace_min_float_loop_bridges = value
+
+    def set_param_retrace_min_loop_bridges_for_allocations(self, value):
+        if value < 0:
+            raise ValueError
+        self.retrace_min_loop_bridges_for_allocations = value
+
+    def set_param_retrace_min_ops(self, value):
+        if value < 0:
+            raise ValueError
+        self.retrace_min_ops = value
+
+    def set_param_retrace_max_allocations(self, value):
+        if value < -1:
+            raise ValueError
+        self.retrace_max_allocations = value
+
+    def set_param_hbp_inherit(self, value):
+        if value < 0:
+            raise ValueError
+        self.hbp_inherit = value
+
+    def set_param_hbp_inherit_bool(self, value):
+        self.hbp_inherit_bool = bool(value)
 
     def set_param_vec(self, ivalue):
         self.vec = bool(ivalue)

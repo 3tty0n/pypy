@@ -57,6 +57,9 @@ class LLTrace(object):
                 # we don't care about the value 13 here, because we gonna
                 # fish it from the extra slot on frame anyway
                 op.getdescr().make_a_counter_per_value(op, 13)
+            elif (opnum == rop.GUARD_CLASS or
+                  opnum == rop.GUARD_NONNULL_CLASS):
+                op.getdescr().make_a_counter_per_class(op, 13)
             if op.getdescr() is not None:
                 if op.is_guard() or op.getopnum() == rop.FINISH:
                     newdescr = op.getdescr()
@@ -1248,7 +1251,7 @@ class LLFrame(object):
             llmemory.cast_int_to_adr(klass),
             rclass.CLASSTYPE)
         if value.typeptr != expected_class:
-            self.fail_guard(descr)
+            self.fail_guard(descr, extra_value=arg)
 
     def execute_guard_nonnull_class(self, descr, arg, klass):
         self.execute_guard_nonnull(descr, arg)

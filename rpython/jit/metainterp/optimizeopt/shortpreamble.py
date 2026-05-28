@@ -476,6 +476,9 @@ class ExtendedShortPreambleBuilder(AbstractShortPreambleBuilder):
         self.jump_args.append(preamble_op.preamble_op)
 
     def use_box(self, box, preamble_op, optimizer=None):
+        if self.label_args is None:
+            # setup not called, rather abandon the trace than crash
+            raise InvalidLoop("ExtendedShortPreambleBuilder not properly initialized")
         jump_op = self.short.pop()
         AbstractShortPreambleBuilder.use_box(self, box, preamble_op, optimizer)
         self.short.append(jump_op)

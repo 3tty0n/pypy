@@ -731,6 +731,11 @@ class Regalloc(BaseRegalloc):
 
         x = self.make_sure_var_in_reg(boxes[0], boxes)
         y_val = rffi.cast(lltype.Signed, boxes[1].getint())
+        opnum = op.getopnum()
+        if (opnum == rop.GUARD_CLASS or
+                opnum == rop.GUARD_NONNULL_CLASS):
+            op.getdescr().make_a_counter_per_class(op,
+                self.cpu.all_reg_indexes[x.value])
         return self._prepare_guard(op, [x, imm(y_val)])
 
     prepare_op_guard_nonnull_class = prepare_op_guard_class

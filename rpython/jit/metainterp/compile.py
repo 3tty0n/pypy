@@ -14,7 +14,7 @@ from rpython.jit.metainterp.resoperation import (
     ResOperation, rop, get_deep_immutable_oplist, OpHelpers,
     AbstractResOpOrInputArg, InputArgInt, InputArgRef, InputArgFloat)
 from rpython.jit.metainterp.history import (TreeLoop, JitCellToken,
-    TargetToken, AbstractFailDescr, Const, ConstInt)
+    TargetToken, AbstractFailDescr, Const, ConstInt, ConstPtr)
 from rpython.jit.metainterp import history, jitexc
 from rpython.jit.metainterp.optimize import InvalidLoop
 from rpython.jit.metainterp.resume import (
@@ -715,7 +715,14 @@ class ResumeDescr(AbstractFailDescr):
         return self
 
 class AbstractResumeGuardDescr(ResumeDescr):
-    _attrs_ = ('status', 'rd_fail_count', 'rd_value_sig')
+    _attrs_ = ('status', 'rd_fail_count', 'rd_value_sig',
+               'rd_hbp_bool_value', 'rd_hbp_bool_failarg_index',
+               'rd_hbp_value_failarg_index', 'rd_last_value',
+               'rd_last_ref_value',
+               'rd_value_fail_count', 'rd_hbp_candidate_seen',
+               'rd_hbp_rejected', 'rd_hbp_value1',
+               'rd_hbp_value1_fail_count', 'rd_hbp_value2',
+               'rd_hbp_value2_fail_count')
 
     status = r_uint(0)
     # Adaptive bridge stage-1: per-descr failure counter. Counts every
@@ -726,12 +733,25 @@ class AbstractResumeGuardDescr(ResumeDescr):
     # Saturating signature of distinct guard_value values seen failing
     # this guard; popcount estimates the guard's value cardinality.
     rd_value_sig = r_uint(0)
+    rd_hbp_bool_value = -1
+    rd_hbp_bool_failarg_index = -1
+    rd_hbp_value_failarg_index = -1
+    rd_last_value = 0
+    rd_last_ref_value = lltype.nullptr(llmemory.GCREF.TO)
+    rd_value_fail_count = r_uint(0)
+    rd_hbp_candidate_seen = False
+    rd_hbp_rejected = False
+    rd_hbp_value1 = 0
+    rd_hbp_value1_fail_count = r_uint(0)
+    rd_hbp_value2 = 0
+    rd_hbp_value2_fail_count = r_uint(0)
 
     ST_BUSY_FLAG    = 0x01     # if set, busy tracing from the guard
     ST_TYPE_MASK    = 0x06     # mask for the type (TY_xxx)
-    ST_SHIFT        = 3        # in "status >> ST_SHIFT" is stored:
+    ST_CLASS_FLAG   = 0x08     # TY_REF counter is keyed by cls_of_box(ref)
+    ST_SHIFT        = 4        # in "status >> ST_SHIFT" is stored:
                                # - if TY_NONE, the jitcounter hash directly
-                               # - otherwise, the guard_value failarg index
+                               # - otherwise, the guard failarg index
     ST_SHIFT_MASK   = -(1 << ST_SHIFT)
     TY_NONE         = 0x00
     TY_INT          = 0x02
@@ -740,6 +760,22 @@ class AbstractResumeGuardDescr(ResumeDescr):
 
     def get_resumestorage(self):
         raise NotImplementedError("abstract base class")
+
+    def copy_hbp_counters_from(self, other):
+        self.rd_fail_count = other.rd_fail_count
+        self.rd_value_sig = other.rd_value_sig
+        self.rd_hbp_bool_value = other.rd_hbp_bool_value
+        self.rd_hbp_bool_failarg_index = other.rd_hbp_bool_failarg_index
+        self.rd_hbp_value_failarg_index = other.rd_hbp_value_failarg_index
+        self.rd_last_value = other.rd_last_value
+        self.rd_last_ref_value = other.rd_last_ref_value
+        self.rd_value_fail_count = other.rd_value_fail_count
+        self.rd_hbp_candidate_seen = other.rd_hbp_candidate_seen
+        self.rd_hbp_rejected = other.rd_hbp_rejected
+        self.rd_hbp_value1 = other.rd_hbp_value1
+        self.rd_hbp_value1_fail_count = other.rd_hbp_value1_fail_count
+        self.rd_hbp_value2 = other.rd_hbp_value2
+        self.rd_hbp_value2_fail_count = other.rd_hbp_value2_fail_count
 
     def handle_fail(self, deadframe, metainterp_sd, jitdriver_sd):
         # Adaptive bridge stage 1 (lazy compilation): even when the
@@ -772,11 +808,132 @@ class AbstractResumeGuardDescr(ResumeDescr):
         adaptive = warmstate.enable_adaptive_bridge
         if not adaptive and not warmstate.enable_hot_bridge_promotion:
             return False
-        self.rd_fail_count += r_uint(1)
+        if not adaptive and not warmstate.hbp_any_promotion:
+            return False
+        if (not adaptive and warmstate.hot_bridge_min_candidates > 1 and
+                self.rd_hbp_candidate_seen):
+            loop_token = self.rd_loop_token.loop_token_wref()
+            if (loop_token is not None and
+                    loop_token.hbp_candidate_count <
+                        warmstate.hot_bridge_min_candidates):
+                return False
+        if adaptive or self._hbp_site_can_still_promote(warmstate):
+            self.rd_fail_count += r_uint(1)
         if not adaptive:
             return False
         if self.rd_fail_count < r_uint(warmstate.adaptive_bridge_lazy_threshold):
             return True
+        return False
+
+    def _hbp_site_can_still_promote(self, warmstate):
+        if self.rd_hbp_rejected:
+            return False
+        if not warmstate.enable_hot_bridge_promotion:
+            return False
+        if not warmstate.hbp_any_promotion:
+            return False
+        typetag = self.status & self.ST_TYPE_MASK
+        if typetag == 0 and self.rd_hbp_bool_value < 0:
+            self.rd_hbp_rejected = True
+            return False
+        if not self._hbp_counts_this_failure(warmstate):
+            return False
+        loop_token = self.rd_loop_token.loop_token_wref()
+        if loop_token is None or loop_token.hbp_megamorphic:
+            self.rd_hbp_rejected = True
+            return False
+        if (warmstate.hot_bridge_max_failed_promotions > 0 and
+                loop_token.hbp_failed_promotion_count >=
+                    warmstate.hot_bridge_max_failed_promotions):
+            self.rd_hbp_rejected = True
+            return False
+        bool_value = self.rd_hbp_bool_value
+        is_ref_value_counter = (bool_value < 0 and
+                                typetag == self.TY_REF and
+                                not bool(self.status & self.ST_CLASS_FLAG))
+        ordinary_bridge_count = (
+            loop_token.bridge_count - loop_token.hbp_variant_count)
+        if ordinary_bridge_count < 0:
+            ordinary_bridge_count = 0
+        bridge_threshold = warmstate.hot_bridge_threshold
+        if (is_ref_value_counter and
+                warmstate.hot_bridge_ref_bridge_threshold > 0):
+            bridge_threshold = warmstate.hot_bridge_ref_bridge_threshold
+        elif (typetag == self.TY_REF and
+                bool(self.status & self.ST_CLASS_FLAG) and
+                warmstate.hot_bridge_class_bridge_threshold > 0):
+            bridge_threshold = warmstate.hot_bridge_class_bridge_threshold
+        if ordinary_bridge_count < bridge_threshold:
+            return False
+        if (warmstate.hot_bridge_max_loop_bridges > 0 and
+                ordinary_bridge_count > warmstate.hot_bridge_max_loop_bridges):
+            self.rd_hbp_rejected = True
+            return False
+        if (warmstate.hot_bridge_global_max_variants > 0 and
+                warmstate.hbp_global_variant_count >=
+                    warmstate.hot_bridge_global_max_variants):
+            self.rd_hbp_rejected = True
+            return False
+        if (warmstate.hot_bridge_max_candidates > 0 and
+                not self.rd_hbp_candidate_seen and
+                loop_token.hbp_candidate_count >=
+                    warmstate.hot_bridge_max_candidates):
+            self.rd_hbp_rejected = True
+            return False
+        if (is_ref_value_counter and
+                warmstate.hot_bridge_max_ref_candidates > 0 and
+                not self.rd_hbp_candidate_seen and
+                loop_token.hbp_candidate_count >=
+                    warmstate.hot_bridge_max_ref_candidates):
+            self.rd_hbp_rejected = True
+            return False
+        if (bool_value >= 0 and warmstate.hot_bridge_max_bool_variants > 0 and
+                loop_token.hbp_bool_variant_count >=
+                    warmstate.hot_bridge_max_bool_variants):
+            self.rd_hbp_rejected = True
+            return False
+        if (bool_value < 0 and typetag != self.TY_NONE and
+                not bool(self.status & self.ST_CLASS_FLAG) and
+                warmstate.hot_bridge_max_value_variants > 0 and
+                loop_token.hbp_value_variant_count >=
+                    warmstate.hot_bridge_max_value_variants):
+            self.rd_hbp_rejected = True
+            return False
+        if (is_ref_value_counter and
+                warmstate.hot_bridge_max_ref_value_variants > 0 and
+                loop_token.hbp_ref_value_variant_count >=
+                    warmstate.hot_bridge_max_ref_value_variants):
+            self.rd_hbp_rejected = True
+            return False
+        if (is_ref_value_counter and
+                warmstate.hot_bridge_global_max_ref_traces > 0 and
+                warmstate.hbp_global_ref_trace_count >=
+                    warmstate.hot_bridge_global_max_ref_traces):
+            self.rd_hbp_rejected = True
+            return False
+        return True
+
+    def _hbp_counts_this_failure(self, warmstate):
+        bool_value = self.rd_hbp_bool_value
+        if bool_value >= 0:
+            if bool_value >= 4:
+                return warmstate.enable_hbp_nullness_promotion
+            if bool_value >= 2:
+                return warmstate.enable_hbp_guard_bool_promotion
+            return warmstate.enable_hbp_bool_promotion
+        typetag = self.status & self.ST_TYPE_MASK
+        if typetag == 0:
+            return False
+        is_class_counter = (typetag == self.TY_REF and
+                            bool(self.status & self.ST_CLASS_FLAG))
+        if is_class_counter:
+            return warmstate.enable_hbp_class_promotion
+        if typetag == self.TY_INT:
+            return warmstate.enable_hbp_value_promotion
+        if typetag == self.TY_REF:
+            return warmstate.enable_hbp_ref_value_promotion
+        if typetag == self.TY_FLOAT:
+            return warmstate.enable_hbp_float_value_promotion
         return False
 
     def _trace_and_compile_from_bridge(self, deadframe, metainterp_sd,
@@ -822,12 +979,24 @@ class AbstractResumeGuardDescr(ResumeDescr):
             # fetch the actual value of the guard_value, possibly turning
             # it to an integer
             if typetag == self.TY_INT:
-                intval = metainterp_sd.cpu.get_value_direct(deadframe, 'i',
-                                                            index)
+                if self.status & self.ST_CLASS_FLAG:
+                    intval = index
+                else:
+                    intval = metainterp_sd.cpu.get_value_direct(deadframe,
+                                                                'i', index)
             elif typetag == self.TY_REF:
                 refval = metainterp_sd.cpu.get_value_direct(deadframe, 'r',
                                                             index)
-                intval = lltype.cast_ptr_to_int(refval)
+                if self.status & self.ST_CLASS_FLAG:
+                    if refval:
+                        clsbox = metainterp_sd.cpu.cls_of_box(
+                            ConstPtr(refval))
+                        intval = clsbox.getint()
+                    else:
+                        intval = 0
+                else:
+                    intval = lltype.cast_ptr_to_int(refval)
+                    self.rd_last_ref_value = refval
             elif typetag == self.TY_FLOAT:
                 floatval = metainterp_sd.cpu.get_value_direct(deadframe, 'f',
                                                               index)
@@ -840,18 +1009,51 @@ class AbstractResumeGuardDescr(ResumeDescr):
                     intval = llmemory.cast_adr_to_int(
                         llmemory.cast_int_to_adr(intval), "forced")
 
-            # OR one of 64 hash buckets per distinct guard_value value.
-            # Knuth multiply then high 6 bits, so 8-byte-aligned pointers
-            # and integer tags spread without low-bit aliasing. r_uint
-            # keeps the multiply wrapping (no Signed overflow).
-            _sig = r_uint(intval) * r_uint(1442968193)
-            self.rd_value_sig |= r_uint(1) << intmask(_sig >> 58)
+            if self._hbp_site_can_still_promote(jitdriver_sd.warmstate):
+                # OR one of 64 hash buckets per distinct guard_value value.
+                # Knuth multiply then high 6 bits, so 8-byte-aligned pointers
+                # and integer tags spread without low-bit aliasing. r_uint
+                # keeps the multiply wrapping (no Signed overflow).
+                _sig = r_uint(intval) * r_uint(1442968193)
+                self.rd_value_sig |= r_uint(1) << intmask(_sig >> 58)
+                if jitdriver_sd.warmstate.hbp_value_counter_slots <= 1:
+                    if (self.rd_value_fail_count == r_uint(0) or
+                            self.rd_last_value != intval):
+                        self.rd_last_value = intval
+                        self.rd_value_fail_count = r_uint(1)
+                    else:
+                        self.rd_value_fail_count += r_uint(1)
+                else:
+                    self._hbp_note_value_failure(intval)
 
             hash = r_uint(current_object_addr_as_int(self) * 777767777 +
                           intval * 1442968193)
         #
         increment = jitdriver_sd.warmstate.increment_trace_eagerness
         return jitcounter.tick(hash, increment)
+
+    def _hbp_note_value_failure(self, intval):
+        self.rd_last_value = intval
+        if (self.rd_hbp_value1_fail_count != r_uint(0) and
+                self.rd_hbp_value1 == intval):
+            self.rd_hbp_value1_fail_count += r_uint(1)
+            self.rd_value_fail_count = self.rd_hbp_value1_fail_count
+        elif (self.rd_hbp_value2_fail_count != r_uint(0) and
+                self.rd_hbp_value2 == intval):
+            self.rd_hbp_value2_fail_count += r_uint(1)
+            self.rd_value_fail_count = self.rd_hbp_value2_fail_count
+        elif self.rd_hbp_value1_fail_count == r_uint(0):
+            self.rd_hbp_value1 = intval
+            self.rd_hbp_value1_fail_count = r_uint(1)
+            self.rd_value_fail_count = r_uint(1)
+        elif self.rd_hbp_value2_fail_count == r_uint(0):
+            self.rd_hbp_value2 = intval
+            self.rd_hbp_value2_fail_count = r_uint(1)
+            self.rd_value_fail_count = r_uint(1)
+        else:
+            self.rd_hbp_value1_fail_count -= r_uint(1)
+            self.rd_hbp_value2_fail_count -= r_uint(1)
+            self.rd_value_fail_count = r_uint(1)
 
     def start_compiling(self):
         # start tracing and compiling from this guard.
@@ -871,6 +1073,24 @@ class AbstractResumeGuardDescr(ResumeDescr):
         # Polymorphism signal for hot_bridge_promotion. Tracked on the
         # cell_token so cascading bridges share the count. Issue #5146.
         metainterp.resumekey_original_loop_token.bridge_count += 1
+        if metainterp.prefer_loop_over_bridge:
+            warmstate = metainterp.jitdriver_sd.warmstate
+            cell_token = metainterp.resumekey_original_loop_token
+            warmstate.hbp_global_variant_count += 1
+            cell_token.hbp_variant_count += 1
+            typetag = self.status & self.ST_TYPE_MASK
+            is_class_counter = (
+                typetag == self.TY_REF and
+                bool(self.status & self.ST_CLASS_FLAG))
+            if self.rd_hbp_bool_value >= 0:
+                cell_token.hbp_bool_variant_count += 1
+            elif (typetag != self.TY_NONE and
+                    not is_class_counter):
+                cell_token.hbp_value_variant_count += 1
+                if typetag == self.TY_REF:
+                    cell_token.hbp_ref_value_variant_count += 1
+            if cell_token.hbp_variant_count >= warmstate.hot_bridge_max_variants:
+                cell_token.hbp_megamorphic = True
         new_loop.original_jitcell_token = metainterp.resumekey_original_loop_token
         inputargs = new_loop.inputargs
         if not we_are_translated():
@@ -897,6 +1117,26 @@ class AbstractResumeGuardDescr(ResumeDescr):
             assert 0, box.type
         self.status = ty | (r_uint(index) << self.ST_SHIFT)
 
+    def make_a_counter_per_class(self, guard_class_op, index):
+        opnum = guard_class_op.getopnum()
+        assert (opnum == rop.GUARD_CLASS or
+                opnum == rop.GUARD_NONNULL_CLASS)
+        self.status = (self.TY_REF | self.ST_CLASS_FLAG |
+                       (r_uint(index) << self.ST_SHIFT))
+
+    def get_hbp_bool_value(self):
+        return self.rd_hbp_bool_value
+
+    def make_a_counter_per_const_bool(self, guard_op):
+        assert (guard_op.getopnum() == rop.GUARD_TRUE or
+                guard_op.getopnum() == rop.GUARD_FALSE)
+        value = self.rd_hbp_bool_value
+        if value >= 2:
+            value -= 2
+        assert value == 0 or value == 1
+        self.status = (self.TY_INT | self.ST_CLASS_FLAG |
+                       (r_uint(value) << self.ST_SHIFT))
+
     def store_hash(self, metainterp_sd):
         if metainterp_sd.warmrunnerdesc is not None:   # for tests
             jitcounter = metainterp_sd.warmrunnerdesc.jitcounter
@@ -904,7 +1144,14 @@ class AbstractResumeGuardDescr(ResumeDescr):
             self.status = hash & self.ST_SHIFT_MASK
 
 class ResumeGuardCopiedDescr(AbstractResumeGuardDescr):
-    _attrs_ = ('status', 'rd_fail_count', 'rd_value_sig', 'prev')
+    _attrs_ = ('status', 'rd_fail_count', 'rd_value_sig',
+               'rd_hbp_bool_value', 'rd_hbp_bool_failarg_index',
+               'rd_hbp_value_failarg_index', 'rd_last_value',
+               'rd_last_ref_value',
+               'rd_value_fail_count', 'rd_hbp_candidate_seen',
+               'rd_hbp_rejected', 'rd_hbp_value1',
+               'rd_hbp_value1_fail_count', 'rd_hbp_value2',
+               'rd_hbp_value2_fail_count', 'prev')
 
     def __init__(self, prev):
         AbstractResumeGuardDescr.__init__(self)
@@ -914,9 +1161,11 @@ class ResumeGuardCopiedDescr(AbstractResumeGuardDescr):
     def copy_all_attributes_from(self, other):
         assert isinstance(other, ResumeGuardCopiedDescr)
         self.prev = other.prev
+        self.copy_hbp_counters_from(other)
 
     def clone(self):
         cloned = ResumeGuardCopiedDescr(self.prev)
+        cloned.copy_hbp_counters_from(self)
         return cloned
 
     def get_resumestorage(self):
@@ -927,7 +1176,14 @@ class ResumeGuardCopiedDescr(AbstractResumeGuardDescr):
 class ResumeGuardDescr(AbstractResumeGuardDescr):
     _attrs_ = ('rd_numb', 'rd_consts', 'rd_virtuals',
                'rd_pendingfields', 'status', 'rd_fail_count',
-               'rd_value_sig')
+               'rd_value_sig', 'rd_hbp_bool_value',
+               'rd_hbp_bool_failarg_index',
+               'rd_hbp_value_failarg_index', 'rd_last_value',
+               'rd_last_ref_value',
+               'rd_value_fail_count', 'rd_hbp_candidate_seen',
+               'rd_hbp_rejected', 'rd_hbp_value1',
+               'rd_hbp_value1_fail_count', 'rd_hbp_value2',
+               'rd_hbp_value2_fail_count')
     rd_numb = lltype.nullptr(NUMBERING)
     rd_consts = None
     rd_virtuals = None
@@ -940,6 +1196,7 @@ class ResumeGuardDescr(AbstractResumeGuardDescr):
         self.rd_pendingfields = other.rd_pendingfields
         self.rd_virtuals = other.rd_virtuals
         self.rd_numb = other.rd_numb
+        self.copy_hbp_counters_from(other)
         # we don't copy status
         if other.rd_vector_info:
             self.rd_vector_info = other.rd_vector_info.clone()
@@ -1123,6 +1380,13 @@ def compile_trace(metainterp, resumekey, runtime_boxes, ends_with_jump=False):
     call_pure_results = metainterp.call_pure_results
     resumestorage = resumekey.get_resumestorage()
 
+    if not ends_with_jump and metainterp.prefer_loop_over_bridge:
+        # HBP is only meaningful for bridge traces that can become loop-like
+        # entries.  A trace that finishes/raises before a jump is just an
+        # ordinary bridge and must not consume HBP variant budget.
+        _reject_hbp_site(resumekey, jitdriver_sd.warmstate)
+        metainterp.prefer_loop_over_bridge = False
+
     trace.tracing_done()
     metainterp_sd.jitlog.start_new_trace(metainterp_sd,
         faildescr=resumekey, entry_bridge=False,
@@ -1143,6 +1407,8 @@ def compile_trace(metainterp, resumekey, runtime_boxes, ends_with_jump=False):
         info, newops = data.optimize_trace(
             metainterp_sd, jitdriver_sd, metainterp.box_names_memo)
     except InvalidLoop:
+        if ends_with_jump and metainterp.prefer_loop_over_bridge:
+            _reject_hbp_site(resumekey, jitdriver_sd.warmstate)
         metainterp_sd.jitlog.trace_aborted()
         # XXX I am fairly convinced that optimize_bridge cannot actually raise
         # InvalidLoop
@@ -1156,11 +1422,62 @@ def compile_trace(metainterp, resumekey, runtime_boxes, ends_with_jump=False):
     if info.final():
         new_trace.inputargs = info.inputargs
         target_token = new_trace.operations[-1].getdescr()
+        if ends_with_jump and metainterp.prefer_loop_over_bridge:
+            if _hbp_final_trace_over_budget(new_trace.operations,
+                                            jitdriver_sd.warmstate):
+                _reject_hbp_site(resumekey, jitdriver_sd.warmstate)
+                debug_print('HBP final trace budget missed, aborting')
+                return None
+            # HBP requested a loop variant, but optimize_bridge returned a
+            # final bridge (usually a conservative fallback to the preamble).
+            # Count this as an ordinary bridge, not as a consumed HBP variant.
+            _reject_hbp_site(resumekey, jitdriver_sd.warmstate)
+            metainterp.prefer_loop_over_bridge = False
         resumekey.compile_and_attach(metainterp, new_trace, inputargs)
         return target_token
+    if ends_with_jump and metainterp.prefer_loop_over_bridge:
+        if _hbp_final_trace_over_budget(new_trace.operations,
+                                        jitdriver_sd.warmstate):
+            _reject_hbp_site(resumekey, jitdriver_sd.warmstate)
+            debug_print('HBP retrace budget missed, aborting')
+            return None
     new_trace.inputargs = info.renamed_inputargs
     metainterp.retrace_needed(new_trace, info)
     return None
+
+def _reject_hbp_site(resumedescr, warmstate):
+    if resumedescr is not None:
+        if isinstance(resumedescr, AbstractResumeGuardDescr):
+            resumedescr.rd_hbp_rejected = True
+        resumestorage = resumedescr.get_resumestorage()
+        if resumestorage is None:
+            return
+        resumestorage.rd_hbp_rejected = True
+        if warmstate.hot_bridge_max_failed_promotions > 0:
+            rd_loop_token = resumestorage.rd_loop_token
+            if rd_loop_token is None:
+                return
+            loop_token = rd_loop_token.loop_token_wref()
+            if loop_token is not None:
+                loop_token.hbp_failed_promotion_count += 1
+                if (loop_token.hbp_failed_promotion_count >=
+                        warmstate.hot_bridge_max_failed_promotions):
+                    loop_token.hbp_megamorphic = True
+
+def _hbp_final_trace_over_budget(operations, warmstate):
+    max_ops = warmstate.hot_bridge_max_ops
+    if max_ops > 0 and len(operations) > max_ops:
+        return True
+    max_guards = warmstate.hot_bridge_max_guards
+    if max_guards <= 0:
+        return False
+    guard_count = 0
+    for op in operations:
+        if op.is_guard():
+            guard_count += 1
+            if guard_count > max_guards:
+                return True
+    return False
 
 # ____________________________________________________________
 

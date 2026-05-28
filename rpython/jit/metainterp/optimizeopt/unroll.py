@@ -1,6 +1,7 @@
 
 import sys
-from rpython.jit.metainterp.history import Const, TargetToken, JitCellToken
+from rpython.jit.metainterp.history import (
+    Const, ConstInt, ConstPtr, TargetToken, JitCellToken)
 from rpython.jit.metainterp.optimizeopt.shortpreamble import ShortBoxes,\
      ShortPreambleBuilder, ExtendedShortPreambleBuilder, PreambleOp
 from rpython.jit.metainterp.optimizeopt import info, intutils
@@ -23,6 +24,8 @@ class UnrollOptimizer(Optimizer):
         Optimizer.__init__(self, metainterp_sd, jitdriver_sd, optimizations)
         self.optunroll = OptUnroll()
         self.optunroll.optimizer = self
+        self._hbp_entry_guard_box = None
+        self._hbp_entry_guard_op = None
 
     def force_op_from_preamble(self, preamble_op):
         if isinstance(preamble_op, PreambleOp):
@@ -190,14 +193,42 @@ class UnrollOptimizer(Optimizer):
                         prefer_loop_over_bridge=False):
         from rpython.jit.metainterp.optimizeopt.bridgeopt import deserialize_optimizer_knowledge
         frontend_inputargs = trace.inputargs
+        min_reduction = 0
+        if prefer_loop_over_bridge:
+            min_reduction = self.jitdriver_sd.warmstate.hot_bridge_min_op_reduction
+        raw_op_count = 0
+        raw_guard_count = 0
+        min_op_reduction_pct = 0
+        if prefer_loop_over_bridge:
+            min_op_reduction_pct = (
+                self.jitdriver_sd.warmstate.hot_bridge_min_op_reduction_pct)
+        if min_reduction > 0 or min_op_reduction_pct > 0:
+            raw_op_count = self._count_trace_ops(trace)
+        min_guard_reduction = 0
+        if prefer_loop_over_bridge:
+            min_guard_reduction = (
+                self.jitdriver_sd.warmstate.hot_bridge_min_guard_reduction)
+        min_guard_reduction_pct = 0
+        if prefer_loop_over_bridge:
+            min_guard_reduction_pct = (
+                self.jitdriver_sd.warmstate.hot_bridge_min_guard_reduction_pct)
+        if min_guard_reduction > 0 or min_guard_reduction_pct > 0:
+            raw_guard_count = self._count_trace_guards(trace)
         trace = trace.get_iter()
         self.optunroll._check_no_forwarding([trace.inputargs])
+        self.trace = trace
+        self._hbp_entry_guard_op = None
+        self._maybe_emit_hbp_entry_guard(trace, resumestorage,
+                                        prefer_loop_over_bridge)
         if resumestorage:
             deserialize_optimizer_knowledge(self,
-                                            resumestorage, frontend_inputargs,
-                                            trace.inputargs)
+                                            resumestorage,
+                                            frontend_inputargs,
+                                            trace.inputargs,
+                                            prefer_loop_over_bridge)
         info, ops = self.propagate_all_forward(trace,
             call_pure_results, False)
+        self._clear_hbp_entry_guard_box()
         jump_op = info.jump_op
         cell_token = jump_op.getdescr()
         assert isinstance(cell_token, JitCellToken)
@@ -226,26 +257,54 @@ class UnrollOptimizer(Optimizer):
             warmrunnerdescr = self.metainterp_sd.warmrunnerdesc
             limit = warmrunnerdescr.memory_manager.retrace_limit
             warmstate = self.jitdriver_sd.warmstate
-            selective_retrace = (warmstate.enable_hot_bridge_promotion or
-                                 warmstate.enable_adaptive_bridge)
+            selective_retrace = warmstate.enable_adaptive_bridge
             # selective_retrace must stay additive: never deny a
             # within-budget retrace that plain retrace_limit would do.
             do_retrace = (prefer_loop_over_bridge or not selective_retrace
                           or cell_token.retraced_count < limit)
-            if do_retrace and cell_token.retraced_count < limit:
+            min_retrace_bridges = warmstate.retrace_min_loop_bridges
+            float_op_count = 0
+            if (not prefer_loop_over_bridge and
+                    (min_retrace_bridges > 0 or
+                     warmstate.retrace_min_float_loop_bridges > 0)):
+                float_op_count = self._count_float_ops_from(0)
+            if (not prefer_loop_over_bridge and min_retrace_bridges > 0 and
+                    cell_token.bridge_count < min_retrace_bridges and
+                    float_op_count == 0):
+                do_retrace = False
+            min_float_retrace_bridges = (
+                warmstate.retrace_min_float_loop_bridges)
+            if (not prefer_loop_over_bridge and
+                    min_float_retrace_bridges > 0 and
+                    cell_token.bridge_count < min_float_retrace_bridges and
+                    float_op_count > 0):
+                do_retrace = False
+            min_alloc_retrace_bridges = (
+                warmstate.retrace_min_loop_bridges_for_allocations)
+            if (not prefer_loop_over_bridge and
+                    min_alloc_retrace_bridges > 0 and
+                    cell_token.bridge_count < min_alloc_retrace_bridges and
+                    self._count_malloc_ops_from(0) > 0):
+                do_retrace = False
+            min_retrace_ops = warmstate.retrace_min_ops
+            if (not prefer_loop_over_bridge and min_retrace_ops > 0 and
+                    len(self._newoperations) - snap_len < min_retrace_ops):
+                do_retrace = False
+            max_retrace_allocations = warmstate.retrace_max_allocations
+            if (not prefer_loop_over_bridge and
+                    max_retrace_allocations >= 0 and
+                    self._count_malloc_ops_from(snap_len) >
+                        max_retrace_allocations):
+                do_retrace = False
+            if prefer_loop_over_bridge:
+                # HBP/adaptive promotion is bounded by its own hotness and
+                # variant gates.  Let it produce a loop variant even when the
+                # global retrace_limit is 0, otherwise HBP inherits stock-vs-
+                # retrace benchmarking noise instead of measuring promotion.
+                debug_print('HBP retracing')
+            elif do_retrace and cell_token.retraced_count < limit:
                 cell_token.retraced_count += 1
                 debug_print('Retracing (%d/%d)' % (cell_token.retraced_count, limit))
-            elif prefer_loop_over_bridge:
-                # HBP wanted a loop variant but this cell's retrace budget is
-                # spent.  Skip the force_boxes=True attempt below (which
-                # emits setfields to materialise virtuals defensively before
-                # then falling to preamble anyway) and go straight to a
-                # normal preamble bridge.  Must emit a terminal JUMP — the
-                # backend's patch_jump_for_descr asserts on bridges with no
-                # terminator (rc=-6 on go/deltablue under HBP otherwise).
-                self.jump_to_preamble(cell_token, jump_op)
-                self._deep_clean_newops()
-                return info, self._newoperations[:]
             else:
                 # Try forcing boxes to avoid jumping to the preamble
                 try:
@@ -260,12 +319,212 @@ class UnrollOptimizer(Optimizer):
                 self.jump_to_preamble(cell_token, jump_op)
                 self._deep_clean_newops()
                 return info, self._newoperations[:]
+        max_ops = self.jitdriver_sd.warmstate.hot_bridge_max_ops
+        if (prefer_loop_over_bridge and max_ops > 0 and
+                len(self._newoperations) > max_ops):
+            del self._newoperations[snap_len:]
+            debug_print('HBP size budget reached, jumping to preamble')
+            self.jump_to_preamble(cell_token, jump_op)
+            self._deep_clean_newops()
+            return info, self._newoperations[:]
+        max_guards = self.jitdriver_sd.warmstate.hot_bridge_max_guards
+        if prefer_loop_over_bridge and max_guards > 0:
+            guard_count = 0
+            for op in self._newoperations:
+                if op.is_guard():
+                    guard_count += 1
+            if guard_count > max_guards:
+                del self._newoperations[snap_len:]
+                debug_print('HBP guard budget reached, jumping to preamble')
+                self.jump_to_preamble(cell_token, jump_op)
+                self._deep_clean_newops()
+                return info, self._newoperations[:]
+        if (prefer_loop_over_bridge and min_reduction > 0 and
+                raw_op_count - len(self._newoperations) < min_reduction):
+            del self._newoperations[snap_len:]
+            debug_print('HBP op reduction budget missed, jumping to preamble')
+            self.jump_to_preamble(cell_token, jump_op)
+            self._deep_clean_newops()
+            return info, self._newoperations[:]
+        if (prefer_loop_over_bridge and min_op_reduction_pct > 0 and
+                self._misses_hbp_reduction_pct(
+                    raw_op_count, len(self._newoperations),
+                    min_op_reduction_pct)):
+            del self._newoperations[snap_len:]
+            debug_print('HBP op reduction pct missed, jumping to preamble')
+            self.jump_to_preamble(cell_token, jump_op)
+            self._deep_clean_newops()
+            return info, self._newoperations[:]
+        if prefer_loop_over_bridge and min_guard_reduction > 0:
+            guard_count = 0
+            for op in self._newoperations:
+                if op.is_guard():
+                    guard_count += 1
+            if raw_guard_count - guard_count < min_guard_reduction:
+                del self._newoperations[snap_len:]
+                debug_print('HBP guard reduction budget missed, jumping to preamble')
+                self.jump_to_preamble(cell_token, jump_op)
+                self._deep_clean_newops()
+                return info, self._newoperations[:]
+        if prefer_loop_over_bridge and min_guard_reduction_pct > 0:
+            guard_count = 0
+            for op in self._newoperations:
+                if op.is_guard():
+                    guard_count += 1
+            if self._misses_hbp_reduction_pct(
+                    raw_guard_count, guard_count, min_guard_reduction_pct):
+                del self._newoperations[snap_len:]
+                debug_print('HBP guard reduction pct missed, jumping to preamble')
+                self.jump_to_preamble(cell_token, jump_op)
+                self._deep_clean_newops()
+                return info, self._newoperations[:]
         exported_state = self.optunroll.export_state(info.jump_op.getarglist(),
                                            info.inputargs, runtime_boxes,
                                            box_names_memo)
         exported_state.quasi_immutable_deps = self.quasi_immutable_deps
         self._clean_optimization_info(self._newoperations)
+        self._hbp_entry_guard_op = None
         return exported_state, self._newoperations
+
+    def _count_trace_ops(self, trace):
+        traceiter = trace.get_iter()
+        count = 0
+        while not traceiter.done():
+            traceiter.next()
+            count += 1
+        return count
+
+    def _count_trace_guards(self, trace):
+        traceiter = trace.get_iter()
+        count = 0
+        while not traceiter.done():
+            op = traceiter.next()
+            if op.is_guard():
+                count += 1
+        return count
+
+    def _count_malloc_ops_from(self, start):
+        count = 0
+        for i in range(start, len(self._newoperations)):
+            if rop.is_malloc(self._newoperations[i].getopnum()):
+                count += 1
+        return count
+
+    def _count_float_ops_from(self, start):
+        count = 0
+        for i in range(start, len(self._newoperations)):
+            op = self._newoperations[i]
+            if op.type == 'f':
+                count += 1
+                continue
+            for j in range(op.numargs()):
+                if op.getarg(j).type == 'f':
+                    count += 1
+                    break
+        return count
+
+    def _misses_hbp_reduction_pct(self, raw_count, opt_count, min_pct):
+        if raw_count <= 0:
+            return True
+        reduction = raw_count - opt_count
+        if reduction <= 0:
+            return True
+        return reduction * 100 < raw_count * min_pct
+
+    def _maybe_emit_hbp_entry_guard(self, trace, resumestorage,
+                                    prefer_loop_over_bridge):
+        warmstate = self.jitdriver_sd.warmstate
+        if (not prefer_loop_over_bridge or not warmstate.hbp_entry_guard or
+                resumestorage is None):
+            return
+        bool_value = resumestorage.rd_hbp_bool_value
+        if (bool_value >= 0 and bool_value < 4 and
+                warmstate.hbp_bool_entry_guard):
+            index = resumestorage.rd_hbp_bool_failarg_index
+            if index < 0 or index >= len(trace.inputargs):
+                return
+            box = trace.inputargs[index]
+            if box.type != 'i':
+                return
+            if bool_value >= 2:
+                bool_value -= 2
+            if bool_value == 0:
+                guard = ResOperation(rop.GUARD_FALSE, [box])
+            else:
+                assert bool_value == 1
+                guard = ResOperation(rop.GUARD_TRUE, [box])
+            self._emit_hbp_entry_guard(guard, resumestorage,
+                                       trace.inputargs)
+            self.make_constant_int(box, bool_value)
+            self._hbp_entry_guard_box = box
+            self._hbp_entry_guard_op = guard
+            return
+        typetag = resumestorage.status & compile.AbstractResumeGuardDescr.ST_TYPE_MASK
+        if (resumestorage.rd_hbp_bool_value >= 0 or
+                resumestorage.status & compile.AbstractResumeGuardDescr.ST_CLASS_FLAG):
+            return
+        if (typetag != compile.AbstractResumeGuardDescr.TY_INT and
+                typetag != compile.AbstractResumeGuardDescr.TY_REF):
+            return
+        if (typetag == compile.AbstractResumeGuardDescr.TY_REF and
+                warmstate.hbp_entry_guard_ref_bridge_threshold > 0):
+            rd_loop_token = resumestorage.rd_loop_token
+            if rd_loop_token is None:
+                return
+            loop_token = rd_loop_token.loop_token_wref()
+            if loop_token is None:
+                return
+            bridge_count = (loop_token.bridge_count -
+                            loop_token.hbp_variant_count)
+            if bridge_count < warmstate.hbp_entry_guard_ref_bridge_threshold:
+                return
+        index = resumestorage.rd_hbp_value_failarg_index
+        if index < 0 or index >= len(trace.inputargs):
+            return
+        box = trace.inputargs[index]
+        if typetag == compile.AbstractResumeGuardDescr.TY_INT:
+            if box.type != 'i':
+                return
+            constbox = ConstInt(resumestorage.rd_last_value)
+        else:
+            if box.type != 'r':
+                return
+            constbox = ConstPtr(resumestorage.rd_last_ref_value)
+        guard = ResOperation(rop.GUARD_VALUE, [box, constbox])
+        self._emit_hbp_entry_guard(guard, resumestorage, trace.inputargs)
+        self.make_constant(box, constbox)
+        self._hbp_entry_guard_box = box
+        self._hbp_entry_guard_op = guard
+
+    def _emit_hbp_entry_guard(self, guard, resumestorage, inputargs):
+        descr = compile.invent_fail_descr_for_op(
+            guard.getopnum(), self, resumestorage)
+        # A failure here means "this value is not the specialization key
+        # for the HBP variant we are entering".  Do not recursively promote
+        # that synthetic guard; let the ordinary bridge path handle it.
+        descr.rd_hbp_rejected = True
+        descr.store_hash(self.metainterp_sd)
+        guard.setdescr(descr)
+        guard.setfailargs(inputargs[:])
+        self._newoperations.append(guard)
+        self._emittedoperations[guard] = None
+        self._really_emitted_operation = guard
+
+    def _discard_hbp_entry_guard(self):
+        guard = self._hbp_entry_guard_op
+        if guard is None:
+            return
+        for i in range(len(self._newoperations)):
+            if self._newoperations[i] is guard:
+                del self._newoperations[i]
+                break
+        self._hbp_entry_guard_op = None
+
+    def _clear_hbp_entry_guard_box(self):
+        box = self._hbp_entry_guard_box
+        if box is not None:
+            box.set_forwarded(None)
+            self._hbp_entry_guard_box = None
 
     def _deep_clean_newops(self):
         # Like _clean_optimization_info but also strips Info forwards from

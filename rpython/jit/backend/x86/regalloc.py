@@ -503,6 +503,11 @@ class RegAlloc(BaseRegalloc, VectorRegallocMixin):
     def consider_guard_class(self, op):
         assert not isinstance(op.getarg(0), Const)
         x = self.rm.make_sure_var_in_reg(op.getarg(0))
+        opnum = op.getopnum()
+        if (opnum == rop.GUARD_CLASS or
+                opnum == rop.GUARD_NONNULL_CLASS):
+            op.getdescr().make_a_counter_per_class(op,
+                self.assembler.cpu.all_reg_indexes[x.value])
         y = self.loc(op.getarg(1))
         self.perform_guard(op, [x, y], None)
 

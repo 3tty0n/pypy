@@ -123,6 +123,12 @@ class AbstractDescr(AbstractValue):
         from rpython.rtyper import rclass
         return ptr2int(lltype.nullptr(rclass.OBJECT_VTABLE))
 
+    def get_hbp_bool_value(self):
+        return -1
+
+    def make_a_counter_per_const_bool(self, op):
+        pass
+
 DONT_CHANGE = AbstractDescr()
 
 class AbstractFailDescr(AbstractDescr):
@@ -131,6 +137,7 @@ class AbstractFailDescr(AbstractDescr):
 
     _attrs_ = ('adr_jump_offset', 'rd_locs', 'rd_loop_token', 'rd_vector_info')
 
+    rd_loop_token = None
     rd_vector_info = None
 
     def handle_fail(self, deadframe, metainterp_sd, jitdriver_sd):
@@ -165,6 +172,9 @@ class BasicFailDescr(AbstractFailDescr):
         self.identifier = identifier      # for testing
 
     def make_a_counter_per_value(self, op, index):
+        pass # for testing
+
+    def make_a_counter_per_class(self, op, index):
         pass # for testing
 
 
@@ -442,6 +452,11 @@ class JitCellToken(AbstractDescr):
     retraced_count = 0
     bridge_count = 0
     hbp_variant_count = 0
+    hbp_value_variant_count = 0
+    hbp_ref_value_variant_count = 0
+    hbp_bool_variant_count = 0
+    hbp_candidate_count = 0
+    hbp_failed_promotion_count = 0
     hbp_megamorphic = False
     invalidated = False
     outermost_jitdriver_sd = None

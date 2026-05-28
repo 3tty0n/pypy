@@ -719,11 +719,19 @@ class Optimizer(Optimization):
         if not isinstance(descr, compile.ResumeGuardCopiedDescr):
             descr.copy_all_attributes_from(last_descr)
         guard_op.setdescr(descr)
-        guard_op.setfailargs(last_guard_op.getfailargs())
+        failargs = last_guard_op.getfailargs()
+        guard_op.setfailargs(failargs)
         descr.store_hash(self.metainterp_sd)
         assert isinstance(guard_op, GuardResOp)
         if guard_op.getopnum() == rop.GUARD_VALUE:
-            guard_op = self._maybe_replace_guard_value(guard_op, descr)
+            guard_op = self._maybe_replace_guard_value(guard_op, descr,
+                                                       failargs)
+        elif (guard_op.getopnum() == rop.GUARD_TRUE or
+              guard_op.getopnum() == rop.GUARD_FALSE):
+            self._maybe_mark_guard_bool(guard_op, descr, failargs)
+        elif (guard_op.getopnum() == rop.GUARD_NONNULL or
+              guard_op.getopnum() == rop.GUARD_ISNULL):
+            self._maybe_mark_guard_nullness(guard_op, descr)
         return guard_op
 
     def getlastop(self):
@@ -775,10 +783,50 @@ class Optimizer(Optimization):
         descr.store_final_boxes(op, newboxes, self.metainterp_sd)
         #
         if op.getopnum() == rop.GUARD_VALUE:
-            op = self._maybe_replace_guard_value(op, descr)
+            op = self._maybe_replace_guard_value(op, descr, newboxes)
+        elif (op.getopnum() == rop.GUARD_TRUE or
+              op.getopnum() == rop.GUARD_FALSE):
+            self._maybe_mark_guard_bool(op, descr, newboxes)
+        elif (op.getopnum() == rop.GUARD_NONNULL or
+              op.getopnum() == rop.GUARD_ISNULL):
+            self._maybe_mark_guard_nullness(op, descr)
         return op
 
-    def _maybe_replace_guard_value(self, op, descr):
+    def _find_failarg_index(self, box, newboxes):
+        if newboxes is None:
+            return -1
+        for i in range(len(newboxes)):
+            if newboxes[i] is box:
+                return i
+        return -1
+
+    def _maybe_mark_guard_bool(self, op, descr, newboxes):
+        warmstate = self.jitdriver_sd.warmstate
+        if (not warmstate.enable_hot_bridge_promotion or
+            not warmstate.enable_hbp_guard_bool_promotion):
+            return
+        if op.getopnum() == rop.GUARD_TRUE:
+            descr.rd_hbp_bool_value = 2
+        else:
+            assert op.getopnum() == rop.GUARD_FALSE
+            descr.rd_hbp_bool_value = 3
+        descr.rd_hbp_bool_failarg_index = self._find_failarg_index(
+            op.getarg(0), newboxes)
+
+    def _maybe_mark_guard_nullness(self, op, descr):
+        warmstate = self.jitdriver_sd.warmstate
+        if (not warmstate.enable_hot_bridge_promotion or
+            not warmstate.enable_hbp_nullness_promotion):
+            return
+        if op.getopnum() == rop.GUARD_NONNULL:
+            descr.rd_hbp_bool_value = 4
+        else:
+            assert op.getopnum() == rop.GUARD_ISNULL
+            descr.rd_hbp_bool_value = 5
+
+    def _maybe_replace_guard_value(self, op, descr, newboxes):
+        descr.rd_hbp_value_failarg_index = self._find_failarg_index(
+            op.getarg(0), newboxes)
         if op.getarg(0).type == 'i':
             b = self.getintbound(op.getarg(0))
             if b.is_bool():
@@ -801,6 +849,11 @@ class Optimizer(Optimization):
                     # not crash here.
                     return op
                 newop = self.replace_op_with(op, opnum, [op.getarg(0)], descr)
+                if (self.jitdriver_sd.warmstate.enable_hbp_bool_promotion and
+                    self.jitdriver_sd.warmstate.enable_hot_bridge_promotion):
+                    descr.rd_hbp_bool_value = 1 - constvalue
+                    descr.rd_hbp_bool_failarg_index = (
+                        self._find_failarg_index(op.getarg(0), newboxes))
                 return newop
         return op
 
@@ -907,5 +960,3 @@ class CantReplaceGuards(object):
 
     def __exit__(self, *args):
         self.optimizer.can_replace_guards = self.oldval
-
-

@@ -827,6 +827,11 @@ class Regalloc(BaseRegalloc):
         assert not isinstance(op.getarg(0), Const)
         x = self.make_sure_var_in_reg(op.getarg(0))
         y_val = rffi.cast(lltype.Signed, op.getarg(1).getint())
+        opnum = op.getopnum()
+        if (opnum == rop.GUARD_CLASS or
+                opnum == rop.GUARD_NONNULL_CLASS):
+            op.getdescr().make_a_counter_per_class(op,
+                self.cpu.all_reg_indexes[x.value])
         arglocs = self._guard_impl(op)
         return [x, imm(y_val)] + arglocs
 

@@ -483,6 +483,60 @@ class FakeJitDriverStaticData(object):
     vec = False
     class warmstate:
         pureop_historylength = 16
+        # HBP attrs (read from unroll.py and bridgeopt.py — match the
+        # defaults on the real WarmEnterState).
+        enable_hot_bridge_promotion = False
+        hot_bridge_threshold = 1
+        hot_bridge_guard_threshold = 50
+        hot_bridge_value_threshold = 0
+        hot_bridge_int_value_threshold = 0
+        hot_bridge_ref_value_threshold = 0
+        hot_bridge_min_value_share_pct = 0
+        hot_bridge_bool_value_threshold = 0
+        hot_bridge_guard_bool_threshold = 200
+        hot_bridge_nullness_threshold = 200
+        hot_bridge_max_variants = 8
+        hot_bridge_max_value_variants = 0
+        hot_bridge_max_bool_variants = 0
+        hot_bridge_max_ref_value_variants = 0
+        hot_bridge_max_cardinality = 4
+        hot_bridge_min_candidates = 1
+        hot_bridge_max_candidates = 0
+        hot_bridge_max_failed_promotions = 0
+        hot_bridge_max_loop_bridges = 0
+        hot_bridge_global_max_variants = 0
+        hbp_global_variant_count = 0
+        hot_bridge_global_max_ref_traces = 0
+        hbp_global_ref_trace_count = 0
+        hot_bridge_ref_bridge_threshold = 0
+        hot_bridge_class_bridge_threshold = 0
+        hot_bridge_max_ops = 0
+        hot_bridge_max_guards = 0
+        hot_bridge_min_op_reduction = 0
+        hot_bridge_min_guard_reduction = 0
+        hot_bridge_min_op_reduction_pct = 0
+        hot_bridge_min_guard_reduction_pct = 0
+        hbp_entry_guard = False
+        hbp_bool_entry_guard = False
+        hbp_inherit_max_liveboxes = 0
+        enable_hbp_cardinality_gate = False
+        enable_hbp_class_promotion = False
+        enable_hbp_bool_promotion = False
+        enable_hbp_guard_bool_promotion = False
+        enable_hbp_nullness_promotion = False
+        enable_hbp_value_promotion = True
+        enable_hbp_ref_value_promotion = True
+        enable_hbp_float_value_promotion = True
+        enable_adaptive_bridge = False
+        adaptive_bridge_lazy_threshold = 50
+        retrace_min_loop_bridges = 0
+        retrace_min_float_loop_bridges = 0
+        retrace_min_loop_bridges_for_allocations = 0
+        retrace_min_ops = 0
+        retrace_max_allocations = -1
+        # bridgeopt's IntBound section (pypy/pypy#5184) reads this.
+        hbp_inherit = 0
+        hbp_inherit_bool = True
 
     virtualizable_info = None
 

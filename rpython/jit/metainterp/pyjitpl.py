@@ -24,7 +24,7 @@ from rpython.rlib.debug import debug_start, debug_stop, debug_print
 from rpython.rlib.debug import have_debug_prints
 from rpython.rlib.jit import Counters
 from rpython.rlib.objectmodel import we_are_translated, specialize, always_inline
-from rpython.rlib.rarithmetic import r_uint
+from rpython.rlib.rarithmetic import r_uint, intmask
 from rpython.rlib.unroll import unrolling_iterable
 from rpython.rtyper.lltypesystem import lltype, rffi, llmemory
 from rpython.rtyper import rclass
@@ -2931,46 +2931,184 @@ class MetaInterp(object):
         assert isinstance(key, compile.ResumeGuardDescr)
         self.resumekey_original_loop_token = resumedescr.rd_loop_token.loop_token_wref()
         warmstate = self.jitdriver_sd.warmstate
-        if warmstate.enable_hot_bridge_promotion:
+        if key.rd_hbp_rejected:
+            resumedescr.rd_hbp_rejected = True
+        if (warmstate.enable_hot_bridge_promotion and
+                not resumedescr.rd_hbp_rejected):
             typetag = resumedescr.status & compile.AbstractResumeGuardDescr.ST_TYPE_MASK
+            bool_value = resumedescr.rd_hbp_bool_value
+            is_class_counter = (typetag ==
+                compile.AbstractResumeGuardDescr.TY_REF and
+                bool(resumedescr.status &
+                    compile.AbstractResumeGuardDescr.ST_CLASS_FLAG))
+            is_bool_counter = bool_value >= 0
+            is_nullness_counter = bool_value >= 4
+            is_guard_bool_counter = bool_value >= 2 and bool_value < 4
+            is_value_counter = not is_class_counter and not is_bool_counter
+            is_ref_value_counter = (is_value_counter and typetag ==
+                compile.AbstractResumeGuardDescr.TY_REF)
             cell_token = self.resumekey_original_loop_token
-            retrace_budget = True
-            if cell_token is not None:
-                warmrunnerdescr = self.staticdata.warmrunnerdesc
-                if (warmrunnerdescr is not None and
-                        warmrunnerdescr.memory_manager is not None):
-                    rl = warmrunnerdescr.memory_manager.retrace_limit
-                    if rl >= 0:
-                        retrace_budget = cell_token.retraced_count < rl
-            # hbp stage 1: gate promotion on low value-cardinality so
-            # megamorphic guards fall through to generic bridges.
-            if (typetag != 0 and cell_token is not None
-                    and retrace_budget
-                    and not cell_token.hbp_megamorphic
-                    and cell_token.bridge_count
-                        >= warmstate.hot_bridge_threshold
-                    and resumedescr.rd_fail_count
-                        >= r_uint(warmstate.hot_bridge_guard_threshold)
-                    and (not warmstate.enable_hbp_cardinality_gate
-                         or _hbp_popcount(resumedescr.rd_value_sig)
-                            <= warmstate.hot_bridge_max_cardinality)):
-                self.prefer_loop_over_bridge = True
-                cell_token.hbp_variant_count += 1
-                if (cell_token.hbp_variant_count
-                        >= warmstate.hot_bridge_max_variants):
-                    cell_token.hbp_megamorphic = True
-                debug_print("HBPEV grant")
-            elif (typetag != 0 and cell_token is not None
-                    and not retrace_budget
-                    and not cell_token.hbp_megamorphic
-                    and cell_token.bridge_count
-                        >= warmstate.hot_bridge_threshold
-                    and resumedescr.rd_fail_count
-                        >= r_uint(warmstate.hot_bridge_guard_threshold)
-                    and (not warmstate.enable_hbp_cardinality_gate
-                         or _hbp_popcount(resumedescr.rd_value_sig)
-                            <= warmstate.hot_bridge_max_cardinality)):
-                debug_print("HBPEV deny_budget")
+            hbp_kind_enabled = True
+            if is_nullness_counter:
+                hbp_kind_enabled = warmstate.enable_hbp_nullness_promotion
+            elif is_guard_bool_counter:
+                hbp_kind_enabled = warmstate.enable_hbp_guard_bool_promotion
+            elif is_bool_counter:
+                hbp_kind_enabled = warmstate.enable_hbp_bool_promotion
+            elif is_class_counter:
+                hbp_kind_enabled = warmstate.enable_hbp_class_promotion
+            elif typetag == compile.AbstractResumeGuardDescr.TY_INT:
+                hbp_kind_enabled = warmstate.enable_hbp_value_promotion
+            elif typetag == compile.AbstractResumeGuardDescr.TY_REF:
+                hbp_kind_enabled = warmstate.enable_hbp_ref_value_promotion
+            elif typetag == compile.AbstractResumeGuardDescr.TY_FLOAT:
+                hbp_kind_enabled = warmstate.enable_hbp_float_value_promotion
+            else:
+                hbp_kind_enabled = False
+            if not hbp_kind_enabled:
+                pass
+            elif (cell_token is not None and
+                    warmstate.hot_bridge_min_candidates > 1 and
+                    resumedescr.rd_hbp_candidate_seen and
+                    cell_token.hbp_candidate_count <
+                        warmstate.hot_bridge_min_candidates):
+                pass
+            else:
+                value_kind_enabled = True
+                if is_value_counter:
+                    if typetag == compile.AbstractResumeGuardDescr.TY_INT:
+                        value_kind_enabled = (
+                            warmstate.enable_hbp_value_promotion)
+                    elif typetag == compile.AbstractResumeGuardDescr.TY_REF:
+                        value_kind_enabled = (
+                            warmstate.enable_hbp_ref_value_promotion)
+                    elif typetag == compile.AbstractResumeGuardDescr.TY_FLOAT:
+                        value_kind_enabled = (
+                            warmstate.enable_hbp_float_value_promotion)
+                    else:
+                        value_kind_enabled = False
+                guard_threshold = warmstate.hot_bridge_guard_threshold
+                if is_nullness_counter:
+                    guard_threshold = warmstate.hot_bridge_nullness_threshold
+                elif is_guard_bool_counter:
+                    guard_threshold = warmstate.hot_bridge_guard_bool_threshold
+                elif (is_bool_counter and
+                        warmstate.hot_bridge_bool_value_threshold):
+                    guard_threshold = warmstate.hot_bridge_bool_value_threshold
+                elif (is_value_counter and typetag ==
+                        compile.AbstractResumeGuardDescr.TY_INT and
+                        warmstate.hot_bridge_int_value_threshold):
+                    guard_threshold = warmstate.hot_bridge_int_value_threshold
+                elif (is_ref_value_counter and
+                        warmstate.hot_bridge_ref_value_threshold):
+                    guard_threshold = warmstate.hot_bridge_ref_value_threshold
+                elif is_value_counter and warmstate.hot_bridge_value_threshold:
+                    guard_threshold = warmstate.hot_bridge_value_threshold
+                fail_count = resumedescr.rd_fail_count
+                if is_value_counter:
+                    fail_count = resumedescr.rd_value_fail_count
+                value_share_ok = True
+                min_value_share_pct = warmstate.hot_bridge_min_value_share_pct
+                if is_value_counter and min_value_share_pct > 0:
+                    total_fail_count = resumedescr.rd_fail_count
+                    value_share_ok = (
+                        total_fail_count == r_uint(0) or
+                        fail_count * r_uint(100) >=
+                        total_fail_count * r_uint(min_value_share_pct))
+                ordinary_bridge_count = 0
+                if cell_token is not None:
+                    ordinary_bridge_count = (
+                        cell_token.bridge_count - cell_token.hbp_variant_count)
+                    if ordinary_bridge_count < 0:
+                        ordinary_bridge_count = 0
+                bridge_threshold = warmstate.hot_bridge_threshold
+                if (is_ref_value_counter and
+                        warmstate.hot_bridge_ref_bridge_threshold > 0):
+                    bridge_threshold = (
+                        warmstate.hot_bridge_ref_bridge_threshold)
+                elif (is_class_counter and
+                        warmstate.hot_bridge_class_bridge_threshold > 0):
+                    bridge_threshold = (
+                        warmstate.hot_bridge_class_bridge_threshold)
+                # hbp stage 1: gate promotion on low value-cardinality so
+                # megamorphic guards fall through to generic bridges.
+                hbp_candidate = ((typetag != 0 or is_bool_counter)
+                        and (not is_class_counter
+                             or warmstate.enable_hbp_class_promotion)
+                        and (not is_bool_counter
+                             or (is_nullness_counter and
+                                 warmstate.enable_hbp_nullness_promotion)
+                             or (is_guard_bool_counter and
+                                 warmstate.enable_hbp_guard_bool_promotion)
+                             or (not is_guard_bool_counter and
+                                 warmstate.enable_hbp_bool_promotion))
+                        and (not is_value_counter or value_kind_enabled)
+                        and cell_token is not None
+                        and not cell_token.hbp_megamorphic
+                        and (warmstate.hot_bridge_max_failed_promotions <= 0
+                             or cell_token.hbp_failed_promotion_count <
+                                warmstate.hot_bridge_max_failed_promotions)
+                        and (warmstate.hot_bridge_global_max_variants <= 0
+                             or warmstate.hbp_global_variant_count <
+                                warmstate.hot_bridge_global_max_variants)
+                        and (not is_value_counter
+                             or warmstate.hot_bridge_max_value_variants <= 0
+                             or cell_token.hbp_value_variant_count <
+                                warmstate.hot_bridge_max_value_variants)
+                        and (not is_bool_counter
+                             or warmstate.hot_bridge_max_bool_variants <= 0
+                             or cell_token.hbp_bool_variant_count <
+                                warmstate.hot_bridge_max_bool_variants)
+                        and (not is_ref_value_counter
+                             or warmstate.hot_bridge_max_ref_value_variants <= 0
+                             or cell_token.hbp_ref_value_variant_count <
+                                warmstate.hot_bridge_max_ref_value_variants)
+                        and (not is_ref_value_counter
+                             or warmstate.hot_bridge_global_max_ref_traces <= 0
+                             or warmstate.hbp_global_ref_trace_count <
+                                warmstate.hot_bridge_global_max_ref_traces)
+                        and value_share_ok
+                        and ordinary_bridge_count >=
+                            bridge_threshold
+                        and (warmstate.hot_bridge_max_loop_bridges <= 0
+                             or ordinary_bridge_count <=
+                                warmstate.hot_bridge_max_loop_bridges)
+                        and (warmstate.hot_bridge_max_candidates <= 0
+                             or resumedescr.rd_hbp_candidate_seen
+                             or cell_token.hbp_candidate_count <
+                                warmstate.hot_bridge_max_candidates)
+                        and (not is_ref_value_counter
+                             or warmstate.hot_bridge_max_ref_candidates <= 0
+                             or resumedescr.rd_hbp_candidate_seen
+                             or cell_token.hbp_candidate_count <
+                                warmstate.hot_bridge_max_ref_candidates)
+                        and fail_count >= r_uint(guard_threshold)
+                        and (is_bool_counter
+                             or not warmstate.enable_hbp_cardinality_gate
+                             or _hbp_popcount(resumedescr.rd_value_sig)
+                                <= warmstate.hot_bridge_max_cardinality))
+                if hbp_candidate:
+                    if not resumedescr.rd_hbp_candidate_seen:
+                        resumedescr.rd_hbp_candidate_seen = True
+                        cell_token.hbp_candidate_count += 1
+                    if (cell_token.hbp_candidate_count >=
+                            warmstate.hot_bridge_min_candidates):
+                        self.prefer_loop_over_bridge = True
+                        if is_ref_value_counter:
+                            warmstate.hbp_global_ref_trace_count += 1
+                        debug_print("HBPEV grant type", typetag,
+                                    "bool", bool_value,
+                                    "fails", intmask(fail_count),
+                                    "totalfails",
+                                    intmask(resumedescr.rd_fail_count),
+                                    "card",
+                                    _hbp_popcount(resumedescr.rd_value_sig),
+                                    "bridges", ordinary_bridge_count,
+                                    "candidates",
+                                    cell_token.hbp_candidate_count,
+                                    "variants", cell_token.hbp_variant_count,
+                                    "reftraces",
+                                    warmstate.hbp_global_ref_trace_count)
 
         # hbp stage 2
         if warmstate.enable_adaptive_bridge:

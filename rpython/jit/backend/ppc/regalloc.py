@@ -663,6 +663,11 @@ class Regalloc(BaseRegalloc, VectorRegalloc):
     def prepare_guard_class(self, op):
         x = self.ensure_reg(op.getarg(0))
         y_val = force_int(op.getarg(1).getint())
+        opnum = op.getopnum()
+        if (opnum == rop.GUARD_CLASS or
+                opnum == rop.GUARD_NONNULL_CLASS):
+            op.getdescr().make_a_counter_per_class(op,
+                self.cpu.all_reg_indexes[x.value])
         arglocs = self._prepare_guard(op, [x, imm(y_val)])
         return arglocs
 
