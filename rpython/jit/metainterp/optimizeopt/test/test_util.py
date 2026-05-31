@@ -527,8 +527,6 @@ class FakeJitDriverStaticData(object):
         enable_hbp_value_promotion = True
         enable_hbp_ref_value_promotion = True
         enable_hbp_float_value_promotion = True
-        enable_adaptive_bridge = False
-        adaptive_bridge_lazy_threshold = 50
         retrace_min_loop_bridges = 0
         retrace_min_float_loop_bridges = 0
         retrace_min_loop_bridges_for_allocations = 0

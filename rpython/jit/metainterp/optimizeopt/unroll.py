@@ -257,11 +257,9 @@ class UnrollOptimizer(Optimizer):
             warmrunnerdescr = self.metainterp_sd.warmrunnerdesc
             limit = warmrunnerdescr.memory_manager.retrace_limit
             warmstate = self.jitdriver_sd.warmstate
-            selective_retrace = warmstate.enable_adaptive_bridge
-            # selective_retrace must stay additive: never deny a
-            # within-budget retrace that plain retrace_limit would do.
-            do_retrace = (prefer_loop_over_bridge or not selective_retrace
-                          or cell_token.retraced_count < limit)
+            # An ordinary retrace is allowed up to retrace_limit; the gates
+            # below can still veto it.
+            do_retrace = True
             min_retrace_bridges = warmstate.retrace_min_loop_bridges
             float_op_count = 0
             if (not prefer_loop_over_bridge and

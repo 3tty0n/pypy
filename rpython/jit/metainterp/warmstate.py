@@ -274,8 +274,6 @@ class WarmEnterState(object):
     hbp_inherit_max_liveboxes = 0
     # When False the cardinality clause in the HBP gate is vacuously true.
     enable_hbp_cardinality_gate = True
-    enable_adaptive_bridge = False
-    adaptive_bridge_lazy_threshold = 50
     retrace_min_loop_bridges = 0
     retrace_min_float_loop_bridges = 0
     retrace_min_loop_bridges_for_allocations = 0
@@ -603,20 +601,6 @@ class WarmEnterState(object):
         if value < 0:
             raise ValueError
         self.hbp_inherit_max_liveboxes = value
-
-    def set_param_enable_adaptive_bridge(self, value):
-        # Adaptive Bridge Compilation Strategy (stages 1-2 + HBP, gated on
-        # this single flag for benchmarking the combined effect).
-        self.enable_adaptive_bridge = bool(value)
-        if value and self.warmrunnerdesc is not None:
-            mm = self.warmrunnerdesc.memory_manager
-            if mm is not None and mm.retrace_limit == 0:
-                mm.retrace_limit = 5
-
-    def set_param_adaptive_bridge_lazy_threshold(self, value):
-        if value < 0:
-            raise ValueError
-        self.adaptive_bridge_lazy_threshold = value
 
     def set_param_retrace_min_loop_bridges(self, value):
         if value < 0:

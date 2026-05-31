@@ -725,10 +725,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
                'rd_hbp_value2_fail_count')
 
     status = r_uint(0)
-    # Adaptive bridge stage-1: per-descr failure counter. Counts every
-    # visit to handle_fail while the adaptive_bridge flag is on, so we
-    # can keep the interpreter in charge until T_lazy is reached and
-    # avoid compiling bridges that only warm-run briefly.
+    # Per-descr guard-failure counter at HBP-promotable sites; the
+    # promotion gate uses it to decide when a site is hot enough.
     rd_fail_count = r_uint(0)
     # Saturating signature of distinct guard_value values seen failing
     # this guard; popcount estimates the guard's value cardinality.
@@ -778,15 +776,9 @@ class AbstractResumeGuardDescr(ResumeDescr):
         self.rd_hbp_value2_fail_count = other.rd_hbp_value2_fail_count
 
     def handle_fail(self, deadframe, metainterp_sd, jitdriver_sd):
-        # Adaptive bridge stage 1 (lazy compilation): even when the
-        # jitcounter says "hot", delay starting a bridge trace until we
-        # have observed T_lazy failures on this exact descr. Cold
-        # bridges that never recur cost zero compile cycles.
-        if self._adaptive_bridge_still_lazy(jitdriver_sd):
-            compile_now = False
-        else:
-            compile_now = self.must_compile(deadframe, metainterp_sd,
-                                            jitdriver_sd)
+        self._record_hbp_failure(jitdriver_sd)
+        compile_now = self.must_compile(deadframe, metainterp_sd,
+                                        jitdriver_sd)
         if compile_now and not rstack.stack_almost_full():
             self.start_compiling()
             try:
@@ -803,27 +795,23 @@ class AbstractResumeGuardDescr(ResumeDescr):
                 resume_in_blackhole(metainterp_sd, jitdriver_sd, self, deadframe)
         assert 0, "unreachable"
 
-    def _adaptive_bridge_still_lazy(self, jitdriver_sd):
+    def _record_hbp_failure(self, jitdriver_sd):
+        # Count guard failures at HBP-promotable sites so the promotion gate
+        # can fire once the site has been hot enough.
         warmstate = jitdriver_sd.warmstate
-        adaptive = warmstate.enable_adaptive_bridge
-        if not adaptive and not warmstate.enable_hot_bridge_promotion:
-            return False
-        if not adaptive and not warmstate.hbp_any_promotion:
-            return False
-        if (not adaptive and warmstate.hot_bridge_min_candidates > 1 and
+        if not warmstate.enable_hot_bridge_promotion:
+            return
+        if not warmstate.hbp_any_promotion:
+            return
+        if (warmstate.hot_bridge_min_candidates > 1 and
                 self.rd_hbp_candidate_seen):
             loop_token = self.rd_loop_token.loop_token_wref()
             if (loop_token is not None and
                     loop_token.hbp_candidate_count <
                         warmstate.hot_bridge_min_candidates):
-                return False
-        if adaptive or self._hbp_site_can_still_promote(warmstate):
+                return
+        if self._hbp_site_can_still_promote(warmstate):
             self.rd_fail_count += r_uint(1)
-        if not adaptive:
-            return False
-        if self.rd_fail_count < r_uint(warmstate.adaptive_bridge_lazy_threshold):
-            return True
-        return False
 
     def _hbp_site_can_still_promote(self, warmstate):
         if self.rd_hbp_rejected:

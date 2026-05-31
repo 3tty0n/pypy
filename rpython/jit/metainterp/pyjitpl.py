@@ -3110,9 +3110,6 @@ class MetaInterp(object):
                                     "reftraces",
                                     warmstate.hbp_global_ref_trace_count)
 
-        # hbp stage 2
-        if warmstate.enable_adaptive_bridge:
-            self.prefer_loop_over_bridge = True
         if self.resumekey_original_loop_token is None:
             raise compile.giveup() # should be rare
         self.staticdata.try_to_free_some_loops()
