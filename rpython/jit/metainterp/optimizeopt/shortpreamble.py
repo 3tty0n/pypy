@@ -7,6 +7,7 @@ from rpython.jit.metainterp.resoperation import ResOperation, OpHelpers,\
 from rpython.jit.metainterp.history import Const, make_hashable_int,\
      TreeLoop
 from rpython.jit.metainterp.optimizeopt import info
+from rpython.jit.metainterp.optimizeopt.util import get_box_replacement
 
 class PreambleOp(AbstractResOp):
     """ An operations that's only found in preamble and not
@@ -78,11 +79,21 @@ class HeapOp(AbstractShortOp):
             opinfo.setfield(preamble_op.getdescr(), g.getarg(0), pop,
                             optheap, cf)
         else:
-            index = g.getarg(1).getint()
-            assert index >= 0
-            cf = optheap.arrayitem_cache(descr, index)
-            opinfo.setitem(self.getfield_op.getdescr(), index, g.getarg(0),
-                           pop, optheap, cf)
+            indexbox = g.getarg(1)
+            if indexbox.is_constant():
+                index = indexbox.getint()
+                assert index >= 0
+                cf = optheap.arrayitem_cache(descr, index)
+                opinfo.setitem(self.getfield_op.getdescr(), index,
+                               g.getarg(0), pop, optheap, cf)
+            else:
+                # invariant variable-index read hoisted into the short
+                # preamble: seed the varindex cache so the matching read in
+                # the peeled loop reuses this (lazy) preamble value.
+                submap = optheap.arrayitem_submap(descr)
+                submap.cache_varindex_read(
+                    opinfo, get_box_replacement(indexbox), pop,
+                    get_box_replacement(g.getarg(0)))
 
     def repr(self, memo):
         return "HeapOp(%s, %s)" % (self.res.repr(memo),
@@ -97,8 +108,15 @@ class HeapOp(AbstractShortOp):
             preamble_op = ResOperation(sop.getopnum(), [preamble_arg],
                                        descr=sop.getdescr())
         else:
+            # The index must also be producible from the preamble: a const
+            # index returns the constant unchanged (current behaviour); an
+            # invariant variable index returns its carried box; a
+            # per-iteration index returns None, correctly skipping the read.
+            preamble_index = sb.produce_arg(sop.getarg(1))
+            if preamble_index is None:
+                return None
             preamble_op = ResOperation(sop.getopnum(), [preamble_arg,
-                                                        sop.getarg(1)],
+                                                        preamble_index],
                                        descr=sop.getdescr())
         return ProducedShortOp(self, preamble_op)
 
@@ -402,7 +420,7 @@ class AbstractShortPreambleBuilder(object):
         preamble_op.set_forwarded(None)
         if optimizer is not None:
             optimizer.setinfo_from_preamble(box, info, None)
-        if info is not empty_info:
+        if info is not empty_info and info is not None:
             info.make_guards(preamble_op, self.short, optimizer)
         return preamble_op
 

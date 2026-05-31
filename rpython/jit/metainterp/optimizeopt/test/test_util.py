@@ -537,6 +537,8 @@ class FakeJitDriverStaticData(object):
         # bridgeopt's IntBound section (pypy/pypy#5184) reads this.
         hbp_inherit = 0
         hbp_inherit_bool = True
+        enable_invariant_varindex_hoist = False
+        invariant_varindex_max_triples = 8
 
     virtualizable_info = None
 

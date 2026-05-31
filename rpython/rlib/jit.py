@@ -629,6 +629,8 @@ PARAMETER_DOCS = {
     'retrace_max_allocations': 'maximum malloc operations allowed in an ordinary retrace body (-1=stock retrace_limit behavior; HBP-promoted variants are not blocked)',
     'hbp_inherit': 'inherit parent-loop optimizer state into HBP-promoted bridges. 0=off (bridges start with the existing bridgeopt subset only), 1=also inherit guard facts: integer bounds (IntBound lower/upper) and nullness-only PtrInfo. See pypy/pypy#5184.',
     'hbp_inherit_bool': 'allow hbp_inherit snapshots for bool-derived guard_value/guard_true/guard_false HBP candidates (0=off, 1=on; default on). Disabling keeps int-value inheritance while avoiding bool-guard snapshot overhead.',
+    'enable_invariant_varindex_hoist': 'Variable-Index Hoisting (VIH): hoist loop-invariant VARIABLE-index array reads (e.g. A[ii] with ii loop-invariant) into the short preamble so they run once instead of every iteration (0=off, 1=on; default ON). The const-index case is already hoisted; VIH extends it to invariant variable indexes via the short-preamble produce_arg invariance gate. Default ON.',
+    'invariant_varindex_max_triples': 'cap on invariant variable-index array reads per array descr emitted as short boxes when enable_invariant_varindex_hoist is on (bounds short-preamble growth; default 8).',
     'vec': 'turn on the vectorization optimization (vecopt). ' \
            'Supports x86 (SSE 4.1), powerpc (SVX), s390x SIMD',
     'vec_cost': 'threshold for which traces to bail. Unpacking increases the counter,'\
@@ -702,6 +704,8 @@ PARAMETERS = {'threshold': 1039, # just above 1024, prime
               'retrace_max_allocations': -1,
               'hbp_inherit': 0,
               'hbp_inherit_bool': 1,
+              'enable_invariant_varindex_hoist': 1,
+              'invariant_varindex_max_triples': 16,
               'vec': 0,
               'vec_all': 0,
               'vec_cost': 0,

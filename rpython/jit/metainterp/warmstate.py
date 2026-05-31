@@ -285,6 +285,10 @@ class WarmEnterState(object):
     # HBP-promoted bridges (pypy/pypy#5184).  Read by bridgeopt.
     hbp_inherit = 0
     hbp_inherit_bool = True
+    # Hoist loop-invariant variable-index array reads into the short preamble
+    # (off = current behaviour, only const-index reads are hoisted).
+    enable_invariant_varindex_hoist = True
+    invariant_varindex_max_triples = 16
 
     def __init__(self, warmrunnerdesc, jitdriver_sd):
         "NOT_RPYTHON"
@@ -423,6 +427,14 @@ class WarmEnterState(object):
 
     def set_param_enable_hbp_cardinality_gate(self, value):
         self.enable_hbp_cardinality_gate = bool(value)
+
+    def set_param_enable_invariant_varindex_hoist(self, value):
+        self.enable_invariant_varindex_hoist = bool(value)
+
+    def set_param_invariant_varindex_max_triples(self, value):
+        if value < 0:
+            raise ValueError
+        self.invariant_varindex_max_triples = value
 
     def set_param_hot_bridge_threshold(self, value):
         if value < 0:

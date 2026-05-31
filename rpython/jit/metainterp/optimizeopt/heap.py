@@ -9,7 +9,7 @@ from rpython.jit.metainterp.optimizeopt.util import (
 from rpython.jit.metainterp.optimizeopt.intutils import IntBound
 from rpython.jit.metainterp.optimizeopt.shortpreamble import PreambleOp
 from rpython.jit.metainterp.optimize import InvalidLoop
-from rpython.jit.metainterp.resoperation import rop
+from rpython.jit.metainterp.resoperation import rop, ResOperation, OpHelpers
 from rpython.rlib.objectmodel import we_are_translated
 from rpython.jit.metainterp.optimizeopt import info
 
@@ -315,20 +315,33 @@ class ArrayCacheSubMap(object):
     def clear_varindex(self):
         self.cached_varindex_triples = None
 
-    def cache_varindex_read(self, arrayinfo, indexbox, resbox):
+    def cache_varindex_read(self, arrayinfo, indexbox, resbox, structbox):
+        # structbox is the base array box, needed to rebuild the read as a
+        # short-preamble box (the const-index path recovers it from
+        # CachedField.cached_structs; the varindex cache has to carry it).
         # TODO: impose some kind of variable length for self.cached_varindex_triples
-        entry = (arrayinfo, indexbox, resbox)
+        entry = (arrayinfo, indexbox, resbox, structbox)
         if self.cached_varindex_triples is None:
             self.cached_varindex_triples = [entry]
             return
         self.cached_varindex_triples.append(entry)
 
-    def cache_varindex_write(self, arrayinfo, indexbox, resbox):
-        self.cached_varindex_triples = [(arrayinfo, indexbox, resbox)]
+    def cache_varindex_write(self, arrayinfo, indexbox, resbox, structbox):
+        self.cached_varindex_triples = [(arrayinfo, indexbox, resbox, structbox)]
+
+    def remove_varindex(self, arrayinfo, indexbox):
+        if self.cached_varindex_triples is None:
+            return
+        kept = []
+        for entry in self.cached_varindex_triples:
+            if entry[0] is arrayinfo and get_box_replacement(entry[1]) is indexbox:
+                continue
+            kept.append(entry)
+        self.cached_varindex_triples = kept
 
     def lookup_cached(self, arrayinfo, indexbox):
         if self.cached_varindex_triples is not None:
-            for cached_arrayinfo, cached_index, cached_result in self.cached_varindex_triples:
+            for cached_arrayinfo, cached_index, cached_result, _ in self.cached_varindex_triples:
                 if cached_arrayinfo is arrayinfo and get_box_replacement(cached_index) is indexbox:
                     return get_box_replacement(cached_result)
         return None
@@ -381,10 +394,42 @@ class OptHeap(Optimization):
             d = self.cached_fields[descr]
             d.produce_potential_short_preamble_ops(self.optimizer, sb, descr)
 
+        warmstate = self.optimizer.jitdriver_sd.warmstate
+        hoist_varindex = warmstate.enable_invariant_varindex_hoist
+        max_triples = warmstate.invariant_varindex_max_triples
         for descr, submap in self.cached_arrayitems.items():
             for index, d in submap.const_indexes.items():
                 d.produce_potential_short_preamble_ops(self.optimizer, sb,
                                                        descr, index)
+            if hoist_varindex and submap.cached_varindex_triples is not None:
+                self._produce_varindex_short_preamble_ops(
+                    sb, descr, submap, max_triples)
+
+    def _produce_varindex_short_preamble_ops(self, sb, descr, submap,
+                                             max_triples):
+        # Variable-Index Hoisting (VIH).
+        # A loop-invariant variable-index array read (e.g. A[ii] with ii
+        # invariant) is recomputed every iteration because only const-index
+        # reads are hoisted above.  Re-emit it as a short box; sb.produce_arg
+        # on the index (HeapOp.add_op_to_short) is the invariance gate, so a
+        # per-iteration index is simply skipped.  Iterate a snapshot and cap
+        # the count so this cannot diverge or bloat the short preamble.
+        opnum = OpHelpers.getarrayitem_for_descr(descr)
+        triples = submap.cached_varindex_triples[:]
+        count = 0
+        for entry in triples:
+            arrayinfo, indexbox, resbox, structbox = entry
+            if max_triples > 0 and count >= max_triples:
+                break
+            indexbox = get_box_replacement(indexbox)
+            if indexbox.is_constant():
+                continue   # already covered by the const-index path
+            resbox = get_box_replacement(resbox)
+            structbox = get_box_replacement(structbox)
+            getarrayitem_op = ResOperation(opnum, [structbox, indexbox],
+                                           descr=descr)
+            sb.add_heap_op(resbox, getarrayitem_op)
+            count += 1
 
     def clean_caches(self):
         items = self.cached_fields.items()
@@ -707,8 +752,23 @@ class OptHeap(Optimization):
             if submap is not None:
                 cached_result = submap.lookup_cached(arrayinfo, indexop)
                 if cached_result is not None:
-                    self.make_equal_to(op, cached_result)
-                    return
+                    if isinstance(cached_result, PreambleOp):
+                        # A short-preamble-hoisted invariant read.  Remove the
+                        # lazy entry BEFORE forcing so the getarrayitem the
+                        # force re-emits does not re-enter this lookup and
+                        # recurse; then cache the materialised result.
+                        if self.optimizer.optunroll.short_preamble_producer is None:
+                            cached_result = None
+                        else:
+                            submap.remove_varindex(arrayinfo, indexop)
+                            cached_result = self.optimizer.force_op_from_preamble(
+                                cached_result)
+                            submap.cache_varindex_read(
+                                arrayinfo, indexop, cached_result,
+                                get_box_replacement(op.getarg(0)))
+                    if cached_result is not None:
+                        self.make_equal_to(op, cached_result)
+                        return
         # default case: produce the operation
         self.make_nonnull(op.getarg(0))
         # return self.emit(op)
@@ -728,7 +788,7 @@ class OptHeap(Optimization):
         else:
             # write cache for variable info
             submap = self.arrayitem_submap(op.getdescr())
-            submap.cache_varindex_read(arrayinfo, get_box_replacement(op.getarg(1)), get_box_replacement(op))
+            submap.cache_varindex_read(arrayinfo, get_box_replacement(op.getarg(1)), get_box_replacement(op), get_box_replacement(op.getarg(0)))
     optimize_GETARRAYITEM_GC_R = optimize_GETARRAYITEM_GC_I
     optimize_GETARRAYITEM_GC_F = optimize_GETARRAYITEM_GC_I
 
@@ -773,7 +833,7 @@ class OptHeap(Optimization):
             # variable index, so make sure the lazy setarrayitems are done
             self.force_lazy_setarrayitem(op.getdescr(), indexb, can_cache=False)
             # and then emit the operation
-            submap.cache_varindex_write(arrayinfo, get_box_replacement(op.getarg(1)), get_box_replacement(op.getarg(2)))
+            submap.cache_varindex_write(arrayinfo, get_box_replacement(op.getarg(1)), get_box_replacement(op.getarg(2)), get_box_replacement(op.getarg(0)))
             return self.emit(op)
 
     def optimize_GC_LOAD_I(self, op):
