@@ -2992,16 +2992,10 @@ class MetaInterp(object):
                     guard_threshold = warmstate.hot_bridge_nullness_threshold
                 elif is_guard_bool_counter:
                     guard_threshold = warmstate.hot_bridge_guard_bool_threshold
-                elif (is_bool_counter and
-                        warmstate.hot_bridge_bool_value_threshold):
-                    guard_threshold = warmstate.hot_bridge_bool_value_threshold
                 elif (is_value_counter and typetag ==
                         compile.AbstractResumeGuardDescr.TY_INT and
                         warmstate.hot_bridge_int_value_threshold):
                     guard_threshold = warmstate.hot_bridge_int_value_threshold
-                elif (is_ref_value_counter and
-                        warmstate.hot_bridge_ref_value_threshold):
-                    guard_threshold = warmstate.hot_bridge_ref_value_threshold
                 elif is_value_counter and warmstate.hot_bridge_value_threshold:
                     guard_threshold = warmstate.hot_bridge_value_threshold
                 fail_count = resumedescr.rd_fail_count

@@ -53,7 +53,6 @@ class _FakeWarmState(object):
         self.enable_hbp_class_promotion = False
         self.hot_bridge_global_max_variants = 0
         self.hbp_global_variant_count = 0
-        self.hbp_inherit_max_liveboxes = 0
 
 
 class _FakeJD(object):
@@ -179,16 +178,6 @@ def test_intbound_section_round_trip_multiple_entries():
             after.intbounds[rboxes[1]].upper) == (-10, 10)
     assert (after.intbounds[rboxes[2]].lower,
             after.intbounds[rboxes[2]].upper) == (100, 200)
-
-
-def test_hbp_inherit_livebox_cap_skips_extra_sections():
-    """A configured livebox cap can avoid broad parent-state snapshots on
-    large guards while preserving the baseline bridgeopt sections."""
-    opt = _FakeOptimizer(hbp_inherit=1)
-    opt.jitdriver_sd.warmstate.hbp_inherit_max_liveboxes = 1
-    numb_state, _ = _serialise(opt, [(1, 42), (2, 43)])
-    decoded = unpack_numbering(numb_state.create_numbering())
-    assert decoded == [1, 0, 0, 0]
 
 
 def test_intbound_section_skips_current_guard_argument():

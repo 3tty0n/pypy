@@ -262,27 +262,12 @@ class UnrollOptimizer(Optimizer):
             do_retrace = True
             min_retrace_bridges = warmstate.retrace_min_loop_bridges
             float_op_count = 0
-            if (not prefer_loop_over_bridge and
-                    (min_retrace_bridges > 0 or
-                     warmstate.retrace_min_float_loop_bridges > 0)):
+            if not prefer_loop_over_bridge and min_retrace_bridges > 0:
+                # float traces bypass retrace_min_loop_bridges
                 float_op_count = self._count_float_ops_from(0)
             if (not prefer_loop_over_bridge and min_retrace_bridges > 0 and
                     cell_token.bridge_count < min_retrace_bridges and
                     float_op_count == 0):
-                do_retrace = False
-            min_float_retrace_bridges = (
-                warmstate.retrace_min_float_loop_bridges)
-            if (not prefer_loop_over_bridge and
-                    min_float_retrace_bridges > 0 and
-                    cell_token.bridge_count < min_float_retrace_bridges and
-                    float_op_count > 0):
-                do_retrace = False
-            min_alloc_retrace_bridges = (
-                warmstate.retrace_min_loop_bridges_for_allocations)
-            if (not prefer_loop_over_bridge and
-                    min_alloc_retrace_bridges > 0 and
-                    cell_token.bridge_count < min_alloc_retrace_bridges and
-                    self._count_malloc_ops_from(0) > 0):
                 do_retrace = False
             min_retrace_ops = warmstate.retrace_min_ops
             if (not prefer_loop_over_bridge and min_retrace_ops > 0 and

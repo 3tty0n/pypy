@@ -241,9 +241,7 @@ class WarmEnterState(object):
     hot_bridge_guard_threshold = 50
     hot_bridge_value_threshold = 0
     hot_bridge_int_value_threshold = 0
-    hot_bridge_ref_value_threshold = 0
     hot_bridge_min_value_share_pct = 0
-    hot_bridge_bool_value_threshold = 0
     hot_bridge_guard_bool_threshold = 200
     hot_bridge_nullness_threshold = 200
     hot_bridge_max_variants = 8
@@ -271,12 +269,9 @@ class WarmEnterState(object):
     hbp_entry_guard_ref_bridge_threshold = 0
     hbp_bool_entry_guard = False
     hbp_value_counter_slots = 1
-    hbp_inherit_max_liveboxes = 0
     # When False the cardinality clause in the HBP gate is vacuously true.
     enable_hbp_cardinality_gate = True
     retrace_min_loop_bridges = 0
-    retrace_min_float_loop_bridges = 0
-    retrace_min_loop_bridges_for_allocations = 0
     retrace_min_ops = 0
     retrace_max_allocations = -1
     # 0 = off, 1 = inherit guard facts (integer bounds and nullness) for
@@ -454,20 +449,10 @@ class WarmEnterState(object):
             raise ValueError
         self.hot_bridge_int_value_threshold = value
 
-    def set_param_hot_bridge_ref_value_threshold(self, value):
-        if value < 0:
-            raise ValueError
-        self.hot_bridge_ref_value_threshold = value
-
     def set_param_hot_bridge_min_value_share_pct(self, value):
         if value < 0 or value > 100:
             raise ValueError
         self.hot_bridge_min_value_share_pct = value
-
-    def set_param_hot_bridge_bool_value_threshold(self, value):
-        if value < 0:
-            raise ValueError
-        self.hot_bridge_bool_value_threshold = value
 
     def set_param_hot_bridge_guard_bool_threshold(self, value):
         if value < 0:
@@ -597,25 +582,10 @@ class WarmEnterState(object):
             raise ValueError
         self.hbp_value_counter_slots = value
 
-    def set_param_hbp_inherit_max_liveboxes(self, value):
-        if value < 0:
-            raise ValueError
-        self.hbp_inherit_max_liveboxes = value
-
     def set_param_retrace_min_loop_bridges(self, value):
         if value < 0:
             raise ValueError
         self.retrace_min_loop_bridges = value
-
-    def set_param_retrace_min_float_loop_bridges(self, value):
-        if value < 0:
-            raise ValueError
-        self.retrace_min_float_loop_bridges = value
-
-    def set_param_retrace_min_loop_bridges_for_allocations(self, value):
-        if value < 0:
-            raise ValueError
-        self.retrace_min_loop_bridges_for_allocations = value
 
     def set_param_retrace_min_ops(self, value):
         if value < 0:

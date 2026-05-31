@@ -235,9 +235,6 @@ def serialize_optimizer_knowledge(optimizer, numb_state, liveboxes,
     if (_hbp_inherit_level(optimizer) < 1 or
             not _guard_may_use_hbp_inherit(optimizer, guard_op)):
         return
-    max_liveboxes = optimizer.jitdriver_sd.warmstate.hbp_inherit_max_liveboxes
-    if max_liveboxes > 0 and len(liveboxes) > max_liveboxes:
-        return
 
     skip_boxes = {}
     if guard_op is not None:
