@@ -93,6 +93,94 @@ def _branch_reaches_backedge(bytecode, start, boundary):
             pc += hasarg[op]
     return False
 
+def _compute_stackdepth(bc):
+    # Static worklist over (pc, stackpos) following _interp's stack effects, to
+    # find the maximum depth any single frame reaches.  JitFrame sizes its
+    # (virtualizable) value stack to this exactly: a fixed oversized array would
+    # turn every unused slot into a dead loop-carried value in the compiled
+    # trace (the whole vable array is part of the loop's virtual state), which
+    # is pure per-iteration register/spill overhead.  Conservative by design --
+    # any opcode it cannot model, or a pathological stack, returns the safe
+    # default 64.  Runs once per program load, never on the hot path.  Takes the
+    # Bytecode object (indexed via __getitem__) so it shares _construct_value's
+    # operand type rather than the raw code string.
+    n = len(bc)
+    seen = [-1] * n
+    todo = [(0, 1)]            # main frame: one arg pushed before pc=0
+    maxd = 1
+    steps = 0
+    while todo:
+        steps += 1
+        if steps > 200000:
+            return 64
+        pc, sp = todo.pop()
+        if pc < 0 or pc >= n:
+            continue
+        if sp > 200 or sp < 0:
+            return 64
+        if sp <= seen[pc]:
+            continue
+        seen[pc] = sp
+        if sp > maxd:
+            maxd = sp
+        op = ord(bc[pc])
+        pc += 1
+        if op == CONST_INT or op == CONST_NEG_INT:
+            todo.append((pc + 1, sp + 1))
+        elif op == CONST_FLOAT or op == CONST_NEG_FLOAT:
+            todo.append((pc + 9, sp + 1))
+        elif op == CONST_N or op == CONST_NEG_N:
+            todo.append((pc + 4, sp + 1))
+        elif op == DUP:
+            todo.append((pc, sp + 1))
+        elif op == DUPN:
+            todo.append((pc + 1, sp + 1))
+        elif op == POP or op == POP1:
+            todo.append((pc, sp - 1))
+        elif (op == LT or op == GT or op == EQ or op == ADD or op == SUB or
+              op == MUL or op == DIV or op == MOD or op == BUILD_LIST or
+              op == LOAD):
+            todo.append((pc, sp - 1))
+        elif op == STORE:
+            todo.append((pc, sp - 2))
+        elif (op == SIN or op == COS or op == SQRT or op == ABS_FLOAT or
+              op == INT_TO_FLOAT or op == FLOAT_TO_INT or op == RAND_INT or
+              op == PRINT or op == NOP):
+            todo.append((pc, sp))
+        elif op == JUMP:
+            todo.append((ord(bc[pc]), sp))
+        elif op == JUMP_N:
+            todo.append((_construct_value(bc, pc), sp))
+        elif op == JUMP_IF:
+            t = ord(bc[pc])
+            todo.append((pc + 1, sp - 1))
+            todo.append((t, sp - 1))
+        elif op == JUMP_IF_N:
+            t = _construct_value(bc, pc)
+            todo.append((pc + 4, sp - 1))
+            todo.append((t, sp - 1))
+        elif (op == CALL_ASSEMBLER or op == CALL or op == CALL_TIER2 or
+              op == CALL_TIER0):
+            t = ord(bc[pc])
+            argnum = ord(bc[pc + 1])
+            todo.append((t, argnum + 2))
+            todo.append((pc + 2, sp - argnum + 1))
+        elif op == CALL_N:
+            t = _construct_value(bc, pc)
+            argnum = ord(bc[pc + 4])
+            todo.append((t, argnum + 2))
+            todo.append((pc + 5, sp - argnum + 1))
+        elif op == FRAME_RESET:
+            o = ord(bc[pc])
+            l = ord(bc[pc + 1])
+            todo.append((pc + 3, sp - o - l))
+        elif op == RET or op == EXIT:
+            pass               # terminal: frame returns
+        else:
+            return 64          # unmodelled opcode -> safe default
+    return maxd
+
+
 @jit.unroll_safe
 def _power_01(n):
     acc = 1
@@ -131,6 +219,19 @@ tier2driver = JitDriver(
     get_printable_location=get_printable_location, is_recursive=True)
 
 
+# Tier-2 driver for the decoupled, *virtualizable* JitFrame.  Same recursive
+# deep-tracing shape as tier2driver, but it declares `self` virtualizable so the
+# optimizer can keep JitFrame's value stack (and the per-iteration counter
+# boxes) unboxed inside the compiled loop.  It is a *separate* driver because
+# tier2driver is still used by the non-virtualizable Frame._interp (tier-0
+# ground truth and tier-1's threaded fallback), and a virtualizable class may
+# not flow as a red box into a driver that does not declare it.
+tier2vdriver = JitDriver(
+    greens=['pc', 'bytecode',], reds=['self'],
+    get_printable_location=get_printable_location,
+    is_recursive=True, virtualizables=['self'])
+
+
 class Frame(object):
     def __init__(self, bytecode, stack=None, stackpos=0, depth=0):
         if stack is None:
@@ -152,6 +253,14 @@ class Frame(object):
         # signals that the live frame now holds placeholder zeros and must be
         # restored before plain interpretation continues.
         self._frame_poisoned = False
+        # Sticky version of _frame_poisoned: stays True once recording has
+        # poisoned this frame.  It gates the loop-header (pc==_clean_pc) restore,
+        # which the post-recording meta-interp continuation needs on every
+        # revisit.  Crucially it is *never* set during pure interpretation
+        # (FRAME_RESET runs with dummy=False there), so a plainly interpreted
+        # loop is never reset to its header state -- which previously reset the
+        # loop counter every iteration and hung (e.g. test_simple_loop).
+        self._ever_poisoned = False
 
     @jit.not_in_trace
     def _jit_take_snapshot(self, pc, entry, jitted):
@@ -168,9 +277,19 @@ class Frame(object):
         # runs from real values rather than the recorder's placeholder zeros.
         if jitted:
             return
+        # Two restore triggers, both requiring that recording actually poisoned
+        # this frame -- so pure interpretation (which never records, hence never
+        # poisons) never restores and never resets a live loop:
+        #   1. _frame_poisoned: the frame is freshly poisoned; restore once
+        #      wherever plain interpretation first resumes (this is the trigger
+        #      a CALL_ASSEMBLER tail-loop like tak relies on, off the loop head).
+        #   2. _ever_poisoned + pc==_clean_pc: the post-recording continuation
+        #      revisits the loop header repeatedly and needs the restore each
+        #      time (e.g. mb_pass's carried invariant); _ever_poisoned is sticky
+        #      so this keeps firing after _frame_poisoned is cleared below.
         should_restore = self._frame_poisoned
-        if (not should_restore and self._clean_stack is not None and
-                pc == self._clean_pc):
+        if (not should_restore and self._ever_poisoned and
+                self._clean_stack is not None and pc == self._clean_pc):
             should_restore = True
         if should_restore:
             snap = self._clean_stack
@@ -452,6 +571,101 @@ class Frame(object):
         else:
             self._push(W_IntObject(0))
 
+    # Real (inlined) arithmetic/comparison variants for the deep _interp
+    # (tier 0/2).  Unlike the shallow _XX helpers above (which the tier-1
+    # threaded-code splitter needs as residual placeholder calls), these inline
+    # the integer fast path directly, so the recursive meta-tracer records the
+    # *real* control flow -- otherwise the shallow placeholder (0) makes the
+    # recorder take a loop's base case instead of its body.  Non-int operands
+    # fall back to the real op (correct in tier 0; tier 2 is int-centric).
+    def _ADD_real(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            self._push(W_IntObject(w_x.intvalue + w_y.intvalue))
+        else:
+            self._push(w_x.add(w_y, False))
+
+    def _SUB_real(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            self._push(W_IntObject(w_x.intvalue - w_y.intvalue))
+        else:
+            self._push(w_x.sub(w_y, False))
+
+    def _MUL_real(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            self._push(W_IntObject(int(w_x.intvalue * w_y.intvalue)))
+        else:
+            self._push(w_x.mul(w_y, False))
+
+    def _DIV_real(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            self._push(W_IntObject(w_x.intvalue // w_y.intvalue))
+        else:
+            self._push(w_x.div(w_y, False))
+
+    def _MOD_real(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            self._push(W_IntObject(w_x.intvalue % w_y.intvalue))
+        else:
+            self._push(w_x.mod(w_y, False))
+
+    def _LT_real(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            if w_x.intvalue <= w_y.intvalue:
+                self._push(W_IntObject(1))
+            else:
+                self._push(W_IntObject(0))
+        else:
+            self._push(w_x.le(w_y, False))
+
+    def _GT_real(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            if w_x.intvalue >= w_y.intvalue:
+                self._push(W_IntObject(1))
+            else:
+                self._push(W_IntObject(0))
+        else:
+            self._push(w_x.ge(w_y, False))
+
+    def _EQ_real(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            if w_x.intvalue == w_y.intvalue:
+                self._push(W_IntObject(1))
+            else:
+                self._push(W_IntObject(0))
+        else:
+            self._push(w_x.eq(w_y, False))
+
+    def _NE_real(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            if w_x.intvalue != w_y.intvalue:
+                self._push(W_IntObject(1))
+            else:
+                self._push(W_IntObject(0))
+        else:
+            w_eq = w_x.eq(w_y, False)
+            if w_eq.intvalue:
+                self._push(W_IntObject(0))
+            else:
+                self._push(W_IntObject(1))
+
     @jit.dont_look_inside
     def CALL(self, oldframe, t, argnum, dummy):
         if dummy and not we_are_blackholing():
@@ -503,6 +717,7 @@ class Frame(object):
         # the poisoned accumulator/counter (mb_sum/mb_inc returning 0).
         if dummy and not we_are_blackholing():
             self._frame_poisoned = True
+            self._ever_poisoned = True
         ret = self.stack[self.stackpos - n - 1]
         old_base = self.stackpos - n
         new_base = self.stackpos - o - n - l - 1
@@ -655,28 +870,28 @@ class Frame(object):
                 pc += 1
 
             elif opcode == LT:
-                self._LT()
+                self._LT_real()
 
             elif opcode == GT:
-                self._GT()
+                self._GT_real()
 
             elif opcode == EQ:
-                self._EQ()
+                self._EQ_real()
 
             elif opcode == ADD:
-                self._ADD()
+                self._ADD_real()
 
             elif opcode == SUB:
-                self._SUB()
+                self._SUB_real()
 
             elif opcode == DIV:
-                self._DIV()
+                self._DIV_real()
 
             elif opcode == MUL:
-                self._MUL()
+                self._MUL_real()
 
             elif opcode == MOD:
-                self._MOD()
+                self._MOD_real()
 
             elif opcode == BUILD_LIST:
                 self._BUILD_LIST()
@@ -1098,6 +1313,507 @@ class Frame(object):
                 assert False, 'Unknown opcode: %s' % bytecodes[opcode]
 
 
+class JitFrame(object):
+    """Tier-2 (inlined) interpreter frame -- decoupled from tier-1 ``Frame``.
+
+    The whole point of tier 2 is to remove tier 1's per-bytecode residual-call
+    overhead by tracing *through* the data-stack helpers and inlining calls.
+    Tier 1 cannot do that: its trace splitter needs the stack ops to survive as
+    opaque ``@jit.dont_look_inside`` residual calls.  Those two requirements are
+    irreconcilable on one shared frame -- worse, making ``Frame`` virtualizable
+    makes tier 1's opaque stack-helper calls escape the vable on every op.
+
+    So JitFrame is a standalone class whose value-stack helpers are plain,
+    fully-inlined methods (no ``@jit.dont_look_inside`` / no role decorators):
+    the recursive meta-tracer traces straight through them.  Combined with the
+    ``_virtualizable_`` declaration (+ ``tier2vdriver``'s ``virtualizables``),
+    the optimizer keeps the value stack -- and the loop-carried counter boxes
+    that sit in it -- unboxed across the compiled loop's back-edge.  That is the
+    structural win tier 2 has over tier 1 on allocation-bound tail loops.
+
+    It is a separate class (not a subclass of Frame) on purpose: a virtualizable
+    subclass of a non-virtualizable base would let a JitFrame flow, by
+    subsumption, into tier1driver's non-virtualizable red ``self`` and trip the
+    warmspot virtualizable check.  Tier 1 only ever builds ``Frame``; tier 2
+    only ever builds ``JitFrame``.
+    """
+    _virtualizable_ = ['stackpos', 'stack[*]']
+
+    def __init__(self, bytecode, stack=None, stackpos=0, depth=0, stacksize=64):
+        self = jit.hint(self, access_directly=True, fresh_virtualizable=True)
+        # Size the value stack to the program's actual max depth (see
+        # _compute_stackdepth).  Because the whole virtualizable array is part of
+        # the compiled loop's virtual state, every surplus slot would become a
+        # dead loop-carried argument -- so a tight size is what lets a flat loop
+        # like mb_loop compile to a clean 2-3 register loop instead of shuffling
+        # 64 dead values per iteration.
+        if stack is None:
+            stack = [None] * stacksize
+        self.stacksize = stacksize
+        self.bytecode = bytecode
+        self.stack = stack
+        self.stackpos = stackpos
+        self.depth = depth
+
+    # --- value-stack helpers ------------------------------------------------
+    # Plain, inlined, vable-friendly: only element-wise self.stack[i] access
+    # (never alias/slice/len the virtualizable array), non-negative-index
+    # asserts so the JIT folds the bounds checks.
+    def _push(self, w_x):
+        stackpos = self.stackpos
+        assert stackpos >= 0
+        self.stack[stackpos] = w_x
+        self.stackpos = stackpos + 1
+
+    def _pop(self):
+        stackpos = self.stackpos - 1
+        assert stackpos >= 0
+        self.stackpos = stackpos
+        res = self.stack[stackpos]
+        self.stack[stackpos] = None
+        return res
+
+    def _take(self, n):
+        idx = self.stackpos - n - 1
+        assert idx >= 0
+        w_x = self.stack[idx]
+        assert w_x is not None
+        return w_x
+
+    @jit.unroll_safe
+    def _drop(self, n):
+        for _ in range(n):
+            self._pop()
+
+    @jit.unroll_safe
+    def copy_frame(self, argnum, retaddr):
+        # Vable-compliant: index both stacks only with by-construction
+        # non-negative values (nonneg + nonneg), never a subtraction, so the
+        # codewriter can fuse every access into a virtualizable-array op.
+        framepos = self.stackpos - argnum - 1
+        assert framepos >= 0
+        assert argnum >= 0
+        bytecode = jit.promote(self.bytecode)
+        newframe = JitFrame(bytecode, None, argnum + 2, self.depth + 1,
+                            stacksize=self.stacksize)
+        count = argnum + 1
+        j = 0
+        while j < count:
+            newframe.stack[j] = self.stack[framepos + j]
+            j += 1
+        newframe.stack[argnum + 1] = W_IntObject(retaddr)
+        return newframe
+
+    @jit.not_in_trace
+    def dump(self):
+        sys.stderr.write("stackpos: %d " % self.stackpos)
+        sys.stderr.write("[")
+        for i in range(self.stackpos):
+            w_x = self.stack[i]
+            if isinstance(w_x, W_Object):
+                sys.stderr.write(w_x.getrepr() + ", ")
+        sys.stderr.write("]\n")
+
+    def _is_true(self):
+        w_x = self._pop()
+        return w_x.is_true()
+
+    def _CONST_INT(self, pc, neg=False):
+        bytecode = jit.promote(self.bytecode)
+        x = ord(bytecode[pc])
+        if neg:
+            self._push(W_IntObject(-x))
+        else:
+            self._push(W_IntObject(x))
+
+    def _CONST_FLOAT(self, pc, neg=False):
+        bytecode = jit.promote(self.bytecode)
+        x = _construct_float(bytecode, pc)
+        if neg:
+            self._push(W_FloatObject(-x))
+        else:
+            self._push(W_FloatObject(x))
+
+    def _CONST_N(self, pc):
+        bytecode = jit.promote(self.bytecode)
+        x = _construct_value(bytecode, pc)
+        self._push(W_IntObject(x))
+
+    def _POP(self):
+        return self._pop()
+
+    def _POP1(self):
+        v = self._pop()
+        _ = self._pop()
+        self._push(v)
+
+    def _DUP(self):
+        w_x = self._pop()
+        self._push(w_x)
+        self._push(w_x)
+
+    def _DUPN(self, pc):
+        bytecode = jit.promote(self.bytecode)
+        n = ord(bytecode[pc])
+        w_x = self._take(n)
+        self._push(w_x)
+
+    # Inlined integer fast paths (the deep tracer records the real control flow;
+    # non-int operands fall back to the real W_Object op).
+    def _ADD(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            self._push(W_IntObject(w_x.intvalue + w_y.intvalue))
+        else:
+            self._push(w_x.add(w_y, False))
+
+    def _SUB(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            self._push(W_IntObject(w_x.intvalue - w_y.intvalue))
+        else:
+            self._push(w_x.sub(w_y, False))
+
+    def _MUL(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            self._push(W_IntObject(int(w_x.intvalue * w_y.intvalue)))
+        else:
+            self._push(w_x.mul(w_y, False))
+
+    def _DIV(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            self._push(W_IntObject(w_x.intvalue // w_y.intvalue))
+        else:
+            self._push(w_x.div(w_y, False))
+
+    def _MOD(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            self._push(W_IntObject(w_x.intvalue % w_y.intvalue))
+        else:
+            self._push(w_x.mod(w_y, False))
+
+    def _LT(self):
+        # LT dispatches <= (matches Frame; every lang program relies on it).
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            if w_x.intvalue <= w_y.intvalue:
+                self._push(W_IntObject(1))
+            else:
+                self._push(W_IntObject(0))
+        else:
+            self._push(w_x.le(w_y, False))
+
+    def _GT(self):
+        # GT dispatches >= (matches Frame).
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            if w_x.intvalue >= w_y.intvalue:
+                self._push(W_IntObject(1))
+            else:
+                self._push(W_IntObject(0))
+        else:
+            self._push(w_x.ge(w_y, False))
+
+    def _EQ(self):
+        w_y = self._pop()
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+            if w_x.intvalue == w_y.intvalue:
+                self._push(W_IntObject(1))
+            else:
+                self._push(W_IntObject(0))
+        else:
+            self._push(w_x.eq(w_y, False))
+
+    def _BUILD_LIST(self):
+        size = self._pop()
+        init = self._pop()
+        assert isinstance(size, W_IntObject)
+        lst = [init] * int(size.intvalue)
+        self._push(W_ListObject(lst))
+
+    def _LOAD(self):
+        w_index = self._pop()
+        w_lst = self._pop()
+        assert isinstance(w_index, W_IntObject)
+        assert isinstance(w_lst, W_ListObject)
+        w_x = w_lst.listvalue[int(w_index.intvalue)]
+        self._push(w_x)
+
+    def _STORE(self):
+        w_index = self._pop()
+        w_lst = self._pop()
+        w_x = self._pop()
+        assert isinstance(w_lst, W_ListObject)
+        assert isinstance(w_index, W_IntObject)
+        w_lst.listvalue[int(w_index.intvalue)] = w_x
+        self._push(w_lst)
+
+    def _RAND_INT(self):
+        raise NotImplementedError
+
+    def _COS(self):
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject):
+            w_c = W_FloatObject(math.cos(w_x.intvalue))
+        elif isinstance(w_x, W_FloatObject):
+            w_c = W_FloatObject(math.cos(w_x.floatvalue))
+        else:
+            raise OperationError
+        self._push(w_c)
+
+    def _SIN(self):
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject):
+            w_c = W_FloatObject(math.sin(w_x.intvalue))
+        elif isinstance(w_x, W_FloatObject):
+            w_c = W_FloatObject(math.sin(w_x.floatvalue))
+        else:
+            raise OperationError
+        self._push(w_c)
+
+    def _SQRT(self):
+        w_x = self._pop()
+        if isinstance(w_x, W_IntObject):
+            w_x = W_FloatObject(math.sqrt(w_x.intvalue))
+        elif isinstance(w_x, W_FloatObject):
+            w_x = W_FloatObject(math.sqrt(w_x.floatvalue))
+        else:
+            raise OperationError
+        self._push(w_x)
+
+    def _INT_TO_FLOAT(self):
+        w_x = self._pop()
+        assert isinstance(w_x, W_IntObject)
+        w_x = W_FloatObject(float(w_x.intvalue))
+        self._push(w_x)
+
+    def _FLOAT_TO_INT(self):
+        w_x = self._pop()
+        assert isinstance(w_x, W_FloatObject)
+        w_x = W_IntObject(int(w_x.floatvalue))
+        self._push(w_x)
+
+    def _ABS_FLOAT(self):
+        w_x = self._pop()
+        assert isinstance(w_x, W_FloatObject)
+        self._push(W_FloatObject(abs(w_x.floatvalue)))
+
+    def _PRINT(self):
+        v = self._take(0)
+        # print v.getrepr()
+
+    def _RET(self, n):
+        v = self._pop()
+        return v
+
+    @jit.unroll_safe
+    def _FRAME_RESET(self, o, l, n):
+        # Vable-compliant: assert every index non-negative before subscripting
+        # the virtualizable stack, and form the loop indices as nonneg + nonneg
+        # (the bare subtractions below are only used after being asserted >= 0).
+        stackpos = jit.promote(self.stackpos)
+        ret_idx = stackpos - n - 1
+        old_base = stackpos - n
+        new_base = stackpos - o - n - l - 1
+        assert n >= 0
+        assert ret_idx >= 0
+        assert old_base >= 0
+        assert new_base >= 0
+        ret = self.stack[ret_idx]
+
+        i = 0
+        while i < n:
+            self.stack[new_base + i] = self.stack[old_base + i]
+            self.stack[old_base + i] = None
+            i += 1
+
+        self.stack[new_base + n] = ret
+        self.stackpos = new_base + n + 1
+
+    def _CALL(self, oldframe, t, argnum):
+        w_x = self._interp(t)
+        oldframe._drop(argnum)
+        if w_x:
+            oldframe._push(w_x)
+
+    def _interp(self, pc=0):
+        "tier-2 inlined tracing interpreter (virtualizable frame)"
+        if self.depth > MAX_INTERP_DEPTH:
+            raise OperationError
+        bytecode = self.bytecode
+
+        while pc < len(bytecode):
+            tier2vdriver.jit_merge_point(bytecode=bytecode, pc=pc, self=self)
+
+            # print get_printable_location(pc, bytecode)
+
+            opcode = ord(bytecode[pc])
+            pc += 1
+
+            if opcode == CONST_INT:
+                self._CONST_INT(pc)
+                pc += 1
+
+            elif opcode == CONST_NEG_INT:
+                self._CONST_INT(pc, neg=True)
+                pc += 1
+
+            elif opcode == CONST_FLOAT:
+                self._CONST_FLOAT(pc)
+                pc += 9
+
+            elif opcode == CONST_NEG_FLOAT:
+                self._CONST_FLOAT(pc, neg=True)
+                pc += 9
+
+            elif opcode == CONST_N:
+                self._CONST_N(pc)
+                pc += 4
+
+            elif opcode == POP:
+                self._POP()
+
+            elif opcode == POP1:
+                self._POP1()
+
+            elif opcode == DUP:
+                self._DUP()
+
+            elif opcode == DUPN:
+                self._DUPN(pc)
+                pc += 1
+
+            elif opcode == LT:
+                self._LT()
+
+            elif opcode == GT:
+                self._GT()
+
+            elif opcode == EQ:
+                self._EQ()
+
+            elif opcode == ADD:
+                self._ADD()
+
+            elif opcode == SUB:
+                self._SUB()
+
+            elif opcode == DIV:
+                self._DIV()
+
+            elif opcode == MUL:
+                self._MUL()
+
+            elif opcode == MOD:
+                self._MOD()
+
+            elif opcode == BUILD_LIST:
+                self._BUILD_LIST()
+
+            elif opcode == LOAD:
+                self._LOAD()
+
+            elif opcode == STORE:
+                self._STORE()
+
+            elif opcode == RAND_INT:
+                self._RAND_INT()
+
+            elif opcode == SIN:
+                self._SIN()
+
+            elif opcode == COS:
+                self._COS()
+
+            elif opcode == ABS_FLOAT:
+                self._ABS_FLOAT()
+
+            elif opcode == SQRT:
+                self._SQRT()
+
+            elif opcode == INT_TO_FLOAT:
+                self._INT_TO_FLOAT()
+
+            elif opcode == FLOAT_TO_INT:
+                self._FLOAT_TO_INT()
+
+            elif opcode == CALL_ASSEMBLER:
+                t = ord(bytecode[pc])
+                argnum = ord(bytecode[pc + 1])
+                pc += 2
+
+                frame = self.copy_frame(argnum, pc)
+                frame._CALL(self, t, argnum)
+
+            elif opcode == CALL_N:
+                t = _construct_value(bytecode, pc)
+                argnum = ord(bytecode[pc + 4])
+                pc += 5
+
+                frame = self.copy_frame(argnum, pc)
+                frame._CALL(self, t, argnum)
+
+            elif opcode == RET:
+                argnum = hint(ord(bytecode[pc]), promote=True)
+                pc += 1
+                w_x = self._RET(argnum)
+                return w_x
+
+            elif opcode == JUMP:
+                t = ord(bytecode[pc])
+                if t < pc:
+                    tier2vdriver.can_enter_jit(bytecode=bytecode, pc=t, self=self)
+                pc = t
+
+            elif opcode == JUMP_IF:
+                t = ord(bytecode[pc])
+                pc += 1
+
+                if self._is_true():
+                    if t < pc:
+                        tier2vdriver.can_enter_jit(bytecode=bytecode, pc=t, self=self)
+                    pc = t
+
+            elif opcode == JUMP_IF_N:
+                t = _construct_value(bytecode, pc)
+                pc += 4
+
+                if self._is_true():
+                    if t < pc:
+                        tier2vdriver.can_enter_jit(bytecode=bytecode, pc=t, self=self)
+                    pc = t
+
+            elif opcode == EXIT:
+                return self._POP()
+
+            elif opcode == PRINT:
+                self._PRINT()
+
+            elif opcode == FRAME_RESET:
+                old_arity = ord(bytecode[pc])
+                local_size = ord(bytecode[pc+1])
+                new_arity = ord(bytecode[pc+2])
+                pc += 3
+                self._FRAME_RESET(old_arity, local_size, new_arity)
+
+            elif opcode == NOP:
+                continue
+
+            else:
+                assert False, 'Unknown opcode: %s' % bytecodes[opcode]
+
+
 # def run(bytecode, w_arg, debug=False, tier=None):
 #     frame = Frame(bytecode)
 #     frame.push(w_arg)
@@ -1111,10 +1827,24 @@ class Frame(object):
 def run(bytecode, w_arg, debug=False, tier=1):
     "tier 0=interp, tier 1=threaded code, tier 2=inlined threaded code."
     bytecode = Bytecode(bytecode.code)
+    if tier == 0 or tier == 2:
+        # Tier 2 (inlined): run the *deep*, virtualizable interpreter under the
+        # recursive meta-tracing driver (tier2vdriver).  Unlike the tier-1
+        # threaded-code path (Frame.interp), it traces straight through the
+        # data-stack helpers and inlines calls, and -- because JitFrame is
+        # virtualizable -- keeps the value stack and the loop-carried counter
+        # boxes unboxed across the compiled loop.  That box elimination is where
+        # tier 2's speedup over tier 1 comes from.
+        #
+        # Tier 0 (the benchmark ground truth) runs the *same* JitFrame._interp
+        # with the JIT turned off (targettla sets --jit off), so it is a pure
+        # interpreter and is guaranteed to agree with tier 2's result.
+        stacksize = _compute_stackdepth(bytecode) + 1
+        jframe = JitFrame(bytecode, stacksize=stacksize)
+        jframe._push(w_arg)
+        return jframe._interp()
     frame = Frame(bytecode)
     frame.push(w_arg)
-    if tier == 0:
-        return frame._interp()
     pc = 0
     while True:
         try:

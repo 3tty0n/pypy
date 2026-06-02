@@ -86,12 +86,18 @@ class TestFrame:
         assert res.intvalue == 234
 
     def test_call(self):
+        # CALL takes two operands (target, argnum): argnum arguments are copied
+        # into the callee frame, which reads them via DUPN.  (This test was
+        # written for an obsolete single-operand CALL where the argument sat on
+        # the callee's stack top and ADD consumed it directly.)
         code = [
-            tla.CALL, 3,
+            tla.DUP,             # keep a copy of the arg for the caller
+            tla.CALL, 5, 1,      # call f@5 with 1 argument
             tla.EXIT,
+            tla.DUPN, 2,         # f: read the argument
             tla.CONST_INT, 12,
             tla.ADD,
-            tla.RET, 1
+            tla.RET, 1,
         ]
         res = interp(code, W_IntObject(34))
         assert res.intvalue == 34 + 12
@@ -123,9 +129,12 @@ class TestFrame:
         assert_stack(frame.stack, expected)
 
     def test_simple_loop(self):
+        # NB: the LT opcode is implemented as <= (it calls W_IntObject.le; GT
+        # likewise calls ge), as every lang program (mb_loop, gcd, ...) relies
+        # on.  So "count down to 0" exits when N <= 0, i.e. compares against 0.
         code = [
             tla.DUP,
-            tla.CONST_INT, 1,
+            tla.CONST_INT, 0,
             tla.LT,
             tla.JUMP_IF, 11,
             tla.CONST_INT, 1,
@@ -137,12 +146,15 @@ class TestFrame:
         assert res.intvalue == 0
 
     def test_double_loop(self):
+        # LT is <= (see test_simple_loop); the loop-exit comparisons are against
+        # 0 so each loop counts down to 0.  The CONST_INT 1 before each SUB are
+        # the decrements and stay 1.
         code = [
             tla.DUP,
             tla.CONST_INT, 1,
             tla.SUB,
             tla.DUP,
-            tla.CONST_INT, 1,
+            tla.CONST_INT, 0,
             tla.LT,
             tla.JUMP_IF, 12,
             tla.JUMP, 1,
@@ -151,7 +163,7 @@ class TestFrame:
             tla.SUB,
             tla.DUP,
             tla.DUP,
-            tla.CONST_INT, 1,
+            tla.CONST_INT, 0,
             tla.LT,
             tla.JUMP_IF, 25,
             tla.JUMP, 1,
