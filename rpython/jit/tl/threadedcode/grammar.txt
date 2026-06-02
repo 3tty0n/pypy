@@ -1,31 +1,48 @@
-IGNORE: "[ \t\n]";
-DECIMAL: "-?0|[1-9][0-9]*";
-FLOAT: "-?(0?|[1-9][0-9]*)\.[0-9]+([eE][-+]?[0-9]+)?";
-BINOP: "(==)|[-+<]";
+# Grammar for the native TLA surface language (an OCaml-flavoured, integer-only
+# functional language).  A program is a non-empty list of `let rec` function
+# definitions; the entry point must be `main`, taking exactly one parameter --
+# the integer CLI argument that targettla/run() pushes onto the initial frame.
+#
+#     let rec fib n =
+#       if n < 2 then n
+#       else fib (n - 1) + fib (n - 2)
+#     ;;
+#     let rec main x = fib x ;;
+#
+# parser.py turns this into an AST and compiles it to TLA bytecode (the same
+# `code = [...]` int list found in lang/*.tla.py).  See parser.py for the
+# code generator.
+#
+# Lexer notes
+# -----------
+# Operators get their own named tokens (ADDOP/MULOP/CMPOP) and those characters
+# are never used as bare quoted literals elsewhere, so the lexer never confuses
+# an operator with punctuation (the bug that broke the old `<`/`-` array rules).
+# Keyword literals (if/then/else/let/rec/in) take priority over VARIABLE.
+
+IGNORE: "[ \t\n]|#[^\n]*";
+DECIMAL: "0|[1-9][0-9]*";
 VARIABLE: "[a-zA-Z_][a-zA-Z0-9_]*";
-DOT: ".";
+ADDOP: "[-+]";
+MULOP: "[*/%]";
+CMPOP: "<=|>=|==|!=|<|>";
 
-main: expr* [EOF];
+main: definition+ [EOF];
 
-atom: DECIMAL | FLOAT | VARIABLE;
-
-simple_expr: "(" simple_expr ")"
-             | atom BINOP simple_expr
-             | array_store
-             | array_load
-             | atom;
-
-expr: "let" VARIABLE "=" expr "in"
-    | "let rec" VARIABLE formal_args "=" expr ";;"
-    | "Array.make" simple_expr simple_expr
-    | simple_expr actual_args
-    | simple_expr
-    ;
+definition: ["let"] ["rec"] VARIABLE formal_args ["="] expr [";;"];
 
 formal_args: VARIABLE formal_args | VARIABLE;
 
-actual_args: simple_expr actual_args | simple_expr;
+expr: ["if"] expr ["then"] expr ["else"] expr
+    | ["let"] VARIABLE ["="] expr ["in"] expr
+    | cmp_expr;
 
-array_load: atom DOT "(" simple_expr ")";
+cmp_expr: add_expr CMPOP add_expr | add_expr;
 
-array_store: atom DOT "(" simple_expr ")" "<" "-" simple_expr;
+add_expr: mul_expr ADDOP add_expr | mul_expr;
+
+mul_expr: app_expr MULOP mul_expr | app_expr;
+
+app_expr: atom app_expr | atom;
+
+atom: ["("] expr [")"] | DECIMAL | VARIABLE;

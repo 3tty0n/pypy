@@ -265,12 +265,84 @@ def not_in_trace(func):
     func.oopspec = "jit.not_in_trace()"   # note that 'func' may take arguments
     return func
 
+class JitInterp(object):
+    """Roles assigned to interpreter helper methods.
+
+    Trace splitting and threaded-code generation inspect
+    ``func._jit_interp_role_`` to recognise helpers by the runtime effect
+    they have, never by their class- or method-name.  The values below
+    are the complete, interpreter-agnostic vocabulary of roles.
+
+    Add roles only when a new structural distinction is needed by the JIT
+    back-end; do not add interpreter-specific roles here.
+    """
+    NONE       = 0
+    # Primary roles -- the five categories every interpreter typically needs.
+    CONDITION  = 1   # boolean test driving a guard / branch (e.g. is_true)
+    PUSH       = 2   # pushes one value onto the runtime stack
+    POP        = 3   # pops one value off  the runtime stack
+    JUMP       = 4   # unconditional jump to another bytecode address
+    RET        = 5   # returns from the current interpreter frame
+    # Secondary roles -- compound effects given their own opaque category
+    # because the trace splitter has to rewrite them as a unit.
+    DROP       = 6   # pops N values, no return
+    RESET      = 7   # reshapes / replaces the current interpreter frame
+    # Tracer-internal variants -- the trace-time push/pop, which lack the
+    # dummy-flag argument used by the runtime-side primary roles.
+    PUSH_RAW   = 8
+    POP_RAW    = 9
+
+
+def _interp_role(role):
+    """Build a decorator that stamps `func` with the given JitInterp role.
+
+    The role declares what the helper *does*, not whether the JIT may look
+    inside it.  Visibility is an orthogonal concern: stack @dont_look_inside
+    on top when the body should stay opaque to the tracer.
+    """
+    def decorate(func):
+        func._jit_interp_role_ = role
+        return func
+    return decorate
+
+
+# Public role decorators.  Each stamps the function with its JitInterp role;
+# consumers (trace splitter, codewriter) look the role up generically.
+condition_helper  = _interp_role(JitInterp.CONDITION)
+push_helper       = _interp_role(JitInterp.PUSH)
+pop_helper        = _interp_role(JitInterp.POP)
+jump_helper       = _interp_role(JitInterp.JUMP)
+ret_helper        = _interp_role(JitInterp.RET)
+drop_helper       = _interp_role(JitInterp.DROP)
+reset_helper      = _interp_role(JitInterp.RESET)
+push_raw_helper   = _interp_role(JitInterp.PUSH_RAW)
+pop_raw_helper    = _interp_role(JitInterp.POP_RAW)
+
+
 def enable_shallow_tracing(func):
-    "Wrap func as a handler_<func> shallow-tracing primitive."
+    """Wrap func as a handler_<func> shallow-tracing primitive.
+
+    During trace recording the wrapper passes the recorded dummy flag through
+    to ``func``, letting ``func`` short-circuit to a constant placeholder so
+    the recorder can thread an arbitrary value without doing the real work.
+    During BlackholeInterpreter replay the wrapper forces ``flg=False`` so the
+    real arithmetic runs -- otherwise the recording-time placeholder would
+    poison the runtime accumulator on every blackhole iteration.
+    """
     func._always_inline_ = True
+    argcount = func.func_code.co_argcount
+    defaults = func.func_defaults
+    has_tracing_flag = defaults is not None and len(defaults) > 0
     @dont_look_inside
     def shallow_hanlder(*args):
+        dummy = args[-1]
         real_args = args[:-2]
+        if has_tracing_flag:
+            if len(real_args) == argcount:
+                real_args = real_args[:-1]
+            if dummy and we_are_blackholing():
+                dummy = False
+            return func(*(real_args + (dummy,)))
         return func(*real_args)
 
     shallow_hanlder.func_name = "handler_" + func.func_name
@@ -380,6 +452,42 @@ def we_are_jitted():
 
 _we_are_jitted = CDefinedIntSymbolic('0 /* we are not jitted here */',
                                      default=0)
+
+
+# Runtime counter incremented while the BlackholeInterpreter is replaying
+# jitcode after a guard failure.  Unlike `_we_are_jitted` (which the
+# codewriter constant-folds to True inside jitcode), this is a real mutable
+# global that the BlackholeInterpreter sets on entry and clears on exit, so
+# code which behaves differently during trace recording versus blackhole
+# replay can distinguish the two via `we_are_blackholing()`.  The compiled
+# native trace never executes through the BlackholeInterpreter and therefore
+# sees the flag as 0.
+_blackholing_depth = [0]
+
+
+def we_are_blackholing():
+    """True while the BlackholeInterpreter is replaying jitcode.
+
+    During trace recording (MetaInterp) this returns False.  During
+    compiled-trace native execution this returns False.  Only the
+    BlackholeInterpreter run path observes True.
+
+    Useful for interpreter helpers that need a recording-time direction
+    hint (e.g. `if dummy: return True` to steer the recorder down the
+    loop-body branch) while still doing the real work on blackhole replay:
+    `if dummy and not we_are_blackholing(): return True`.
+    """
+    return _blackholing_depth[0] != 0
+
+
+@dont_look_inside
+def _enter_blackhole():
+    _blackholing_depth[0] += 1
+
+
+@dont_look_inside
+def _leave_blackhole():
+    _blackholing_depth[0] -= 1
 
 def _get_virtualizable_token(frame):
     """ An obscure API to get vable token.

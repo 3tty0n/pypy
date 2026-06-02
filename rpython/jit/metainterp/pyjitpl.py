@@ -2183,6 +2183,8 @@ class MetaInterpStaticData(object):
 
         self._addr2name_keys = []
         self._addr2name_values = []
+        self._addr2annotation_keys = []
+        self._addr2annotation_values = []
 
         compile.make_and_attach_done_descrs([self, cpu])
 
@@ -2213,6 +2215,12 @@ class MetaInterpStaticData(object):
         self._addr2name_keys = [key for key, value in list_of_addr2name]
         self._addr2name_values = [value for key, value in list_of_addr2name]
 
+    def setup_list_of_addr2annotation(self, list_of_addr2annotation):
+        self._addr2annotation_keys = [
+            key for key, value in list_of_addr2annotation]
+        self._addr2annotation_values = [
+            value for key, value in list_of_addr2annotation]
+
     def finish_setup(self, codewriter, optimizer=None):
         from rpython.jit.metainterp.blackhole import BlackholeInterpBuilder
         self.blackholeinterpbuilder = BlackholeInterpBuilder(codewriter, self)
@@ -2222,6 +2230,7 @@ class MetaInterpStaticData(object):
         self.setup_descrs(asm.descrs)
         self.setup_indirectcalltargets(asm.indirectcalltargets)
         self.setup_list_of_addr2name(asm.list_of_addr2name)
+        self.setup_list_of_addr2annotation(asm.list_of_addr2annotation)
         self.liveness_info = "".join(asm.all_liveness)
         #
         self.jitdrivers_sd = codewriter.callcontrol.jitdrivers_sd
@@ -2284,6 +2293,23 @@ class MetaInterpStaticData(object):
                     return self._addr2name_values[i]
             return ''
 
+    def get_annotation_from_address(self, addr):
+        if we_are_translated():
+            d = self.globaldata.addr2annotation
+            if d is None:
+                d = {}
+                keys = self._addr2annotation_keys
+                values = self._addr2annotation_values
+                for i in range(len(keys)):
+                    d[keys[i]] = values[i]
+                self.globaldata.addr2annotation = d
+            return d.get(addr, 0)
+        else:
+            for i in range(len(self._addr2annotation_keys)):
+                if addr == self._addr2annotation_keys[i]:
+                    return self._addr2annotation_values[i]
+            return 0
+
     def bytecode_for_address(self, fnaddress):
         if we_are_translated():
             d = self.globaldata.indirectcall_dict
@@ -2332,6 +2358,7 @@ class MetaInterpGlobalData(object):
         self.initialized = False
         self.indirectcall_dict = None
         self.addr2name = None
+        self.addr2annotation = None
 
 # ____________________________________________________________
 
@@ -3028,6 +3055,14 @@ class MetaInterp(object):
             # However, in order to keep the existing tests working
             # (which are based on the assumption that 'loop_token' is
             # directly used here), a bit of custom non-translatable code...
+            if self.threaded_code_gen:
+                num_green_args = self.jitdriver_sd.num_green_args
+                gi, gr, gf = self._unpack_boxes(live_arg_boxes, 0,
+                                                num_green_args)
+                ri, rr, rf = self._unpack_boxes(live_arg_boxes,
+                                                num_green_args,
+                                                len(live_arg_boxes))
+                raise jitexc.ContinueRunningNormally(gi, gr, gf, ri, rr, rf)
             self._nontranslated_run_directly(live_arg_boxes, loop_token)
             assert 0, "unreachable"
 
@@ -3166,7 +3201,7 @@ class MetaInterp(object):
         greenkey = original_boxes[:num_green_args]
         runtime_args = original_boxes[num_green_args:]
         target_token = compile.compile_loop_and_split(
-            self, greenkey, self.resumekey, runtime_args)
+            self, greenkey, self.resumekey, runtime_args, start=start)
         if target_token is not None:
             assert isinstance(target_token, TargetToken)
             self.jitdriver_sd.warmstate.attach_procedure_to_interp(

@@ -4371,6 +4371,27 @@ class TestLLtype(BaseLLtypeTests, LLJitMixin):
         self.check_resops(call_i=2)
         self.check_resops(int_add=0)
 
+    def test_enable_shallow_tracing_with_flag(self):
+        @enable_shallow_tracing
+        def prim_add(x, y, flg=False):
+            if flg:
+                return 0
+            return x + y
+
+        jitdriver = JitDriver(greens=[], reds=['n', 'acc'])
+        def f(n):
+            acc = 0
+            while n >= 0:
+                jitdriver.jit_merge_point(n=n, acc=acc)
+                acc = prim_add(acc, n)
+                n -= 1
+            return acc
+
+        res = self.meta_interp(f, [10])
+        assert res == 0
+        self.check_resops(call_i=2)
+        self.check_resops(int_add=0)
+
     def test_not_in_trace_exception(self):
         def g():
             if we_are_jitted():

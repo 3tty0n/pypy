@@ -436,6 +436,10 @@ class JitCellToken(AbstractDescr):
     # and more data specified by the backend when the loop is compiled
     number = -1
     generation = r_int64(0)
+    # threaded-code-gen: recorded input-arg types for adapting residual
+    # call_assembler arglists; declared here (default None) so the threaded
+    # splitter can read it as a plain attribute (RPython has no 3-arg getattr).
+    _threaded_inputarg_types = None
     # one purpose of LoopToken is to keep alive the CompiledLoopToken
     # returned by the backend.  When the LoopToken goes away, the
     # CompiledLoopToken has its __del__ called, which frees the assembler
@@ -468,6 +472,7 @@ class JitCellToken(AbstractDescr):
 class TargetToken(AbstractDescr):
     _ll_loop_code = 0     # for the backend.  If 0, we know that it is
                           # a LABEL that was not compiled yet.
+    _x86_arglocs = None
 
     def __init__(self, targeting_jitcell_token=None,
                  original_jitcell_token=None):
@@ -1097,4 +1102,3 @@ class BackendDescr(AbstractDescr):
 
     def get_ei_index(self):
         return self.ei_index
-

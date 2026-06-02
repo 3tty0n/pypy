@@ -12,6 +12,39 @@ from rpython.rtyper.lltypesystem import lltype, llmemory, rffi
 from rpython.rtyper import rclass
 
 
+_JIT_INTERP_ROLE_ATTR = '_jit_interp_role_'
+
+
+def _read_jit_interp_role(funcobj):
+    """Walk a FuncType wrapper looking for a JitInterp role annotation.
+
+    Helpers are stamped by the @jit.<role>_helper decorators in rpython.rlib.jit;
+    the role is exposed at runtime via metainterp_sd.get_annotation_from_address.
+    """
+    for candidate in _role_candidates(funcobj):
+        role = getattr(candidate, _JIT_INTERP_ROLE_ATTR, 0)
+        if role:
+            return role
+    return 0
+
+
+def _role_candidates(funcobj):
+    func = getattr(funcobj, '_callable', None)
+    if func is not None:
+        yield func
+        im_func = getattr(func, 'im_func', None)
+        if im_func is not None:
+            yield im_func
+    graph = getattr(funcobj, 'graph', None)
+    if graph is not None:
+        graph_func = getattr(graph, 'func', None)
+        if graph_func is not None:
+            yield graph_func
+            im_func = getattr(graph_func, 'im_func', None)
+            if im_func is not None:
+                yield im_func
+
+
 class AssemblerError(Exception):
     pass
 
@@ -23,6 +56,7 @@ class Assembler(object):
         self.descrs = []
         self.indirectcalltargets = set()    # set of JitCodes
         self.list_of_addr2name = []
+        self.list_of_addr2annotation = []
         self._descr_dict = {}
         self._count_jitcodes = 0
         self._seen_raw_objects = set()
@@ -287,6 +321,10 @@ class Assembler(object):
             TYPE = lltype.typeOf(value).TO
             if isinstance(TYPE, lltype.FuncType):
                 name = value._obj._name
+                role = _read_jit_interp_role(value._obj)
+                if role:
+                    addr = llmemory.cast_ptr_to_adr(value)
+                    self.list_of_addr2annotation.append((addr, role))
             elif TYPE == rclass.OBJECT_VTABLE:
                 if not value.name:    # this is really the "dummy" class
                     return            #   pointer from some dict

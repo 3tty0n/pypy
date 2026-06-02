@@ -341,11 +341,19 @@ class WarmEnterState(object):
         old_token = cell.get_procedure_token()
         cell.set_procedure_token(procedure_token)
         if old_token is not None:
-            self.cpu.redirect_call_assembler(old_token, procedure_token)
-            # procedure_token is also kept alive by any loop that used
-            # to point to old_token.  Actually freeing old_token early
-            # is a pointless optimization (it is tiny).
-            old_token.record_jump_to(procedure_token)
+            can_redirect = True
+            if self.jitdriver_sd.jitdriver.threaded_code_gen:
+                # Split threaded-code entries may share the same backend
+                # argument types while depending on different materialized
+                # frame-stack slots.  A raw call-assembler redirect would
+                # preserve only the word-level shape, not that resume contract.
+                can_redirect = False
+            if can_redirect:
+                self.cpu.redirect_call_assembler(old_token, procedure_token)
+                # procedure_token is also kept alive by any loop that used
+                # to point to old_token.  Actually freeing old_token early
+                # is a pointless optimization (it is tiny).
+                old_token.record_jump_to(procedure_token)
 
     # ----------
 

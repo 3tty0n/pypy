@@ -20,6 +20,53 @@ class W_Object:
         raise NotImplementedError
 
     def add(self, w_other, flg=False):
+        if flg:
+            return W_IntObject(0)
+        raise NotImplementedError
+
+    def sub(self, w_other, flg=False):
+        if flg:
+            return W_IntObject(0)
+        raise NotImplementedError
+
+    def mul(self, w_other, flg=False):
+        if flg:
+            return W_IntObject(0)
+        raise NotImplementedError
+
+    def div(self, w_other, flg=False):
+        if flg:
+            return W_IntObject(0)
+        raise NotImplementedError
+
+    def mod(self, w_other, flg=False):
+        if flg:
+            return W_IntObject(0)
+        raise NotImplementedError
+
+    def eq(self, w_other, flg=False):
+        if flg:
+            return W_IntObject(0)
+        raise NotImplementedError
+
+    def lt(self, w_other, flg=False):
+        if flg:
+            return W_IntObject(0)
+        raise NotImplementedError
+
+    def gt(self, w_other, flg=False):
+        if flg:
+            return W_IntObject(0)
+        raise NotImplementedError
+
+    def le(self, w_other, flg=False):
+        if flg:
+            return W_IntObject(0)
+        raise NotImplementedError
+
+    def ge(self, w_other, flg=False):
+        if flg:
+            return W_IntObject(0)
         raise NotImplementedError
 
 
@@ -94,7 +141,10 @@ class W_IntObject(W_Object):
     def mod(self, w_other, flg=False):
         if flg:
             return W_IntObject(0)
-        raise OperationError
+        if isinstance(w_other, W_IntObject):
+            return W_IntObject(self.intvalue % w_other.intvalue)
+        else:
+            raise OperationError
 
     @enable_shallow_tracing
     def eq(self, w_other, flg=False):

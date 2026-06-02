@@ -2,7 +2,7 @@ import math
 import sys
 
 from rpython.rlib import jit
-from rpython.rlib.jit import JitDriver, we_are_jitted, hint
+from rpython.rlib.jit import JitDriver, we_are_jitted, hint, we_are_blackholing
 from rpython.rlib.rarithmetic import r_uint
 from rpython.rlib.rrandom import Random
 
@@ -15,6 +15,8 @@ from rpython.jit.tl.threadedcode.bytecode import *
 
 TRACE_THRESHOLD = -1
 MAX_INTERP_DEPTH = 50
+
+
 
 class ContinueInTracingJIT(Exception):
     def __init__(self, pc):
@@ -54,6 +56,43 @@ def _construct_value(bytecode, pc):
     d = ord(bytecode[pc+3])
     return a << 24 | b << 16 | c << 8 | d
 
+@jit.elidable
+def _branch_reaches_backedge(bytecode, start, boundary):
+    # Statically follow control flow from `start`, returning True if a backward
+    # jump to a pc <= `boundary` (a loop back-edge) is reached before RET/EXIT.
+    # This lets the recorder tell a conditional's *loop-continue* branch from its
+    # *exit* branch without knowing anything language-specific about opcodes.
+    # Pure over the (immutable) bytecode + green pcs, so it folds to a constant
+    # during recording instead of being traced.
+    pc = start
+    n = len(bytecode)
+    steps = 0
+    while steps < 4096:
+        steps += 1
+        if pc < 0 or pc >= n:
+            return False
+        op = ord(bytecode[pc])
+        pc += 1
+        if op == JUMP:
+            t = ord(bytecode[pc])
+            if t <= boundary:
+                return True
+            pc = t
+        elif op == JUMP_N:
+            t = _construct_value(bytecode, pc)
+            if t <= boundary:
+                return True
+            pc = t
+        elif op == RET or op == EXIT:
+            return False
+        elif op == JUMP_IF:
+            pc += 1          # nested conditional: follow its fall-through
+        elif op == JUMP_IF_N:
+            pc += 4
+        else:
+            pc += hasarg[op]
+    return False
+
 @jit.unroll_safe
 def _power_01(n):
     acc = 1
@@ -74,9 +113,16 @@ def _construct_float(bytecode, pc):
     decimal = literals[8]
     return float(int_val + (float_val * _power_01(decimal)))
 
+def _tier1_confirm_enter_jit(pc, entry, bytecode, tstack, self):
+    # No frame fix-up here: the clean loop-header state is captured/restored in
+    # _jit_take_snapshot (the driverhook graph is rtyped separately and may not
+    # do list operations on the frame stack without upsetting the codewriter).
+    return True
+
 tier1driver = JitDriver(
     greens=['pc', 'entry', 'bytecode', 'tstack'], reds=['self'],
     get_printable_location=get_printable_location_tier1,
+    confirm_enter_jit=_tier1_confirm_enter_jit,
     threaded_code_gen=True, conditions=["is_true"])
 
 
@@ -93,6 +139,57 @@ class Frame(object):
         self.stack = stack
         self.stackpos = stackpos
         self.depth = depth
+        # Clean (pre-recording) loop-header frame state, captured by
+        # confirm_enter_jit.  The trace recorder mutates the live frame with
+        # shallow-tracing placeholder zeros (and leaves stackpos off-by-one
+        # because POP only peeks while recording, as the trace splitter
+        # requires); this lets _jit_take_snapshot restore the real state when
+        # plain interpretation resumes after recording.
+        self._clean_stack = None
+        self._clean_pos = 0
+        self._clean_pc = -1
+        # Set by FRAME_RESET while a trace is being recorded (dummy=True):
+        # signals that the live frame now holds placeholder zeros and must be
+        # restored before plain interpretation continues.
+        self._frame_poisoned = False
+
+    @jit.not_in_trace
+    def _jit_take_snapshot(self, pc, entry, jitted):
+        # not_in_trace: runs in tier-0 and during tracing/blackholing, but is
+        # never emitted into the compiled loop, so it costs nothing at JIT
+        # speed.  `jitted` is we_are_jitted() evaluated in the (traced) interp
+        # method, so it is True only while a trace is being recorded -- not
+        # during plain warmup interpretation nor the post-trace continuation.
+        #
+        # While recording (jitted) we must not touch the live frame: the
+        # meta-interp is reading it to build the trace.  When recording has
+        # just finished and plain interpretation resumes, restore the clean
+        # loop-header state captured by confirm_enter_jit so the continuation
+        # runs from real values rather than the recorder's placeholder zeros.
+        if jitted:
+            return
+        should_restore = self._frame_poisoned
+        if (not should_restore and self._clean_stack is not None and
+                pc == self._clean_pc):
+            should_restore = True
+        if should_restore:
+            snap = self._clean_stack
+            if snap is not None:
+                stack = self.stack
+                i = 0
+                n = len(snap)
+                while i < n:
+                    stack[i] = snap[i]
+                    i += 1
+                self.stackpos = self._clean_pos
+            self._frame_poisoned = False
+        elif pc == entry:
+            # Clean loop header reached during plain interpretation; remember
+            # this state so it can be restored after the next recording poisons
+            # the live frame.
+            self._clean_stack = self.stack[:]
+            self._clean_pos = self.stackpos
+            self._clean_pc = pc
 
     @jit.unroll_safe
     def copy_frame(self, argnum, retaddr, dummy=False):
@@ -116,6 +213,7 @@ class Frame(object):
         self.stack[self.stackpos] = w_x
         self.stackpos += 1
 
+    @jit.push_raw_helper
     def _push(self, w_x):
         stackpos = jit.promote(self.stackpos)
         self.stack[stackpos] = w_x
@@ -130,6 +228,8 @@ class Frame(object):
         self.stack[stackpos] = None
         return res
 
+    @jit.dont_look_inside
+    @jit.pop_raw_helper
     def _pop(self):
         stackpos = jit.promote(self.stackpos) - 1
         assert stackpos >= 0
@@ -173,10 +273,11 @@ class Frame(object):
         sys.stderr.write("]\n")
 
     @jit.dont_look_inside
-    def is_true(self, dummy):
+    @jit.condition_helper
+    def is_true(self, recorded, dummy):
         w_x = self.pop()
-        if dummy:
-            return True
+        if dummy and not we_are_blackholing():
+            return recorded
         return w_x.is_true()
 
     def _is_true(self):
@@ -214,8 +315,9 @@ class Frame(object):
             raise OperationError
 
     @jit.dont_look_inside
+    @jit.push_helper
     def PUSH(self, w_x, dummy):
-        if dummy:
+        if dummy and not we_are_blackholing():
             return
         self.push(w_x)
 
@@ -223,8 +325,15 @@ class Frame(object):
         self._push(w_x)
 
     @jit.dont_look_inside
+    @jit.pop_helper
     def POP(self, dummy):
-        if dummy:
+        # On the dummy (trace-recording) path we must NOT really pop: the trace
+        # splitter reconstructs the pop as a read of stack[stackpos-1] at this
+        # op's position, so it relies on stackpos still pointing past the value.
+        # The off-by-one this leaves in the live frame is undone for the
+        # post-trace continuation by the clean-snapshot restore in
+        # _jit_take_snapshot (keyed off _frame_poisoned).
+        if dummy and not we_are_blackholing():
             return self.take(0)
         return self.pop()
 
@@ -232,8 +341,9 @@ class Frame(object):
         return self._pop()
 
     @jit.dont_look_inside
+    @jit.drop_helper
     def DROP(self, n, dummy):
-        if dummy:
+        if dummy and not we_are_blackholing():
             return
         for _ in range(n):
             self.pop()
@@ -344,7 +454,7 @@ class Frame(object):
 
     @jit.dont_look_inside
     def CALL(self, oldframe, t, argnum, dummy):
-        if dummy:
+        if dummy and not we_are_blackholing():
             return
         w_x = self.interp(t)
         oldframe.drop(argnum)
@@ -367,8 +477,9 @@ class Frame(object):
             oldframe._push(w_x)
 
     @jit.dont_look_inside
+    @jit.ret_helper
     def RET(self, n, dummy):
-        if dummy:
+        if dummy and not we_are_blackholing():
             return
         v = self.pop()
         return v
@@ -382,7 +493,16 @@ class Frame(object):
         # print v.getrepr()
 
     @jit.dont_look_inside
+    @jit.reset_helper
     def FRAME_RESET(self, o, l, n, dummy):
+        # During trace recording (dummy=True, not blackholing) the shallow
+        # arithmetic/comparison primitives returned placeholder zeros that we
+        # are now copying into the persistent argument slots.  Flag the frame
+        # so the next plain-interpretation loop header restores the real state
+        # (see _jit_take_snapshot); otherwise the post-trace continuation reads
+        # the poisoned accumulator/counter (mb_sum/mb_inc returning 0).
+        if dummy and not we_are_blackholing():
+            self._frame_poisoned = True
         ret = self.stack[self.stackpos - n - 1]
         old_base = self.stackpos - n
         new_base = self.stackpos - o - n - l - 1
@@ -663,7 +783,7 @@ class Frame(object):
 
     @jit.dont_look_inside
     def interp_CALL_ASSEMBLER(self, pc, entry, bytecode, tstack, dummy):
-        if dummy:
+        if dummy and not we_are_blackholing():
             return self.take(0)
 
         return self.interp(pc)
@@ -679,6 +799,7 @@ class Frame(object):
         while pc < len(bytecode):
             tier1driver.jit_merge_point(bytecode=bytecode, entry=entry,
                                         pc=pc, tstack=tstack, self=self)
+            self._jit_take_snapshot(pc, entry, we_are_jitted())
 
             # print get_printable_location_tier1(pc, entry, bytecode, tstack)
             # self.dump()
@@ -825,6 +946,13 @@ class Frame(object):
                 if we_are_jitted():
                     frame.CALL_ASSEMBLER(self, t, argnum, bytecode, t_empty(), dummy=True)
                 else:
+                    if t < pc:
+                        tier1driver.can_enter_jit(
+                            bytecode=bytecode, entry=t, pc=t,
+                            tstack=t_empty(), self=frame)
+                        tier1driver.can_enter_jit(
+                            bytecode=bytecode, entry=t, pc=t,
+                            tstack=t_empty(), self=frame)
                     frame.CALL_ASSEMBLER(self, t, argnum, bytecode, t_empty(), dummy=False)
 
             elif opcode == RET:
@@ -863,7 +991,7 @@ class Frame(object):
                         if bytecode.counts[pc-1] == TRACE_THRESHOLD:
                             raise ContinueInTracingJIT(pc-1)
                         bytecode.counts[pc-1] += 1
-                    if t < pc:
+                    if t < pc and tstack.t_is_empty():
                         tier1driver.can_enter_jit(
                             bytecode=bytecode, entry=entry, pc=t, tstack=tstack, self=self)
                     pc = t
@@ -884,43 +1012,52 @@ class Frame(object):
                     if t < pc:
                         pc = emit_jump(pc, t)
                 else:
-                    if t < pc:
+                    if t < pc and tstack.t_is_empty():
                         tier1driver.can_enter_jit(
                             bytecode=bytecode, entry=entry, pc=t, tstack=tstack, self=self)
                     pc = t
 
             elif opcode == JUMP_IF:
+                jumpif_pc = pc - 1
                 target = ord(bytecode[pc])
                 pc += 1
 
                 if we_are_jitted():
-                    if self.is_true(dummy=True):
+                    # Record the *loop-continue* branch, not blindly the true
+                    # one: take the false branch only when it loops back and the
+                    # true branch exits (e.g. `while cond:` exits on true).
+                    recorded = (_branch_reaches_backedge(bytecode, target, jumpif_pc) or
+                                not _branch_reaches_backedge(bytecode, pc, jumpif_pc))
+                    if self.is_true(recorded, dummy=True):
                         tstack = t_push(pc, tstack)
                         pc = target
                     else:
                         tstack = t_push(target, tstack)
                 else:
-                    if self.is_true(dummy=False):
-                        if target < pc:
+                    if self.is_true(True, dummy=False):
+                        if target < pc and tstack.t_is_empty():
                             entry = target
                             tier1driver.can_enter_jit(
                                 bytecode=bytecode, entry=entry, pc=target, tstack=tstack, self=self)
                         pc = target
 
             elif opcode == JUMP_IF_N:
+                jumpif_pc = pc - 1
                 target = _construct_value(bytecode, pc)
                 pc += 4
 
                 if we_are_jitted():
-                    if self.is_true(dummy=True):
+                    recorded = (_branch_reaches_backedge(bytecode, target, jumpif_pc) or
+                                not _branch_reaches_backedge(bytecode, pc, jumpif_pc))
+                    if self.is_true(recorded, dummy=True):
                         tstack = t_push(pc, tstack)
                         pc = target
                     else:
                         tstack = t_push(target, tstack)
 
                 else:
-                    if self.is_true(dummy=False):
-                        if target < pc:
+                    if self.is_true(True, dummy=False):
+                        if target < pc and tstack.t_is_empty():
                             entry = target
                             tier1driver.can_enter_jit(
                                 bytecode=bytecode, entry=entry, pc=target, tstack=tstack, self=self)

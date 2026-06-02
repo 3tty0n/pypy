@@ -12,7 +12,7 @@ from rpython.rlib.rjitlog import rjitlog as jl
 
 from rpython.jit.metainterp.resoperation import (
     ResOperation, rop, get_deep_immutable_oplist, OpHelpers, InputArgInt,
-    InputArgRef, InputArgFloat)
+    InputArgRef, InputArgFloat, AbstractResOp)
 from rpython.jit.metainterp.history import (TreeLoop, JitCellToken,
     TargetToken, AbstractFailDescr, ConstInt)
 from rpython.jit.metainterp import history, jitexc
@@ -175,19 +175,21 @@ class SimpleSplitCompileData(SplitCompileData):
 
     def __init__(self, trace, resumestorage=None,
                  call_pure_results=None, enable_opts=None,
-                 inline_short_preamble=False, body_token=None):
+                 inline_short_preamble=False, body_token=None,
+                 expected_inputargs_count=-1):
         self.trace = trace
         self.resumestorage = resumestorage
         self.call_pure_results = call_pure_results
         self.enable_opts = enable_opts
         self.inline_short_preamble = inline_short_preamble
         self.body_token = body_token
+        self.expected_inputargs_count = expected_inputargs_count
 
     def split(self, metainterp_sd, jitdriver_sd, optimizations):
         from rpython.jit.metainterp.optimizeopt.tracesplit import OptTraceSplit
         opt = OptTraceSplit(metainterp_sd, jitdriver_sd, optimizations)
         return opt.split(self.trace, self.resumestorage, self.call_pure_results,
-                         self.body_token)
+                         self.body_token, self.expected_inputargs_count)
 
 def show_procedures(metainterp_sd, procedure=None, error=None):
     from rpython.conftest import option
@@ -217,6 +219,317 @@ def make_jitcell_token(jitdriver_sd):
     jitcell_token = JitCellToken()
     jitcell_token.outermost_jitdriver_sd = jitdriver_sd
     return jitcell_token
+
+def _same_greenkey(greenkey1, greenkey2):
+    if len(greenkey1) != len(greenkey2):
+        return False
+    for i in range(len(greenkey1)):
+        if not greenkey1[i].same_constant(greenkey2[i]):
+            return False
+    return True
+
+def _greenkey_from_debug_merge_point(op, jitdriver_sd):
+    if op.getopnum() != rop.DEBUG_MERGE_POINT:
+        return None
+    num_green_args = jitdriver_sd.num_green_args
+    arglist = op.getarglist()
+    if len(arglist) < 3 + num_green_args:
+        return None
+    greenkey = arglist[3:3 + num_green_args]
+    for box in greenkey:
+        if not isinstance(box, history.Const):
+            return None
+    return greenkey
+
+def _collect_threaded_entry_targets(operations, jitdriver_sd, red_args,
+                                    original_greenkey):
+    """Find split labels that can be entered directly from the portal.
+
+    The split loop may contain internal LABELs for threaded-code positions.
+    If blackholing unwinds through ContinueRunningNormally at one of those
+    positions, the warm entry path needs a tiny bridge to that label; attaching
+    the containing loop token itself would enter at the wrong machine-code
+    address.  Only labels with the exact red argument shape are exposed.
+    """
+    entries = []
+    seen_greenkeys = []
+    i = 0
+    while i < len(operations):
+        op = operations[i]
+        if op.getopnum() != rop.LABEL:
+            i += 1
+            continue
+        target_token = op.getdescr()
+        if not isinstance(target_token, TargetToken):
+            i += 1
+            continue
+        label_args = op.getarglist()
+        j = i + 1
+        greenkey = None
+        while j < len(operations):
+            nextop = operations[j]
+            if nextop.getopnum() == rop.LABEL:
+                break
+            if nextop.getopnum() != rop.DEBUG_MERGE_POINT:
+                greenkey = None
+                break
+            greenkey = _greenkey_from_debug_merge_point(nextop, jitdriver_sd)
+            if greenkey is not None:
+                break
+            j += 1
+        if (greenkey is not None and
+                not _same_greenkey(greenkey, original_greenkey)):
+            duplicate = False
+            for seen in seen_greenkeys:
+                if _same_greenkey(greenkey, seen):
+                    duplicate = True
+                    break
+            if (not duplicate and
+                    _threaded_entry_jump_args(label_args, red_args,
+                                              red_args) is not None):
+                entries.append((greenkey, target_token, label_args))
+                seen_greenkeys.append(greenkey)
+        i += 1
+    return entries
+
+def _new_inputarg_for_type(kind):
+    if kind == 'i':
+        return InputArgInt()
+    if kind == 'r':
+        return InputArgRef()
+    if kind == 'f':
+        return InputArgFloat()
+    raise AssertionError("unsupported threaded entry argument kind")
+
+def _threaded_entry_jump_args(label_args, red_args, bridge_args):
+    if len(red_args) != len(bridge_args):
+        return None
+    resolved = {}
+    for i in range(len(red_args)):
+        if red_args[i].type != bridge_args[i].type:
+            return None
+        if i < len(label_args):
+            if label_args[i].type != red_args[i].type:
+                return None
+            resolved[label_args[i]] = bridge_args[i]
+    jump_args = []
+    for arg in label_args:
+        if arg in resolved:
+            jump_args.append(resolved[arg])
+            continue
+        if (isinstance(arg, AbstractResOp) and
+                rop.is_same_as(arg.getopnum()) and arg.numargs() == 1):
+            src = arg.getarg(0)
+            if src in resolved and src.type == arg.type:
+                jump_args.append(resolved[src])
+                resolved[arg] = resolved[src]
+                continue
+        return None
+    return jump_args
+
+def _drop_positions(boxes, drop_positions):
+    if not drop_positions:
+        return boxes
+    newboxes = []
+    for i in range(len(boxes)):
+        if i not in drop_positions:
+            newboxes.append(boxes[i])
+    return newboxes
+
+def _drop_boxes(boxes, old_boxes):
+    newboxes = []
+    for box in boxes:
+        if box not in old_boxes:
+            newboxes.append(box)
+    return newboxes
+
+def _drop_unused_label_args(seg_label_op, ops, bridge_ops):
+    label_args = seg_label_op.getarglist()
+    drop_positions = []
+    old_boxes = []
+    for i in range(len(label_args)):
+        arg = label_args[i]
+        used = False
+        for bop in bridge_ops:
+            if bop.getopnum() in (rop.LABEL, rop.JUMP):
+                continue
+            for ai in range(bop.numargs()):
+                if bop.getarg(ai) is arg:
+                    used = True
+                    break
+            if used:
+                break
+        if not used:
+            drop_positions.append(i)
+            old_boxes.append(arg)
+    if not drop_positions:
+        return seg_label_op
+    seg_token = seg_label_op.getdescr()
+    for op in ops:
+        if op.getopnum() == rop.JUMP and op.getdescr() is seg_token:
+            op.initarglist(_drop_positions(op.getarglist(), drop_positions))
+    new_label_args = _drop_positions(label_args, drop_positions)
+    for i in range(len(bridge_ops)):
+        bop = bridge_ops[i]
+        if bop.getopnum() == rop.LABEL and bop.getdescr() is seg_token:
+            bridge_ops[i] = ResOperation(rop.LABEL, new_label_args,
+                                         seg_token)
+        elif bop.getopnum() == rop.JUMP and bop.getdescr() is seg_token:
+            bop.initarglist(_drop_positions(bop.getarglist(),
+                                            drop_positions))
+        elif bop.is_guard():
+            failargs = bop.getfailargs()
+            if failargs is not None:
+                bop.setfailargs(_drop_boxes(failargs, old_boxes))
+    return ResOperation(rop.LABEL, new_label_args, seg_token)
+
+def _drop_unused_embedded_label_args(ops):
+    i = 1
+    while i < len(ops):
+        label_op = ops[i]
+        if (label_op.getopnum() != rop.LABEL or
+                not isinstance(label_op.getdescr(), TargetToken)):
+            i += 1
+            continue
+        label_args = label_op.getarglist()
+        used = {}
+        j = i + 1
+        while j < len(ops):
+            op = ops[j]
+            if op.getopnum() == rop.LABEL:
+                break
+            if op.getopnum() != rop.JUMP:
+                for ai in range(op.numargs()):
+                    arg = op.getarg(ai)
+                    if arg in label_args:
+                        used[arg] = True
+                if op.is_guard():
+                    failargs = op.getfailargs()
+                    if failargs is not None:
+                        for arg in failargs:
+                            if arg in label_args:
+                                used[arg] = True
+            j += 1
+        drop_positions = []
+        for ai in range(len(label_args)):
+            if label_args[ai] not in used:
+                drop_positions.append(ai)
+        if drop_positions:
+            token = label_op.getdescr()
+            ops[i] = ResOperation(rop.LABEL,
+                                  _drop_positions(label_args,
+                                                  drop_positions),
+                                  token)
+            for j in range(len(ops)):
+                op = ops[j]
+                if op.getopnum() == rop.JUMP and op.getdescr() is token:
+                    op.initarglist(_drop_positions(op.getarglist(),
+                                                   drop_positions))
+        i += 1
+    return ops
+
+def _attach_threaded_entry_bridge(metainterp, greenkey, target_token,
+                                  label_args, red_args):
+    jitdriver_sd = metainterp.jitdriver_sd
+    metainterp_sd = metainterp.staticdata
+    jitcell_token = make_jitcell_token(jitdriver_sd)
+    bridge = create_empty_loop(metainterp)
+    bridge.original_jitcell_token = jitcell_token
+    bridge.inputargs = [_new_inputarg_for_type(box.type)
+                        for box in red_args]
+    jump_args = _threaded_entry_jump_args(label_args, red_args,
+                                         bridge.inputargs)
+    assert jump_args is not None
+    bridge.operations = [ResOperation(rop.JUMP, jump_args,
+                                      descr=target_token)]
+    if not we_are_translated():
+        bridge.check_consistency(
+            check_descr=not jitdriver_sd.jitdriver.threaded_code_gen)
+    send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, bridge,
+                         "entry bridge", red_args,
+                         metainterp.box_names_memo)
+    jitdriver_sd.warmstate.attach_procedure_to_interp(greenkey,
+                                                      jitcell_token)
+    metainterp_sd.stats.add_jitcell_token(jitcell_token)
+    record_loop_or_bridge(metainterp_sd, bridge)
+
+def _first_threaded_greenkey(operations, jitdriver_sd, original_greenkey):
+    for op in operations:
+        if op.getopnum() != rop.DEBUG_MERGE_POINT:
+            return None
+        greenkey = _greenkey_from_debug_merge_point(op, jitdriver_sd)
+        if greenkey is not None and not _same_greenkey(greenkey,
+                                                       original_greenkey):
+            return greenkey
+    return None
+
+def _clone_threaded_entry_ops(inputargs, operations, red_args):
+    if len(inputargs) < len(red_args):
+        return None, None
+    boxmap = {}
+    new_inputargs = []
+    for i in range(len(red_args)):
+        if inputargs[i].type != red_args[i].type:
+            return None, None
+        newbox = _new_inputarg_for_type(red_args[i].type)
+        boxmap[inputargs[i]] = newbox
+        new_inputargs.append(newbox)
+
+    extra_inputs = {}
+    for i in range(len(red_args), len(inputargs)):
+        extra_inputs[inputargs[i]] = True
+
+    newops = []
+    for op in operations:
+        newargs = []
+        for i in range(op.numargs()):
+            arg = op.getarg(i)
+            if arg in boxmap:
+                arg = boxmap[arg]
+            elif arg in extra_inputs:
+                return None, None
+            newargs.append(arg)
+        newop = op.copy_and_change(op.getopnum(), args=newargs,
+                                   descr=op.getdescr())
+        if op.is_guard():
+            failargs = op.getfailargs()
+            if failargs is not None:
+                newfailargs = []
+                for arg in failargs:
+                    if arg in boxmap:
+                        arg = boxmap[arg]
+                    elif arg in extra_inputs:
+                        continue
+                    newfailargs.append(arg)
+                newop.setfailargs(newfailargs)
+        if op.type != 'v':
+            boxmap[op] = newop
+        newops.append(newop)
+    return new_inputargs, newops
+
+def _attach_threaded_guard_entry(metainterp, greenkey, inputargs, operations,
+                                 red_args):
+    jitdriver_sd = metainterp.jitdriver_sd
+    metainterp_sd = metainterp.staticdata
+    entry_inputargs, entry_ops = _clone_threaded_entry_ops(
+        inputargs, operations, red_args)
+    if entry_inputargs is None:
+        return
+    jitcell_token = make_jitcell_token(jitdriver_sd)
+    loop = create_empty_loop(metainterp)
+    loop.original_jitcell_token = jitcell_token
+    loop.inputargs = entry_inputargs
+    loop.operations = entry_ops
+    if not we_are_translated():
+        loop.check_consistency(
+            check_descr=not jitdriver_sd.jitdriver.threaded_code_gen)
+    send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, loop,
+                         "entry bridge", red_args,
+                         metainterp.box_names_memo)
+    jitdriver_sd.warmstate.attach_procedure_to_interp(greenkey,
+                                                      jitcell_token)
+    metainterp_sd.stats.add_jitcell_token(jitcell_token)
+    record_loop_or_bridge(metainterp_sd, loop)
 
 def record_loop_or_bridge(metainterp_sd, loop):
     """Do post-backend recordings and cleanups on 'loop'.
@@ -549,6 +862,14 @@ def forget_optimization_info(lst, reset_values=False):
 
 def send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, loop, type,
                          orig_inpargs, memo):
+    if jitdriver_sd.jitdriver.threaded_code_gen:
+        loop.original_jitcell_token._threaded_inputarg_types = [
+            box.type for box in loop.inputargs]
+        from rpython.jit.metainterp.optimizeopt.tracesplit import (
+            rewrite_call_assembler_in_ops)
+        rewrite_call_assembler_in_ops(
+            loop.operations, metainterp_sd, jitdriver_sd,
+            loop_token=loop.original_jitcell_token, inputargs=loop.inputargs)
     forget_optimization_info(loop.operations)
     forget_optimization_info(loop.inputargs)
     vinfo = jitdriver_sd.virtualizable_info
@@ -561,7 +882,8 @@ def send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, loop, type,
 
     if not we_are_translated():
         show_procedures(metainterp_sd, loop)
-        loop.check_consistency()
+        loop.check_consistency(
+            check_descr=not jitdriver_sd.jitdriver.threaded_code_gen)
 
     debug_info = None
     hooks = None
@@ -611,6 +933,28 @@ def send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, loop, type,
 
 def send_bridge_to_backend(jitdriver_sd, metainterp_sd, faildescr, inputargs,
                            operations, original_loop_token, memo):
+    if jitdriver_sd.jitdriver.threaded_code_gen:
+        from rpython.jit.metainterp.optimizeopt.tracesplit import (
+            rewrite_call_assembler_in_ops)
+        rewrite_call_assembler_in_ops(
+            operations, metainterp_sd, jitdriver_sd,
+            loop_token=original_loop_token, inputargs=inputargs)
+    if len(operations) > 0 and operations[-1].getopnum() == rop.JUMP:
+        if not jitdriver_sd.jitdriver.threaded_code_gen:
+            descr = operations[-1].getdescr()
+            if not isinstance(descr, TargetToken):
+                return None
+            if descr._ll_loop_code == 0:
+                return None
+            arglocs = descr._x86_arglocs
+            if arglocs is None or len(arglocs) != operations[-1].numargs():
+                return None
+        # threaded_code_gen: a deferred FRAME_RESET tail-loop arm (e.g. gcd's
+        # inner JUMP_IF false branch) ends in a JUMP back to the loop header
+        # that was *just* compiled, so its target token is backend-ready.
+        # Compile it as a real guard bridge instead of dropping it -- dropping
+        # left the guard with no bridge, so it bailed to ContinueRunningNormally
+        # and spun forever.  (Base-case arms end in FINISH and are unaffected.)
     forget_optimization_info(operations)
     forget_optimization_info(inputargs)
     if not we_are_translated():
@@ -721,9 +1065,16 @@ class ResumeDescr(AbstractFailDescr):
         return self
 
 class AbstractResumeGuardDescr(ResumeDescr):
-    _attrs_ = ('status',)
+    _attrs_ = ('status', 'tcg_cond_pop')
 
     status = r_uint(0)
+    # threaded-code-gen: number of condition-helper stack slots (e.g. the
+    # is_true operand) that this guard's preceding condition call pops at run
+    # time but did *not* pop while recording (shallow tracing peeks).  A
+    # base-case bridge compiled out of such a guard is recorded one slot too
+    # high per popped condition, so compile_and_attach shifts its frame stack
+    # constants down by this amount.  0 for every non-condition guard.
+    tcg_cond_pop = 0
 
     ST_BUSY_FLAG    = 0x01     # if set, busy tracing from the guard
     ST_TYPE_MASK    = 0x06     # mask for the type (TY_xxx)
@@ -841,10 +1192,34 @@ class AbstractResumeGuardDescr(ResumeDescr):
         assert metainterp.resumekey_original_loop_token is not None
         new_loop.original_jitcell_token = metainterp.resumekey_original_loop_token
         inputargs = new_loop.inputargs
+        propagate_original_jitcell_token(new_loop)
+        if metainterp.jitdriver_sd.jitdriver.threaded_code_gen:
+            from rpython.jit.metainterp.optimizeopt.tracesplit import (
+                rewrite_call_assembler_in_ops,
+                shift_condition_base_case_bridge)
+            rewrite_call_assembler_in_ops(
+                new_loop.operations, metainterp.staticdata,
+                metainterp.jitdriver_sd,
+                loop_token=new_loop.original_jitcell_token,
+                inputargs=inputargs)
+            # This bridge is compiled out of `self`.  If `self` is a condition
+            # guard (loop-continue GUARD_TRUE on is_true), its deferred base
+            # case was recorded one stack slot too high per popped condition
+            # operand; bring the bridge's frame stack constants back down.
+            # Only a base-case arm (ends in FINISH) is recorded one slot too
+            # high: it reads loop-header slots and never re-bases.  A deferred
+            # *tail-loop* arm (ends in JUMP back to the header, e.g. gcd's inner
+            # JUMP_IF false branch) re-bases via its own FRAME_RESET and reads
+            # absolute argument slots (DUPN reaching slot 0), so the uniform
+            # shift would drive those to slot -1 -- skip it there.
+            ends_in_jump = (len(new_loop.operations) > 0 and
+                            new_loop.operations[-1].getopnum() == rop.JUMP)
+            if self.tcg_cond_pop and not ends_in_jump:
+                shift_condition_base_case_bridge(
+                    new_loop.operations, self.tcg_cond_pop)
         if not we_are_translated():
             self._debug_subinputargs = new_loop.inputargs
             self._debug_suboperations = new_loop.operations
-        propagate_original_jitcell_token(new_loop)
         send_bridge_to_backend(metainterp.jitdriver_sd, metainterp.staticdata,
                                self, inputargs, new_loop.operations,
                                new_loop.original_jitcell_token,
@@ -1122,11 +1497,21 @@ def compile_trace(metainterp, resumekey, runtime_boxes, ends_with_jump=False,
         # Apply call_assembler rewrite to split-tree guard bridges.
         if metainterp.threaded_code_gen:
             from rpython.jit.metainterp.optimizeopt.tracesplit import (
+                has_threaded_tstack_fallthrough_to_empty_jump,
                 rewrite_call_assembler_in_ops)
             rewrite_call_assembler_in_ops(
                 new_trace.operations, metainterp_sd, jitdriver_sd,
-                loop_token=procedure_token)
+                loop_token=procedure_token, inputargs=new_trace.inputargs)
+            if has_threaded_tstack_fallthrough_to_empty_jump(
+                    new_trace.operations, jitdriver_sd):
+                return None
+        from rpython.jit.metainterp.optimizeopt.tracesplit import (
+            _rewrite_final_celltoken_jump)
+        _rewrite_final_celltoken_jump(new_trace.operations, procedure_token)
         target_token = new_trace.operations[-1].getdescr()
+        if (new_trace.operations[-1].getopnum() == rop.JUMP and
+                not isinstance(target_token, TargetToken)):
+            return None
         resumekey.compile_and_attach(metainterp, new_trace, inputargs)
         return target_token
     new_trace.inputargs = info.renamed_inputargs
@@ -1134,7 +1519,7 @@ def compile_trace(metainterp, resumekey, runtime_boxes, ends_with_jump=False,
     return None
 
 def compile_loop_and_split(metainterp, greenkey, resumekey, runtime_boxes,
-                           ends_with_jump=False):
+                           ends_with_jump=False, start=(0, 0, 0)):
     """
     Try to execute a baseline (or method)  JIT compilation by splitting
     a given trace generated from a method-traversal interpreter
@@ -1156,12 +1541,16 @@ def compile_loop_and_split(metainterp, greenkey, resumekey, runtime_boxes,
     body_token = TargetToken(body_jitcell_token,
                              original_jitcell_token=body_jitcell_token)
     body_jitcell_token.target_tokens = [body_token]
+    if start != (0, 0, 0):
+        trace = trace.cut_trace_from(start, runtime_boxes)
 
     data = SimpleSplitCompileData(trace,
                                   resumestorage=resumestorage,
                                   call_pure_results=call_pure_results,
                                   enable_opts=enable_opts,
-                                  body_token=body_token)
+                                  body_token=body_token,
+                                  expected_inputargs_count=(
+                                      jitdriver_sd.num_red_args))
     try:
         splitted = data.optimize_trace(
             metainterp_sd, jitdriver_sd, metainterp.box_names_memo)
@@ -1180,32 +1569,6 @@ def compile_loop_and_split(metainterp, greenkey, resumekey, runtime_boxes,
     #     metainterp_sd.logger_noopt.log_bridge(bridge_info.inputargs, bridge_ops,
     #                                           descr=bridge_info.faildescr)
 
-    # ---- TRACESPLIT DIAGNOSTICS (temporary; PYPYLOG=jit-tracesplit-diag) ----
-    debug_start("jit-tracesplit-diag")
-    debug_print("split: nsegments", len(splitted))
-    diag_i = 0
-    while diag_i < len(splitted):
-        diag_info, diag_ops = splitted[diag_i]
-        diag_last = diag_ops[-1]
-        diag_lbl_descr = diag_info.label_op.getdescr()
-        diag_is_tgt = 0
-        diag_j = 0
-        while diag_j < len(last_op_descrs):
-            if last_op_descrs[diag_j] is diag_lbl_descr:
-                diag_is_tgt = 1
-                break
-            diag_j += 1
-        debug_print("seg", diag_i,
-                    "nops", len(diag_ops),
-                    "first", diag_ops[0].getopname(),
-                    "last", diag_last.getopname(),
-                    "lbl_id", compute_unique_id(diag_lbl_descr),
-                    "lastdescr_id", compute_unique_id(diag_last.getdescr()),
-                    "is_jump_target", diag_is_tgt)
-        diag_i += 1
-    debug_stop("jit-tracesplit-diag")
-    # ---- END TRACESPLIT DIAGNOSTICS ----
-
     # Concatenate body + JUMP-target segments into one multi-LABEL loop.
     new_body = create_empty_loop(metainterp)
     new_body.original_jitcell_token = body_jitcell_token
@@ -1213,7 +1576,12 @@ def compile_loop_and_split(metainterp, greenkey, resumekey, runtime_boxes,
 
     body_label_op = new_body_info.label_op
     if body_label_op is not None:
-        ops = [body_label_op] + new_body_ops
+        if (len(new_body_ops) > 0 and
+                new_body_ops[0].getopnum() == rop.LABEL and
+                new_body_ops[0].getdescr() is body_label_op.getdescr()):
+            ops = new_body_ops
+        else:
+            ops = [body_label_op] + new_body_ops
         body_tok = body_label_op.getdescr()
         if (isinstance(body_tok, TargetToken) and
                 body_tok not in body_jitcell_token.target_tokens):
@@ -1225,6 +1593,8 @@ def compile_loop_and_split(metainterp, greenkey, resumekey, runtime_boxes,
     for (bridge_info, bridge_ops) in bridges:
         if bridge_info.label_op.getdescr() in last_op_descrs:
             seg_label_op = bridge_info.label_op
+            seg_label_op = _drop_unused_label_args(seg_label_op, ops,
+                                                   bridge_ops)
             seg_token = seg_label_op.getdescr()
             assert isinstance(seg_token, TargetToken)
             if seg_token not in body_jitcell_token.target_tokens:
@@ -1233,25 +1603,14 @@ def compile_loop_and_split(metainterp, greenkey, resumekey, runtime_boxes,
         else:
             guard_only_bridges.append((bridge_info, bridge_ops))
 
+    ops = [op for op in ops
+           if (op.getopnum() != rop.LABEL or
+               isinstance(op.getdescr(), TargetToken))]
+    ops = _drop_unused_embedded_label_args(ops)
     new_body.operations = ops
     if not we_are_translated():
-        import os as osd
-        osd.write(2, "\n[BODY] inputargs=%s nsegs=%d\n" % (
-            [str(arg) for arg in new_body.inputargs], len(splitted)))
-        for bi in range(len(ops)):
-            bop = ops[bi]
-            try:
-                bargs = [str(a) for a in bop.getarglist()]
-            except Exception:
-                bargs = []
-            osd.write(2, "  b[%d] %s -> %s args=%s\n" % (
-                bi, str(bop), bop.getopname(), bargs))
-        for si in range(1, len(splitted)):
-            sinfo, sops = splitted[si]
-            osd.write(2, "[SEG %d] inputargs=%s lbl=%s\n" % (
-                si, [str(arg) for arg in sinfo.inputargs],
-                sinfo.label_op.getopname()))
-        new_body.check_consistency()
+        new_body.check_consistency(
+            check_descr=not jitdriver_sd.jitdriver.threaded_code_gen)
     send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, new_body, "loop",
                          new_body_info.inputargs, metainterp.box_names_memo)
     record_loop_or_bridge(metainterp_sd, new_body)
@@ -1266,51 +1625,12 @@ def compile_loop_and_split(metainterp, greenkey, resumekey, runtime_boxes,
         new_bridge.original_jitcell_token = body_jitcell_token
         new_bridge.inputargs = bridge_info.inputargs
         new_bridge.operations = bridge_ops
+        from rpython.jit.metainterp.optimizeopt.tracesplit import (
+            rewrite_call_assembler_in_ops)
+        rewrite_call_assembler_in_ops(
+            new_bridge.operations, metainterp_sd, jitdriver_sd,
+            loop_token=body_jitcell_token, inputargs=new_bridge.inputargs)
         resumekey = bridge_info.faildescr
-        if not we_are_translated():
-            import os as osd
-            osd.write(2, "\n[BRIDGE] inputargs=%s faildescr=%s\n" % (
-                [str(arg) for arg in new_bridge.inputargs], str(resumekey)))
-            # Dump resume descr internals.
-            try:
-                rdstore = resumekey
-                if isinstance(rdstore, ResumeGuardCopiedDescr):
-                    osd.write(2, "  [RD] copied descr -> prev=%s\n" % str(rdstore.prev))
-                    rdstore = rdstore.prev
-                rd_pf = getattr(rdstore, 'rd_pendingfields', None)
-                if rd_pf and rd_pf != lltype.nullptr(rd_pf._TYPE.TO):
-                    pf_n = len(rd_pf)
-                    osd.write(2, "  [RD] rd_pendingfields n=%d\n" % pf_n)
-                    for pi in range(pf_n):
-                        pf = rd_pf[pi]
-                        osd.write(2, "    pf[%d] lldescr=%s num=%s fieldnum=%s itemindex=%s\n" % (
-                            pi, str(getattr(pf, 'lldescr', '?')),
-                            str(getattr(pf, 'num', '?')),
-                            str(getattr(pf, 'fieldnum', '?')),
-                            str(getattr(pf, 'itemindex', '?'))))
-                else:
-                    osd.write(2, "  [RD] rd_pendingfields=<null/none>\n")
-                rd_numb = getattr(rdstore, 'rd_numb', None)
-                osd.write(2, "  [RD] rd_numb=%s rd_consts.len=%s\n" % (
-                    str(rd_numb),
-                    str(len(getattr(rdstore, 'rd_consts', []) or []))))
-            except Exception as ex:
-                osd.write(2, "  [RD] dump_error=%s\n" % str(ex))
-            for xi in range(len(bridge_ops)):
-                xop = bridge_ops[xi]
-                try:
-                    xargs = [str(a) for a in xop.getarglist()]
-                except Exception:
-                    xargs = []
-                xfail = ""
-                if xop.is_guard():
-                    try:
-                        xfail = " FAIL=%s" % (
-                            [str(y) for y in (xop.getfailargs() or [])],)
-                    except Exception:
-                        xfail = " FAIL=?"
-                osd.write(2, "  x[%d] %s -> %s args=%s%s\n" % (
-                    xi, str(xop), xop.getopname(), xargs, xfail))
         assert isinstance(resumekey, AbstractResumeGuardDescr)
         resumekey.compile_and_attach(metainterp, new_bridge, inputargs)
 

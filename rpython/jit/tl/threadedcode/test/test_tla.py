@@ -194,6 +194,56 @@ class TestLLType(LLJitMixin):
         res = self.meta_interp(interp_w, [7])
         assert res == 8
 
+    def test_jit_mbpass(self):
+        code = read_code('../lang/mb_pass.tla.py')
+        def interp_w(intvalue):
+            w_result = interp(code, W_IntObject(intvalue))
+            assert isinstance(w_result, W_IntObject)
+            return w_result.intvalue
+
+        res = self.meta_interp(interp_w, [30])
+        assert res == 42
+
+    def test_jit_mbcount(self):
+        code = read_code('../lang/mb_count.tla.py')
+        def interp_w(intvalue):
+            w_result = interp(code, W_IntObject(intvalue))
+            assert isinstance(w_result, W_IntObject)
+            return w_result.intvalue
+
+        res = self.meta_interp(interp_w, [30])
+        assert res == 0
+
+    def test_jit_mbloop(self):
+        code = read_code('../lang/mb_loop.tla.py')
+        def interp_w(intvalue):
+            w_result = interp(code, W_IntObject(intvalue))
+            assert isinstance(w_result, W_IntObject)
+            return w_result.intvalue
+
+        res = self.meta_interp(interp_w, [30])
+        assert res == 0
+
+    def test_jit_mbsum(self):
+        code = read_code('../lang/mb_sum.tla.py')
+        def interp_w(intvalue):
+            w_result = interp(code, W_IntObject(intvalue))
+            assert isinstance(w_result, W_IntObject)
+            return w_result.intvalue
+
+        res = self.meta_interp(interp_w, [30])
+        assert res == 30 * 31 / 2
+
+    def test_jit_mbinc(self):
+        code = read_code('../lang/mb_inc.tla.py')
+        def interp_w(intvalue):
+            w_result = interp(code, W_IntObject(intvalue))
+            assert isinstance(w_result, W_IntObject)
+            return w_result.intvalue
+
+        res = self.meta_interp(interp_w, [30])
+        assert res == 30
+
     def test_jit_tak(self):
         code = read_code('../lang/tak.tla.py')
         def interp_w(intvalue):
@@ -229,6 +279,7 @@ class TestLLType(LLJitMixin):
             assert isinstance(w_result, W_IntObject)
             return w_result.intvalue
         res = self.meta_interp(interp_w, [1])
+        assert res == 12
 
 
     def test_jit_ary(self):

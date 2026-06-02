@@ -20,23 +20,30 @@ CONFIGS = [
 ]
 
 PROGRAMS = [
-    ('sum',           10,   5),
-    ('sum-tail',      10,   5),
-    ('sum-callasm',   10,   5),
-    ('fib',           10,   5),
-    ('fib-tail',      10,   5),
-    ('fact',          10,   5),
-    ('loop',          100,  5),
-    ('loopabit',      100,  5),
-    ('ack',           3,    5),
-    ('ack-callasm',   3,    5),
-    ('gcd',           1024, 5),
-    ('sieve',         100,  5),
-    ('square',        10,   5),
-    ('ary',           100,  5),
-    ('prefix_sum',    50,   5),
-    ('tak',           7,    3),
-    ('tarai',         7,    3),
+    # ('sum',           10,   5),
+    # ('sum-tail',      10,   5),
+    # ('sum-callasm',   10,   5),
+    # ('fib',           10,   5),
+    # ('fib-tail',      10,   5),
+    # ('fact',          10,   5),
+    # ('loop',          100,  5),
+    # ('loopabit',      100,  5),
+    # ('ack',           3,    5),
+    # ('ack-callasm',   3,    5),
+    # ('gcd',           1024, 5),
+    # ('sieve',         100,  5),
+    # ('square',        10,   5),
+    # ('ary',           100,  5),
+    # ('prefix_sum',    50,   5),
+    # ('tak',           7,    3),
+    # ('tarai',         7,    3),
+    # Diagnostic microbench (see lang/mb_*.tla.py).  CLI x is the iteration
+    # count for these.
+    ('mb_count',      1000000, 5),  # tail-recursive countdown, returns 0
+    ('mb_sum',        1000000, 5),  # tail-recursive sum, returns N*(N+1)/2
+    ('mb_pass',       1000000, 5),  # tail recursive, acc unchanged, returns 42
+    ('mb_inc',        1000000, 5),  # tail recursive, acc+=1, returns N
+    ('mb_loop',       1000000, 5),  # single-frame loop, returns 0
 ]
 
 

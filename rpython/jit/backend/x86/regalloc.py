@@ -1283,7 +1283,8 @@ class RegAlloc(BaseRegalloc, VectorRegallocMixin):
     def _compute_hint_locations_from_descr(self, descr):
         arglocs = descr._x86_arglocs
         jump_op = self.final_jump_op
-        assert len(arglocs) == jump_op.numargs()
+        if len(arglocs) != jump_op.numargs():
+            return
         hinted = []
         for i in range(jump_op.numargs()):
             box = jump_op.getarg(i)
