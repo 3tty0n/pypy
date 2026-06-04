@@ -301,3 +301,21 @@ class TestLLType(LLJitMixin):
             assert isinstance(w_result, W_IntObject)
             return w_result.intvalue
         res = self.meta_interp(interp_w, [6])
+
+    @pytest.mark.xfail(reason="sh_fib tree recursion: base-case bridge slot "
+                       "shift is fixed (no more crash / None reads), but the "
+                       "deferred-branch recursive calls still compile to "
+                       "call_may_force(interp_CALL_ASSEMBLER) instead of "
+                       "call_assembler, so PyPy's recursive portal short-circuits "
+                       "the first call's result (returns fib(n-2)).  Translated "
+                       "tier-1 is correct for N<=11; untranslated meta_interp's "
+                       "lower JIT threshold trips the portal issue sooner.",
+                       strict=False)
+    def test_jit_shfib(self):
+        code = read_code('../lang/sh_fib.tla.py')
+        def interp_w(intvalue):
+            w_result = interp(code, W_IntObject(intvalue))
+            assert isinstance(w_result, W_IntObject)
+            return w_result.intvalue
+        res = self.meta_interp(interp_w, [10])
+        assert res == 55

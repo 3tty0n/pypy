@@ -276,6 +276,16 @@ _ARITH = {
 
 _COMPARISONS = ('<', '>', '<=', '>=', '==', '!=')
 
+# name arg... -> single opcode (nargs, op).  Arg order matches the opcode's pops:
+#   mklist init size ; aref lst idx ; aset val lst idx
+_BUILTINS = {
+    'tofloat': (1, bc.INT_TO_FLOAT),
+    'toint':   (1, bc.FLOAT_TO_INT),
+    'mklist':  (2, bc.BUILD_LIST),
+    'aref':    (2, bc.LOAD),
+    'aset':    (3, bc.STORE),
+}
+
 
 class _Label(object):
     __slots__ = ('name',)
@@ -382,6 +392,17 @@ class Compiler(object):
         raise CompileError("unsupported operator %r" % (node.op,))
 
     def _call(self, node):
+        builtin = _BUILTINS.get(node.funcname)
+        if builtin is not None:
+            nargs, op = builtin
+            if len(node.args) != nargs:
+                raise CompileError("%s expects %d args, got %d"
+                                   % (node.funcname, nargs, len(node.args)))
+            for a in node.args:
+                self.compile_value(a)
+            self._op(op)
+            self.depth -= (nargs - 1)
+            return
         callee = self.funcs.get(node.funcname)
         if callee is None:
             raise CompileError("call to unknown function %r" % node.funcname)

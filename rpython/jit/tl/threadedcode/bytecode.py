@@ -86,6 +86,8 @@ class Bytecode(object):
     def __init__(self, code):
         self.code = code
         self.counts = [0] * len(code)
+        self.seen = [0] * len(code)
+        self.poly = [0] * len(code)
 
     def __len__(self):
         return len(self.code)

@@ -49,7 +49,7 @@ def entry_point(args):
         jit.set_user_param(None, "off")
     elif tier == 1:
         jit.set_user_param(None, "inlining=0")
-    elif tier == 2:
+    elif tier >= 2:
         jit.set_user_param(None, "inlining=1")
 
     w_x = tla.W_IntObject(x)
