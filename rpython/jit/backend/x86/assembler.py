@@ -65,6 +65,7 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
         self.datablockwrapper = None
         self.stack_check_slowpath = 0
         self.propagate_exception_path = 0
+        self._call_assembler_relative_target = -1
         self.teardown()
 
     def setup_once(self):
@@ -77,6 +78,10 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
         BaseAssembler.setup(self, looptoken)
         assert self.memcpy_addr != 0, "setup_once() not called?"
         self.current_clt = looptoken.compiled_loop_token
+        self._assembling_loop_token = None
+        self._assembling_loop_functionpos = -1
+        self._call_assembler_relative_target = -1
+        self._call_assembler_self_patches = []
         self.pending_slowpaths = []
         self.pending_guard_tokens = []
         if WORD == 8:
@@ -536,6 +541,8 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
                                            looptoken, allgcrefs)
         self.reserve_gcref_table(allgcrefs)
         functionpos = self.mc.get_relative_pos()
+        self._assembling_loop_token = looptoken
+        self._assembling_loop_functionpos = functionpos
         self._call_header_with_stack_check()
         self._check_frame_depth_debug(self.mc)
         looppos = self.mc.get_relative_pos()
@@ -548,6 +555,7 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
         full_size = self.mc.get_relative_pos()
         #
         rawstart = self.materialize_loop(looptoken)
+        self.patch_call_assembler_self_calls(rawstart)
         self.patch_gcref_table(looptoken, rawstart)
         self.patch_stack_checks(frame_depth_no_fixed_size + JITFRAME_FIXED_SIZE,
                                 rawstart)
@@ -606,6 +614,8 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
                                            ops_offset=ops_offset)
 
         self.fixup_target_tokens(rawstart)
+        self._assembling_loop_token = None
+        self._assembling_loop_functionpos = -1
         self.teardown()
         # oprofile support
         if self.cpu.profile_agent is not None:
@@ -957,6 +967,12 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
             self.cpu.codemap.register_codemap(
                 self.codemap_builder.get_final_bytecode(res, size))
         return res
+
+    def patch_call_assembler_self_calls(self, rawstart):
+        for pos, targetpos in self._call_assembler_self_patches:
+            p = rffi.cast(rffi.SIGNEDP, rawstart + pos)
+            p[0] = rawstart + targetpos
+        self._call_assembler_self_patches = []
 
     def patch_jump_for_descr(self, faildescr, adr_new_target):
         adr_jump_offset = faildescr.adr_jump_offset
@@ -2263,6 +2279,32 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
     def _call_assembler_emit_call(self, addr, argloc, _):
         threadlocal_loc = RawEspLoc(THREADLOCAL_OFS, INT)
         self.simple_call(addr, [argloc, threadlocal_loc])
+
+    def _call_assembler_emit_call_assembler(self, descr, argloc, tmploc):
+        # A call_assembler whose target's machine code is not materialised yet
+        # (_ll_function_addr == 0) is a self-reference into the very loop being
+        # assembled now (threaded-code self-recursion: every depth converges on
+        # this loop's own jitcell token).  Its real address is unknown until
+        # materialize_loop(), so emit a relative CALL to the loop's function
+        # entry and record it for patch_call_assembler_self_calls().  This used
+        # to only fire for descr is self._assembling_loop_token; widening it to
+        # *any* not-yet-compiled target makes compile_loop_and_split robust when
+        # the split produces more than one segment label referencing the loop
+        # (e.g. tree-recursive bodies), which otherwise reached follow_jump(0)
+        # in CallBuilderX86 and segfaulted the backend.
+        if (descr is self._assembling_loop_token and
+                self._assembling_loop_functionpos >= 0 and
+                descr._ll_function_addr == 0):
+            old = self._call_assembler_relative_target
+            self._call_assembler_relative_target = (
+                self._assembling_loop_functionpos)
+            try:
+                self._call_assembler_emit_call(imm0, argloc, tmploc)
+            finally:
+                self._call_assembler_relative_target = old
+        else:
+            BaseAssembler._call_assembler_emit_call_assembler(
+                self, descr, argloc, tmploc)
 
     def _call_assembler_emit_helper_call(self, addr, arglocs, result_loc):
         self.simple_call(addr, arglocs, result_loc)

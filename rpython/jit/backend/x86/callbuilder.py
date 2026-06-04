@@ -1,7 +1,7 @@
 import sys
 from rpython.rlib.clibffi import FFI_DEFAULT_ABI
 from rpython.rlib.objectmodel import we_are_translated
-from rpython.rlib.rarithmetic import intmask
+from rpython.rlib.rarithmetic import intmask, r_longlong
 from rpython.jit.metainterp.history import INT, FLOAT
 from rpython.jit.backend.x86.arch import (WORD, IS_X86_64, IS_X86_32,
                                           PASS_ON_MY_FRAME, FRAME_FIXED_SIZE,
@@ -29,7 +29,13 @@ def align_stack_words(words):
 
 def follow_jump(addr):
     # If 'addr' is immediately starting with another JMP instruction,
-    # follow it now.  'addr' is an absolute address here
+    # follow it now.  'addr' is an absolute address here.
+    # A null 'addr' means the real target is not materialised yet (a
+    # self-reference into the loop being assembled, patched later); never
+    # dereference it -- doing so segfaulted the backend on tree-recursive
+    # threaded-code loops.
+    if addr == 0:
+        return addr
     while rffi.cast(rffi.CCHARP, addr)[0] == '\xE9':    # JMP <4 bytes>
         addr += 5
         addr += intmask(rffi.cast(rffi.INTP, addr - 4)[0])
@@ -54,8 +60,16 @@ class CallBuilderX86(AbstractCallBuilder):
         # as an extra argument if needed
         if isinstance(fnloc, ImmedLoc):
             self.fnloc_is_immediate = True
-            self.fnloc = imm(follow_jump(fnloc.value))
+            self.relative_call_target = -1
+            if fnloc.value == 0:
+                self.relative_call_target = (
+                    assembler._call_assembler_relative_target)
+            if self.relative_call_target >= 0:
+                self.fnloc = fnloc
+            else:
+                self.fnloc = imm(follow_jump(fnloc.value))
         else:
+            self.relative_call_target = -1
             self.fnloc_is_immediate = False
             self.fnloc = None
             self.arglocs = arglocs + [fnloc]
@@ -380,6 +394,21 @@ class CallBuilderX86(AbstractCallBuilder):
         """Overridden in CallBuilder32 and CallBuilder64"""
         raise NotImplementedError
 
+    def emit_call_insn(self):
+        target = self.relative_call_target
+        if target >= 0:
+            if IS_X86_64:
+                self.mc.MOV_ri(X86_64_SCRATCH_REG.value,
+                               r_longlong(0x100000007))
+                pos = self.mc.get_relative_pos(break_basic_block=False) - WORD
+                self.asm._call_assembler_self_patches.append((pos, target))
+                self.mc.CALL_r(X86_64_SCRATCH_REG.value)
+            else:
+                callpos = self.mc.get_relative_pos(break_basic_block=False)
+                self.mc.CALL_l(target - (callpos + 5))
+        else:
+            self.mc.CALL(self.fnloc)
+
 
 class CallBuilder32(CallBuilderX86):
 
@@ -432,10 +461,10 @@ class CallBuilder32(CallBuilderX86):
             # convention this particular function takes, which would
             # avoid these two extra MOVs... but later.
             self.save_stack_position()      # => edi (possibly reused)
-            self.mc.CALL(self.fnloc)
+            self.emit_call_insn()
             self.mc.MOV(esp, self.saved_stack_position_reg)
         else:
-            self.mc.CALL(self.fnloc)
+            self.emit_call_insn()
             if IS_X86_32 and self.callconv != FFI_DEFAULT_ABI:
                 # in the STDCALL ABI, the CALL above has an effect on
                 # the stack depth.  Adjust 'mc._frame_size'.
@@ -668,7 +697,7 @@ class CallBuilder64(CallBuilderX86):
 
     def emit_raw_call(self):
         assert self.callconv == FFI_DEFAULT_ABI
-        self.mc.CALL(self.fnloc)
+        self.emit_call_insn()
 
     def load_result(self):
         if self.restype == 'S':

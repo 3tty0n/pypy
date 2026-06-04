@@ -329,8 +329,7 @@ class BaseAssembler(object):
         # we need to allocate the frame, keep in sync with runner's
         # execute_token
         jd = descr.outermost_jitdriver_sd
-        self._call_assembler_emit_call(self.imm(descr._ll_function_addr),
-                                        argloc, tmploc)
+        self._call_assembler_emit_call_assembler(descr, argloc, tmploc)
 
         if op.type == 'v':
             assert result_loc is None
@@ -370,6 +369,10 @@ class BaseAssembler(object):
         #
         # Here we join Path A and Path B again
         self._call_assembler_patch_jmp(jmp_location)
+
+    def _call_assembler_emit_call_assembler(self, descr, argloc, tmploc):
+        self._call_assembler_emit_call(self.imm(descr._ll_function_addr),
+                                       argloc, tmploc)
 
     def get_loop_run_counters(self, index):
         return self.loop_run_counters[index]

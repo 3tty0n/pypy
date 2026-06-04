@@ -178,12 +178,24 @@ class RegAlloc(BaseRegalloc, VectorRegallocMixin):
         self.final_jump_op = None
         self.final_jump_op_position = -1
 
-    def _prepare(self, inputargs, operations, allgcrefs):
+    def _prepare(self, inputargs, operations, allgcrefs, looptoken=None):
         from rpython.jit.backend.x86.reghint import X86RegisterHints
         for box in inputargs:
             assert box.get_forwarded() is None
         cpu = self.assembler.cpu
         self.fm = X86FrameManager(cpu.get_baseofs_of_frame_field())
+        if looptoken is not None:
+            # Record the loop's initial input-arg locations (_ll_initial_locs)
+            # BEFORE the GC rewrite.  A (self-)recursive call_assembler in this
+            # very loop makes handle_call_assembler -- invoked from inside
+            # rewrite_assembler below -- read the target loop's
+            # compiled_loop_token._ll_initial_locs, and that target is the loop
+            # being compiled here.  Binding afterwards (the old order) left it
+            # null and segfaulted the backend on tree-recursive programs
+            # (sh_fib, tak-callasm).  The bindings only need self.fm (just
+            # created) and are slot-deterministic, so non-recursive loops are
+            # unaffected.
+            self._set_initial_bindings(inputargs, looptoken)
         operations = cpu.gc_ll_descr.rewrite_assembler(cpu, operations,
                                                        allgcrefs)
         # compute longevity of variables
@@ -198,8 +210,11 @@ class RegAlloc(BaseRegalloc, VectorRegallocMixin):
         return operations
 
     def prepare_loop(self, inputargs, operations, looptoken, allgcrefs):
-        operations = self._prepare(inputargs, operations, allgcrefs)
-        self._set_initial_bindings(inputargs, looptoken)
+        # Pass looptoken so _prepare sets the initial bindings before the GC
+        # rewrite (handle_call_assembler needs _ll_initial_locs populated for a
+        # self-recursive call_assembler; see _prepare).
+        operations = self._prepare(inputargs, operations, allgcrefs,
+                                   looptoken=looptoken)
         # note: we need to make a copy of inputargs because possibly_free_vars
         # is also used on op args, which is a non-resizable list
         self.possibly_free_vars(list(inputargs))

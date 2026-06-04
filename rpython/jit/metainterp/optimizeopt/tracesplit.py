@@ -472,6 +472,20 @@ def _adapt_call_assembler_args_for_token(args, token):
     return prefix + args
 
 
+def _call_assembler_targets_current_entry(callee_greenargs, current_greenargs):
+    # Threaded-code greenkeys are (pc, entry, bytecode, tstack).  A recursive
+    # CALL_ASSEMBLER enters at pc==entry, but the call site itself can be at any
+    # pc inside that entry.  Reuse the current loop token only if the callee's
+    # entry and bytecode match the current trace; tstack may differ by deferred
+    # branch depth.
+    if current_greenargs is None:
+        return False
+    if len(callee_greenargs) < 3 or len(current_greenargs) < 3:
+        return False
+    return (callee_greenargs[1].same_constant(current_greenargs[1]) and
+            callee_greenargs[2].same_constant(current_greenargs[2]))
+
+
 def _descr_name_contains(descr, name):
     if descr is None:
         return False
@@ -931,6 +945,7 @@ def rewrite_call_assembler_in_ops(operations, metainterp_sd, jitdriver_sd,
     stack_effect_records = []
     changed = prepend_stackpos_entry_shim(operations)
     current_tstack_empty = True
+    current_greenargs = None
     if materialize_frame_pop_reads(operations, metainterp_sd):
         changed = True
     if _rewrite_finish_to_materialized_read(operations):
@@ -942,6 +957,8 @@ def rewrite_call_assembler_in_ops(operations, metainterp_sd, jitdriver_sd,
     for idx in range(len(operations)):
         op = operations[idx]
         if op.getopnum() == rop.DEBUG_MERGE_POINT:
+            arglist = op.getarglist()
+            current_greenargs = arglist[3:3+num_green_args]
             location = _debug_merge_point_location(op, jitdriver_sd)
             if location is not None:
                 current_tstack_empty = (
@@ -990,7 +1007,17 @@ def rewrite_call_assembler_in_ops(operations, metainterp_sd, jitdriver_sd,
                 op.setarg(numargs - 1, ConstInt(0))
         if not endswith(name, mark.CALL_ASSEMBLER):
             continue
-        if not current_tstack_empty:
+        if not current_tstack_empty and loop_token is None:
+            # A deferred (tstack non-empty) CALL_ASSEMBLER reached while splitting
+            # the main trace, with no known target loop, stays a residual
+            # interp_CALL_ASSEMBLER -- only normalise its dummy flag.  But when we
+            # DO have the target loop (a bridge being attached: loop_token set),
+            # a self-recursive CALL_ASSEMBLER must still become a real
+            # call_assembler into that loop even with a branch deferred -- the
+            # recursion re-enters the compiled loop, whose own bridges resolve the
+            # deferred arms.  Leaving it as call_may_force(interp_CALL_ASSEMBLER)
+            # makes PyPy's recursive portal short-circuit and the warm loop hang
+            # (ack/tak; the old test_jit_shfib xfail).
             if op.numargs() > 0:
                 lastarg = op.getarg(op.numargs() - 1)
                 if isinstance(lastarg, ConstInt) and lastarg.getint() == 1:
@@ -1001,7 +1028,9 @@ def rewrite_call_assembler_in_ops(operations, metainterp_sd, jitdriver_sd,
         greenargs = arglist[1+num_red_args:1+num_red_args+num_green_args]
         args = arglist[1:num_red_args+1]
         assert len(args) == jd.num_red_args
-        if loop_token is not None:
+        if (loop_token is not None and
+                _call_assembler_targets_current_entry(greenargs,
+                                                      current_greenargs)):
             new_token = loop_token
         else:
             new_token = warmrunnerstate.get_assembler_token(greenargs)
@@ -3357,6 +3386,18 @@ class OptTraceSplit(Optimizer):
         if len(self._fdescrstack) > 0:
             self.resumekey = self._fdescrstack.pop()
 
+    def _current_greenargs_from_emitted_ops(self):
+        jd = self.jitdriver_sd
+        num_green_args = jd.num_green_args
+        i = len(self._newoperations) - 1
+        while i >= 0:
+            op = self._newoperations[i]
+            if op.getopnum() == rop.DEBUG_MERGE_POINT:
+                arglist = op.getarglist()
+                return arglist[3:3+num_green_args]
+            i -= 1
+        return None
+
     def _handle_call_assembler(self, op):
         "convert recursive calls to an op using `call_assembler_x'"
         jd = self.jitdriver_sd
@@ -3387,7 +3428,10 @@ class OptTraceSplit(Optimizer):
         # compiled loop.  Target the loop's own jitcell token directly so
         # every depth converges onto it.
         new_token = None
-        if self.token is not None:
+        current_greenargs = self._current_greenargs_from_emitted_ops()
+        if (self.token is not None and
+                _call_assembler_targets_current_entry(greenargs,
+                                                      current_greenargs)):
             new_token = self.token.original_jitcell_token
         if new_token is None:
             new_token = warmrunnerstate.get_assembler_token(greenargs)
