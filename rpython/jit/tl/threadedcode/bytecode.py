@@ -32,7 +32,7 @@ _bytecodes_has_args = [
     ('JUMP_IF', 1),
     ('JUMP_IF_N', 4),
     ('CALL', 2),
-    ('CALL_N', 4),
+    ('CALL_N', 5),
     ('CALL_ASSEMBLER', 2),
     ('CALL_TIER2', 2),
     ('CALL_TIER0', 2),
@@ -88,6 +88,14 @@ class Bytecode(object):
         self.counts = [0] * len(code)
         self.seen = [0] * len(code)
         self.poly = [0] * len(code)
+        # Frequency-aware (tier-4 adaptive) operand-type profile: per arithmetic
+        # site, cnt_a counts int/int executions and cnt_b counts every other
+        # operand-type signature.  The inline-vs-residual decision is driven by
+        # the *minority* fraction min(cnt_a, cnt_b) / (cnt_a + cnt_b) rather than
+        # by a single "saw two types" event, so a dominant-type-with-rare-off-type
+        # site stays inlined (fast) instead of being residualised forever.
+        self.cnt_a = [0] * len(code)
+        self.cnt_b = [0] * len(code)
 
     def __len__(self):
         return len(self.code)

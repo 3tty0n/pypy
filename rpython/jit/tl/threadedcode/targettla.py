@@ -1,9 +1,11 @@
+import os
 import py
 py.path.local(__file__)
 
 from rpython.rlib.rtime import time
 from rpython.rlib import jit
 from rpython.jit.tl.threadedcode import tla
+from rpython.jit.tl.threadedcode import frames
 from rpython.jit.tl.threadedcode.bytecode import Bytecode
 
 def entry_point(args):
@@ -50,8 +52,18 @@ def entry_point(args):
     elif tier == 1:
         jit.set_user_param(None, "inlining=0")
     elif tier >= 2:
-        jit.set_user_param(None, "inlining=1")
+        # TLA_THRESHOLD lowers the loop/function compile threshold -- the "when to
+        # compile" warmup knob: a smaller value reaches compiled code after fewer
+        # interpreted iterations (faster warmup for interpretation-bound loops) at
+        # the cost of compiling colder loops.  Keep TLA_FREEZE below it so the
+        # tier-4 type decision still settles before the loop compiles.
+        params = "inlining=1"
+        th = os.environ.get('TLA_THRESHOLD')
+        if th:
+            params = "inlining=1,threshold=%s,function_threshold=%s" % (th, th)
+        jit.set_user_param(None, params)
 
+    frames._t4_configure()
     w_x = tla.W_IntObject(x)
     bytecode = load_bytecode(filename)
     w_res = tla.W_IntObject(0)
@@ -61,6 +73,17 @@ def entry_point(args):
         n2 = time()
         print n2 - n1
     print w_res.getrepr()
+    if os.environ.get('TLA_DUMP_PROFILE'):
+        os.write(2, "CFG ratio=%d freeze=%d min=%d\n" % (
+            frames._t4cfg.ratio, frames._t4cfg.freeze, frames._t4cfg.minn))
+        i = 0
+        while i < len(bytecode):
+            ca = bytecode.cnt_a[i]
+            cb = bytecode.cnt_b[i]
+            if ca != 0 and cb != 0:
+                os.write(2, "PROFILE site=%d cnt_a=%d cnt_b=%d poly=%d\n" % (
+                    i, ca, cb, bytecode.poly[i]))
+            i += 1
     return 0
 
 def load_bytecode(filename):

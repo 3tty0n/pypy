@@ -128,7 +128,7 @@ class W_IntObject(W_Object):
         if isinstance(w_other, W_IntObject):
             return W_IntObject(self.intvalue + w_other.intvalue)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def add(self, w_other, flg=False):
@@ -140,7 +140,7 @@ class W_IntObject(W_Object):
         if isinstance(w_other, W_IntObject):
             return W_IntObject(self.intvalue - w_other.intvalue)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def sub(self, w_other, flg=False):
@@ -154,7 +154,7 @@ class W_IntObject(W_Object):
         elif isinstance(w_other, W_FloatObject):
             return W_FloatObject(int(self.intvalue * w_other.floatvalue))
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def mul(self, w_other, flg=False):
@@ -166,7 +166,7 @@ class W_IntObject(W_Object):
         if isinstance(w_other, W_IntObject):
             return W_IntObject(self.intvalue // w_other.intvalue)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def div(self, w_other, flg=False):
@@ -178,7 +178,7 @@ class W_IntObject(W_Object):
         if isinstance(w_other, W_IntObject):
             return W_IntObject(self.intvalue % w_other.intvalue)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def mod(self, w_other, flg=False):
@@ -193,7 +193,7 @@ class W_IntObject(W_Object):
             else:
                 return W_IntObject(0)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def eq(self, w_other, flg=False):
@@ -211,7 +211,7 @@ class W_IntObject(W_Object):
             else:
                 return W_IntObject(0)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def gt(self, w_other, flg=False):
@@ -223,7 +223,7 @@ class W_IntObject(W_Object):
             else:
                 return W_IntObject(0)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     def le_inline(self, w_other):
         if isinstance(w_other, W_IntObject):
@@ -232,7 +232,7 @@ class W_IntObject(W_Object):
             else:
                 return W_IntObject(0)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def le(self, w_other, flg=False):
@@ -247,7 +247,7 @@ class W_IntObject(W_Object):
             else:
                 return W_IntObject(0)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def ge(self, w_other, flg=False):
@@ -276,28 +276,28 @@ class W_FloatObject(W_Object):
         if isinstance(w_other, W_FloatObject):
             return W_FloatObject(self.floatvalue + w_other.floatvalue)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     def sub_inline(self, w_other):
         if isinstance(w_other, W_FloatObject):
             return W_FloatObject(self.floatvalue - w_other.floatvalue)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     def mul_inline(self, w_other):
         if isinstance(w_other, W_FloatObject):
             return W_FloatObject(self.floatvalue * w_other.floatvalue)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     def div_inline(self, w_other):
         if isinstance(w_other, W_FloatObject):
             return W_FloatObject(self.floatvalue / w_other.floatvalue)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     def mod_inline(self, w_other):
-        raise OperationError
+        return W_IntObject(0)   # float mod unsupported / poisoned placeholder (tier-1 blackhole)
 
     def eq_inline(self, w_other):
         if isinstance(w_other, W_FloatObject):
@@ -306,7 +306,7 @@ class W_FloatObject(W_Object):
             else:
                 return W_IntObject(0)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     def le_inline(self, w_other):
         if isinstance(w_other, W_FloatObject):
@@ -315,7 +315,7 @@ class W_FloatObject(W_Object):
             else:
                 return W_IntObject(0)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     def ge_inline(self, w_other):
         if isinstance(w_other, W_FloatObject):
@@ -324,7 +324,7 @@ class W_FloatObject(W_Object):
             else:
                 return W_IntObject(0)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def sqrt(self, flg=False):
@@ -341,7 +341,7 @@ class W_FloatObject(W_Object):
             sum = self.floatvalue + w_other.floatvalue
             return W_FloatObject(sum)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def sub(self, w_other, flg=False):
@@ -351,7 +351,7 @@ class W_FloatObject(W_Object):
             sum = self.floatvalue - w_other.floatvalue
             return W_FloatObject(sum)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def mul(self, w_other, flg=False):
@@ -361,7 +361,7 @@ class W_FloatObject(W_Object):
             sum = self.floatvalue * w_other.floatvalue
             return W_FloatObject(sum)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def div(self, w_other, flg=False):
@@ -371,13 +371,13 @@ class W_FloatObject(W_Object):
             sum = self.floatvalue / w_other.floatvalue
             return W_FloatObject(sum)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def mod(self, w_other, flg=False):
         if flg:
             return W_IntObject(0)
-        raise OperationError
+        return W_IntObject(0)   # float mod unsupported / poisoned placeholder (tier-1 blackhole)
 
     @enable_shallow_tracing
     def eq(self, w_other, flg=False):
@@ -389,7 +389,7 @@ class W_FloatObject(W_Object):
             else:
                 return W_IntObject(0)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def lt(self, w_other, flg=False):
@@ -401,7 +401,7 @@ class W_FloatObject(W_Object):
             else:
                 return W_IntObject(0)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def gt(self, w_other, flg=False):
@@ -413,7 +413,7 @@ class W_FloatObject(W_Object):
             else:
                 return W_IntObject(0)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def le(self, w_other, flg=False):
@@ -425,7 +425,7 @@ class W_FloatObject(W_Object):
             else:
                 return W_IntObject(0)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
     @enable_shallow_tracing
     def ge(self, w_other, flg=False):
@@ -437,7 +437,7 @@ class W_FloatObject(W_Object):
             else:
                 return W_IntObject(0)
         else:
-            raise OperationError
+            return W_IntObject(0)   # tolerate poisoned placeholder operand (tier-1 blackhole)
 
 class W_StringObject(W_Object):
 

@@ -12,6 +12,7 @@ Depends only on the pure helpers in interp_helpers and the value classes in
 object; it is imported and re-exported by tla.py, which keeps run().
 """
 import math
+import os
 import sys
 
 from rpython.rlib import jit
@@ -452,49 +453,94 @@ class Frame(object):
     def LT(self):
         w_y = self._pop()
         w_x = self._pop()
-        self._push(w_x.le(w_y, False))
+        self._push(w_x.le_inline(w_y))
 
     @jit.enable_shallow_tracing
     def GT(self):
         w_y = self._pop()
         w_x = self._pop()
-        self._push(w_x.ge(w_y, False))
+        self._push(w_x.ge_inline(w_y))
 
     @jit.enable_shallow_tracing
     def EQ(self):
         w_y = self._pop()
         w_x = self._pop()
-        self._push(w_x.eq(w_y, False))
+        self._push(w_x.eq_inline(w_y))
 
     @jit.enable_shallow_tracing
     def ADD(self):
         w_y = self._pop()
         w_x = self._pop()
-        self._push(w_x.add(w_y, False))
+        self._push(w_x.add_inline(w_y))
 
     @jit.enable_shallow_tracing
     def SUB(self):
         w_y = self._pop()
         w_x = self._pop()
-        self._push(w_x.sub(w_y, False))
+        self._push(w_x.sub_inline(w_y))
 
     @jit.enable_shallow_tracing
     def MUL(self):
         w_y = self._pop()
         w_x = self._pop()
-        self._push(w_x.mul(w_y, False))
+        self._push(w_x.mul_inline(w_y))
 
     @jit.enable_shallow_tracing
     def DIV(self):
         w_y = self._pop()
         w_x = self._pop()
-        self._push(w_x.div(w_y, False))
+        self._push(w_x.div_inline(w_y))
 
     @jit.enable_shallow_tracing
     def MOD(self):
         w_y = self._pop()
         w_x = self._pop()
-        self._push(w_x.mod(w_y, False))
+        self._push(w_x.mod_inline(w_y))
+
+    # Array opcodes are shallow handlers for the same reason as the arithmetic
+    # ones: traced directly (self._LOAD/_STORE/_BUILD_LIST) they bake a stackpos,
+    # which the blackhole interpreter then mis-reconstructs in nested threaded
+    # loops -- _LOAD pops a misaligned slot, reads listvalue off a non-list and
+    # segfaults.  As residual handlers no stackpos is baked; the real pop/push
+    # (and the variable-size allocation) replays at the live stackpos at runtime.
+    @jit.enable_shallow_tracing
+    def BUILD_LIST(self):
+        size = self._pop()
+        init = self._pop()
+        assert isinstance(size, W_IntObject)
+        lst = [init] * int(size.intvalue)
+        self._push(W_ListObject(lst))
+
+    @jit.enable_shallow_tracing
+    def LOAD(self):
+        w_index = self._pop()
+        w_lst = self._pop()
+        # Tolerate a poisoned operand the way the int ops do: when this handler
+        # replays inside the blackhole interpreter after a guard failure, the
+        # loop-carried array slot can hold the shallow-handler placeholder
+        # (W_IntObject(0)) instead of the real W_ListObject.  Asserting here
+        # crashes before normal execution can resume from the intact frame, so
+        # return a placeholder element instead; the result is discarded when the
+        # real frame continues.  In correct execution w_lst is always a list.
+        if isinstance(w_lst, W_ListObject) and isinstance(w_index, W_IntObject):
+            idx = int(w_index.intvalue)
+            if 0 <= idx < len(w_lst.listvalue):
+                self._push(w_lst.listvalue[idx])
+                return
+        self._push(W_IntObject(0))
+
+    @jit.enable_shallow_tracing
+    def STORE(self):
+        w_index = self._pop()
+        w_lst = self._pop()
+        w_x = self._pop()
+        if isinstance(w_lst, W_ListObject) and isinstance(w_index, W_IntObject):
+            idx = int(w_index.intvalue)
+            if 0 <= idx < len(w_lst.listvalue):
+                w_lst.listvalue[idx] = w_x
+            self._push(w_lst)
+            return
+        self._push(w_lst if isinstance(w_lst, W_ListObject) else W_IntObject(0))
 
     # Real (inlined) arithmetic/comparison variants for the deep _interp
     # (tier 0/2).  Unlike the shallow _XX helpers above (which the tier-1
@@ -1010,13 +1056,13 @@ class Frame(object):
                 self.MOD()
 
             elif opcode == BUILD_LIST:
-                self._BUILD_LIST()
+                self.BUILD_LIST()
 
             elif opcode == LOAD:
-                self._LOAD()
+                self.LOAD()
 
             elif opcode == STORE:
-                self._STORE()
+                self.STORE()
 
             elif opcode == SIN:
                 self._SIN()
@@ -1067,13 +1113,17 @@ class Frame(object):
                 frame = self.copy_frame(argnum, pc)
 
                 if we_are_jitted():
-                    frame.CALL(self, t, argnum, dummy=True)
+                    frame.CALL_ASSEMBLER(self, t, argnum, bytecode, t_empty(), dummy=True)
                 else:
-                    entry = t
-                    if t < pc:
+                    if (t < pc and t == entry and
+                            not _entry_has_wide_call_assembler(bytecode, t)):
                         tier1driver.can_enter_jit(
-                            bytecode=bytecode, entry=t, pc=t, tstack=tstack, self=frame)
-                    frame.CALL(self, t, argnum, dummy=False)
+                            bytecode=bytecode, entry=t, pc=t,
+                            tstack=t_empty(), self=frame)
+                        tier1driver.can_enter_jit(
+                            bytecode=bytecode, entry=t, pc=t,
+                            tstack=t_empty(), self=frame)
+                    frame.CALL_ASSEMBLER(self, t, argnum, bytecode, t_empty(), dummy=False)
 
             elif opcode == CALL_ASSEMBLER:
                 t = ord(bytecode[pc])
@@ -1260,41 +1310,160 @@ class Frame(object):
 # inlined -- they stay as residual calls, so the operands remain boxed and the
 # operation logic is opaque to the trace.  That is exactly tier 1's shallow-
 # handler behaviour, and the opposite of tier 3 (the plain tracing JIT), which
-# inlines them.  @jit.dont_look_inside delivers precisely this: the helper still
-# runs for real while tracing (so recorded values and the branch decisions stay
-# correct) but is emitted as a residual `call` rather than being inlined and
-# unboxed.
-@jit.dont_look_inside
+# inlines them.  Both @jit.dont_look_inside and @jit.elidable deliver this:
+# with non-constant (loop-variant) operands -- the hot case -- an elidable
+# helper "is not traced into (as if decorated with @jit.dont_look_inside)", so
+# it is still emitted as one opaque, type-invariant residual `call` rather than
+# being inlined and unboxed.  The non-raising helpers (add/sub/mul/le/ge/eq) use
+# @jit.elidable, which additionally tells the optimizer the call is pure: it
+# drops the per-op guard_no_exception that @jit.dont_look_inside's
+# EF_RANDOM_EFFECTS forces, and lets a constant-operand op fold away.  div/mod
+# stay @jit.dont_look_inside because they can raise ZeroDivisionError.
+#
+# Two things make each residual call cheaper *without* changing the trace (the
+# op stays one opaque, type-invariant `call` -- so tier 2's code-size merit is
+# untouched):
+#
+#   1. The helpers compute the int x int case (the overwhelmingly common one)
+#      directly and call the raw object._inline method for everything else,
+#      instead of going through the @enable_shallow_tracing `op(w_y, False)`
+#      wrapper -- that wrapper expands to call_handler -> shallow_hanlder (a
+#      second @dont_look_inside) -> op -> op_inline, a chain that is pure
+#      overhead on the residual (never-traced-into) path.
+#
+#   2. Because a residual result is a *real* heap box (unlike tier 3's inlined
+#      arithmetic, whose result the optimizer virtualizes away), the small-int
+#      box cache below turns the common results -- every comparison (0/1) and
+#      every small / array-index arithmetic result -- into a plain array read
+#      instead of a fresh W_IntObject allocation.  W_IntObject is immutable, so
+#      sharing a canonical box is safe.  Tier 3's object._inline methods
+#      deliberately do NOT use the cache: there the box is virtual, and a cache
+#      lookup would only add a guard to the inlined trace.
+_INTCACHE_LO = -1
+_INTCACHE_HI = 1024
+_int_cache = [W_IntObject(_i) for _i in range(_INTCACHE_LO, _INTCACHE_HI + 1)]
+_BOX_FALSE = _int_cache[0 - _INTCACHE_LO]
+_BOX_TRUE = _int_cache[1 - _INTCACHE_LO]
+
+@jit.elidable
+def _intbox(n):
+    if _INTCACHE_LO <= n <= _INTCACHE_HI:
+        return _int_cache[n - _INTCACHE_LO]
+    return W_IntObject(n)
+
+# Tier-4 adaptive-specialization policy (see JitFrame3._profile), held in a
+# mutable cell [poly_ratio, freeze, profile_min] so _t4_configure can override
+# the knobs at runtime (RPython forbids reassigning a module global).
+#
+#  * poly_ratio  : a site is residualised once its minority operand-type fraction
+#                  reaches 1/poly_ratio (default 1/8 = 12.5%).  Below that the
+#                  dominant type is inlined (tier-3 speed; the rare off-type takes
+#                  a guard bridge); at/above it the residual _t2_* path wins
+#                  (tier-2 code-size, type-invariant) since the bridge would be
+#                  taken too often.
+#  * freeze      : stop updating the decision after this many samples.  It must
+#                  settle *before the site's loop first compiles* (~1200 samples
+#                  here): post-compile the dominant type runs as machine code (no
+#                  more profiling) while every rare off-type bails to the
+#                  interpreter and increments only the minority counter -- a
+#                  feedback loop that would otherwise inflate any non-zero
+#                  off-type fraction up to the threshold.  512 is inside the
+#                  warmup window yet large enough for a stable 12.5% estimate.
+#  * profile_min : don't decide before this many samples.
+class _T4Cfg(object):
+    # Mutable instance (NOT a prebuilt list/global -- RPython constant-folds those
+    # so a startup override would be ignored).  Non-immutable fields => getfield.
+    #
+    # ratio=1 is the *throughput-optimal* default: a site residualises only when
+    # its minority fraction >= 1/ratio, so ratio=1 (>= 100%, impossible) never
+    # residualises arithmetic -> every arithmetic site is inlined (tier-3 speed;
+    # the off-type takes a cheap data-flow guard bridge, never a control-flow
+    # explosion).  Inlined arithmetic always beats residual arithmetic on
+    # throughput, even at full polymorphism, so for *performance* the only sites
+    # worth residualising are control-flow comparisons (handled by the separate,
+    # ratio-independent binary policy in _profile -- that is the real tier-4 win
+    # over tier 3 on predicate-heavy code like heapsort).  Raise ratio (e.g. 8 =
+    # 12.5%) to trade throughput for smaller code by residualising balanced
+    # arithmetic too; TLA_POLY_RATIO overrides it at runtime.
+    def __init__(self):
+        self.ratio = 1
+        self.freeze = 512
+        self.minn = 50
+
+_t4cfg = _T4Cfg()
+
+def _t4_configure():
+    # Optional runtime override of the knobs so the warmup/stable/compile-time
+    # trade-off can be swept without recompiling.  No-op unless env vars are set.
+    r = os.environ.get('TLA_POLY_RATIO')
+    if r:
+        _t4cfg.ratio = int(r)
+    f = os.environ.get('TLA_FREEZE')
+    if f:
+        _t4cfg.freeze = int(f)
+    m = os.environ.get('TLA_PROFILE_MIN')
+    if m:
+        _t4cfg.minn = int(m)
+
+@jit.elidable
 def _t2_add(w_x, w_y):
-    return w_x.add(w_y, False)
+    if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+        return _intbox(w_x.intvalue + w_y.intvalue)
+    return w_x.add_inline(w_y)
 
-@jit.dont_look_inside
+@jit.elidable
 def _t2_sub(w_x, w_y):
-    return w_x.sub(w_y, False)
+    if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+        return _intbox(w_x.intvalue - w_y.intvalue)
+    return w_x.sub_inline(w_y)
 
-@jit.dont_look_inside
+@jit.elidable
 def _t2_mul(w_x, w_y):
-    return w_x.mul(w_y, False)
+    if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+        return _intbox(w_x.intvalue * w_y.intvalue)
+    return w_x.mul_inline(w_y)
 
 @jit.dont_look_inside
 def _t2_div(w_x, w_y):
-    return w_x.div(w_y, False)
+    if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+        return _intbox(w_x.intvalue // w_y.intvalue)
+    return w_x.div_inline(w_y)
 
 @jit.dont_look_inside
 def _t2_mod(w_x, w_y):
-    return w_x.mod(w_y, False)
+    if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+        return _intbox(w_x.intvalue % w_y.intvalue)
+    return w_x.mod_inline(w_y)
 
-@jit.dont_look_inside
+# The comparison helpers return ONLY the two cached boolean boxes -- they never
+# allocate -- so RPython infers EF_ELIDABLE_CANNOT_RAISE and the optimizer drops
+# the per-comparison guard_no_exception (and the residual op stops being an
+# optimization barrier).  Int and float are handled inline; any other operand
+# pairing (never produced by a valid program) tolerantly yields false, matching
+# the old *_inline placeholder behaviour without an allocation.
+@jit.elidable
 def _t2_le(w_x, w_y):
-    return w_x.le(w_y, False)
+    if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+        return _BOX_TRUE if w_x.intvalue <= w_y.intvalue else _BOX_FALSE
+    if isinstance(w_x, W_FloatObject) and isinstance(w_y, W_FloatObject):
+        return _BOX_TRUE if w_x.floatvalue <= w_y.floatvalue else _BOX_FALSE
+    return _BOX_FALSE
 
-@jit.dont_look_inside
+@jit.elidable
 def _t2_ge(w_x, w_y):
-    return w_x.ge(w_y, False)
+    if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+        return _BOX_TRUE if w_x.intvalue >= w_y.intvalue else _BOX_FALSE
+    if isinstance(w_x, W_FloatObject) and isinstance(w_y, W_FloatObject):
+        return _BOX_TRUE if w_x.floatvalue >= w_y.floatvalue else _BOX_FALSE
+    return _BOX_FALSE
 
-@jit.dont_look_inside
+@jit.elidable
 def _t2_eq(w_x, w_y):
-    return w_x.eq(w_y, False)
+    if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
+        return _BOX_TRUE if w_x.intvalue == w_y.intvalue else _BOX_FALSE
+    if isinstance(w_x, W_FloatObject) and isinstance(w_y, W_FloatObject):
+        return _BOX_TRUE if w_x.floatvalue == w_y.floatvalue else _BOX_FALSE
+    return _BOX_FALSE
 
 
 class JitFrameBase(object):
@@ -1409,13 +1578,17 @@ class JitFrame(JitFrameBase):
         w_x = self._pop()
         return w_x.is_true()
 
+    # Constant operands box through the small-int cache: x is a trace-time
+    # constant (promoted bytecode), so _intbox(x) const-folds to a prebuilt box
+    # -- removing the per-iteration new_with_vtable+setfield that a residual op's
+    # escaping constant operand would otherwise force into the tier-2 loop.
     def _CONST_INT(self, pc, neg=False):
         bytecode = jit.promote(self.bytecode)
         x = ord(bytecode[pc])
         if neg:
-            self._push(W_IntObject(-x))
+            self._push(_intbox(-x))
         else:
-            self._push(W_IntObject(x))
+            self._push(_intbox(x))
 
     def _CONST_FLOAT(self, pc, neg=False):
         bytecode = jit.promote(self.bytecode)
@@ -1428,7 +1601,7 @@ class JitFrame(JitFrameBase):
     def _CONST_N(self, pc):
         bytecode = jit.promote(self.bytecode)
         x = _construct_value(bytecode, pc)
-        self._push(W_IntObject(x))
+        self._push(_intbox(x))
 
     def _POP(self):
         return self._pop()
@@ -1449,10 +1622,11 @@ class JitFrame(JitFrameBase):
         w_x = self._take(n)
         self._push(w_x)
 
-    # Tier-2 arithmetic: residual (_t2_* are @jit.dont_look_inside, so the
-    # operands stay boxed and the op is opaque to the trace -- the stack-
-    # manipulation-only inliner).  Tier 3 uses the JitFrame3 subclass at the end
-    # of this module, which overrides these to trace the arithmetic *inline*.
+    # Tier-2 arithmetic: residual (_t2_* are @jit.elidable / @jit.dont_look_inside
+    # with loop-variant operands, so the operands stay boxed and the op is opaque
+    # to the trace -- the stack-manipulation-only inliner).  Tier 3 uses the
+    # JitFrame3 subclass at the end of this module, which overrides these to trace
+    # the arithmetic *inline*.
     def _ADD(self):
         w_y = self._pop()
         w_x = self._pop()
@@ -1736,6 +1910,12 @@ class JitFrame(JitFrameBase):
                     tier2vdriver.can_enter_jit(bytecode=bytecode, pc=t, self=self)
                 pc = t
 
+            elif opcode == JUMP_N:
+                t = _construct_value(bytecode, pc)
+                if t < pc:
+                    tier2vdriver.can_enter_jit(bytecode=bytecode, pc=t, self=self)
+                pc = t
+
             elif opcode == JUMP_IF:
                 t = ord(bytecode[pc])
                 pc += 1
@@ -1885,6 +2065,12 @@ class JitFrame3(JitFrameBase):
         w_x = self._pop()
         return w_x.is_true()
 
+    # NB: unlike JitFrame (tier 2), this inlined path must NOT route constants
+    # through the small-int cache.  W_IntObject.intvalue is not declared
+    # immutable, so a getfield off a *shared* cached box does not const-fold --
+    # the constant would become a loop-carried variable instead of an immediate
+    # operand.  A fresh `new W_IntObject(x)` is virtualised away and its value
+    # tracked as a literal, which is what tier 3/4's inlined arithmetic wants.
     def _CONST_INT(self, pc, neg=False):
         bytecode = jit.promote(self.bytecode)
         x = ord(bytecode[pc])
@@ -1930,18 +2116,41 @@ class JitFrame3(JitFrameBase):
     # the integer work and keeps the W_IntObject results virtual -- the loop
     # counters stay fully unboxed across the back-edge.  This is the only
     # difference from JitFrame (tier 2), which keeps these residual (_t2_*).
-    def _profile(self, bytecode, site, w_x, w_y):
+    def _profile(self, bytecode, site, w_x, w_y, is_cmp):
+        # Adaptive specialization profile.  Count int/int (cnt_a) vs every other
+        # operand-type signature (cnt_b) per site.
         if isinstance(w_x, W_IntObject) and isinstance(w_y, W_IntObject):
-            tag = 1
-        elif isinstance(w_x, W_FloatObject) and isinstance(w_y, W_FloatObject):
-            tag = 2
+            a = bytecode.cnt_a[site] + 1
+            bytecode.cnt_a[site] = a
+            b = bytecode.cnt_b[site]
         else:
-            tag = 3
-        seen = bytecode.seen[site]
-        if seen == 0:
-            bytecode.seen[site] = tag
-        elif seen != tag:
-            bytecode.poly[site] = 1
+            a = bytecode.cnt_a[site]
+            b = bytecode.cnt_b[site] + 1
+            bytecode.cnt_b[site] = b
+        if is_cmp:
+            # Control-flow comparisons (le/ge/eq feed JUMP_IF): inlining a
+            # *polymorphic predicate* makes the tracer specialise the comparison
+            # AND each downstream branch per operand type -> a bridge explosion
+            # (the heapsort effect: tier 3 inlines it and gets 1.75x; residualising
+            # it gets 6.0x).  So residualise on ANY genuine polymorphism, like the
+            # original tier-4 policy.  Monotonic 0->1, hence immune both to the
+            # post-compile minority-overcount feedback loop and to phase-varying
+            # skew -- no freeze needed.
+            if a != 0 and b != 0:
+                bytecode.poly[site] = 1
+        else:
+            # Arithmetic (add/sub/mul/div/mod): the result flows into more
+            # arithmetic, so an inlined dominant type with a rare off-type costs
+            # only one cheap guard bridge.  Decide from the *minority* fraction,
+            # frozen inside the warmup window (see _T4_FREEZE) so the post-compile
+            # feedback loop cannot inflate a rare off-type up to the threshold.
+            total = a + b
+            if _t4cfg.minn <= total <= _t4cfg.freeze:
+                minority = a if a < b else b
+                if minority * _t4cfg.ratio >= total:
+                    bytecode.poly[site] = 1
+                else:
+                    bytecode.poly[site] = 0
 
     def _ADD(self, site):
         w_y = self._pop()
@@ -1949,7 +2158,7 @@ class JitFrame3(JitFrameBase):
         if self.hybrid:
             bytecode = jit.promote(self.bytecode)
             if not we_are_jitted():
-                self._profile(bytecode, site, w_x, w_y)
+                self._profile(bytecode, site, w_x, w_y, False)
             if jit.promote(bytecode.poly[site]):
                 self._push(_t2_add(w_x, w_y)); return
         self._push(w_x.add_inline(w_y))
@@ -1960,7 +2169,7 @@ class JitFrame3(JitFrameBase):
         if self.hybrid:
             bytecode = jit.promote(self.bytecode)
             if not we_are_jitted():
-                self._profile(bytecode, site, w_x, w_y)
+                self._profile(bytecode, site, w_x, w_y, False)
             if jit.promote(bytecode.poly[site]):
                 self._push(_t2_sub(w_x, w_y)); return
         self._push(w_x.sub_inline(w_y))
@@ -1971,7 +2180,7 @@ class JitFrame3(JitFrameBase):
         if self.hybrid:
             bytecode = jit.promote(self.bytecode)
             if not we_are_jitted():
-                self._profile(bytecode, site, w_x, w_y)
+                self._profile(bytecode, site, w_x, w_y, False)
             if jit.promote(bytecode.poly[site]):
                 self._push(_t2_mul(w_x, w_y)); return
         self._push(w_x.mul_inline(w_y))
@@ -1982,7 +2191,7 @@ class JitFrame3(JitFrameBase):
         if self.hybrid:
             bytecode = jit.promote(self.bytecode)
             if not we_are_jitted():
-                self._profile(bytecode, site, w_x, w_y)
+                self._profile(bytecode, site, w_x, w_y, False)
             if jit.promote(bytecode.poly[site]):
                 self._push(_t2_div(w_x, w_y)); return
         self._push(w_x.div_inline(w_y))
@@ -1993,7 +2202,7 @@ class JitFrame3(JitFrameBase):
         if self.hybrid:
             bytecode = jit.promote(self.bytecode)
             if not we_are_jitted():
-                self._profile(bytecode, site, w_x, w_y)
+                self._profile(bytecode, site, w_x, w_y, False)
             if jit.promote(bytecode.poly[site]):
                 self._push(_t2_mod(w_x, w_y)); return
         self._push(w_x.mod_inline(w_y))
@@ -2005,7 +2214,7 @@ class JitFrame3(JitFrameBase):
         if self.hybrid:
             bytecode = jit.promote(self.bytecode)
             if not we_are_jitted():
-                self._profile(bytecode, site, w_x, w_y)
+                self._profile(bytecode, site, w_x, w_y, True)
             if jit.promote(bytecode.poly[site]):
                 self._push(_t2_le(w_x, w_y)); return
         self._push(w_x.le_inline(w_y))
@@ -2017,7 +2226,7 @@ class JitFrame3(JitFrameBase):
         if self.hybrid:
             bytecode = jit.promote(self.bytecode)
             if not we_are_jitted():
-                self._profile(bytecode, site, w_x, w_y)
+                self._profile(bytecode, site, w_x, w_y, True)
             if jit.promote(bytecode.poly[site]):
                 self._push(_t2_ge(w_x, w_y)); return
         self._push(w_x.ge_inline(w_y))
@@ -2028,7 +2237,7 @@ class JitFrame3(JitFrameBase):
         if self.hybrid:
             bytecode = jit.promote(self.bytecode)
             if not we_are_jitted():
-                self._profile(bytecode, site, w_x, w_y)
+                self._profile(bytecode, site, w_x, w_y, True)
             if jit.promote(bytecode.poly[site]):
                 self._push(_t2_eq(w_x, w_y)); return
         self._push(w_x.eq_inline(w_y))
@@ -2270,6 +2479,12 @@ class JitFrame3(JitFrameBase):
 
             elif opcode == JUMP:
                 t = ord(bytecode[pc])
+                if t < pc:
+                    tier3driver.can_enter_jit(bytecode=bytecode, pc=t, self=self)
+                pc = t
+
+            elif opcode == JUMP_N:
+                t = _construct_value(bytecode, pc)
                 if t < pc:
                     tier3driver.can_enter_jit(bytecode=bytecode, pc=t, self=self)
                 pc = t

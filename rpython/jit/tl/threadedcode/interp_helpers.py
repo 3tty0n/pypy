@@ -123,10 +123,13 @@ def _entry_has_foreign_call_assembler(bytecode, entry):
             if t != entry:
                 return True
             pc += 2
+        elif op == CALL_N:
+            t = _construct_value(bytecode, pc)
+            if t != entry:
+                return True
+            pc += 5
         elif op == CALL or op == CALL_TIER2 or op == CALL_TIER0:
             pc += 2
-        elif op == CALL_N:
-            pc += 5
         elif op == JUMP or op == JUMP_IF:
             pc += 1
         elif op == JUMP_N or op == JUMP_IF_N:
@@ -160,10 +163,14 @@ def _entry_has_wide_call_assembler(bytecode, entry):
             if t == entry and argnum > 1:
                 return True
             pc += 2
+        elif op == CALL_N:
+            t = _construct_value(bytecode, pc)
+            argnum = ord(bytecode[pc + 4])
+            if t == entry and argnum > 1:
+                return True
+            pc += 5
         elif op == CALL or op == CALL_TIER2 or op == CALL_TIER0:
             pc += 2
-        elif op == CALL_N:
-            pc += 5
         elif op == JUMP or op == JUMP_IF:
             pc += 1
         elif op == JUMP_N or op == JUMP_IF_N:
@@ -282,8 +289,73 @@ def _construct_float(bytecode, pc):
     decimal = literals[8]
     return float(int_val + (float_val * _power_01(decimal)))
 
+@jit.elidable
+def _entry_has_array_op(bytecode, entry):
+    n = len(bytecode)
+    seen = [False] * n
+    todo = [entry]
+    while todo:
+        pc = todo.pop()
+        if pc < 0 or pc >= n or seen[pc]:
+            continue
+        seen[pc] = True
+        op = ord(bytecode[pc])
+        pc += 1
+        if op == LOAD or op == STORE or op == BUILD_LIST:
+            return True
+        if op == RET or op == EXIT:
+            continue
+        if op == JUMP:
+            todo.append(ord(bytecode[pc]))
+        elif op == JUMP_N:
+            todo.append(_construct_value(bytecode, pc))
+        elif op == JUMP_IF:
+            todo.append(ord(bytecode[pc]))
+            todo.append(pc + 1)
+        elif op == JUMP_IF_N:
+            todo.append(_construct_value(bytecode, pc))
+            todo.append(pc + 4)
+        else:
+            todo.append(pc + hasarg[op])
+    return False
+
+@jit.elidable
+def _entry_has_assembler_call(bytecode, entry):
+    # Tier 1 pays one residual call per shallow opcode.  That tradeoff is useful
+    # for threaded recursive entries, where CALL_ASSEMBLER stitches nested traces
+    # together, but plain in-frame tail loops (mb_sum) are faster and safer in
+    # the interpreter.
+    n = len(bytecode)
+    seen = [False] * n
+    todo = [entry]
+    while todo:
+        pc = todo.pop()
+        if pc < 0 or pc >= n or seen[pc]:
+            continue
+        seen[pc] = True
+        op = ord(bytecode[pc])
+        pc += 1
+        if op == CALL_ASSEMBLER or op == CALL_N:
+            return True
+        if op == RET or op == EXIT:
+            continue
+        if op == JUMP:
+            todo.append(ord(bytecode[pc]))
+        elif op == JUMP_N:
+            todo.append(_construct_value(bytecode, pc))
+        elif op == JUMP_IF:
+            todo.append(ord(bytecode[pc]))
+            todo.append(pc + 1)
+        elif op == JUMP_IF_N:
+            todo.append(_construct_value(bytecode, pc))
+            todo.append(pc + 4)
+        else:
+            todo.append(pc + hasarg[op])
+    return False
+
 def _tier1_confirm_enter_jit(pc, entry, bytecode, tstack, self):
     # No frame fix-up here: the clean loop-header state is captured/restored in
     # _jit_take_snapshot (the driverhook graph is rtyped separately and may not
     # do list operations on the frame stack without upsetting the codewriter).
-    return True
+    return (not _entry_has_array_op(bytecode, entry) and
+            _entry_has_assembler_call(bytecode, entry))
