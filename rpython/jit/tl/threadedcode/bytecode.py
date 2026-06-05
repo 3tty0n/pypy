@@ -81,7 +81,15 @@ class CompilerContext(object):
         raise NotImplementedError
 
 class Bytecode(object):
-    _immutable_ = True
+    # `code` is write-once (the compiled program).  `poly` is quasi-immutable:
+    # the tier-4 dispatch reads poly[site] every op, so folding it to a constant
+    # (instead of a per-op getarrayitem + guard off a mutable array that the
+    # in-loop stores prevent hoisting) removes the entire hybrid trace overhead.
+    # A changed decision replaces the whole array (see _t4_set_poly), which
+    # invalidates the affected traces.  The profiling counters (counts/seen/
+    # cnt_a/cnt_b) stay plain mutable -- they are only touched in the interpreted
+    # warmup, never in a compiled trace.
+    _immutable_fields_ = ['code', 'poly?[*]']
 
     def __init__(self, code):
         self.code = code

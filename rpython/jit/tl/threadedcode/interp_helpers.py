@@ -359,3 +359,32 @@ def _tier1_confirm_enter_jit(pc, entry, bytecode, tstack, self):
     # do list operations on the frame stack without upsetting the codewriter).
     return (not _entry_has_array_op(bytecode, entry) and
             _entry_has_assembler_call(bytecode, entry))
+
+@jit.elidable
+def _tier1_use_frame_inliner_for_plain_loops(bytecode):
+    if _entry_has_array_op(bytecode, 0):
+        return False
+    pc = 0
+    n = len(bytecode)
+    while pc < n:
+        op = ord(bytecode[pc])
+        pc += 1
+        if op == LOAD or op == STORE or op == BUILD_LIST:
+            return False
+        if op == CALL_ASSEMBLER:
+            t = ord(bytecode[pc])
+            if _entry_has_array_op(bytecode, t):
+                return False
+            if _entry_has_assembler_call(bytecode, t):
+                return False
+            pc += 2
+        elif op == CALL_N:
+            t = _construct_value(bytecode, pc)
+            if _entry_has_array_op(bytecode, t):
+                return False
+            if _entry_has_assembler_call(bytecode, t):
+                return False
+            pc += 5
+        else:
+            pc += hasarg[op]
+    return True

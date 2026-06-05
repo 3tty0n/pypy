@@ -1392,6 +1392,19 @@ class _T4Cfg(object):
 
 _t4cfg = _T4Cfg()
 
+def _t4_set_poly(bytecode, site, value):
+    # Change a tier-4 inline/residual decision in the quasi-immutable poly array.
+    # Reading poly[site] in the dispatch folds to a constant (no per-op trace
+    # overhead); to keep that valid, a *changed* decision replaces the whole
+    # array, which invalidates the traces that folded the old value.  Skip the
+    # copy when nothing changes -- with ratio==1 arithmetic never writes poly, so
+    # in practice this fires only the first time a comparison turns polymorphic.
+    if bytecode.poly[site] == value:
+        return
+    new = bytecode.poly[:]
+    new[site] = value
+    bytecode.poly = new
+
 def _t4_configure():
     # Optional runtime override of the knobs so the warmup/stable/compile-time
     # trade-off can be swept without recompiling.  No-op unless env vars are set.
@@ -1495,10 +1508,10 @@ class JitFrame(JitFrameBase):
     only ever builds ``JitFrame``.
     """
     _virtualizable_ = ['stackpos', 'stack[*]']
-    _immutable_fields_ = ['hybrid']
+    _immutable_fields_ = ['hybrid', 'inline_arith']
 
     def __init__(self, bytecode, stack=None, stackpos=0, depth=0, stacksize=64,
-                 hybrid=False):
+                 hybrid=False, inline_arith=False):
         self = jit.hint(self, access_directly=True, fresh_virtualizable=True)
         # Size the value stack to the program's actual max depth (see
         # _compute_stackdepth).  Because the whole virtualizable array is part of
@@ -1514,6 +1527,7 @@ class JitFrame(JitFrameBase):
         self.stackpos = stackpos
         self.depth = depth
         self.hybrid = hybrid
+        self.inline_arith = inline_arith
 
     # --- value-stack helpers ------------------------------------------------
     # Plain, inlined, vable-friendly: only element-wise self.stack[i] access
@@ -1982,10 +1996,10 @@ class JitFrame3(JitFrameBase):
     only ever builds ``JitFrame``.
     """
     _virtualizable_ = ['stackpos', 'stack[*]']
-    _immutable_fields_ = ['hybrid']
+    _immutable_fields_ = ['hybrid', 'inline_arith']
 
     def __init__(self, bytecode, stack=None, stackpos=0, depth=0, stacksize=64,
-                 hybrid=False):
+                 hybrid=False, inline_arith=False):
         self = jit.hint(self, access_directly=True, fresh_virtualizable=True)
         # Size the value stack to the program's actual max depth (see
         # _compute_stackdepth).  Because the whole virtualizable array is part of
@@ -2001,6 +2015,7 @@ class JitFrame3(JitFrameBase):
         self.stackpos = stackpos
         self.depth = depth
         self.hybrid = hybrid
+        self.inline_arith = inline_arith
 
     # --- value-stack helpers ------------------------------------------------
     # Plain, inlined, vable-friendly: only element-wise self.stack[i] access
@@ -2042,7 +2057,8 @@ class JitFrame3(JitFrameBase):
         assert argnum >= 0
         bytecode = jit.promote(self.bytecode)
         newframe = JitFrame3(bytecode, None, argnum + 2, self.depth + 1,
-                            stacksize=self.stacksize, hybrid=self.hybrid)
+                            stacksize=self.stacksize, hybrid=self.hybrid,
+                            inline_arith=self.inline_arith)
         count = argnum + 1
         j = 0
         while j < count:
@@ -2137,7 +2153,7 @@ class JitFrame3(JitFrameBase):
             # post-compile minority-overcount feedback loop and to phase-varying
             # skew -- no freeze needed.
             if a != 0 and b != 0:
-                bytecode.poly[site] = 1
+                _t4_set_poly(bytecode, site, 1)
         else:
             # Arithmetic (add/sub/mul/div/mod): the result flows into more
             # arithmetic, so an inlined dominant type with a rare off-type costs
@@ -2148,14 +2164,14 @@ class JitFrame3(JitFrameBase):
             if _t4cfg.minn <= total <= _t4cfg.freeze:
                 minority = a if a < b else b
                 if minority * _t4cfg.ratio >= total:
-                    bytecode.poly[site] = 1
+                    _t4_set_poly(bytecode, site, 1)
                 else:
-                    bytecode.poly[site] = 0
+                    _t4_set_poly(bytecode, site, 0)
 
     def _ADD(self, site):
         w_y = self._pop()
         w_x = self._pop()
-        if self.hybrid:
+        if self.hybrid and not self.inline_arith:
             bytecode = jit.promote(self.bytecode)
             if not we_are_jitted():
                 self._profile(bytecode, site, w_x, w_y, False)
@@ -2166,7 +2182,7 @@ class JitFrame3(JitFrameBase):
     def _SUB(self, site):
         w_y = self._pop()
         w_x = self._pop()
-        if self.hybrid:
+        if self.hybrid and not self.inline_arith:
             bytecode = jit.promote(self.bytecode)
             if not we_are_jitted():
                 self._profile(bytecode, site, w_x, w_y, False)
@@ -2177,7 +2193,7 @@ class JitFrame3(JitFrameBase):
     def _MUL(self, site):
         w_y = self._pop()
         w_x = self._pop()
-        if self.hybrid:
+        if self.hybrid and not self.inline_arith:
             bytecode = jit.promote(self.bytecode)
             if not we_are_jitted():
                 self._profile(bytecode, site, w_x, w_y, False)
@@ -2188,7 +2204,7 @@ class JitFrame3(JitFrameBase):
     def _DIV(self, site):
         w_y = self._pop()
         w_x = self._pop()
-        if self.hybrid:
+        if self.hybrid and not self.inline_arith:
             bytecode = jit.promote(self.bytecode)
             if not we_are_jitted():
                 self._profile(bytecode, site, w_x, w_y, False)
@@ -2199,7 +2215,7 @@ class JitFrame3(JitFrameBase):
     def _MOD(self, site):
         w_y = self._pop()
         w_x = self._pop()
-        if self.hybrid:
+        if self.hybrid and not self.inline_arith:
             bytecode = jit.promote(self.bytecode)
             if not we_are_jitted():
                 self._profile(bytecode, site, w_x, w_y, False)

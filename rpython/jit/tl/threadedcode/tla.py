@@ -18,11 +18,11 @@ from rpython.jit.tl.threadedcode.interp_helpers import (
     _construct_value, _branch_reaches_backedge,
     _entry_has_foreign_call_assembler, _entry_has_wide_call_assembler,
     _compute_stackdepth, _power_01, _construct_float,
-    _tier1_confirm_enter_jit,
+    _tier1_confirm_enter_jit, _tier1_use_frame_inliner_for_plain_loops,
 )
 from rpython.jit.tl.threadedcode.frames import (
     Frame, JitFrame, JitFrame3, tier1driver, tier2driver, tier2vdriver,
-    tier3driver,
+    tier3driver, _t4cfg,
 )
 
 
@@ -75,9 +75,14 @@ def run(bytecode, w_arg, debug=False, tier=1):
         # arithmetic: the tier2-vs-tier3 gap measures exactly what that buys --
         # not an artificial boxed-stack handicap.
         stacksize = _compute_stackdepth(bytecode) + 1
-        jframe3 = JitFrame3(bytecode, stacksize=stacksize, hybrid=(tier == 4))
+        jframe3 = JitFrame3(bytecode, stacksize=stacksize, hybrid=(tier == 4),
+                            inline_arith=(tier == 4 and _t4cfg.ratio == 1))
         jframe3._push(w_arg)
         return jframe3._interp()
+    if tier == 1 and _tier1_use_frame_inliner_for_plain_loops(bytecode):
+        frame = Frame(bytecode)
+        frame.push(w_arg)
+        return frame._interp()
     frame = Frame(bytecode)
     frame.push(w_arg)
     pc = 0
