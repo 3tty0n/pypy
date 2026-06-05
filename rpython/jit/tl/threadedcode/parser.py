@@ -135,6 +135,25 @@ class ConstInt(Node):
         return "ConstInt(%r)" % (self.intval,)
 
 
+class ArrayGet(Node):
+    def __init__(self, arr, idx):
+        self.arr = arr        # expression evaluating to an array
+        self.idx = idx        # index expression
+
+    def __repr__(self):
+        return "ArrayGet(%r, %r)" % (self.arr, self.idx)
+
+
+class ArraySet(Node):
+    def __init__(self, arr, idx, val):
+        self.arr = arr
+        self.idx = idx
+        self.val = val
+
+    def __repr__(self):
+        return "ArraySet(%r, %r, %r)" % (self.arr, self.idx, self.val)
+
+
 # ---------------------------------------------------------------------------
 # Parse tree -> AST.  Operates on the ToAST-cleaned tree (keywords/punctuation
 # dropped, definition list flattened, `if` rendered as 3 expr children).  The
@@ -166,7 +185,14 @@ class _Transformer(object):
         children = node.children
         if len(children) == 1:                      # cmp_expr
             return self.visit_cmp(children[0])
-        # 3 children: `let .. in` (VARIABLE first) or `if` (expr first)
+        # 3 children: array store (postfix <- expr), `let .. in` (VARIABLE first),
+        # or `if` (expr first).
+        if children[1].symbol == 'ASSIGN':
+            lhs = self.visit_postfix(children[0])
+            if not isinstance(lhs, ArrayGet):
+                raise CompileError("assignment target must be an indexed array "
+                                   "element a[i], got %r" % (lhs,))
+            return ArraySet(lhs.arr, lhs.idx, self.visit_expr(children[2]))
         if children[0].symbol == 'VARIABLE':
             return LetIn(children[0].additional_info,
                          self.visit_expr(children[1]),
@@ -207,11 +233,11 @@ class _Transformer(object):
         return res
 
     def visit_app(self, node):
-        # app_expr is right-nested juxtaposition: atom (atom (atom ...)).  A
-        # single atom is just a value; two or more is `f arg1 arg2 ...`.
+        # app_expr is right-nested juxtaposition: postfix (postfix ...).  A
+        # single operand is just a value; two or more is `f arg1 arg2 ...`.
         atoms = []
         while True:
-            atoms.append(self.visit_atom(node.children[0]))
+            atoms.append(self.visit_postfix(node.children[0]))
             if len(node.children) == 2:
                 node = node.children[1]
             else:
@@ -222,6 +248,26 @@ class _Transformer(object):
         if not isinstance(head, Variable):
             raise CompileError("only direct calls `f a b ...` are supported")
         return FunApp(head.name, atoms[1:])
+
+    def visit_postfix(self, node):
+        # postfix: atom | atom indexes.  Fold the index list left so a[i][j]
+        # reads as (a[i])[j].
+        base = self.visit_atom(node.children[0])
+        if len(node.children) == 2:
+            for idx in self._indexes(node.children[1]):
+                base = ArrayGet(base, idx)
+        return base
+
+    def _indexes(self, node):
+        # indexes: "[" expr "]" | "[" expr "]" indexes  -> list of index exprs
+        out = []
+        while True:
+            out.append(self.visit_expr(node.children[0]))
+            if len(node.children) == 2:
+                node = node.children[1]
+            else:
+                break
+        return out
 
     def visit_atom(self, node):
         child = node.children[0]
@@ -250,6 +296,11 @@ def parse(source):
 # ---------------------------------------------------------------------------
 
 class CompileError(Exception):
+    pass
+
+
+class _TooWide(Exception):
+    """Internal: a jump/call target overflowed 1 byte; recompile in wide mode."""
     pass
 
 
@@ -318,6 +369,7 @@ class Compiler(object):
         self.cur = None            # current _Func
         self.depth = 0             # operand-stack depth from frame base
         self.slot_of = {}          # name -> absolute frame slot
+        self.wide = False          # 1-byte (narrow) vs 4-byte (wide) jump/call targets
 
     # -- low-level emit -------------------------------------------------------
     def _op(self, opcode):
@@ -333,6 +385,20 @@ class Compiler(object):
 
     def _place(self, label):
         self.items.append(label)
+
+    # Jump/call emission picks the narrow (1-byte target) or wide (4-byte target,
+    # *_N) opcode per self.wide.  compile() retries in wide mode if any target
+    # overflows one byte, so small programs stay byte-identical to the narrow
+    # encoding and only large programs pay the wider operands.
+    def _emit_jump(self, label):
+        self._op(bc.JUMP_N if self.wide else bc.JUMP); self._ref(label)
+
+    def _emit_jump_if(self, label):
+        self._op(bc.JUMP_IF_N if self.wide else bc.JUMP_IF); self._ref(label)
+
+    def _emit_call(self, label, argnum):
+        self._op(bc.CALL_N if self.wide else bc.CALL_ASSEMBLER)
+        self._ref(label); self._byte(argnum)
 
     def _push_const(self, value):
         if 0 <= value <= 255:
@@ -371,8 +437,25 @@ class Compiler(object):
             self._if_value(node)
         elif isinstance(node, LetIn):
             self._let_value(node)
+        elif isinstance(node, ArrayGet):
+            self._array_get(node)
+        elif isinstance(node, ArraySet):
+            self._array_set(node)
         else:
             raise CompileError("unsupported expression: %r" % (node,))
+
+    def _array_get(self, node):
+        # a[i] -> push arr, push idx, LOAD (pops idx+arr, pushes element).
+        self.compile_value(node.arr)
+        self.compile_value(node.idx)
+        self._op(bc.LOAD); self.depth -= 1
+
+    def _array_set(self, node):
+        # a[i] <- e -> push val, arr, idx, STORE (pops idx+arr+val, pushes arr).
+        self.compile_value(node.val)
+        self.compile_value(node.arr)
+        self.compile_value(node.idx)
+        self._op(bc.STORE); self.depth -= 2
 
     def _binop_value(self, node):
         if node.op in _ARITH:
@@ -392,6 +475,16 @@ class Compiler(object):
         raise CompileError("unsupported operator %r" % (node.op,))
 
     def _call(self, node):
+        if node.funcname == 'array':
+            # array n x -> n-element array of x.  BUILD_LIST pops size then init,
+            # so push init(x) first, then size(n).
+            if len(node.args) != 2:
+                raise CompileError("array expects 2 args (size, init), got %d"
+                                   % len(node.args))
+            self.compile_value(node.args[1])
+            self.compile_value(node.args[0])
+            self._op(bc.BUILD_LIST); self.depth -= 1
+            return
         builtin = _BUILTINS.get(node.funcname)
         if builtin is not None:
             nargs, op = builtin
@@ -416,7 +509,7 @@ class Compiler(object):
         self._push_const(0)
         for a in node.args:
             self.compile_value(a)
-        self._op(bc.CALL_ASSEMBLER); self._ref(callee.label); self._byte(argnum)
+        self._emit_call(callee.label, argnum)
         self.depth -= argnum               # args dropped
         self.depth += 1                    # result pushed
         self._op(bc.POP1); self.depth -= 1
@@ -442,11 +535,11 @@ class Compiler(object):
         false_branch = node.then if swap else node.orelse
         true_branch = node.orelse if swap else node.then
         lthen = _Label('then')
-        self._op(bc.JUMP_IF); self._ref(lthen)
+        self._emit_jump_if(lthen)
         self.depth = depth0
         self.compile_value(false_branch)
         lend = _Label('endif')
-        self._op(bc.JUMP); self._ref(lend)
+        self._emit_jump(lend)
         self._place(lthen)
         self.depth = depth0
         self.compile_value(true_branch)
@@ -475,7 +568,7 @@ class Compiler(object):
             false_branch = node.then if swap else node.orelse
             true_branch = node.orelse if swap else node.then
             lthen = _Label('then')
-            self._op(bc.JUMP_IF); self._ref(lthen)
+            self._emit_jump_if(lthen)
             self.depth = depth0
             self.compile_tail(false_branch, allow_loop)
             self._place(lthen)
@@ -517,7 +610,7 @@ class Compiler(object):
             self.compile_value(a)
         self._op(bc.FRAME_RESET); self._byte(k); self._byte(0); self._byte(k)
         self.depth -= k
-        self._op(bc.JUMP); self._ref(self.cur.body_label)
+        self._emit_jump(self.cur.body_label)
 
     # -- function / program ---------------------------------------------------
     def function(self, func):
@@ -551,17 +644,28 @@ class Compiler(object):
         for fn in program.functions:
             if fn.name != 'main':
                 order.append(self.funcs[fn.name])
+        try:
+            return self._assemble(order, False)
+        except _TooWide:
+            return self._assemble(order, True)
+
+    def _assemble(self, order, wide):
+        self.items = []
+        self.wide = wide
         for func in order:
             self.function(func)
         return self._resolve()
 
     def _resolve(self):
+        refwidth = 4 if self.wide else 1
         # first pass: byte offset of every label
         pos = {}
         p = 0
         for it in self.items:
             if isinstance(it, _Label):
                 pos[id(it)] = p
+            elif isinstance(it, _Ref):
+                p += refwidth
             else:
                 p += 1
         # second pass: flatten to ints, substituting label offsets
@@ -571,11 +675,15 @@ class Compiler(object):
                 continue
             if isinstance(it, _Ref):
                 target = pos[id(it.label)]
-                if not (0 <= target <= 255):
-                    raise CompileError(
-                        "jump/call target %d exceeds one byte; program too "
-                        "large for the 1-byte address encoding" % target)
-                out.append(target)
+                if self.wide:
+                    out.append((target >> 24) & 0xff)
+                    out.append((target >> 16) & 0xff)
+                    out.append((target >> 8) & 0xff)
+                    out.append(target & 0xff)
+                elif 0 <= target <= 255:
+                    out.append(target)
+                else:
+                    raise _TooWide()   # retry the whole program in wide mode
             else:
                 out.append(it)
         return out

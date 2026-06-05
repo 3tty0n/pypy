@@ -1,7 +1,8 @@
-# Grammar for the native TLA surface language (an OCaml-flavoured, integer-only
-# functional language).  A program is a non-empty list of `let rec` function
-# definitions; the entry point must be `main`, taking exactly one parameter --
-# the integer CLI argument that targettla/run() pushes onto the initial frame.
+# Grammar for the native TLA surface language (an OCaml-flavoured functional
+# language with integers, floats (via tofloat/toint) and mutable arrays).  A
+# program is a non-empty list of `let rec` function definitions; the entry point
+# must be `main`, taking exactly one parameter -- the integer CLI argument that
+# targettla/run() pushes onto the initial frame.
 #
 #     let rec fib n =
 #       if n < 2 then n
@@ -9,20 +10,30 @@
 #     ;;
 #     let rec main x = fib x ;;
 #
+# Arrays (compile to the BUILD_LIST / LOAD / STORE opcodes):
+#
+#     array n x        -- a fresh n-element array, every slot initialised to x
+#     a[i]             -- read  (binds tighter than application: `f a[i]` = f (a[i]))
+#     a[i] <- e        -- write; evaluates to the array `a` (so it threads through
+#                         tail calls: `loop (a[i] <- v) (i + 1) n`)
+#
 # parser.py turns this into an AST and compiles it to TLA bytecode (the same
 # `code = [...]` int list found in lang/*.tla.py).  See parser.py for the
 # code generator.
 #
 # Lexer notes
 # -----------
-# Operators get their own named tokens (ADDOP/MULOP/CMPOP) and those characters
-# are never used as bare quoted literals elsewhere, so the lexer never confuses
-# an operator with punctuation (the bug that broke the old `<`/`-` array rules).
-# Keyword literals (if/then/else/let/rec/in) take priority over VARIABLE.
+# Operators get their own named tokens (ASSIGN/ADDOP/MULOP/CMPOP) and those
+# characters are never used as bare quoted literals elsewhere, so the lexer never
+# confuses an operator with punctuation (the bug that broke the old `<`/`-` array
+# rules).  ASSIGN ("<-") is declared before ADDOP/CMPOP so longest-match keeps
+# `<-` whole instead of splitting it into `<` and `-`.  Keyword literals
+# (if/then/else/let/rec/in) take priority over VARIABLE.
 
 IGNORE: "[ \t\n]|#[^\n]*";
 DECIMAL: "0|[1-9][0-9]*";
 VARIABLE: "[a-zA-Z_][a-zA-Z0-9_]*";
+ASSIGN: "<-";
 ADDOP: "[-+]";
 MULOP: "[*/%]";
 CMPOP: "<=|>=|==|!=|<|>";
@@ -35,6 +46,7 @@ formal_args: VARIABLE formal_args | VARIABLE;
 
 expr: ["if"] expr ["then"] expr ["else"] expr
     | ["let"] VARIABLE ["="] expr ["in"] expr
+    | postfix ASSIGN expr
     | cmp_expr;
 
 cmp_expr: add_expr CMPOP add_expr | add_expr;
@@ -43,6 +55,10 @@ add_expr: mul_expr ADDOP add_expr | mul_expr;
 
 mul_expr: app_expr MULOP mul_expr | app_expr;
 
-app_expr: atom app_expr | atom;
+app_expr: postfix app_expr | postfix;
+
+postfix: atom indexes | atom;
+
+indexes: ["["] expr ["]"] indexes | ["["] expr ["]"];
 
 atom: ["("] expr [")"] | DECIMAL | VARIABLE;

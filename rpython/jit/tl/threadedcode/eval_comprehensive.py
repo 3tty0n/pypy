@@ -11,8 +11,10 @@ Tiers (see tla.run / targettla.py entry_point):
 
   0 interp    pure interpreter, JIT off            -- the speedup baseline
   1 threaded  threaded-code generation             (Frame.interp, tier1driver)
-  2 inliner   stack-manipulation inliner           (JitFrame._interp, virtualizable)
-  3 tracing   conventional tracing JIT             (Frame._interp, non-virtualizable)
+  2 inliner   residual-arithmetic inliner          (JitFrame._interp, virtualizable, _t2_*)
+  3 tracing   conventional tracing JIT             (JitFrame3._interp, virtualizable, *_inline)
+  4 hybrid    selective inliner                    (JitFrame3 hybrid=True: per-site
+                                                     inline if monomorphic, residual if poly)
 
 Metrics, per (benchmark, tier):
 
@@ -37,6 +39,7 @@ Usage:
 
 Options:
   --full              evaluate every lang/*.tla (default: the curated subset)
+  --shootout          evaluate the ported shootout suite (dot/matmul/heapsort/...)
   --repeats N         timing repeats per (benchmark, tier)        [default 5]
   --iters N           override the per-program iteration count
   --timeout SEC       per-child-process timeout                   [default 120]
@@ -70,8 +73,9 @@ CACHE = '/tmp/tla_eval_cache'
 BIN = os.environ.get('TLA_BIN', os.path.join(THIS, 'targettla-c'))
 
 # label, --tier value
-ALL_TIERS = [('interp', '0'), ('threaded', '1'), ('inliner', '2'), ('tracing', '3')]
-JIT_LABELS = ('threaded', 'inliner', 'tracing')
+ALL_TIERS = [('interp', '0'), ('threaded', '1'), ('inliner', '2'),
+             ('tracing', '3'), ('hybrid', '4')]
+JIT_LABELS = ('threaded', 'inliner', 'tracing', 'hybrid')
 
 # (x, iters) per program.  x is the workload size, iters the number of times the
 # program is re-run inside one process (the first is cold, the rest are warm).
@@ -91,8 +95,20 @@ SIZES = {
     # shallow non-tail recursion (depth-bounded)
     'fib': (25, 12), 'sum': (40, 12), 'fact': (10, 12), 'sh_fact': (10, 12),
     'square': (10, 12),
+    # ---- shootout ports: generic kernels reused across int+float (poly) vs
+    #      monomorphic (int/flt) vs sequential-poly vs monomorphic controls ----
+    'dot_int': (30, 12), 'dot_flt': (30, 12), 'dot_mix': (30, 12),
+    'matmul_int': (20, 12), 'matmul_flt': (20, 12), 'matmul_poly': (20, 12),
+    'heapsort_int': (600, 12), 'heapsort_flt': (600, 12), 'heapsort_poly': (600, 12),
+    'nsieve': (2000, 12), 'mandelbrot': (35, 12),
 }
 DEFAULT_SIZE = (10, 12)
+
+# Shootout suite: pass with `--shootout` (or name them explicitly).
+SHOOTOUT = ['dot_int', 'dot_flt', 'dot_mix',
+            'matmul_int', 'matmul_flt', 'matmul_poly',
+            'heapsort_int', 'heapsort_flt', 'heapsort_poly',
+            'nsieve', 'mandelbrot']
 
 # The curated default set: representative of every workload shape, sized so the
 # JIT tiers do real warm work.  --full runs everything in lang/.  (gcd/sh_gcd are
@@ -369,21 +385,20 @@ def _spd(v):
 
 def report(results, tiers):
     labels = [l for l, _ in tiers]
+    jitl = [l for l in JIT_LABELS if l in labels]
     out = []
     w = out.append
-    line = '=' * 96
+    line = '=' * (20 + 11 * len(labels))
     w(line)
     w('TIERS:  ' + ' | '.join('%s %s' % (t, l) for (l, t) in tiers))
     w(line)
 
     # correctness
     w('\n## Correctness (result per tier; must all match interp)')
-    head = '%-16s ' % 'benchmark' + ' '.join('%-12s' % l for l in labels) + '  status'
-    w(head)
+    w('%-16s ' % 'benchmark' + ' '.join('%-12s' % l for l in labels) + '  status')
     for r in results:
         ro = r['rows']
-        cells = []
-        ok = True
+        cells, ok = [], True
         for l in labels:
             rr = ro[l]
             v = rr['result'] if rr['status'] == 'ok' else ('<%s>' % rr['status'])
@@ -394,87 +409,63 @@ def report(results, tiers):
           ('OK' if ok else 'MISMATCH'))
 
     # (4) running time + speedup
-    w('\n## (4) Warm steady-state time (ms, median of repeats) and speedup vs interp')
-    w('%-16s %10s %10s %10s %10s | %8s %8s %8s' % (
-        'benchmark', 'interp', 'threaded', 'inliner', 'tracing',
-        'thr', 'inl', 'trc'))
+    w('\n## (4) Warm steady-state time (ms, median of repeats); spd=speedup vs interp')
+    w('%-15s' % 'benchmark' + ''.join('%9s' % l[:8] for l in labels) +
+      '  |' + ''.join('%8s' % ('spd:' + l[:4]) for l in jitl))
     for r in results:
         ro = r['rows']
-        def warm(l):
-            return _ms(ro[l]['warm']) if l in ro else '-'
-        def sp(l):
-            return _spd(ro[l]['speedup']) if l in ro else '-'
-        w('%-16s %10s %10s %10s %10s | %8s %8s %8s' % (
-            r['name'], warm('interp'), warm('threaded'), warm('inliner'),
-            warm('tracing'), sp('threaded'), sp('inliner'), sp('tracing')))
-    # aggregate geomean speedup
-    w('%-16s %10s %10s %10s %10s | %8s %8s %8s' % (
-        'GEOMEAN', '', '', '', '',
-        _spd(_geomean([r['rows'].get('threaded', {}).get('speedup')
-                       for r in results])),
-        _spd(_geomean([r['rows'].get('inliner', {}).get('speedup')
-                       for r in results])),
-        _spd(_geomean([r['rows'].get('tracing', {}).get('speedup')
-                       for r in results]))))
+        w('%-15s' % r['name'] +
+          ''.join('%9s' % (_ms(ro[l]['warm']) if l in ro else '-') for l in labels) +
+          '  |' + ''.join('%8s' % (_spd(ro[l]['speedup']) if l in ro else '-')
+                          for l in jitl))
+    w('%-15s' % 'GEOMEAN' + ''.join('%9s' % '' for _ in labels) + '  |' +
+      ''.join('%8s' % _spd(_geomean([r['rows'].get(l, {}).get('speedup')
+                                     for r in results])) for l in jitl))
 
     # measurement noise
-    w('\n## Measurement noise (coefficient of variation of warm time across repeats)')
-    w('%-16s %12s %12s %12s %12s' % ('benchmark', 'interp', 'threaded',
-                                     'inliner', 'tracing'))
+    w('\n## Measurement noise (coefficient of variation of warm time)')
+    w('%-15s' % 'benchmark' + ''.join('%11s' % l[:10] for l in labels))
     for r in results:
         ro = r['rows']
-        w('%-16s %12s %12s %12s %12s' % (
-            r['name'],
-            _pct(ro.get('interp', {}).get('warm_cv')),
-            _pct(ro.get('threaded', {}).get('warm_cv')),
-            _pct(ro.get('inliner', {}).get('warm_cv')),
-            _pct(ro.get('tracing', {}).get('warm_cv'))))
+        w('%-15s' % r['name'] +
+          ''.join('%11s' % _pct(ro.get(l, {}).get('warm_cv')) for l in labels))
 
     # (1) tracing + compilation time
-    w('\n## (1) Tracing + compilation time (ms): trace=tracing, comp=backend')
-    w('%-16s | %-16s | %-16s | %-16s' % ('benchmark', 'threaded', 'inliner',
-                                         'tracing'))
-    w('%-16s | %7s %7s | %7s %7s | %7s %7s' % (
-        '', 'trace', 'comp', 'trace', 'comp', 'trace', 'comp'))
+    w('\n## (1) Tracing + compilation time (ms): trace / comp(backend)')
+    w('%-15s' % 'benchmark' + ''.join('%17s' % l for l in jitl))
+    w('%-15s' % '' + ''.join('%8s %8s' % ('trace', 'comp') for _ in jitl))
     for r in results:
         ro = r['rows']
-        cells = []
-        for l in JIT_LABELS:
-            d = ro.get(l, {})
-            cells.append('%7s %7s' % (_ms(d.get('trace_t')),
-                                      _ms(d.get('backend_t'))))
-        w('%-16s | %s | %s | %s' % (r['name'], cells[0], cells[1], cells[2]))
+        w('%-15s' % r['name'] + ''.join(
+            '%8s %8s' % (_ms(ro.get(l, {}).get('trace_t')),
+                         _ms(ro.get(l, {}).get('backend_t'))) for l in jitl))
 
     # (2) traces: number, length, aborts
     w('\n## (2) Traces -- #=loops+bridges, ops=opt ops total, avg=ops/#, ab=aborts')
-    w('%-16s | %-21s | %-21s | %-21s' % ('benchmark', 'threaded', 'inliner',
-                                         'tracing'))
-    w('%-16s | %4s %6s %4s %4s | %4s %6s %4s %4s | %4s %6s %4s %4s' % (
-        '', '#', 'ops', 'avg', 'ab', '#', 'ops', 'avg', 'ab',
-        '#', 'ops', 'avg', 'ab'))
+    w('%-15s' % 'benchmark' + ''.join('%23s' % l for l in jitl))
+    w('%-15s' % '' + ''.join('%5s%7s%5s%5s' % ('#', 'ops', 'avg', 'ab')
+                             for _ in jitl))
     for r in results:
         ro = r['rows']
         cells = []
-        for l in JIT_LABELS:
+        for l in jitl:
             d = ro.get(l, {})
             ntr = (d.get('loops', 0) or 0) + (d.get('bridges', 0) or 0)
             ops = d.get('optops')
             avg = ('%d' % (ops // ntr)) if (ops and ntr) else '-'
-            cells.append('%4s %6s %4s %4s' % (ntr or '-', _fnum(ops), avg,
-                                              _fnum(d.get('aborts'))))
-        w('%-16s | %s | %s | %s' % (r['name'], cells[0], cells[1], cells[2]))
+            cells.append('%5s%7s%5s%5s' % (ntr or '-', _fnum(ops), avg,
+                                           _fnum(d.get('aborts'))))
+        w('%-15s' % r['name'] + ''.join(cells))
 
     # (3) memory footprint
     w('\n## (3) Memory footprint -- maximum resident set size (MB, median)')
-    w('%-16s %10s %10s %10s %10s' % ('benchmark', 'interp', 'threaded',
-                                     'inliner', 'tracing'))
+    w('%-15s' % 'benchmark' + ''.join('%11s' % l[:10] for l in labels))
     for r in results:
         ro = r['rows']
         def mb(l):
             v = ro.get(l, {}).get('rss_kb')
             return ('%.1f' % (v / 1024.0)) if v else '-'
-        w('%-16s %10s %10s %10s %10s' % (r['name'], mb('interp'),
-          mb('threaded'), mb('inliner'), mb('tracing')))
+        w('%-15s' % r['name'] + ''.join('%11s' % mb(l) for l in labels))
 
     return '\n'.join(out)
 
@@ -522,7 +513,7 @@ def make_plots(results, pdf_path):
     names = [r['name'] for r in results]
     jit = list(JIT_LABELS)
     colors = {'interp': '#888888', 'threaded': '#1f77b4',
-              'inliner': '#2ca02c', 'tracing': '#d62728'}
+              'inliner': '#2ca02c', 'tracing': '#d62728', 'hybrid': '#9467bd'}
 
     def col(label, key, scale=1.0):
         out = []
@@ -537,9 +528,9 @@ def make_plots(results, pdf_path):
     with PdfPages(pdf_path) as pdf:
         # --- Fig 1: warm speedup vs interp (threaded/inliner/tracing) ---------
         fig, ax = plt.subplots(figsize=(max(8, len(names) * 0.9), 5))
-        wbar = 0.26
+        nj = len(jit); wbar = 0.8 / nj
         for i, l in enumerate(jit):
-            ax.bar(x + (i - 1) * wbar, col(l, 'speedup'), wbar,
+            ax.bar(x + (i - (nj - 1) / 2.0) * wbar, col(l, 'speedup'), wbar,
                    label=l, color=colors[l])
         ax.axhline(1.0, color='k', lw=0.8, ls='--')
         ax.set_yscale('log')
@@ -555,9 +546,9 @@ def make_plots(results, pdf_path):
 
         # --- Fig 2: warm runtime (ms), all tiers ------------------------------
         fig, ax = plt.subplots(figsize=(max(8, len(names) * 0.9), 5))
-        wbar = 0.2
+        nt = len(ALL_TIERS); wbar = 0.8 / nt
         for i, (l, _) in enumerate(ALL_TIERS):
-            ax.bar(x + (i - 1.5) * wbar, col(l, 'warm', 1000.0), wbar,
+            ax.bar(x + (i - (nt - 1) / 2.0) * wbar, col(l, 'warm', 1000.0), wbar,
                    label=l, color=colors[l])
         ax.set_yscale('log')
         ax.set_ylabel('warm time per iteration (ms, log)')
@@ -571,7 +562,8 @@ def make_plots(results, pdf_path):
         plt.close(fig)
 
         # --- Fig 3: compile cost = tracing + backend time, stacked, per tier --
-        fig, axes = plt.subplots(1, 3, figsize=(14, 4.5), sharey=True)
+        fig, axes = plt.subplots(1, len(jit), figsize=(4.0 * len(jit), 4.5),
+                                 sharey=True)
         for ax, l in zip(axes, jit):
             tr = col(l, 'trace_t', 1000.0)
             be = col(l, 'backend_t', 1000.0)
@@ -590,10 +582,10 @@ def make_plots(results, pdf_path):
 
         # --- Fig 4: memory footprint (MB), all tiers --------------------------
         fig, ax = plt.subplots(figsize=(max(8, len(names) * 0.9), 5))
-        wbar = 0.2
+        nt = len(ALL_TIERS); wbar = 0.8 / nt
         for i, (l, _) in enumerate(ALL_TIERS):
-            ax.bar(x + (i - 1.5) * wbar, col(l, 'rss_kb', 1.0 / 1024.0), wbar,
-                   label=l, color=colors[l])
+            ax.bar(x + (i - (nt - 1) / 2.0) * wbar, col(l, 'rss_kb', 1.0 / 1024.0),
+                   wbar, label=l, color=colors[l])
         ax.set_ylabel('max RSS (MB)')
         ax.set_title('(3) Memory footprint (maximum resident set size)')
         ax.set_xticks(x)
@@ -606,7 +598,7 @@ def make_plots(results, pdf_path):
 
         # --- Fig 5: trace count and avg length, per tier ----------------------
         fig, (a1, a2) = plt.subplots(1, 2, figsize=(14, 4.5))
-        wbar = 0.26
+        nj = len(jit); wbar = 0.8 / nj
         for i, l in enumerate(jit):
             ntr = []
             avg = []
@@ -616,8 +608,8 @@ def make_plots(results, pdf_path):
                 ops = d.get('optops')
                 ntr.append(n if n else float('nan'))
                 avg.append((ops / n) if (ops and n) else float('nan'))
-            a1.bar(x + (i - 1) * wbar, ntr, wbar, label=l, color=colors[l])
-            a2.bar(x + (i - 1) * wbar, avg, wbar, label=l, color=colors[l])
+            a1.bar(x + (i - (nj - 1) / 2.0) * wbar, ntr, wbar, label=l, color=colors[l])
+            a2.bar(x + (i - (nj - 1) / 2.0) * wbar, avg, wbar, label=l, color=colors[l])
         a1.set_title('(2) #traces (loops + bridges)')
         a2.set_title('(2) avg trace length (opt ops / trace)')
         for ax in (a1, a2):
@@ -650,7 +642,7 @@ def main(argv):
         make_plots(results, argv[2])
         return 0
 
-    full = no_plot = False
+    full = no_plot = shootout = False
     repeats = 5
     iters_override = None
     timeout = 120
@@ -666,6 +658,8 @@ def main(argv):
             _usage(); return 0
         elif a == '--full':
             full = True
+        elif a == '--shootout':
+            shootout = True
         elif a == '--no-plot':
             no_plot = True
         elif a == '--quick':
@@ -701,6 +695,8 @@ def main(argv):
     # build the work list
     if names:
         worklist = names
+    elif shootout:
+        worklist = list(SHOOTOUT)
     elif full:
         worklist = sorted(os.path.splitext(os.path.basename(p))[0]
                           for p in glob.glob(os.path.join(LANG, '*.tla')))
