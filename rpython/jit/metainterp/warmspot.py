@@ -264,8 +264,15 @@ class WarmRunnerDesc(object):
         self.codewriter.setup_vrefinfo(vrefinfo)
         #
         from rpython.jit.metainterp import counter
+        # GenExtension builds use value-dependent (adaptive) jitcounter decay;
+        # vanilla keeps the uniform decay so the A/B baseline is unchanged.
+        adaptive_decay = False
+        if getattr(translator, 'config', None) is not None:
+            adaptive_decay = bool(getattr(translator.config.translation,
+                                          'genextension', False))
         if self.cpu.translate_support_code:
-            self.jitcounter = counter.JitCounter(translator=translator)
+            self.jitcounter = counter.JitCounter(translator=translator,
+                                                 adaptive_decay=adaptive_decay)
         else:
             self.jitcounter = counter.DeterministicJitCounter()
         #

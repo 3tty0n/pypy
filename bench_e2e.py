@@ -92,6 +92,31 @@ PRESETS = {
         "django", "sqlalchemy_imperative",
         # misc real workloads with strong tracing wins
         "bm_dulwich_log", "spambayes", "chaos", "telco",
+        # regression-watch: families that showed steady-state regressions
+        # under GenExtension (ORM / serialization / templating).  Included so
+        # A/B runs surface the whack-a-mole regressors a partial set hides:
+        # tuning that recovers one regressor (e.g. sympy_integrate via a
+        # higher function_threshold) tends to surface a fresh regression in
+        # the ORM/serialization families, which a winner-heavy set never sees.
+        "sqlalchemy_declarative", "unpickle", "genshi_xml",
+    ],
+    # Regression-focused working subset for cheap iteration: the confirmed
+    # steady-state regressors + their collateral + representative winners and
+    # high-variance sentinels, balanced so a quick `--benchmarks`/`--preset
+    # genext_reg` sweep predicts the full-genext geomean.  Use this instead of
+    # an ad-hoc winner-heavy subset, which over-predicted a candidate's gain
+    # by omitting sqlalchemy_imperative (the collateral regressor).
+    "genext_reg": [
+        # original premature-compile regressors (recovered by decay=80)
+        "sympy_sum", "sympy_integrate",
+        # collateral regressors (surface when inlining/threshold is tuned)
+        "sqlalchemy_imperative", "json_bench", "bm_dulwich_log",
+        # sibling regression-watch
+        "sqlalchemy_declarative", "unpickle",
+        # reliable winners: geomean anchors
+        "pyxl_bench", "spambayes",
+        # mids / high-variance sentinels
+        "telco", "chaos", "sympy_str",
     ],
     # Fast sanity check: 3 substantial-but-quicker benches, signal only.
     "smoke": ["sympy_expand", "chaos", "html5lib"],
@@ -378,6 +403,13 @@ def run_one(pypy, script, env_extra, extra_args, n, warmup_iters=10,
         env[k] = os.pathsep.join(parts)
     _stable_child_env(env)
     jit_args = ["--jit", "off"] if jit_off else []
+    # Runtime JIT-param override sweep hook: BENCH_JIT_PARAMS="threshold=768,..."
+    # injects `--jit <params>` so build-time PARAMETERS defaults can be probed
+    # without a retranslation.  Ignored in jit-off (break-even) runs.
+    _jp = os.environ.get("BENCH_JIT_PARAMS")
+    # Apply only to the genext binary so a paired A/B keeps vanilla pristine.
+    if _jp and not jit_off and "jit-ext" in pypy:
+        jit_args = ["--jit", _jp]
     base_cmd = ([pypy] + jit_args
                 + [os.path.join(BENCH_DIR, script), "-n", str(n)]
                 + list(extra_args))

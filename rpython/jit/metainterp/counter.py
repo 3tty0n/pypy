@@ -81,9 +81,17 @@ class JitCounter:
     """
     DEFAULT_SIZE = 2048
 
-    def __init__(self, size=DEFAULT_SIZE, translator=None):
+    def __init__(self, size=DEFAULT_SIZE, translator=None,
+                 adaptive_decay=False):
         "NOT_RPYTHON"
         self.size = size
+        # GenExtension-only: value-dependent ("adaptive") decay.  A uniform
+        # decay (decay=80) recovers the premature-compile regressors but
+        # over-filters genuinely-hot-but-moderate loops (the ORM/serialization/
+        # templating residual regressors).  Adaptive decay fades cold/transient
+        # counters at the full rate while barely touching counters already near
+        # the 1.0 compile bar -- preserving the about-to-compile hot loops.
+        self.adaptive_decay = adaptive_decay
         self.shift = 16
         while (UINT32MAX >> self.shift) != size - 1:
             self.shift += 1
@@ -275,7 +283,10 @@ class JitCounter:
         # than one loop because all counters reach the bound at the same
         # time, but where compiling all but the first one is pointless.
         p = rffi.cast(rffi.CCHARP, self.timetable)
-        pypy__decay_jit_counters(p, self.decay_by_mult, self.size)
+        if self.adaptive_decay:
+            pypy__decay_jit_counters_adaptive(p, self.decay_by_mult, self.size)
+        else:
+            pypy__decay_jit_counters(p, self.decay_by_mult, self.size)
 
 
 # this function is written directly in C; gcc will optimize it using SSE
@@ -299,6 +310,40 @@ static void pypy__decay_jit_counters(char *data, double f1, long size) {
 pypy__decay_jit_counters = rffi.llexternal(
     "pypy__decay_jit_counters", [rffi.CCHARP, lltype.Float, lltype.Signed],
     lltype.Void, compilation_info=eci, _nowrapper=True, sandboxsafe=True)
+
+
+# Value-dependent ("adaptive") decay, GenExtension-only.  For a counter t in
+# [0,1] the effective multiplier is  m(t) = f + (1-f)*t*t , so:
+#   t~0 (cold/transient, slow-rising)  -> decays by the full factor f
+#   t~1 (about to cross the compile bar)-> m~1, i.e. barely decays (preserved)
+# The quadratic keeps cold/mid counters near the baseline decay (preserving the
+# uniform-decay=80 suppression of sympy's premature loops) while protecting the
+# genuinely-hot counters that uniform decay=80 over-filtered.
+eci_adaptive = ExternalCompilationInfo(post_include_bits=["""
+static void pypy__decay_jit_counters_adaptive(char *data, double f1, long size){
+    struct rpy_jitcnt { float times[5]; unsigned short subhashes[5]; };
+    struct rpy_jitcnt *p = (struct rpy_jitcnt *)data;
+    float f = (float)f1;
+    float omf = 1.0f - f;
+    long i;
+    for (i=0; i<size; i++) {
+        float t0=p->times[0], t1=p->times[1], t2=p->times[2];
+        float t3=p->times[3], t4=p->times[4];
+        p->times[0] = t0 * (f + omf*t0*t0);
+        p->times[1] = t1 * (f + omf*t1*t1);
+        p->times[2] = t2 * (f + omf*t2*t2);
+        p->times[3] = t3 * (f + omf*t3*t3);
+        p->times[4] = t4 * (f + omf*t4*t4);
+        ++p;
+    }
+}
+"""])
+
+pypy__decay_jit_counters_adaptive = rffi.llexternal(
+    "pypy__decay_jit_counters_adaptive",
+    [rffi.CCHARP, lltype.Float, lltype.Signed],
+    lltype.Void, compilation_info=eci_adaptive, _nowrapper=True,
+    sandboxsafe=True)
 
 
 # ____________________________________________________________

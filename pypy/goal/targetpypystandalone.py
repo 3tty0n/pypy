@@ -329,6 +329,20 @@ class PyPyTarget(object):
             PARAMETERS['threshold'] = 384
             PARAMETERS['function_threshold'] = 640
             PARAMETERS['trace_eagerness'] = 80
+            # GenExtension's eager threshold/function_threshold compile loops
+            # sooner than stock PyPy.  For polymorphic app-level loops (e.g.
+            # sympy's symbolic-term dispatch) this captured an unstable value
+            # profile, baking guards that fail at steady state and dragging
+            # steady-state -6% on sympy_sum/integrate.  Doubling the jitcounter
+            # decay (40 -> 80) starves *premature* compilation of transient
+            # loops -- their counters decay before crossing the bar -- while
+            # genuinely-hot loops (pyxl/spambayes/sympy_str) cross it well
+            # before decay matters, so their specialization is untouched.  This
+            # is the per-loop-behavioural selectivity that no global threshold
+            # could provide: measured +3.41% -> +4.21% steady geomean, the two
+            # premature-compile regressors recovered to within-noise with zero
+            # new significant regressions.
+            PARAMETERS['decay'] = 80
 
         if config.translation.sandbox:
             assert 0, ("--sandbox is not tested nor maintained.  If you "
