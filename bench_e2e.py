@@ -786,6 +786,10 @@ _TV = dict(HBP_POLICY_PRESETS)["eval_tunedvih"]
 HBP_POLICY_PRESETS += [
     ("eval_tv_u2", _TV + ",loop_unroll_factor=2,loop_unroll_metric=2"),
     ("eval_tv_u4", _TV + ",loop_unroll_factor=4,loop_unroll_metric=2"),
+    # High warmup: only very-hot long-lived loops (numeric kernels) enter the
+    # A/B trial; short object-churn loops never pay the trial overhead.
+    ("eval_tv_u4w1k", _TV + ",loop_unroll_factor=4,loop_unroll_metric=2,loop_unroll_warmup=1000"),
+    ("eval_tv_u4w5k", _TV + ",loop_unroll_factor=4,loop_unroll_metric=2,loop_unroll_warmup=5000"),
 ]
 
 #HBP_POLICY_DEFAULT = (
