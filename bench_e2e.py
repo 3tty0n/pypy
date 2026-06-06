@@ -779,6 +779,15 @@ HBP_POLICY_PRESETS += [
     ("eval_rl4_novih", _AGG_HBP % {"rl": 4, "vih": 0}),
 ]
 
+# Lever C/A validation: tunedvih + classical loop unrolling with the robust
+# (min+mean) A/B decision metric.  Tests whether unrolling adds stable gain on
+# top of the tunedvih base without regressing it (A/B defaults to f1).
+_TV = dict(HBP_POLICY_PRESETS)["eval_tunedvih"]
+HBP_POLICY_PRESETS += [
+    ("eval_tv_u2", _TV + ",loop_unroll_factor=2,loop_unroll_metric=2"),
+    ("eval_tv_u4", _TV + ",loop_unroll_factor=4,loop_unroll_metric=2"),
+]
+
 #HBP_POLICY_DEFAULT = (
 #    "stock,hbp_stock_noinherit,hbp_stock_inherit1,base_rl1,"
 #    "hbp_noinherit,hbp_inherit1,hbp_refcard8_noinherit,"
