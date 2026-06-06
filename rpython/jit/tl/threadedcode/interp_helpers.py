@@ -23,7 +23,7 @@ from rpython.jit.tl.threadedcode.bytecode import *
 
 
 TRACE_THRESHOLD = -1
-MAX_INTERP_DEPTH = 50
+MAX_INTERP_DEPTH = 7000
 
 
 
@@ -67,12 +67,6 @@ def _construct_value(bytecode, pc):
 
 @jit.elidable
 def _branch_reaches_backedge(bytecode, start, boundary):
-    # Statically follow control flow from `start`, returning True if a backward
-    # jump to a pc <= `boundary` (a loop back-edge) is reached before RET/EXIT.
-    # This lets the recorder tell a conditional's *loop-continue* branch from its
-    # *exit* branch without knowing anything language-specific about opcodes.
-    # Pure over the (immutable) bytecode + green pcs, so it folds to a constant
-    # during recording instead of being traced.
     pc = start
     n = len(bytecode)
     steps = 0
@@ -182,16 +176,6 @@ def _entry_has_wide_call_assembler(bytecode, entry):
     return False
 
 def _compute_stackdepth(bc):
-    # Static worklist over (pc, stackpos) following _interp's stack effects, to
-    # find the maximum depth any single frame reaches.  JitFrame sizes its
-    # (virtualizable) value stack to this exactly: a fixed oversized array would
-    # turn every unused slot into a dead loop-carried value in the compiled
-    # trace (the whole vable array is part of the loop's virtual state), which
-    # is pure per-iteration register/spill overhead.  Conservative by design --
-    # any opcode it cannot model, or a pathological stack, returns the safe
-    # default 64.  Runs once per program load, never on the hot path.  Takes the
-    # Bytecode object (indexed via __getitem__) so it shares _construct_value's
-    # operand type rather than the raw code string.
     n = len(bc)
     seen = [-1] * n
     todo = [(0, 1)]            # main frame: one arg pushed before pc=0
@@ -321,10 +305,6 @@ def _entry_has_array_op(bytecode, entry):
 
 @jit.elidable
 def _entry_has_assembler_call(bytecode, entry):
-    # Tier 1 pays one residual call per shallow opcode.  That tradeoff is useful
-    # for threaded recursive entries, where CALL_ASSEMBLER stitches nested traces
-    # together, but plain in-frame tail loops (mb_sum) are faster and safer in
-    # the interpreter.
     n = len(bytecode)
     seen = [False] * n
     todo = [entry]
@@ -354,37 +334,5 @@ def _entry_has_assembler_call(bytecode, entry):
     return False
 
 def _tier1_confirm_enter_jit(pc, entry, bytecode, tstack, self):
-    # No frame fix-up here: the clean loop-header state is captured/restored in
-    # _jit_take_snapshot (the driverhook graph is rtyped separately and may not
-    # do list operations on the frame stack without upsetting the codewriter).
     return (not _entry_has_array_op(bytecode, entry) and
             _entry_has_assembler_call(bytecode, entry))
-
-@jit.elidable
-def _tier1_use_frame_inliner_for_plain_loops(bytecode):
-    if _entry_has_array_op(bytecode, 0):
-        return False
-    pc = 0
-    n = len(bytecode)
-    while pc < n:
-        op = ord(bytecode[pc])
-        pc += 1
-        if op == LOAD or op == STORE or op == BUILD_LIST:
-            return False
-        if op == CALL_ASSEMBLER:
-            t = ord(bytecode[pc])
-            if _entry_has_array_op(bytecode, t):
-                return False
-            if _entry_has_assembler_call(bytecode, t):
-                return False
-            pc += 2
-        elif op == CALL_N:
-            t = _construct_value(bytecode, pc)
-            if _entry_has_array_op(bytecode, t):
-                return False
-            if _entry_has_assembler_call(bytecode, t):
-                return False
-            pc += 5
-        else:
-            pc += hasarg[op]
-    return True

@@ -332,6 +332,7 @@ _COMPARISONS = ('<', '>', '<=', '>=', '==', '!=')
 _BUILTINS = {
     'tofloat': (1, bc.INT_TO_FLOAT),
     'toint':   (1, bc.FLOAT_TO_INT),
+    'sqrt':    (1, bc.SQRT),
     'mklist':  (2, bc.BUILD_LIST),
     'aref':    (2, bc.LOAD),
     'aset':    (3, bc.STORE),
