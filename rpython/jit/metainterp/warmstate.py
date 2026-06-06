@@ -212,7 +212,9 @@ class BaseJitCell(object):
     ab_entries_f1 = 0    # number of timed f1 entries
     ab_entries_fk = 0    # number of timed fK entries
     ab_trial_left = 0    # entries still needed per variant before deciding
-    ab_toggle = 0        # alternates 0/1 to interleave f1 and fK per entry
+    ab_toggle = 0        # current timed variant: 0=f1, 1=fK
+    ab_phase_left = 0    # entries left in the current exclusive phase (phase mode)
+    ab_phase_fresh = 0   # 1 => skip timing this entry (cold phase transition)
     ab_token_f1 = None   # strong ref to the f1 JitCellToken (keeps it alive)
     ab_token_fk = None   # strong ref to the fK JitCellToken
 
@@ -320,6 +322,9 @@ class WarmEnterState(object):
     loop_unroll_trial = 50      # cap on timed entries per variant (rarely hit)
     loop_unroll_min_gain = 30   # permille: keep fK only if it is >=3% faster
     loop_unroll_numeric_only = 1 # only A/B-trial loops with no calls/allocations
+    loop_unroll_phase = 0       # 0=per-entry interleave; >0=exclusive phase length
+                                # (run this many consecutive entries of one variant
+                                # before switching, to measure true steady-state cost)
 
     def __init__(self, warmrunnerdesc, jitdriver_sd):
         "NOT_RPYTHON"
@@ -428,6 +433,11 @@ class WarmEnterState(object):
 
     def set_param_loop_unroll_numeric_only(self, value):
         self.loop_unroll_numeric_only = value
+
+    def set_param_loop_unroll_phase(self, value):
+        if value < 0:
+            value = 0
+        self.loop_unroll_phase = value
 
     def set_param_max_retrace_guards(self, value):
         if self.warmrunnerdesc:
@@ -835,11 +845,19 @@ class WarmEnterState(object):
             if ab_cell is None:
                 deadframe = func_execute_token(loop_token, *args)
             elif ab_cell.ab_state == AB_INTERLEAVE:
-                # A/B unroll trial: time this loop entry and attribute it to
-                # the f1 or fK accumulator of the owning cell.
-                _ab_t0 = read_timestamp()
-                deadframe = func_execute_token(loop_token, *args)
-                _ab_record_timing(ab_cell, loop_token, read_timestamp() - _ab_t0)
+                if ab_cell.ab_phase_fresh:
+                    # First entry of an exclusive phase: the variant has just
+                    # switched, so this entry pays the cold transition.  Run it
+                    # untimed so the recorded samples reflect steady-state.
+                    ab_cell.ab_phase_fresh = 0
+                    deadframe = func_execute_token(loop_token, *args)
+                else:
+                    # A/B unroll trial: time this loop entry and attribute it to
+                    # the f1 or fK accumulator of the owning cell.
+                    _ab_t0 = read_timestamp()
+                    deadframe = func_execute_token(loop_token, *args)
+                    _ab_record_timing(ab_cell, loop_token,
+                                      read_timestamp() - _ab_t0)
             else:
                 # AB_WARMUP: run f1 normally (no timing); only loops that stay
                 # hot for loop_unroll_warmup entries are worth A/B-ing, so cold
@@ -949,10 +967,22 @@ class WarmEnterState(object):
                 if cell.ab_state == AB_TRACING_FK:
                     _ab_decide(cell, False)
                 return
-            # A/B unroll: both variants exist -- alternate f1/fK each entry so
-            # both are timed on the same workload (no drift bias).
+            # A/B unroll: both variants exist.  Per-entry interleave (phase=0)
+            # cancels drift but never lets a variant run continuously; exclusive
+            # phase mode (phase>0) runs a block of one variant before switching,
+            # so the timing captures each variant's true steady-state cost (the
+            # only way to catch fK regressions that appear only under continuous
+            # execution).  Alternating phases still cancels slow drift.
             if cell.ab_state == AB_INTERLEAVE:
-                cell.ab_toggle ^= 1
+                phase = unroll_ws.loop_unroll_phase
+                if phase > 0:
+                    if cell.ab_phase_left <= 0:
+                        cell.ab_toggle ^= 1            # next block, other variant
+                        cell.ab_phase_left = phase
+                        cell.ab_phase_fresh = 1        # skip cold transition entry
+                    cell.ab_phase_left -= 1
+                else:
+                    cell.ab_toggle ^= 1                # per-entry interleave
                 if cell.ab_toggle:
                     itok = cell.ab_token_fk
                 else:

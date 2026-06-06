@@ -3478,6 +3478,8 @@ class MetaInterp(object):
             cell.ab_min_f1 = 0
             cell.ab_min_fk = 0
             cell.ab_toggle = 0
+            cell.ab_phase_left = 0   # 1st dispatch opens a fresh exclusive phase
+            cell.ab_phase_fresh = 0
             cell.ab_trial_left = ws.loop_unroll_trial
             cell.ab_state = AB_INTERLEAVE
         elif cell.ab_state == AB_OFF and ab_numeric:

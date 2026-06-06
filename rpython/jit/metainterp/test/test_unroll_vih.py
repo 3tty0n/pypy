@@ -50,13 +50,14 @@ class UnrollVIHTests(object):
                 jj += 1
             return total
 
-        def f(outer, n, k, factor, vih, metric=1):
+        def f(outer, n, k, factor, vih, metric=1, phase=0):
             set_param(driver, 'threshold', 1)
             set_param(driver, 'loop_unroll_factor', factor)
             set_param(driver, 'loop_unroll_warmup', 2)
             set_param(driver, 'loop_unroll_trial', 1)
             set_param(driver, 'loop_unroll_min_gain', 0)
             set_param(driver, 'loop_unroll_metric', metric)
+            set_param(driver, 'loop_unroll_phase', phase)
             set_param(driver, 'enable_invariant_varindex_hoist', vih)
             a = [0.0] * n
             i = 0
@@ -86,7 +87,7 @@ class UnrollVIHTests(object):
         expected = self._interp(60, 40, 4)
         for factor in [1, 2, 4]:
             for vih in [0, 1]:
-                res = self.meta_interp(f, [60, 40, 4, factor, vih, 1])
+                res = self.meta_interp(f, [60, 40, 4, factor, vih, 1, 0])
                 assert res == expected
 
     def test_unroll_vih_robust_metric_correct(self):
@@ -95,7 +96,16 @@ class UnrollVIHTests(object):
         f = self._make()
         expected = self._interp(60, 40, 4)
         for factor in [1, 2, 4]:
-            res = self.meta_interp(f, [60, 40, 4, factor, 1, 2])
+            res = self.meta_interp(f, [60, 40, 4, factor, 1, 2, 0])
+            assert res == expected
+
+    def test_unroll_vih_phase_metric_correct(self):
+        # Exclusive-phase trial (loop_unroll_phase>0) must also produce
+        # interpreter-identical results in both A/B outcomes.
+        f = self._make()
+        expected = self._interp(60, 40, 4)
+        for factor in [1, 2, 4]:
+            res = self.meta_interp(f, [60, 40, 4, factor, 1, 2, 8])
             assert res == expected
 
     def test_unroll_vih_does_not_increase_body_reads(self):
@@ -104,9 +114,9 @@ class UnrollVIHTests(object):
         # exceed (factor==1, VIH on) x K.  This is the optimisation-effectiveness
         # gate -- it fails if the hoist is duplicated per peeled copy.
         f = self._make()
-        self.meta_interp(f, [60, 40, 4, 1, 1, 1])
+        self.meta_interp(f, [60, 40, 4, 1, 1, 1, 0])
         base = _max_body_array_reads()
-        self.meta_interp(f, [60, 40, 4, 2, 1, 1])
+        self.meta_interp(f, [60, 40, 4, 2, 1, 1, 0])
         unrolled = _max_body_array_reads()
         assert unrolled <= base * 2
 
