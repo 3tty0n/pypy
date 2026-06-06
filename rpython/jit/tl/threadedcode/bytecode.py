@@ -104,6 +104,21 @@ class Bytecode(object):
         # site stays inlined (fast) instead of being residualised forever.
         self.cnt_a = [0] * len(code)
         self.cnt_b = [0] * len(code)
+        # DRR (tier-4 deopt-rate re-decision, ratio>1 only): per arithmetic site
+        # bails = off-type guard-bail replays under the blackhole, inl_runs = its
+        # inlined (interpreted) executions, redecided = one-shot latch.  Plain
+        # mutable and touched only off the compiled trace, like cnt_a/cnt_b, so
+        # they are NOT in _immutable_fields_.
+        self.bails = [0] * len(code)
+        self.inl_runs = [0] * len(code)
+        self.redecided = [0] * len(code)
+        # Tier-4 adaptive compilation state.  0 means "profiling/baseline";
+        # otherwise it is the concrete compiler tier selected for this bytecode.
+        self.adaptive_invocations = 0
+        self.adaptive_tier = 0
+        # off-trace only; not in _immutable_fields_
+        self.reopt_retry = 0
+        self.reopt_baseline = 0
 
     def __len__(self):
         return len(self.code)
