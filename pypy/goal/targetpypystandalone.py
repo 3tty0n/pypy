@@ -326,7 +326,19 @@ class PyPyTarget(object):
 
         if config.translation.genextension:
             from rpython.rlib.jit import PARAMETERS
-            PARAMETERS['threshold'] = 384
+            # Keep the loop 'threshold' >= 'function_threshold'.  The earlier
+            # genext threshold=384 (< function_threshold=640) compiled tight
+            # numeric loops (scimark FFT/SparseMatMult) *before* their math
+            # callees became inline-eligible, so they compiled with uninlined
+            # residual calls and regressed steady-state up to -30% on the full
+            # suite.  Setting threshold == function_threshold == 640 lets those
+            # loops compile with callees inlined (scimark_fft -30% -> -3.6%)
+            # while preserving the object-heavy wins (sqlalchemy +37%, pyxl
+            # +21%, spambayes +26%) that ride on function_threshold /
+            # trace_eagerness + decay/adaptive.  640 is the measured knee:
+            # below it numeric craters (-37% at 512), at/above it it recovers,
+            # and the subset geomean peaks here (+5.0% vs +4.6% at stock 1039).
+            PARAMETERS['threshold'] = 640
             PARAMETERS['function_threshold'] = 640
             PARAMETERS['trace_eagerness'] = 80
             # GenExtension's eager threshold/function_threshold compile loops
