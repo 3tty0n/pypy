@@ -2431,6 +2431,13 @@ class MetaInterp(object):
         # Signal from handle_guard_failure to optimize_bridge: on
         # InvalidLoop, route to retrace instead of jumping to preamble.
         self.prefer_loop_over_bridge = False
+        # Classical loop unrolling: counts how many times the current fresh
+        # trace has reached its loop header; the loop is closed only once this
+        # reaches loop_unroll_factor (1 = stock behaviour).
+        self.unroll_reach_count = 0
+        # Set to True only for the unrolled (fK) re-trace of an A/B trial, so
+        # the very first (f1) trace of a loop is never body-unrolled.
+        self.ab_unroll_this_trace = False
         self.call_pure_results = args_dict()
         self.heapcache = HeapCache()
 
@@ -2913,6 +2920,7 @@ class MetaInterp(object):
     def _compile_and_run_once(self, original_boxes):
         self.initialize_state_from_start(original_boxes)
         self.current_merge_points = [(original_boxes, (0, 0, 0, 0, 0))]
+        self.unroll_reach_count = 0
         num_green_args = self.jitdriver_sd.num_green_args
         original_greenkey = original_boxes[:num_green_args]
         self.resumekey = compile.ResumeFromInterpDescr(original_greenkey)
@@ -3121,6 +3129,7 @@ class MetaInterp(object):
 
     def _handle_guard_failure(self, resumedescr, key, inputargs, deadframe, excdata):
         self.current_merge_points = []
+        self.unroll_reach_count = 0
         self.resumekey = resumedescr
         self.seen_loop_header_for_jdindex = -1
         if isinstance(key, compile.ResumeAtPositionDescr):
@@ -3173,6 +3182,27 @@ class MetaInterp(object):
             live_arg_boxes += self.virtualizable_boxes
             live_arg_boxes.pop()
 
+        # Classical loop unrolling: when this fresh trace reaches a loop header
+        # that matches an active merge point but has not yet looped
+        # loop_unroll_factor times, keep tracing the next iteration into the
+        # same loop body instead of closing the loop now.  The K iterations are
+        # traced normally, so resume data stays correct, and the optimizer then
+        # amortises the back-edge over K iterations.  Only the fK re-trace of an
+        # A/B trial sets ab_unroll_this_trace, so the first (f1) trace is plain.
+        unroll_factor = self.jitdriver_sd.warmstate.loop_unroll_factor
+        if (self.ab_unroll_this_trace and unroll_factor > 1 and
+                not self.partial_trace):
+            num_green_args = self.jitdriver_sd.num_green_args
+            for j in range(len(self.current_merge_points) - 1, -1, -1):
+                original_boxes, start = self.current_merge_points[j]
+                if (len(original_boxes) == len(live_arg_boxes) and
+                        same_greenkey(original_boxes, live_arg_boxes,
+                                      num_green_args)):
+                    self.unroll_reach_count += 1
+                    if self.unroll_reach_count < unroll_factor:
+                        return
+                    break
+
         # generate a dummy guard just before the JUMP so that unroll can use it
         # when it's creating artificial guards.
         self.generate_guard(rop.GUARD_FUTURE_CONDITION)
@@ -3185,8 +3215,10 @@ class MetaInterp(object):
         # - if self.resumekey is a ResumeFromInterpDescr, it starts directly
         #   from the interpreter.
         num_green_args = self.jitdriver_sd.num_green_args
-        if not self.partial_trace:
+        if not self.partial_trace and not self.ab_unroll_this_trace:
             # FIXME: Support a retrace to be a bridge as well as a loop
+            # (skipped for the A/B unroll re-trace, which must close as a fresh
+            # fK loop rather than bridge back to the existing f1 loop)
             ptoken = self.get_procedure_token(greenboxes)
             if has_compiled_targets(ptoken):
                 self.compile_trace(live_arg_boxes, ptoken)
@@ -3368,7 +3400,9 @@ class MetaInterp(object):
         num_green_args = self.jitdriver_sd.num_green_args
         greenkey = original_boxes[:num_green_args]
         ptoken = self.get_procedure_token(greenkey)
-        if has_compiled_targets(ptoken):
+        # The fK re-trace of an A/B trial intentionally re-compiles a loop that
+        # already has an (f1) token, so skip the usual "already compiled" guard.
+        if has_compiled_targets(ptoken) and not self.ab_unroll_this_trace:
             # XXX this path not tested, but shown to occur on pypy-c :-(
             self.staticdata.log('cancelled: we already have a token now')
             raise SwitchToBlackhole(Counters.ABORT_BAD_LOOP)
@@ -3377,11 +3411,57 @@ class MetaInterp(object):
             live_arg_boxes[num_green_args:], use_unroll=use_unroll)
         if target_token is not None:
             assert isinstance(target_token, TargetToken)
-            self.jitdriver_sd.warmstate.attach_procedure_to_interp(
-                greenkey, target_token.targeting_jitcell_token)
-            self.staticdata.stats.add_jitcell_token(
-                target_token.targeting_jitcell_token)
+            jct = target_token.targeting_jitcell_token
+            if self.ab_unroll_this_trace:
+                # A/B fK variant: make it the active token via the cell's
+                # procedure token only -- do NOT redirect the f1 assembler, so
+                # the trial can cleanly revert dispatch to f1 if fK loses.
+                ws = self.jitdriver_sd.warmstate
+                cell = ws.JitCell.get_jit_cell_at_key(greenkey)
+                if cell is not None:
+                    cell.set_procedure_token(jct)
+            else:
+                self.jitdriver_sd.warmstate.attach_procedure_to_interp(
+                    greenkey, jct)
+            self.staticdata.stats.add_jitcell_token(jct)
+            self._ab_after_compile(greenkey, jct)
         return target_token
+
+    def _ab_after_compile(self, greenkey, jitcell_token):
+        # Runtime A/B loop-unrolling bookkeeping.  Only active when the param
+        # loop_unroll_factor > 1.  Sets up the f1 timing window on the first
+        # compile of a loop, and the fK timing window on the unrolled re-trace.
+        ws = self.jitdriver_sd.warmstate
+        if ws.loop_unroll_factor <= 1:
+            return
+        from rpython.jit.metainterp.warmstate import (
+            AB_OFF, AB_WARMUP, AB_INTERLEAVE)
+        cell = ws.JitCell.get_jit_cell_at_key(greenkey)
+        if cell is None:
+            return
+        if self.ab_unroll_this_trace:
+            # this compile produced the fK variant: begin interleaved timing
+            jitcell_token.ab_cell = cell
+            jitcell_token.ab_version = 2
+            cell.ab_token_fk = jitcell_token
+            cell.ab_cycles_f1 = 0
+            cell.ab_entries_f1 = 0
+            cell.ab_cycles_fk = 0
+            cell.ab_entries_fk = 0
+            cell.ab_min_f1 = 0
+            cell.ab_min_fk = 0
+            cell.ab_toggle = 0
+            cell.ab_trial_left = ws.loop_unroll_trial
+            cell.ab_state = AB_INTERLEAVE
+        elif cell.ab_state == AB_OFF:
+            # first compile of a fresh loop: run f1 and count entries; the A/B
+            # trial only starts once the loop has stayed hot for loop_unroll_warmup
+            # entries, so cold/short loops never pay the trial's overhead
+            jitcell_token.ab_cell = cell
+            jitcell_token.ab_version = 1
+            cell.ab_token_f1 = jitcell_token
+            cell.ab_trial_left = ws.loop_unroll_warmup
+            cell.ab_state = AB_WARMUP
 
     def compile_retrace(self, original_boxes, live_arg_boxes, start):
         num_green_args = self.jitdriver_sd.num_green_args

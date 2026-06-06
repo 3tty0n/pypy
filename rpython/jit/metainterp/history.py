@@ -460,6 +460,10 @@ class JitCellToken(AbstractDescr):
     hbp_megamorphic = False
     invalidated = False
     outermost_jitdriver_sd = None
+    # Runtime A/B loop-unrolling trial: backref to the owning JitCell and
+    # which variant this token is (1 = f1, 2 = fK).  None/0 when not in a trial.
+    ab_cell = None
+    ab_version = 0
     # and more data specified by the backend when the loop is compiled
     number = -1
     generation = r_int64(0)

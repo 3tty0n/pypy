@@ -13,6 +13,7 @@ from rpython.rlib.objectmodel import specialize, we_are_translated, r_dict
 from rpython.rlib.rarithmetic import intmask, r_uint
 from rpython.rlib.unroll import unrolling_iterable
 from rpython.rlib import rstack
+from rpython.rlib.rtimer import read_timestamp
 from rpython.rtyper.annlowlevel import (hlstr, cast_base_ptr_to_instance,
     cast_object_to_ptr)
 from rpython.rtyper.lltypesystem import lltype, llmemory, rstr, rffi
@@ -134,6 +135,19 @@ JC_TEMPORARY       = 0x04
 JC_TRACING_OCCURRED= 0x08
 JC_FORCE_FINISH    = 0x10
 
+# Runtime A/B loop-unrolling trial (cell.ab_state).  Only used when
+# loop_unroll_factor > 1.  A loop is compiled normally (f1) and unrolled (fK);
+# the two variants are then *interleaved* per loop entry and timed, so both see
+# the same workload distribution (avoids the drift bias of timing them in
+# separate phases).  The faster variant is kept, defaulting to f1 unless fK is
+# clearly faster, so it never regresses.
+AB_OFF        = 0   # not participating in a trial
+AB_WARMUP     = 1   # f1 compiled and running; count entries until hot enough
+AB_WANT_FK    = 2   # warm enough; next entry forces an unrolled re-trace
+AB_TRACING_FK = 3   # transient: an unrolled re-trace is in progress
+AB_INTERLEAVE = 4   # both compiled; alternate f1/fK per entry and time both
+AB_DONE       = 5   # decision made; the winner is installed
+
 class BaseJitCell(object):
     """Subclasses of BaseJitCell are used in tandem with the single
     JitCounter instance to record places in the JIT-tracked user program
@@ -187,6 +201,20 @@ class BaseJitCell(object):
     flags = 0     # JC_xxx flags
     wref_procedure_token = None
     next = None
+
+    # Runtime A/B loop-unrolling trial state (see AB_* above).  Class-level
+    # defaults so non-trialling cells cost no extra memory until written.
+    ab_state = AB_OFF
+    ab_cycles_f1 = 0     # summed timestamp cycles of timed f1 entries
+    ab_cycles_fk = 0     # summed timestamp cycles of timed fK entries
+    ab_min_f1 = 0        # minimum (fastest) timed f1 entry
+    ab_min_fk = 0        # minimum (fastest) timed fK entry
+    ab_entries_f1 = 0    # number of timed f1 entries
+    ab_entries_fk = 0    # number of timed fK entries
+    ab_trial_left = 0    # entries still needed per variant before deciding
+    ab_toggle = 0        # alternates 0/1 to interleave f1 and fK per entry
+    ab_token_f1 = None   # strong ref to the f1 JitCellToken (keeps it alive)
+    ab_token_fk = None   # strong ref to the fK JitCellToken
 
     def get_procedure_token(self):
         if self.wref_procedure_token is not None:
@@ -282,6 +310,15 @@ class WarmEnterState(object):
     # (off = current behaviour, only const-index reads are hoisted).
     enable_invariant_varindex_hoist = True
     invariant_varindex_max_triples = 16
+    # Classical loop unrolling: trace this many iterations into one loop body
+    # before closing the loop (1 = stock peeling only).
+    loop_unroll_factor = 1
+    # Runtime A/B trial tuning (only used when loop_unroll_factor > 1):
+    loop_unroll_warmup = 200    # f1 entries before a loop is hot enough to A/B
+    loop_unroll_metric = 1      # decision metric: 1=min(fastest entry), 0=mean
+    loop_unroll_min_samples = 8 # interleaved samples per variant before deciding
+    loop_unroll_trial = 50      # cap on timed entries per variant (rarely hit)
+    loop_unroll_min_gain = 30   # permille: keep fK only if it is >=3% faster
 
     def __init__(self, warmrunnerdesc, jitdriver_sd):
         "NOT_RPYTHON"
@@ -359,6 +396,34 @@ class WarmEnterState(object):
 
     def set_param_pureop_historylength(self, value):
         self.pureop_historylength = value
+
+    def set_param_loop_unroll_factor(self, value):
+        if value < 1:
+            value = 1
+        self.loop_unroll_factor = value
+
+    def set_param_loop_unroll_warmup(self, value):
+        if value < 0:
+            value = 0
+        self.loop_unroll_warmup = value
+
+    def set_param_loop_unroll_metric(self, value):
+        self.loop_unroll_metric = value
+
+    def set_param_loop_unroll_min_samples(self, value):
+        if value < 1:
+            value = 1
+        self.loop_unroll_min_samples = value
+
+    def set_param_loop_unroll_trial(self, value):
+        if value < 1:
+            value = 1
+        self.loop_unroll_trial = value
+
+    def set_param_loop_unroll_min_gain(self, value):
+        if value < 0:
+            value = 0
+        self.loop_unroll_min_gain = value
 
     def set_param_max_retrace_guards(self, value):
         if self.warmrunnerdesc:
@@ -669,6 +734,68 @@ class WarmEnterState(object):
         cpu = self.cpu
         jitcounter = self.warmrunnerdesc.jitcounter
         result_type = jitdriver_sd.result_type
+        unroll_ws = self    # read A/B params at runtime (tunable via set_param)
+
+        def _ab_decide(cell, keep_fk):
+            # Install the chosen variant and end the trial.  Defaulting to f1
+            # (keep_fk False) keeps the trial regression-safe.
+            tok_f1 = cell.ab_token_f1
+            tok_fk = cell.ab_token_fk
+            # Stop timing future entries of either variant.
+            if tok_f1 is not None:
+                tok_f1.ab_cell = None
+            if tok_fk is not None:
+                tok_fk.ab_cell = None
+            if keep_fk:
+                # fK is already the active procedure token; keep its strong ref
+                # alive on the cell and drop the f1 loser.
+                cell.ab_token_f1 = None
+            else:
+                # Revert dispatch to f1 and keep f1's strong ref alive (it has
+                # not run during the fK phase, so the memory manager may have
+                # aged it).  Drop the fK loser.
+                if tok_f1 is not None:
+                    cell.set_procedure_token(tok_f1)
+                cell.ab_token_fk = None
+            cell.ab_state = AB_DONE
+
+        def _ab_record_timing(cell, loop_token, dt):
+            if cell.ab_state != AB_INTERLEAVE:
+                return
+            # Track both the sum (for the mean) and the minimum per variant, so
+            # the decision metric can be picked at runtime.  Interleaving makes
+            # the comparison robust to noise, which hits both variants equally.
+            if loop_token.ab_version == 1:
+                cell.ab_cycles_f1 += dt
+                cell.ab_entries_f1 += 1
+                if cell.ab_min_f1 == 0 or dt < cell.ab_min_f1:
+                    cell.ab_min_f1 = dt
+            else:
+                cell.ab_cycles_fk += dt
+                cell.ab_entries_fk += 1
+                if cell.ab_min_fk == 0 or dt < cell.ab_min_fk:
+                    cell.ab_min_fk = dt
+            n1 = cell.ab_entries_f1
+            n2 = cell.ab_entries_fk
+            if n1 < unroll_ws.loop_unroll_min_samples or \
+                    n2 < unroll_ws.loop_unroll_min_samples:
+                return
+            # Pick the comparison metric: min (fastest entry, sensitive) or mean
+            # (representative).  Adaptive early stop: decide as soon as the gap is
+            # clearly past the noise margin, collapsing the trial's overhead.
+            if unroll_ws.loop_unroll_metric == 1:
+                a1 = cell.ab_min_f1
+                a2 = cell.ab_min_fk
+            else:
+                a1 = cell.ab_cycles_f1 // n1
+                a2 = cell.ab_cycles_fk // n2
+            gain = unroll_ws.loop_unroll_min_gain   # permille
+            if a1 > 0 and a2 * 1000 < a1 * (1000 - gain):
+                _ab_decide(cell, True)     # fK clearly faster -> adopt it
+            elif a2 * 1000 > a1 * (1000 + gain):
+                _ab_decide(cell, False)    # fK clearly slower -> keep f1
+            elif n1 >= cell.ab_trial_left:
+                _ab_decide(cell, False)    # close, inconclusive -> keep f1
 
         def execute_assembler(loop_token, *args):
             # Call the backend to run the 'looptoken' with the given
@@ -681,7 +808,24 @@ class WarmEnterState(object):
                 virtualizable = args[index_of_virtualizable]
                 vinfo.clear_vable_token(virtualizable)
 
-            deadframe = func_execute_token(loop_token, *args)
+            ab_cell = loop_token.ab_cell
+            if ab_cell is None:
+                deadframe = func_execute_token(loop_token, *args)
+            elif ab_cell.ab_state == AB_INTERLEAVE:
+                # A/B unroll trial: time this loop entry and attribute it to
+                # the f1 or fK accumulator of the owning cell.
+                _ab_t0 = read_timestamp()
+                deadframe = func_execute_token(loop_token, *args)
+                _ab_record_timing(ab_cell, loop_token, read_timestamp() - _ab_t0)
+            else:
+                # AB_WARMUP: run f1 normally (no timing); only loops that stay
+                # hot for loop_unroll_warmup entries are worth A/B-ing, so cold
+                # or short-lived loops never build fK or interleave.
+                deadframe = func_execute_token(loop_token, *args)
+                if ab_cell.ab_state == AB_WARMUP:
+                    ab_cell.ab_trial_left -= 1
+                    if ab_cell.ab_trial_left <= 0:
+                        ab_cell.ab_state = AB_WANT_FK
             #
             # Record in the memmgr that we just ran this loop,
             # so that it will keep it alive for a longer time
@@ -723,6 +867,10 @@ class WarmEnterState(object):
             metainterp = MetaInterp(
                 metainterp_sd, jitdriver_sd,
                 force_finish_trace=bool(cell.flags & JC_FORCE_FINISH))
+            # A/B unroll: the fK variant is produced by re-tracing the loop with
+            # body-unrolling enabled for this trace only.
+            if cell.ab_state == AB_TRACING_FK:
+                metainterp.ab_unroll_this_trace = True
             cell.flags |= JC_TRACING | JC_TRACING_OCCURRED
             try:
                 metainterp.compile_and_run_once(jitdriver_sd, *args)
@@ -765,6 +913,35 @@ class WarmEnterState(object):
                 if jitcounter.tick(hash, increment_threshold):
                     bound_reached(hash, cell, *args)
                 return
+            # A/B unroll: f1 is compiled -- force one unrolled re-trace to build
+            # the fK variant, then interleave the two.
+            if cell.ab_state == AB_WANT_FK:
+                cell.ab_state = AB_TRACING_FK
+                bound_reached(hash, cell, *args)
+                # bound_reached raises when it installs+runs fK; reaching here
+                # means the re-trace aborted.  Revert dispatch to f1 via the
+                # shared decision helper so f1 stays installed and strongly
+                # referenced (do not just drop the tokens -- the memory manager
+                # may have aged f1 during the aborted re-trace).
+                if cell.ab_state == AB_TRACING_FK:
+                    _ab_decide(cell, False)
+                return
+            # A/B unroll: both variants exist -- alternate f1/fK each entry so
+            # both are timed on the same workload (no drift bias).
+            if cell.ab_state == AB_INTERLEAVE:
+                cell.ab_toggle ^= 1
+                if cell.ab_toggle:
+                    itok = cell.ab_token_fk
+                else:
+                    itok = cell.ab_token_f1
+                if itok is not None and not itok.invalidated:
+                    if not confirm_enter_jit(*args):
+                        return
+                    execute_args = ()
+                    for i in range_red_args:
+                        execute_args += (unspecialize_value(args[i]), )
+                    raise EnterJitAssembler(itok, *execute_args)
+                # a variant vanished: fall through to the normal procedure token
             # machine code was already compiled for these greenargs
             procedure_token = cell.get_procedure_token()
             if procedure_token is None:
