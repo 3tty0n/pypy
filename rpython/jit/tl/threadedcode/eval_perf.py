@@ -51,18 +51,17 @@ ALL_TIERS = [('interp', '0'), ('threaded', '1'), ('inliner', '2'), ('tracing', '
 # (name, x, iters).  Sized so the JIT tiers trace/compile real work while the
 # non-tail-recursive programs stay within the interpreter's MAX_INTERP_DEPTH (50).
 # Default set = programs that compile/run on every tier today (tail loops + tree
-# recursion).  Deep FRAME_RESET-tail recursion (ack/tak/tarai/sh_ack) still hangs
+# recursion).  Deep FRAME_RESET-tail recursion (ack/tak/tarai) still hangs
 # tier 1 -- pass those as NAME args to measure them (they'll show as crashed).
 BENCHMARKS = [
-    ('mb_sum',         1000000, 12),
-    ('mb_count',       1000000, 12),
-    ('mb_inc',         1000000, 12),
-    ('sum-tail',       1000000, 12),
+    ('sumtail',        1000000, 12),
+    ('loop',           1000000, 12),
+    ('inc',            1000000, 12),
     ('gcd',            1000000, 12),
-    ('sh_fib',         30,      12),
-    ('sh_binarytrees', 18,      12),
-    ('sh_primes',      30000,   12),
-    ('sh_collatz',     100000,  12),
+    ('fib',            30,      12),
+    ('binarytrees',    18,      12),
+    ('primes',         30000,   12),
+    ('collatz',        100000,  12),
 ]
 DEFAULT_SIZE = (10, 12)             # for a NAME arg not in BENCHMARKS
 

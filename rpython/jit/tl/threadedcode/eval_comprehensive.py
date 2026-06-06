@@ -37,9 +37,13 @@ both.  The body is written to parse under both interpreters.
 Usage:
   python2 eval_comprehensive.py [options] [NAME ...]
 
+  With no NAME and no suite flag the default suite runs: the curated
+  representatives followed by the shootout kernels (dot/matmul/heapsort/...).
+
 Options:
-  --full              evaluate every lang/*.tla (default: the curated subset)
-  --shootout          evaluate the ported shootout suite (dot/matmul/heapsort/...)
+  --full              evaluate every lang/*.tla
+  --curated           evaluate only the curated representative subset
+  --shootout          evaluate only the ported shootout suite (dot/matmul/...)
   --repeats N         timing repeats per (benchmark, tier)        [default 5]
   --iters N           override the per-program iteration count
   --timeout SEC       per-child-process timeout                   [default 120]
@@ -54,6 +58,15 @@ Options:
 
   --plot-only JSON PDF   (internal) draw the PDF from a results JSON; run by the
                          python3 re-exec, but usable by hand too.
+
+Extending this harness:
+  * add a benchmark -- add one row to the BENCHMARKS registry (name, x, iters,
+    suite tag) and drop lang/<name>.tla; SIZES/CURATED/SHOOTOUT/DEFAULT derive
+    from it.
+  * add a tier      -- add a (label, "--tier value") pair to ALL_TIERS (and, if
+    it is a JIT tier, to JIT_LABELS); the binary must accept that --tier value.
+  * add a metric    -- parse it in evaluate()/_parse_summary, surface it in
+    report(), write_csv()'s `cols`, and (optionally) make_plots().
 """
 from __future__ import print_function, division
 
@@ -77,46 +90,73 @@ ALL_TIERS = [('interp', '0'), ('threaded', '1'), ('inliner', '2'),
              ('tracing', '3'), ('hybrid', '4')]
 JIT_LABELS = ('threaded', 'inliner', 'tracing', 'hybrid')
 
-# (x, iters) per program.  x is the workload size, iters the number of times the
-# program is re-run inside one process (the first is cold, the rest are warm).
-# Tail-recursive loops take a big x; non-tail recursion must stay under the
-# interpreter's MAX_INTERP_DEPTH (50), hence the small x there.
-SIZES = {
-    # tail-recursive loops (the JIT sweet spot)
-    'mb_loop': (1000000, 12), 'mb_count': (1000000, 12), 'mb_sum': (1000000, 12),
-    'mb_inc': (1000000, 12), 'mb_pass': (1000000, 12),
-    'gcd': (1000000, 12), 'sum-tail': (1000000, 12), 'fib-tail': (1000000, 12),
-    'sh_countdown': (1000000, 12), 'sh_sumtail': (1000000, 12),
-    'sh_gcd': (1000000, 12), 'loop': (1000000, 12),
-    # recursion / call-assembler workloads
-    'sh_fib': (30, 12), 'sh_binarytrees': (18, 12), 'sh_collatz': (100000, 12),
-    'sh_primes': (30000, 12), 'sh_tak': (24, 12), 'tak': (24, 12),
-    'sh_ack': (9, 12), 'ack': (10, 12), 'tarai': (5, 12),
-    # shallow non-tail recursion (depth-bounded)
-    'fib': (25, 12), 'sum': (40, 12), 'fact': (10, 12), 'sh_fact': (10, 12),
-    'square': (10, 12),
-    # ---- shootout ports: generic kernels reused across int+float (poly) vs
-    #      monomorphic (int/flt) vs sequential-poly vs monomorphic controls ----
-    'dot_int': (30, 12), 'dot_flt': (30, 12), 'dot_mix': (30, 12),
-    'matmul_int': (20, 12), 'matmul_flt': (20, 12), 'matmul_poly': (20, 12),
-    'heapsort_int': (600, 12), 'heapsort_flt': (600, 12), 'heapsort_poly': (600, 12),
-    'nsieve': (2000, 12), 'mandelbrot': (35, 12),
-}
+# Benchmark registry -- the single source of truth for what to run and how big.
+#
+# One row per program: (name, x, iters, suites).  `suites` is a short tag
+# string: 'C' = curated representative, 'S' = ported shootout kernel, 'CS' =
+# both, '' = sized but in no named suite (reachable via --full or by name).
+# Every view below (SIZES / CURATED / SHOOTOUT / DEFAULT) is derived from this
+# table, so adding a benchmark is a one-line change here (+ its lang/<name>.tla).
+#
+# The default run is the curated set followed by the shootout kernels it does
+# not already cover; --curated / --shootout select a single suite; --full runs
+# every lang/*.tla.  (gcd is intentionally curated-less: Euclid converges in
+# O(log) steps, finishing below the timer resolution -- run it via --full.)
+BENCHMARKS = [
+    # name             x         iters  suites
+    # -- tail-recursive loops (the JIT sweet spot) --
+    ('loop',           1000000,  12,    'C'),
+    ('sum',            1000,     12,    'C'),
+    ('sumtail',        1000000,  12,    'C'),
+    ('inc',            1000000,  12,    'C'),
+    # -- recursion / call-assembler workloads --
+    ('fib',            30,       12,    'C'),
+    ('collatz',        30000,    12,    'C'),
+    ('primes',         30000,    12,    'C'),
+    # -- shootout ports (generic kernels: int/flt monomorphic vs poly) --
+    ('fannkuchredux',  4,        12,    'S'),
+    ('nbody',          1000,     12,    'S'),
+    ('spectralnorm',   100,      12,    'S'),
+    ('mandelbrot',     35,       12,    'S'),
+    ('fasta',          5000,     12,    'S'),
+    ('knucleotide',    5000,     12,    'S'),
+    ('revcomp',        5000,     12,    'S'),
+    ('binarytrees',    18,       12,    'CS'),
+    ('tak',            24,       12,    'C'),
+    ('pidigits',       50,       12,    'S'),
+    ('regexredux',     5000,     12,    'S'),
+    ('dot_int',        30,       12,    'S'),
+    ('dot_flt',        30,       12,    'S'),
+    ('dot_mix',        30,       12,    'S'),
+    ('matmul_int',     20,       12,    'S'),
+    ('matmul_flt',     20,       12,    'S'),
+    ('matmul_poly',    20,       12,    'S'),
+    ('heapsort_int',   200,      30,    'S'),
+    ('heapsort_flt',   200,      30,    'S'),
+    ('heapsort_poly',  200,      30,    'S'),
+    ('nsieve',         2000,     12,    'S'),
+    ('takfp',          8,        12,    'CS'),
+    ('ack',            10,       12,    'C'),
+    ('tarai',          5,        12,    'C'),
+    ('nestedloop',     1500,     12,    'CS'),
+    ('harmonic',       5000000,  12,    'S'),
+    ('ary',            500,      12,    'S'),
+    # -- adaptive-specialization / warmup-curve stress (phase change mid-run) --
+    ('warmstab',       600,      40,    'S'),
+    # -- sized but in no named suite (--full or by name) --
+    ('pass',           1000000,  12,    ''),
+    ('gcd',            1000000,  12,    ''),
+    ('fib-tail',       1000000,  12,    ''),
+    ('fact',           10,       12,    ''),
+    ('square',         10,       12,    ''),
+]
 DEFAULT_SIZE = (10, 12)
 
-# Shootout suite: pass with `--shootout` (or name them explicitly).
-SHOOTOUT = ['dot_int', 'dot_flt', 'dot_mix',
-            'matmul_int', 'matmul_flt', 'matmul_poly',
-            'heapsort_int', 'heapsort_flt', 'heapsort_poly',
-            'nsieve', 'mandelbrot']
-
-# The curated default set: representative of every workload shape, sized so the
-# JIT tiers do real warm work.  --full runs everything in lang/.  (gcd/sh_gcd are
-# left out of the curated set: Euclid converges in O(log) steps, so they finish
-# below the timer resolution and carry no perf signal -- use --full for them.)
-CURATED = ['mb_loop', 'mb_count', 'mb_sum', 'mb_inc', 'sum-tail',
-           'sh_fib', 'sh_collatz', 'sh_primes', 'sh_binarytrees',
-           'sh_tak', 'tak', 'sh_ack', 'ack', 'tarai']
+# Derived views (maintained from BENCHMARKS -- do not edit by hand).
+SIZES    = dict((n, (x, it)) for (n, x, it, _s) in BENCHMARKS)
+CURATED  = [n for (n, _x, _i, s) in BENCHMARKS if 'C' in s]
+SHOOTOUT = [n for (n, _x, _i, s) in BENCHMARKS if 'S' in s]
+DEFAULT  = CURATED + [n for n in SHOOTOUT if n not in CURATED]
 
 
 # ===========================================================================
@@ -262,6 +302,58 @@ def _warm_of(times):
     return min(times[1:])
 
 
+def _curve_stats(curves):
+    """Adaptive-compilation warmup metrics from the per-iteration time curves.
+
+    The cold/warm endpoints alone hide *how* a tier reaches steady state -- which
+    is exactly what adaptive/tiered compilation governs (when it compiles, how
+    many recompiles/bridges the warmup pays).  We keep the whole trajectory the
+    binary already prints and reduce it to three numbers:
+
+      awe   Adaptive Warmup Efficiency = steady*n / sum(curve), in (0, 1].  The
+            fraction of total wall time spent doing useful steady-state work:
+            1.0 is instant warmup, 0.5 means half the time went to the warmup
+            shoulder.  A flat (already-compiled or interpreted) tier scores ~1.0;
+            a tier that pays a multi-iteration compile/profile shoulder scores
+            lower -- a signal the cold/warm pair cannot express.
+      its90 iterations to come within 10% of steady (>=1; 1 == no shoulder).
+      waos  Warmup-Area-Over-Steady = sum(max(0, t-steady))/steady: a
+            dimensionless count of steady-iterations'-worth of time burned on
+            warmup (bigger = costlier warmup).
+
+    steady is the tail median (last third of the median curve), robust to a
+    single lucky fast iteration -- unlike the global min `_warm_of` uses.
+    `curves` is one per-iteration vector per repeat; ragged/timeout repeats are
+    index-guarded to the shortest length.  Returns None when there is no curve.
+    """
+    curves = [c for c in curves if c]
+    if not curves:
+        return None
+    n = min(len(c) for c in curves)
+    if n == 0:
+        return None
+    med = [_median([c[i] for c in curves]) for i in range(n)]
+    if n < 2:
+        return {'awe': 1.0, 'its90': 1, 'waos': 0.0,
+                'steady': med[0], 'curve_med': med}
+    tail = max(1, n // 3)
+    steady = _median(med[n - tail:])
+    total = sum(med)
+    if not steady or not total:
+        return {'awe': 1.0, 'its90': 1, 'waos': 0.0,
+                'steady': steady, 'curve_med': med}
+    awe = min(1.0, steady * n / total)
+    band = 1.1 * steady
+    its90 = n
+    for i in range(n):
+        if med[i] <= band:
+            its90 = i + 1            # 1-based: 1 == in steady band immediately
+            break
+    waos = sum(v - steady for v in med if v > steady) / steady
+    return {'awe': awe, 'its90': its90, 'waos': waos,
+            'steady': steady, 'curve_med': med}
+
+
 def _geomean(xs):
     xs = [v for v in xs if v and v > 0]
     if not xs:
@@ -282,7 +374,7 @@ def evaluate(name, x, iters, repeats, timeout, tiers):
     interp_warm = None
     for label, tier in tiers:
         row = {'label': label, 'tier': tier, 'status': 'ok', 'result': None,
-               'cold_list': [], 'warm_list': [], 'rss_list': []}
+               'cold_list': [], 'warm_list': [], 'rss_list': [], 'curves': []}
 
         # --- (3)+(4) repeated timing runs (each wrapped in /usr/bin/time -v;
         #     the per-iteration numbers come from time() *inside* the program so
@@ -303,6 +395,7 @@ def evaluate(name, x, iters, repeats, timeout, tiers):
             row['result'] = result
             row['cold_list'].append(times[0])
             row['warm_list'].append(_warm_of(times))
+            row['curves'].append(times)
             rss = _max_rss_kb(err)
             if rss is not None:
                 row['rss_list'].append(rss)
@@ -316,6 +409,18 @@ def evaluate(name, x, iters, repeats, timeout, tiers):
         else:
             row['warm'] = row['warm_min'] = row['warm_cv'] = row['cold'] = None
         row['rss_kb'] = _median(row['rss_list']) if row['rss_list'] else None
+
+        # adaptive-compilation warmup-curve metrics (additive; warm/cold above
+        # stay byte-identical).  steady ~= warm and curve_med[0] ~= cold serve as
+        # a built-in cross-check that the curve reduction agrees with the
+        # endpoints the harness already reports.
+        cs = _curve_stats(row['curves'])
+        if cs:
+            row['awe'] = cs['awe']
+            row['its90'] = cs['its90']
+            row['waos'] = cs['waos']
+            row['steady'] = cs['steady']
+            row['curve_med'] = cs['curve_med']
 
         # --- (1)+(2) JIT instrumentation (tiers 1/2/3 only; tier 0 has JIT off),
         #     a single run each; skip when the timing runs already failed.
@@ -422,6 +527,21 @@ def report(results, tiers):
       ''.join('%8s' % _spd(_geomean([r['rows'].get(l, {}).get('speedup')
                                      for r in results])) for l in jitl))
 
+    # adaptive-compilation warmup curve: AWE (fraction of time spent at steady
+    # state, 1.0=instant warmup) and its90 (iters to within 10% of steady).
+    w('\n## Adaptive warmup -- AWE (steady*n/sum, higher=better) | its90 (iters to steady)')
+    w('%-15s' % 'benchmark' + ''.join('%9s' % l[:8] for l in jitl) +
+      '  |' + ''.join('%7s' % ('i90:' + l[:3]) for l in jitl))
+    for r in results:
+        ro = r['rows']
+        w('%-15s' % r['name'] +
+          ''.join('%9s' % _fnum(ro.get(l, {}).get('awe'), '%.2f') for l in jitl) +
+          '  |' + ''.join('%7s' % _fnum(ro.get(l, {}).get('its90')) for l in jitl))
+    w('%-15s' % 'GEOMEAN-AWE' +
+      ''.join('%9s' % _fnum(_geomean([r['rows'].get(l, {}).get('awe')
+                                      for r in results]), '%.2f') for l in jitl) +
+      '  |' + ''.join('%7s' % '' for _ in jitl))
+
     # measurement noise
     w('\n## Measurement noise (coefficient of variation of warm time)')
     w('%-15s' % 'benchmark' + ''.join('%11s' % l[:10] for l in labels))
@@ -478,7 +598,7 @@ def write_csv(results, path, tiers):
             'status', 'warm_s', 'warm_min_s', 'warm_cv', 'cold_s', 'speedup',
             'trace_time_s', 'backend_time_s', 'loops', 'bridges', 'aborts',
             'recorded_ops', 'opt_ops', 'guards', 'n_traces', 'trace_len_mean',
-            'rss_kb']
+            'rss_kb', 'awe', 'its90', 'waos', 'steady_s']
     f = open(path, 'w')
     try:
         f.write(','.join(cols) + '\n')
@@ -492,7 +612,9 @@ def write_csv(results, path, tiers):
                         d.get('trace_t'), d.get('backend_t'), d.get('loops'),
                         d.get('bridges'), d.get('aborts'), d.get('recorded'),
                         d.get('optops'), d.get('guards'), d.get('n_traces'),
-                        d.get('trace_len_mean'), d.get('rss_kb')]
+                        d.get('trace_len_mean'), d.get('rss_kb'),
+                        d.get('awe'), d.get('its90'), d.get('waos'),
+                        d.get('steady')]
                 f.write(','.join('' if v is None else str(v) for v in vals) + '\n')
     finally:
         f.close()
@@ -621,6 +743,63 @@ def make_plots(results, pdf_path):
         pdf.savefig(fig)
         plt.close(fig)
 
+        # --- Fig 6: adaptive warmup efficiency (AWE) + its90, per JIT tier -----
+        fig, (a1, a2) = plt.subplots(1, 2, figsize=(14, 4.5))
+        nj = len(jit); wbar = 0.8 / nj
+        for i, l in enumerate(jit):
+            a1.bar(x + (i - (nj - 1) / 2.0) * wbar, col(l, 'awe'), wbar,
+                   label=l, color=colors[l])
+            a2.bar(x + (i - (nj - 1) / 2.0) * wbar, col(l, 'its90'), wbar,
+                   label=l, color=colors[l])
+        a1.axhline(1.0, color='k', lw=0.8, ls='--')
+        a1.set_title('AWE = steady*n / sum(curve)  (1.0 = instant warmup)')
+        a1.set_ylabel('adaptive warmup efficiency')
+        a2.set_title('its90 (iterations to within 10% of steady)')
+        a2.set_ylabel('iterations')
+        for ax in (a1, a2):
+            ax.set_xticks(x)
+            ax.set_xticklabels(names, rotation=60, ha='right', fontsize=7)
+            ax.grid(axis='y', ls=':', alpha=0.4)
+            ax.legend()
+        fig.suptitle('Adaptive compilation warmup metrics (higher AWE / lower its90 = better)')
+        fig.tight_layout(rect=(0, 0, 1, 0.96))
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        # --- Fig 7: warmup curves for the steepest-shoulder benchmarks --------
+        def min_awe(r):
+            vs = [r['rows'].get(l, {}).get('awe') for l in jit]
+            vs = [v for v in vs if isinstance(v, (int, float))]
+            return min(vs) if vs else 2.0
+        ranked = sorted([r for r in results
+                         if any(r['rows'].get(l, {}).get('curve_med') for l in jit)],
+                        key=min_awe)
+        sel = ranked[:6]
+        if sel:
+            ncol = 3 if len(sel) > 1 else 1
+            nrow = (len(sel) + ncol - 1) // ncol
+            fig, axes = plt.subplots(nrow, ncol, figsize=(5.0 * ncol, 3.5 * nrow),
+                                     squeeze=False)
+            for idx, r in enumerate(sel):
+                ax = axes[idx // ncol][idx % ncol]
+                for l in jit:
+                    cm = r['rows'].get(l, {}).get('curve_med')
+                    if cm:
+                        ax.plot(range(1, len(cm) + 1), [v * 1000.0 for v in cm],
+                                marker='.', ms=4, label=l, color=colors[l])
+                ax.set_yscale('log')
+                ax.set_title('%s (min AWE=%.2f)' % (r['name'], min_awe(r)))
+                ax.set_xlabel('iteration')
+                ax.set_ylabel('time (ms, log)')
+                ax.grid(ls=':', alpha=0.4)
+                ax.legend(fontsize=7)
+            for j in range(len(sel), nrow * ncol):
+                axes[j // ncol][j % ncol].axis('off')
+            fig.suptitle('Warmup curves -- per-iteration time from cold to steady state')
+            fig.tight_layout(rect=(0, 0, 1, 0.96))
+            pdf.savefig(fig)
+            plt.close(fig)
+
     sys.stderr.write('wrote %s\n' % pdf_path)
 
 
@@ -642,7 +821,7 @@ def main(argv):
         make_plots(results, argv[2])
         return 0
 
-    full = no_plot = shootout = False
+    full = no_plot = shootout = curated = False
     repeats = 5
     iters_override = None
     timeout = 120
@@ -660,6 +839,8 @@ def main(argv):
             full = True
         elif a == '--shootout':
             shootout = True
+        elif a == '--curated':
+            curated = True
         elif a == '--no-plot':
             no_plot = True
         elif a == '--quick':
@@ -692,16 +873,18 @@ def main(argv):
         # interp is the speedup/correctness baseline; always include it.
         tiers = [('interp', '0')] + tiers
 
-    # build the work list
+    # build the work list: default = curated + shootout; flags pick a subset.
     if names:
         worklist = names
     elif shootout:
         worklist = list(SHOOTOUT)
+    elif curated:
+        worklist = list(CURATED)
     elif full:
         worklist = sorted(os.path.splitext(os.path.basename(p))[0]
                           for p in glob.glob(os.path.join(LANG, '*.tla')))
     else:
-        worklist = list(CURATED)
+        worklist = list(DEFAULT)
 
     csv_path = csv_path or (out_prefix + '.csv')
     json_path = json_path or (out_prefix + '.json')
