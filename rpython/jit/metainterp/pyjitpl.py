@@ -2438,8 +2438,8 @@ class MetaInterp(object):
         # Set to True only for the unrolled (fK) re-trace of an A/B trial, so
         # the very first (f1) trace of a loop is never body-unrolled.
         self.ab_unroll_this_trace = False
-        # Set during tracing if the current loop records a call or allocation;
-        # used by the A/B unroll loop-content gate to skip object-churn loops.
+        # Set during tracing if the current loop records a residual call; used
+        # by the A/B unroll loop-content gate to skip object-churn loops.
         self.ab_seen_nonnumeric = False
         self.call_pure_results = args_dict()
         self.heapcache = HeapCache()
@@ -2703,8 +2703,8 @@ class MetaInterp(object):
     @specialize.argtype(2)
     def _record_helper_varargs(self, opnum, resvalue, descr, argboxes):
         # record the operation
-        if rop.is_call(opnum) or rop.is_malloc(opnum):
-            self.ab_seen_nonnumeric = True   # marks loop as non-numeric for A/B
+        if rop.is_call(opnum):
+            self.ab_seen_nonnumeric = True   # residual call => non-numeric (object-churn) loop
         profiler = self.staticdata.profiler
         profiler.count_ops(opnum, Counters.RECORDED_OPS)
         self.heapcache.invalidate_caches_varargs(opnum, descr, argboxes)
@@ -2716,8 +2716,8 @@ class MetaInterp(object):
     @specialize.arg(1)
     def _record_helper(self, opnum, resvalue, descr, *argboxes):
         # record the operation
-        if rop.is_call(opnum) or rop.is_malloc(opnum):
-            self.ab_seen_nonnumeric = True   # marks loop as non-numeric for A/B
+        if rop.is_call(opnum):
+            self.ab_seen_nonnumeric = True   # residual call => non-numeric (object-churn) loop
         profiler = self.staticdata.profiler
         profiler.count_ops(opnum, Counters.RECORDED_OPS)
         self.heapcache.invalidate_caches(opnum, descr, *argboxes)
@@ -3446,11 +3446,12 @@ class MetaInterp(object):
         return target_token
 
     def _ab_loop_is_numeric(self):
-        # A/B unroll only helps tight arithmetic loops.  Loops that call out or
-        # allocate (object-churn) gain nothing from body-unrolling and only pay
-        # the trial's interleave/compile overhead, so they are kept out of the
-        # trial.  ab_seen_nonnumeric is set during tracing whenever a call or
-        # allocation is recorded, so a numeric loop is one that stayed clear.
+        # A/B unroll only helps tight arithmetic loops.  Object-churn loops gain
+        # nothing from body-unrolling and only pay the trial's interleave/compile
+        # overhead, so they are kept out of the trial.  ab_seen_nonnumeric is set
+        # during tracing whenever a residual CALL is recorded; allocations are
+        # NOT counted because numeric float loops box intermediates that the
+        # optimiser then virtualises away (so they are not real object-churn).
         return not self.ab_seen_nonnumeric
 
     def _ab_after_compile(self, greenkey, jitcell_token, ab_numeric):
