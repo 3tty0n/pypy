@@ -746,6 +746,37 @@ HBP_POLICY_PRESETS = [
     ("eval_hbp", "retrace_limit=1,retrace_min_loop_bridges=20,enable_hot_bridge_promotion=1,enable_hbp_class_promotion=1,enable_hbp_bool_promotion=1,enable_hbp_guard_bool_promotion=1,enable_hbp_nullness_promotion=1,enable_hbp_ref_value_promotion=1,enable_hbp_float_value_promotion=1,hot_bridge_threshold=15,hot_bridge_min_candidates=2,hot_bridge_guard_threshold=100,hot_bridge_guard_bool_threshold=200,hot_bridge_max_value_variants=3,hot_bridge_max_bool_variants=3,hot_bridge_max_ref_value_variants=2,hot_bridge_max_loop_bridges=128,hot_bridge_max_ops=80,hot_bridge_max_guards=16,hot_bridge_min_op_reduction=5,hot_bridge_min_op_reduction_pct=10,hot_bridge_min_guard_reduction=1,hot_bridge_min_guard_reduction_pct=5,hot_bridge_global_max_variants=128,hot_bridge_max_failed_promotions=2,hot_bridge_max_cardinality=16,enable_hbp_cardinality_gate=1,hbp_inherit=1,hbp_inherit_bool=1,enable_invariant_varindex_hoist=0"),
     ("eval_hbpvih", "retrace_limit=1,retrace_min_loop_bridges=20,enable_hot_bridge_promotion=1,enable_hbp_class_promotion=1,enable_hbp_bool_promotion=1,enable_hbp_guard_bool_promotion=1,enable_hbp_nullness_promotion=1,enable_hbp_ref_value_promotion=1,enable_hbp_float_value_promotion=1,hot_bridge_threshold=15,hot_bridge_min_candidates=2,hot_bridge_guard_threshold=100,hot_bridge_guard_bool_threshold=200,hot_bridge_max_value_variants=3,hot_bridge_max_bool_variants=3,hot_bridge_max_ref_value_variants=2,hot_bridge_max_loop_bridges=128,hot_bridge_max_ops=80,hot_bridge_max_guards=16,hot_bridge_min_op_reduction=5,hot_bridge_min_op_reduction_pct=10,hot_bridge_min_guard_reduction=1,hot_bridge_min_guard_reduction_pct=5,hot_bridge_global_max_variants=128,hot_bridge_max_failed_promotions=2,hot_bridge_max_cardinality=16,enable_hbp_cardinality_gate=1,hbp_inherit=1,hbp_inherit_bool=1,enable_invariant_varindex_hoist=1"),
     ("eval_tunedvih", "retrace_limit=3,retrace_min_loop_bridges=20,enable_hot_bridge_promotion=1,enable_hbp_class_promotion=1,enable_hbp_nullness_promotion=1,enable_hbp_bool_promotion=0,enable_hbp_guard_bool_promotion=1,enable_hbp_ref_value_promotion=0,enable_hbp_float_value_promotion=0,hot_bridge_threshold=30,hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,hot_bridge_guard_bool_threshold=400,hot_bridge_max_value_variants=1,hot_bridge_max_bool_variants=2,hot_bridge_max_loop_bridges=64,hot_bridge_max_ops=60,hot_bridge_max_guards=12,hot_bridge_min_op_reduction=10,hot_bridge_min_op_reduction_pct=20,hot_bridge_min_guard_reduction=2,hot_bridge_min_guard_reduction_pct=10,hot_bridge_global_max_variants=64,hot_bridge_max_failed_promotions=1,hbp_bool_entry_guard=1,enable_hbp_cardinality_gate=1,hbp_inherit=1,hbp_inherit_bool=0,enable_invariant_varindex_hoist=1"),
+    ("eval_rl3mb6", "retrace_limit=3,retrace_min_loop_bridges=6,enable_hot_bridge_promotion=1,enable_hbp_class_promotion=1,enable_hbp_nullness_promotion=1,enable_hbp_bool_promotion=0,enable_hbp_guard_bool_promotion=1,enable_hbp_ref_value_promotion=0,enable_hbp_float_value_promotion=0,hot_bridge_threshold=30,hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,hot_bridge_guard_bool_threshold=400,hot_bridge_max_value_variants=1,hot_bridge_max_bool_variants=2,hot_bridge_max_loop_bridges=64,hot_bridge_max_ops=60,hot_bridge_max_guards=12,hot_bridge_min_op_reduction=10,hot_bridge_min_op_reduction_pct=20,hot_bridge_min_guard_reduction=2,hot_bridge_min_guard_reduction_pct=10,hot_bridge_global_max_variants=64,hot_bridge_max_failed_promotions=1,hbp_bool_entry_guard=1,enable_hbp_cardinality_gate=1,hbp_inherit=1,hbp_inherit_bool=0,enable_invariant_varindex_hoist=1"),
+    ("eval_rl6mb6", "retrace_limit=6,retrace_min_loop_bridges=6,enable_hot_bridge_promotion=1,enable_hbp_class_promotion=1,enable_hbp_nullness_promotion=1,enable_hbp_bool_promotion=0,enable_hbp_guard_bool_promotion=1,enable_hbp_ref_value_promotion=0,enable_hbp_float_value_promotion=0,hot_bridge_threshold=30,hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,hot_bridge_guard_bool_threshold=400,hot_bridge_max_value_variants=1,hot_bridge_max_bool_variants=2,hot_bridge_max_loop_bridges=64,hot_bridge_max_ops=60,hot_bridge_max_guards=12,hot_bridge_min_op_reduction=10,hot_bridge_min_op_reduction_pct=20,hot_bridge_min_guard_reduction=2,hot_bridge_min_guard_reduction_pct=10,hot_bridge_global_max_variants=64,hot_bridge_max_failed_promotions=1,hbp_bool_entry_guard=1,enable_hbp_cardinality_gate=1,hbp_inherit=1,hbp_inherit_bool=0,enable_invariant_varindex_hoist=1"),
+    ("eval_rl12mb6", "retrace_limit=12,retrace_min_loop_bridges=6,enable_hot_bridge_promotion=1,enable_hbp_class_promotion=1,enable_hbp_nullness_promotion=1,enable_hbp_bool_promotion=0,enable_hbp_guard_bool_promotion=1,enable_hbp_ref_value_promotion=0,enable_hbp_float_value_promotion=0,hot_bridge_threshold=30,hot_bridge_min_candidates=2,hot_bridge_guard_threshold=200,hot_bridge_guard_bool_threshold=400,hot_bridge_max_value_variants=1,hot_bridge_max_bool_variants=2,hot_bridge_max_loop_bridges=64,hot_bridge_max_ops=60,hot_bridge_max_guards=12,hot_bridge_min_op_reduction=10,hot_bridge_min_op_reduction_pct=20,hot_bridge_min_guard_reduction=2,hot_bridge_min_guard_reduction_pct=10,hot_bridge_global_max_variants=64,hot_bridge_max_failed_promotions=1,hbp_bool_entry_guard=1,enable_hbp_cardinality_gate=1,hbp_inherit=1,hbp_inherit_bool=0,enable_invariant_varindex_hoist=1"),
+]
+
+# Aggressive-HBP family sweep over (retrace_limit x VIH).  eval_rl2/eval_rl3
+# reproduce the archived +4.02%/+4.31% configs; the rest fill unexplored cells.
+_AGG_HBP = (
+    "retrace_limit=%(rl)d,retrace_min_loop_bridges=20,"
+    "enable_hot_bridge_promotion=1,enable_hbp_class_promotion=1,"
+    "enable_hbp_bool_promotion=1,enable_hbp_guard_bool_promotion=1,"
+    "enable_hbp_nullness_promotion=1,enable_hbp_ref_value_promotion=1,"
+    "enable_hbp_float_value_promotion=1,hot_bridge_threshold=15,"
+    "hot_bridge_min_candidates=2,hot_bridge_guard_threshold=100,"
+    "hot_bridge_guard_bool_threshold=200,hot_bridge_max_value_variants=3,"
+    "hot_bridge_max_bool_variants=3,hot_bridge_max_ref_value_variants=2,"
+    "hot_bridge_max_loop_bridges=128,hot_bridge_max_ops=80,"
+    "hot_bridge_max_guards=16,hot_bridge_min_op_reduction=5,"
+    "hot_bridge_min_op_reduction_pct=10,hot_bridge_min_guard_reduction=1,"
+    "hot_bridge_min_guard_reduction_pct=5,hot_bridge_global_max_variants=128,"
+    "hot_bridge_max_failed_promotions=2,hot_bridge_max_cardinality=16,"
+    "enable_hbp_cardinality_gate=1,hbp_inherit=1,hbp_inherit_bool=1,"
+    "enable_invariant_varindex_hoist=%(vih)d")
+HBP_POLICY_PRESETS += [
+    ("eval_rl2",       _AGG_HBP % {"rl": 2, "vih": 1}),
+    ("eval_rl3",       _AGG_HBP % {"rl": 3, "vih": 1}),
+    ("eval_rl4",       _AGG_HBP % {"rl": 4, "vih": 1}),
+    ("eval_rl6",       _AGG_HBP % {"rl": 6, "vih": 1}),
+    ("eval_rl2_novih", _AGG_HBP % {"rl": 2, "vih": 0}),
+    ("eval_rl3_novih", _AGG_HBP % {"rl": 3, "vih": 0}),
+    ("eval_rl4_novih", _AGG_HBP % {"rl": 4, "vih": 0}),
 ]
 
 #HBP_POLICY_DEFAULT = (
