@@ -790,6 +790,10 @@ HBP_POLICY_PRESETS += [
     # A/B trial; short object-churn loops never pay the trial overhead.
     ("eval_tv_u4w1k", _TV + ",loop_unroll_factor=4,loop_unroll_metric=2,loop_unroll_warmup=1000"),
     ("eval_tv_u4w5k", _TV + ",loop_unroll_factor=4,loop_unroll_metric=2,loop_unroll_warmup=5000"),
+    # Gate off (trial every hot loop) vs the default gated eval_tv_u4, to isolate
+    # the loop-content gate's effect on object-churn benches.
+    ("eval_tv_u4_nogate", _TV + ",loop_unroll_factor=4,loop_unroll_metric=2,loop_unroll_numeric_only=0"),
+    ("eval_tv_u2g", _TV + ",loop_unroll_factor=2,loop_unroll_metric=2,loop_unroll_numeric_only=1"),
 ]
 
 #HBP_POLICY_DEFAULT = (
