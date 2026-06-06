@@ -319,6 +319,7 @@ class WarmEnterState(object):
     loop_unroll_min_samples = 8 # interleaved samples per variant before deciding
     loop_unroll_trial = 50      # cap on timed entries per variant (rarely hit)
     loop_unroll_min_gain = 30   # permille: keep fK only if it is >=3% faster
+    loop_unroll_numeric_only = 1 # only A/B-trial loops with no calls/allocations
 
     def __init__(self, warmrunnerdesc, jitdriver_sd):
         "NOT_RPYTHON"
@@ -424,6 +425,9 @@ class WarmEnterState(object):
         if value < 0:
             value = 0
         self.loop_unroll_min_gain = value
+
+    def set_param_loop_unroll_numeric_only(self, value):
+        self.loop_unroll_numeric_only = value
 
     def set_param_max_retrace_guards(self, value):
         if self.warmrunnerdesc:

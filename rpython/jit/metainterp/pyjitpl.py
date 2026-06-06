@@ -2438,6 +2438,9 @@ class MetaInterp(object):
         # Set to True only for the unrolled (fK) re-trace of an A/B trial, so
         # the very first (f1) trace of a loop is never body-unrolled.
         self.ab_unroll_this_trace = False
+        # Set during tracing if the current loop records a call or allocation;
+        # used by the A/B unroll loop-content gate to skip object-churn loops.
+        self.ab_seen_nonnumeric = False
         self.call_pure_results = args_dict()
         self.heapcache = HeapCache()
 
@@ -2649,9 +2652,11 @@ class MetaInterp(object):
         self.history = history.History(len(inputargs), self.staticdata)
         self.history.set_inputargs(inputargs)
         self.staticdata.stats.set_history(self.history)
+        self.ab_seen_nonnumeric = False
 
     def create_history(self, max_num_inputargs):
         self.history = history.History(max_num_inputargs, self.staticdata)
+        self.ab_seen_nonnumeric = False
 
     def _all_constants(self, *boxes):
         if len(boxes) == 0:
@@ -2698,6 +2703,8 @@ class MetaInterp(object):
     @specialize.argtype(2)
     def _record_helper_varargs(self, opnum, resvalue, descr, argboxes):
         # record the operation
+        if rop.is_call(opnum) or rop.is_malloc(opnum):
+            self.ab_seen_nonnumeric = True   # marks loop as non-numeric for A/B
         profiler = self.staticdata.profiler
         profiler.count_ops(opnum, Counters.RECORDED_OPS)
         self.heapcache.invalidate_caches_varargs(opnum, descr, argboxes)
@@ -2709,6 +2716,8 @@ class MetaInterp(object):
     @specialize.arg(1)
     def _record_helper(self, opnum, resvalue, descr, *argboxes):
         # record the operation
+        if rop.is_call(opnum) or rop.is_malloc(opnum):
+            self.ab_seen_nonnumeric = True   # marks loop as non-numeric for A/B
         profiler = self.staticdata.profiler
         profiler.count_ops(opnum, Counters.RECORDED_OPS)
         self.heapcache.invalidate_caches(opnum, descr, *argboxes)
@@ -3400,6 +3409,15 @@ class MetaInterp(object):
         num_green_args = self.jitdriver_sd.num_green_args
         greenkey = original_boxes[:num_green_args]
         ptoken = self.get_procedure_token(greenkey)
+        # A/B unroll loop-content gate: decide (while the traced history is still
+        # intact, before compile.compile_loop consumes it) whether this loop is
+        # numeric enough to be worth an A/B unroll trial.  Object-churn loops
+        # only pay the trial overhead, so they are excluded from the trial.
+        ws = self.jitdriver_sd.warmstate
+        ab_numeric = True
+        if (ws.loop_unroll_factor > 1 and not self.ab_unroll_this_trace
+                and ws.loop_unroll_numeric_only):
+            ab_numeric = self._ab_loop_is_numeric()
         # The fK re-trace of an A/B trial intentionally re-compiles a loop that
         # already has an (f1) token, so skip the usual "already compiled" guard.
         if has_compiled_targets(ptoken) and not self.ab_unroll_this_trace:
@@ -3424,10 +3442,18 @@ class MetaInterp(object):
                 self.jitdriver_sd.warmstate.attach_procedure_to_interp(
                     greenkey, jct)
             self.staticdata.stats.add_jitcell_token(jct)
-            self._ab_after_compile(greenkey, jct)
+            self._ab_after_compile(greenkey, jct, ab_numeric)
         return target_token
 
-    def _ab_after_compile(self, greenkey, jitcell_token):
+    def _ab_loop_is_numeric(self):
+        # A/B unroll only helps tight arithmetic loops.  Loops that call out or
+        # allocate (object-churn) gain nothing from body-unrolling and only pay
+        # the trial's interleave/compile overhead, so they are kept out of the
+        # trial.  ab_seen_nonnumeric is set during tracing whenever a call or
+        # allocation is recorded, so a numeric loop is one that stayed clear.
+        return not self.ab_seen_nonnumeric
+
+    def _ab_after_compile(self, greenkey, jitcell_token, ab_numeric):
         # Runtime A/B loop-unrolling bookkeeping.  Only active when the param
         # loop_unroll_factor > 1.  Sets up the f1 timing window on the first
         # compile of a loop, and the fK timing window on the unrolled re-trace.
@@ -3453,10 +3479,11 @@ class MetaInterp(object):
             cell.ab_toggle = 0
             cell.ab_trial_left = ws.loop_unroll_trial
             cell.ab_state = AB_INTERLEAVE
-        elif cell.ab_state == AB_OFF:
-            # first compile of a fresh loop: run f1 and count entries; the A/B
-            # trial only starts once the loop has stayed hot for loop_unroll_warmup
-            # entries, so cold/short loops never pay the trial's overhead
+        elif cell.ab_state == AB_OFF and ab_numeric:
+            # first compile of a fresh numeric loop: run f1 and count entries; the
+            # A/B trial only starts once the loop has stayed hot for
+            # loop_unroll_warmup entries, so cold/short loops never pay the trial's
+            # overhead.  Non-numeric (object-churn) loops are excluded entirely.
             jitcell_token.ab_cell = cell
             jitcell_token.ab_version = 1
             cell.ab_token_f1 = jitcell_token

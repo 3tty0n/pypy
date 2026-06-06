@@ -7,10 +7,15 @@ be hoisted once into the short preamble and shared across the K unrolled copies
 (not re-read per copy), while producing results identical to the interpreter for
 every (factor, VIH) combination.
 """
-from rpython.rlib.jit import JitDriver, set_param
+from rpython.rlib.jit import JitDriver, set_param, dont_look_inside
 from rpython.jit.metainterp.test.support import LLJitMixin
 from rpython.jit.metainterp.warmspot import get_stats
 from rpython.jit.metainterp.resoperation import rop
+
+
+@dont_look_inside
+def _residual(x):
+    return x + 1
 
 
 def _max_body_array_reads():
@@ -104,6 +109,30 @@ class UnrollVIHTests(object):
         self.meta_interp(f, [60, 40, 4, 2, 1, 1])
         unrolled = _max_body_array_reads()
         assert unrolled <= base * 2
+
+
+    def test_unroll_gate_call_loop_correct(self):
+        # A loop with a residual call is non-numeric: the content gate keeps it
+        # out of the A/B trial.  Results must stay correct under unrolling with
+        # the gate both on (numeric_only=1) and off (0).
+        driver = JitDriver(greens=[], reds=['n', 'res'])
+
+        def f(start, factor, numeric_only):
+            set_param(driver, 'threshold', 1)
+            set_param(driver, 'loop_unroll_factor', factor)
+            set_param(driver, 'loop_unroll_warmup', 2)
+            set_param(driver, 'loop_unroll_numeric_only', numeric_only)
+            n = start
+            res = 0
+            while n > 0:
+                driver.jit_merge_point(n=n, res=res)
+                res = _residual(res)   # residual call -> non-numeric loop
+                n -= 1
+            return res
+
+        for factor in [1, 2, 4]:
+            for numeric_only in [0, 1]:
+                assert self.meta_interp(f, [30, factor, numeric_only]) == 30
 
 
 class TestLLtype(UnrollVIHTests, LLJitMixin):
