@@ -794,6 +794,10 @@ HBP_POLICY_PRESETS += [
     # the loop-content gate's effect on object-churn benches.
     ("eval_tv_u4_nogate", _TV + ",loop_unroll_factor=4,loop_unroll_metric=2,loop_unroll_numeric_only=0"),
     ("eval_tv_u2g", _TV + ",loop_unroll_factor=2,loop_unroll_metric=2,loop_unroll_numeric_only=1"),
+    # Exclusive-phase trial: run a block of one variant before switching so the
+    # timing reflects steady-state (should reject fK on raytrace/pickle while
+    # keeping it on scimark_lu).  numeric_only=0 so numeric kernels are trialed.
+    ("eval_tv_u4_phase", _TV + ",loop_unroll_factor=4,loop_unroll_metric=2,loop_unroll_numeric_only=0,loop_unroll_phase=20"),
 ]
 
 #HBP_POLICY_DEFAULT = (
