@@ -2,7 +2,7 @@ import py
 import re
 import collections
 from rpython.jit.metainterp.history import (Const, ConstInt, ConstPtr,
-    ConstFloat, CONST_NULL, getkind, AbstractDescr)
+    ConstFloat, getkind, AbstractDescr)
 from rpython.jit.metainterp import support
 from rpython.flowspace.model import Constant
 from rpython.jit.codewriter.flatten import (
@@ -11,7 +11,7 @@ from rpython.jit.codewriter.jitcode import SwitchDictDescr
 from rpython.rtyper.lltypesystem import lltype, llmemory, rstr
 from rpython.rtyper.rclass import OBJECTPTR
 from rpython.rlib import objectmodel
-from rpython.rlib.rarithmetic import intmask, r_uint, uint_mul_high, r_singlefloat
+from rpython.rlib.rarithmetic import intmask, r_uint, uint_mul_high, r_singlefloat, ovfcheck
 from rpython.jit.metainterp.support import int_signext
 from rpython.jit.codewriter import longlong
 from rpython.jit.codewriter.genextprof import (
@@ -27,6 +27,7 @@ from rpython.jit.codewriter.genextprof import (
 HEAPCACHE_SKIP_OPS = frozenset([
     # Integer binary operations
     'int_add', 'int_sub', 'int_mul', 'int_floordiv', 'int_mod',
+    'int_add_jump_if_ovf', 'int_sub_jump_if_ovf', 'int_mul_jump_if_ovf',
     'int_and', 'int_or', 'int_xor', 'int_rshift', 'int_lshift',
     'uint_rshift', 'uint_mul_high',
     # Integer comparisons
@@ -46,6 +47,17 @@ HEAPCACHE_SKIP_OPS = frozenset([
     'cast_float_to_singlefloat', 'cast_singlefloat_to_float',
 ])
 
+DISPATCH_PREFIX_DIRECT_SWITCH_OPS = frozenset([
+    23, 24,  # BINARY_ADD, BINARY_SUBTRACT
+    100,    # LOAD_CONST
+    110, 113, 114, 115, 116,  # common jumps and LOAD_GLOBAL
+    120,    # SETUP_LOOP
+    124, 125, 126,  # LOAD_FAST, STORE_FAST, DELETE_FAST
+    131, 132, 133,  # CALL_FUNCTION, MAKE_FUNCTION, BUILD_SLICE
+])
+
+HBP_CANDIDATE_SCORE_THRESHOLD = 0.20
+
 def can_skip_heapcache(opname):
     return opname in HEAPCACHE_SKIP_OPS
 
@@ -63,6 +75,7 @@ def _genext_compile_target():
         return detect_cpu.autodetect()
     except Exception:
         return None
+
 
 class GenExtension(object):
     def __init__(self, assembler, ssarepr, jitcode):
@@ -114,13 +127,238 @@ class GenExtension(object):
         pcd = residual_call / float(total)
         score = gbd * 0.7 + pcd * 0.3
         self.jitcode.genext_hbp_score = score
-        self.jitcode.genext_hbp_candidate = score > 0.20
+        self.jitcode.genext_hbp_candidate = (
+            score > HBP_CANDIDATE_SCORE_THRESHOLD)
 
-    def generate(self):
-        from rpython.jit.codewriter.flatten import Label
+    def _install_source(self, allcode):
         from rpython.jit.codewriter.jitcode import JitCode
         from rpython.jit.metainterp.pyjitpl import ChangeFrame
+        from rpython.jit.metainterp.resoperation import rop
+        from rpython.jit.metainterp.pyjitpl import const_int
+        self.jitcode._genext_source = "\n".join(allcode)
+        d = {"Const": Const, "ConstInt": ConstInt, "const_int": const_int,
+             "ConstPtr": ConstPtr, "ConstFloat": ConstFloat, "JitCode": JitCode,
+             "ChangeFrame": ChangeFrame, "lltype": lltype, "rstr": rstr,
+             'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR, 'support': support,
+             'rop': rop, 'intmask': intmask, 'r_uint': r_uint,
+             'uint_mul_high': uint_mul_high, 'ovfcheck': ovfcheck,
+             'int_signext': int_signext,
+             'longlong': longlong, 'r_singlefloat': r_singlefloat}
+        d.update(self.globals)
+        source = py.code.Source(self.jitcode._genext_source)
+        exec source.compile() in d
+        self.jitcode.genext_function = d['jit_shortcut']
+        self.jitcode.genext_function.__name__ += "_" + self.jitcode.name
+
+    def _prepare_pc_maps(self):
+        from rpython.jit.codewriter.flatten import Label
+        for index, insn in enumerate(self.ssarepr.insns):
+            if isinstance(insn[0], Label) or insn[0] == '---':
+                continue
+            pc = self.ssarepr._insns_pos[index]
+            self.pc_to_insn[pc] = insn
+            if index == len(self.ssarepr.insns) - 1:
+                nextpc = len(self.jitcode.code)
+            else:
+                nextpc = self.ssarepr._insns_pos[index + 1]
+            self.pc_to_nextpc[pc] = nextpc
+            self.pc_to_index[pc] = index
+
+    def _try_generate_dispatch_prefix_shortcut(self):
+        if self.jitcode.name != 'dispatch_bytecode__AccessDirect_None':
+            return False
+
+        pc_to_insn = {}
+        for index, insn in enumerate(self.ssarepr.insns):
+            if isinstance(insn[0], Label) or insn[0] == '---':
+                continue
+            pc_to_insn[self.ssarepr._insns_pos[index]] = insn
+
+        try:
+            set_last = pc_to_insn[3]
+            get_debug = pc_to_insn[14]
+            debug_branch = pc_to_insn[22]
+            longarg_branch = pc_to_insn[52]
+            switch = pc_to_insn[84]
+            if (set_last[0] != 'setfield_vable_i' or
+                    get_debug[0] != 'getfield_vable_r' or
+                    debug_branch[0] != 'goto_if_not_ptr_nonzero' or
+                    longarg_branch[0] != 'goto_if_not_int_ge' or
+                    switch[0] != 'switch'):
+                return False
+            debug_zero_pc = self.assembler.label_positions[debug_branch[2].name]
+            no_longarg_pc = self.assembler.label_positions[longarg_branch[3].name]
+        except (KeyError, IndexError, AttributeError):
+            return False
+
+        last_instr_descr = self._add_global(set_last[3])
+        debugdata_descr = self._add_global(get_debug[2])
+        c0 = self._add_global(ConstInt(0))
+        c1 = self._add_global(ConstInt(1))
+        c2 = self._add_global(ConstInt(2))
+        c90 = self._add_global(ConstInt(90))
+        c256 = self._add_global(ConstInt(256))
+        switch_targets = sorted(
+            (opcode, target_pc)
+            for opcode, target_pc in switch[2].dict.items()
+            if opcode in DISPATCH_PREFIX_DIRECT_SWITCH_OPS)
+
+        def append_switch_tail(lines, indent):
+            lines.append("%sif isinstance(ri2, ConstInt):" % (indent,))
+            lines.append("%s    op = ri2.getint()" % (indent,))
+            prefix = "if"
+            for opcode, target_pc in switch_targets:
+                lines.append("%s    %s op == %d:" % (indent, prefix, opcode))
+                lines.append("%s        self.pc = %d" % (indent, target_pc))
+                lines.append("%s        return self._run_one_step_standard()" % (
+                    indent,))
+                prefix = "elif"
+            lines.append("%sself.pc = 84" % (indent,))
+            lines.append("%sreturn self._run_one_step_standard()" % (indent,))
+
+        allcode = [
+            "def jit_shortcut(self): # dispatch_bytecode__AccessDirect_None prefix",
+            "    if self.pc != 0:",
+            "        return self._run_one_step_standard()",
+            "    rr0 = self.registers_r[0]",
+            "    rr1 = self.registers_r[1]",
+            "    ri0 = self.registers_i[0]",
+            "    self.pc = 8",
+            "    self.opimpl_setfield_vable_i(rr0, ri0, %s, 3)" % (
+                last_instr_descr,),
+            "    self.registers_r[3] = rr0",
+            "    self.pc = 19",
+            "    rr4 = self.opimpl_getfield_vable_r(rr0, %s, 14)" % (
+                debugdata_descr,),
+            "    self.registers_r[4] = rr4",
+            "    self.pc = 26",
+            "    self.opimpl_goto_if_not_ptr_nonzero(rr4, %d, 22)" % (
+                debug_zero_pc,),
+            "    if self.pc != %d:" % (debug_zero_pc,),
+            "        return self._run_one_step_standard()",
+            "    self.pc = 45",
+            "    ri2 = self.opimpl_strgetitem(rr1, ri0)",
+            "    self.registers_i[2] = ri2",
+            "    self.pc = 49",
+            "    ri1 = self.metainterp.execute_and_record(rop.INT_ADD, None, ri0, %s)" % (
+                c1,),
+            "    self.registers_i[1] = ri1",
+            "    self.pc = 57",
+            "    self.opimpl_goto_if_not_int_ge(ri2, %s, %d, 52)" % (
+                c90, no_longarg_pc),
+            "    if self.pc == %d:" % (no_longarg_pc,),
+            "        self.registers_i[3] = %s" % (c0,),
+        ]
+        append_switch_tail(allcode, "        ")
+        allcode += [
+            "    assert self.pc == 57",
+            "    self.pc = 61",
+            "    ri0 = self.opimpl_strgetitem(rr1, ri1)",
+            "    self.registers_i[0] = ri0",
+            "    self.pc = 65",
+            "    ri3 = self.metainterp.execute_and_record(rop.INT_ADD, None, ri1, %s)" % (
+                c1,),
+            "    self.registers_i[3] = ri3",
+            "    self.pc = 69",
+            "    ri3 = self.opimpl_strgetitem(rr1, ri3)",
+            "    self.registers_i[3] = ri3",
+            "    self.pc = 73",
+            "    ri1 = self.metainterp.execute_and_record(rop.INT_ADD, None, ri1, %s)" % (
+                c2,),
+            "    self.registers_i[1] = ri1",
+            "    self.pc = 77",
+            "    ri3 = self.metainterp.execute_and_record(rop.INT_MUL, None, ri3, %s)" % (
+                c256,),
+            "    self.registers_i[3] = ri3",
+            "    self.pc = 81",
+            "    ri3 = self.metainterp.execute_and_record(rop.INT_OR, None, ri3, ri0)",
+            "    self.registers_i[3] = ri3",
+        ]
+        append_switch_tail(allcode, "    ")
+        self._install_source(allcode)
+        self.jitcode.genext_is_pure_arithmetic = False
+        self.jitcode.genext_compile_function = None
+        return True
+
+    def _try_generate_pyframe_portal_tail_shortcut(self):
+        if self.jitcode.name != 'PyFrame.dispatch':
+            return False
+        if self.jitcode.jitdriver_sd is None:
+            return False
+
+        try:
+            inline_call = self.pc_to_insn[52]
+            catch = self.pc_to_insn[65]
+            live = self.pc_to_insn[68]
+            get_debug = self.pc_to_insn[71]
+            debug_branch = self.pc_to_insn[79]
+            int_copy = self.pc_to_insn[83]
+            goto_loop = self.pc_to_insn[86]
+            get_profiled = self.pc_to_insn[89]
+            goto_profiled = self.pc_to_insn[94]
+            if (inline_call[0] != 'inline_call_ir_i' or
+                    inline_call[1].name != 'dispatch_bytecode__AccessDirect_None' or
+                    catch[0] != 'catch_exception' or
+                    live[0] != '-live-' or
+                    get_debug[0] != 'getfield_vable_r' or
+                    debug_branch[0] != 'goto_if_not_ptr_iszero' or
+                    int_copy[0] != 'int_copy' or
+                    goto_loop[0] != 'goto' or
+                    get_profiled[0] != 'getfield_gc_i' or
+                    goto_profiled[0] != 'goto'):
+                return False
+            exception_pc = self.assembler.label_positions[catch[1].name]
+            profiled_pc = self.assembler.label_positions[debug_branch[2].name]
+            loop_pc = self.assembler.label_positions[goto_loop[1].name]
+            profiled_loop_pc = self.assembler.label_positions[
+                goto_profiled[1].name]
+            if (exception_pc != 97 or profiled_pc != 89 or loop_pc != 0 or
+                    profiled_loop_pc != 0):
+                return False
+        except (KeyError, IndexError, AttributeError):
+            return False
+
+        debugdata_descr = self._add_global(get_debug[2])
+        profiled_descr = self._add_global(get_profiled[2])
+        cfalse = self._add_global(ConstInt(0))
+        allcode = [
+            "def jit_shortcut(self): # PyFrame.dispatch portal normal tail",
+            "    if self.pc != 65:",
+            "        return self._run_one_step_standard()",
+            "    self.pc = 68",
+            "    self.opimpl_catch_exception(%d)" % (exception_pc,),
+            "    rr1 = self.registers_r[1]",
+            "    self.pc = 76",
+            "    rr3 = self.opimpl_getfield_vable_r(rr1, %s, 71)" % (
+                debugdata_descr,),
+            "    self.registers_r[3] = rr3",
+            "    self.pc = 83",
+            "    self.opimpl_goto_if_not_ptr_iszero(rr3, %d, 79)" % (
+                profiled_pc,),
+            "    if self.pc == %d:" % (profiled_pc,),
+            "        self.pc = 94",
+            "        ri1 = self.opimpl_getfield_gc_i(rr3, %s)" % (
+                profiled_descr,),
+            "        self.registers_i[1] = ri1",
+            "        self.pc = 0",
+            "        return self._run_one_step_standard()",
+            "    assert self.pc == 83",
+            "    self.registers_i[1] = %s" % (cfalse,),
+            "    self.pc = 0",
+            "    return self._run_one_step_standard()",
+        ]
+        self._install_source(allcode)
+        self.jitcode.genext_is_pure_arithmetic = False
+        self.jitcode.genext_compile_function = None
+        return True
+
+    def generate(self):
         self._compute_hbp_signals()
+        self._prepare_pc_maps()
+        if self._try_generate_dispatch_prefix_shortcut():
+            return
+        if self._try_generate_pyframe_portal_tail_shortcut():
+            return
         for insn in self.ssarepr.insns:
             if isinstance(insn[0], Label) or insn[0] == '---':
                 continue
@@ -140,18 +378,6 @@ class GenExtension(object):
                 # guard-safe.
                 self.jitcode.genext_function = None
                 return
-        for index, insn in enumerate(self.ssarepr.insns):
-            self._reset_insn()
-            if isinstance(insn[0], Label) or insn[0] == '---':
-                continue
-            pc = self.ssarepr._insns_pos[index]
-            self.pc_to_insn[pc] = insn
-            if index == len(self.ssarepr.insns) - 1:
-                nextpc = len(self.jitcode.code)
-            else:
-                nextpc = self.ssarepr._insns_pos[index + 1]
-            self.pc_to_nextpc[pc] = nextpc
-            self.pc_to_index[pc] = index
 
         # starting points are pc==0, or the instructions after a -live-, or the
         # -live- after a call, or the target of catch_exception calls
@@ -249,22 +475,7 @@ class GenExtension(object):
         allcode.extend(self.precode)
         for line in self.code:
             allcode.append(" " * 8 + line)
-        self.jitcode._genext_source = "\n".join(allcode)
-        # Import rop for opnum constants used in type-specialized recording
-        from rpython.jit.metainterp.resoperation import rop
-        from rpython.jit.metainterp.pyjitpl import const_int
-        d = {"Const": Const, "ConstInt": ConstInt, "const_int": const_int,
-             "ConstPtr": ConstPtr, "ConstFloat": ConstFloat, "JitCode": JitCode, "ChangeFrame": ChangeFrame,
-             "lltype": lltype, "rstr": rstr, 'llmemory': llmemory, 'OBJECTPTR': OBJECTPTR, 'support': support,
-             'rop': rop, 'intmask': intmask, 'r_uint': r_uint,
-             'uint_mul_high': uint_mul_high,
-             'int_signext': int_signext,
-             'longlong': longlong, 'r_singlefloat': r_singlefloat}
-        d.update(self.globals)
-        source = py.code.Source(self.jitcode._genext_source)
-        exec source.compile() in d
-        self.jitcode.genext_function = d['jit_shortcut']
-        self.jitcode.genext_function.__name__ += "_" + self.jitcode.name
+        self._install_source(allcode)
         self._classify_pure_arithmetic()
         self._generate_compile_function()
 
@@ -306,6 +517,7 @@ class GenExtension(object):
             from rpython.jit.backend.x86.regloc import (
                 RegLoc, ImmedLoc, FrameLoc, eax, ecx, xmm0, xmm1,
                 r10, r11, xmm2, xmm3)
+            from rpython.jit.backend.x86 import rx86
             from rpython.jit.backend.x86.arch import (
                 JITFRAME_FIXED_SIZE, WORD, IS_X86_64)
             from rpython.jit.metainterp.resoperation import rop
@@ -514,6 +726,59 @@ class GenExtension(object):
                     fail_locs, frame_depth)
                 assembler.implement_guard(token)
 
+            def _emit_bool_guard(guard_op):
+                _flush_caches()
+                arg = guard_op.getarg(0)
+                if isinstance(arg, ConstInt):
+                    passed = bool(arg.getint())
+                    if guard_op.getopnum() == rop.GUARD_FALSE:
+                        passed = not passed
+                    if passed:
+                        return
+                    raise CannotCompileGenExt(
+                        "constant failing bool guard")
+                loc = _loc(arg)
+                assembler.test_location(loc)
+                assembler.guard_success_cc = rx86.Conditions['NZ']
+                faildescr = guard_op.getdescr()
+                failargs = guard_op.getfailargs() or []
+                fail_locs = []
+                for fa in failargs:
+                    if fa is None:
+                        fail_locs.append(None)
+                    else:
+                        fail_locs.append(_loc(fa))
+                frame_depth = frame_pos[0] + JITFRAME_FIXED_SIZE
+                token = assembler.implement_guard_recovery(
+                    guard_op.getopnum(), faildescr, failargs,
+                    fail_locs, frame_depth)
+                if guard_op.getopnum() == rop.GUARD_TRUE:
+                    assembler.genop_guard_guard_true(
+                        guard_op, token, [], None)
+                else:
+                    assembler.genop_guard_guard_false(
+                        guard_op, token, [], None)
+
+            def _emit_int_comparison(op, cond):
+                arg0 = _load_int(op.getarg(0))
+                arg1 = _loc(op.getarg(1))
+                assembler.mc.CMP(arg0, arg1)
+                assembler.flush_cc(rx86.Conditions[cond], eax)
+                _publish_int_result(op, op_index)
+
+            def _emit_float_comparison(op, emit):
+                arg0 = _load_float(op.getarg(0))
+                arg1 = _loc(op.getarg(1))
+                if isinstance(arg1, FrameLoc):
+                    assembler.mc.MOVSD(xmm1, arg1)
+                    arg1 = xmm1
+                elif isinstance(arg1, ImmedLoc):
+                    assembler.mc.MOVSD(xmm1, arg1)
+                    arg1 = xmm1
+                _spill_cached_int()
+                emit(op, [arg0, arg1], eax)
+                _publish_int_result(op, op_index)
+
             for op_index, op in enumerate(operations):
                 current_op_index[0] = op_index
                 opnum = op.getopnum()
@@ -546,6 +811,9 @@ class GenExtension(object):
                 elif (opnum == rop.GUARD_NO_OVERFLOW or
                         opnum == rop.GUARD_OVERFLOW):
                     _emit_overflow_guard(op)
+                elif (opnum == rop.GUARD_TRUE or
+                        opnum == rop.GUARD_FALSE):
+                    _emit_bool_guard(op)
                 elif opnum == rop.INT_ADD:
                     arg0 = _load_int(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
@@ -621,6 +889,26 @@ class GenExtension(object):
                         arg1 = ecx
                     assembler.mc.SHR(arg0, arg1)
                     _publish_int_result(op, op_index)
+                elif opnum == rop.INT_LT:
+                    _emit_int_comparison(op, "L")
+                elif opnum == rop.INT_LE:
+                    _emit_int_comparison(op, "LE")
+                elif opnum == rop.INT_EQ:
+                    _emit_int_comparison(op, "E")
+                elif opnum == rop.INT_NE:
+                    _emit_int_comparison(op, "NE")
+                elif opnum == rop.INT_GT:
+                    _emit_int_comparison(op, "G")
+                elif opnum == rop.INT_GE:
+                    _emit_int_comparison(op, "GE")
+                elif opnum == rop.UINT_LT:
+                    _emit_int_comparison(op, "B")
+                elif opnum == rop.UINT_LE:
+                    _emit_int_comparison(op, "BE")
+                elif opnum == rop.UINT_GT:
+                    _emit_int_comparison(op, "A")
+                elif opnum == rop.UINT_GE:
+                    _emit_int_comparison(op, "AE")
                 elif opnum == rop.INT_NEG:
                     arg0 = _load_int(op.getarg(0))
                     assembler.genop_int_neg(op, [arg0], arg0)
@@ -628,6 +916,14 @@ class GenExtension(object):
                 elif opnum == rop.INT_INVERT:
                     arg0 = _load_int(op.getarg(0))
                     assembler.genop_int_invert(op, [arg0], arg0)
+                    _publish_int_result(op, op_index)
+                elif opnum == rop.INT_IS_TRUE:
+                    arg0 = _load_int(op.getarg(0))
+                    assembler.genop_int_is_true(op, [arg0], eax)
+                    _publish_int_result(op, op_index)
+                elif opnum == rop.INT_IS_ZERO:
+                    arg0 = _load_int(op.getarg(0))
+                    assembler.genop_int_is_zero(op, [arg0], eax)
                     _publish_int_result(op, op_index)
                 elif opnum == rop.INT_FORCE_GE_ZERO:
                     arg0 = _load_int(op.getarg(0))
@@ -682,6 +978,18 @@ class GenExtension(object):
                         arg1 = xmm1
                     assembler.genop_float_truediv(op, [arg0, arg1], arg0)
                     _publish_float_result(op, op_index)
+                elif opnum == rop.FLOAT_LT:
+                    _emit_float_comparison(op, assembler.genop_float_lt)
+                elif opnum == rop.FLOAT_LE:
+                    _emit_float_comparison(op, assembler.genop_float_le)
+                elif opnum == rop.FLOAT_EQ:
+                    _emit_float_comparison(op, assembler.genop_float_eq)
+                elif opnum == rop.FLOAT_NE:
+                    _emit_float_comparison(op, assembler.genop_float_ne)
+                elif opnum == rop.FLOAT_GT:
+                    _emit_float_comparison(op, assembler.genop_float_gt)
+                elif opnum == rop.FLOAT_GE:
+                    _emit_float_comparison(op, assembler.genop_float_ge)
                 elif opnum == rop.FLOAT_NEG:
                     arg0 = _load_float(op.getarg(0))
                     assembler.genop_float_neg(op, [arg0], arg0)
@@ -1696,6 +2004,117 @@ class Specializer(object):
             return "self.registers_f[%d].getfloatstorage()" % arg.index
         else:
             return "self.registers_r[%d].getref_base()" % arg.index
+
+    # ------------------------------------------------------------------
+    # Overflow-checked int arithmetic: int_{add,sub,mul}_jump_if_ovf.
+    #
+    # These are the dominant arithmetic bytecodes in real Python loops:
+    # CPython-semantics int +/-/* lower to ovfcheck'd ops, which flatten.py
+    # turns into '<op>_jump_if_ovf' with the two-successor insn layout
+    #   (op, TLabel(overflow_exit), arg0, arg1, '->', result).
+    # Without dedicated emitters they fall through to the generic
+    # emit_default (full opimpl dispatch + _record_helper + heapcache), and
+    # when their operands are constant-tracked they hit the sync-and-discard
+    # fallback in generate(), throwing away constant propagation for the rest
+    # of the trace.
+    #
+    # The fast path mirrors _emit_goto_if_not_int_comparison_fast (two
+    # successors: the overflow target and the fall-through) but additionally
+    # records the INT_*_OVF op via the type-specialized record2_int (which
+    # skips the heapcache -- a no-op for overflow ops) and reuses
+    # MIFrame.handle_possible_overflow_error to emit the exact
+    # GUARD_OVERFLOW/GUARD_NO_OVERFLOW with the correct resume pc.  The inline
+    # ovfcheck replicates executor.do_int_*_ovf verbatim (result 0 and
+    # metainterp.ovf_flag=True on overflow), so the recorded op, guard sense
+    # and steady-state output are byte-identical to the generic path.
+    def _emit_int_binop_ovf_fast(self, opnum_name, py_op):
+        lines = []
+        lbl = self.insn[1]
+        arg0 = self.insn[2]
+        arg1 = self.insn[3]
+        result = self.insn[self.resindex]
+        target_pc = self.get_target_pc(lbl)
+
+        box0 = self._get_as_box_nosync(arg0)
+        box1 = self._get_as_box_nosync(arg1)
+        lines.append("_b0 = %s" % box0)
+        lines.append("_b1 = %s" % box1)
+        lines.append("_v0 = %s" % self._get_as_unboxed_nosync(arg0))
+        lines.append("_v1 = %s" % self._get_as_unboxed_nosync(arg1))
+        lines.append("self.metainterp.ovf_flag = False")
+        lines.append("try:")
+        lines.append("    _res = ovfcheck(_v0 %s _v1)" % (py_op,))
+        lines.append("except OverflowError:")
+        lines.append("    self.metainterp.ovf_flag = True")
+        lines.append("    _res = 0")
+        # fast-path recording, skip heapcache (a no-op for overflow ops)
+        lines.append("_op = self.metainterp.history.record2_int(rop.%s, _b0, _b1, _res)" % (
+            opnum_name,))
+        # sync constant registers so the guard captures correct resume data,
+        # then emit GUARD_OVERFLOW/GUARD_NO_OVERFLOW exactly like the opimpl.
+        self._emit_sync_registers(lines)
+        lines.append("self.handle_possible_overflow_error(%d, %d, _op)" % (
+            target_pc, self.orig_pc))
+        lines.append("self.registers_i[%d] = _op" % (result.index,))
+        lines.append("i%d = _res" % (result.index,))
+        lines.append("pc = self.pc")
+        next_consts = self.constant_registers - {result}
+        lines.append("if pc == %s:" % (target_pc,))
+        ovf_spec = self.work_list.specialize_pc(next_consts, target_pc)
+        lines.append("    pc = %s" % (ovf_spec.spec_pc,))
+        lines.append("else:")
+        next_pc = self.work_list.pc_to_nextpc[self.orig_pc]
+        noovf_spec = self.work_list.specialize_pc(next_consts, next_pc)
+        lines.append("    assert self.pc == %s" % (noovf_spec.orig_pc,))
+        lines.append("    pc = %s" % (noovf_spec.spec_pc,))
+        lines.append("continue")
+        return lines
+
+    def emit_unspecialized_int_add_jump_if_ovf(self):
+        return self._emit_int_binop_ovf_fast("INT_ADD_OVF", "+")
+
+    def emit_unspecialized_int_sub_jump_if_ovf(self):
+        return self._emit_int_binop_ovf_fast("INT_SUB_OVF", "-")
+
+    def emit_unspecialized_int_mul_jump_if_ovf(self):
+        return self._emit_int_binop_ovf_fast("INT_MUL_OVF", "*")
+
+    def _emit_specialized_int_binop_ovf(self, py_op):
+        # All operands are compile-time-constant-tracked: replicate the
+        # opimpl 'resbox is Const' branch -- constant-fold with no recorded op
+        # and no guard, jumping to the overflow target only if the runtime
+        # ovfcheck actually overflows (matching opimpl line 'elif ovf_flag:
+        # self.pc = lbl; return None').
+        lines = []
+        lbl = self.insn[1]
+        arg0 = self.insn[2]
+        arg1 = self.insn[3]
+        result = self.insn[self.resindex]
+        target_pc = self.get_target_pc(lbl)
+        lines.append("self.metainterp.ovf_flag = False")
+        lines.append("try:")
+        lines.append("    _res = ovfcheck(%s %s %s)" % (
+            self._get_as_unboxed(arg0), py_op, self._get_as_unboxed(arg1)))
+        lines.append("except OverflowError:")
+        lines.append("    self.metainterp.ovf_flag = True")
+        lines.append("    _res = 0")
+        lines.append("if self.metainterp.ovf_flag:")
+        ovf_spec = self.work_list.specialize_pc(self.constant_registers, target_pc)
+        lines.append("    pc = %s" % (ovf_spec.spec_pc,))
+        lines.append("    continue")
+        lines.append("i%d = _res" % (result.index,))
+        self._emit_jump(lines,
+                        constant_registers=self.constant_registers.union({result}))
+        return lines
+
+    def emit_specialized_int_add_jump_if_ovf(self):
+        return self._emit_specialized_int_binop_ovf("+")
+
+    def emit_specialized_int_sub_jump_if_ovf(self):
+        return self._emit_specialized_int_binop_ovf("-")
+
+    def emit_specialized_int_mul_jump_if_ovf(self):
+        return self._emit_specialized_int_binop_ovf("*")
 
     def emit_unspecialized_int_add(self):
         return self._emit_unspecialized_int_binary_fast("INT_ADD", "+")
@@ -3429,17 +3848,9 @@ class Specializer(object):
 
         target_pc = self.get_target_pc(arg1)
 
-        self._emit_n_ary_if([arg0], lines)
-        specializer = self.work_list.specialize_insn(
-            self.insn, self.constant_registers.union({arg0}), self.orig_pc)
-        lines.append("    pc = %d" % (specializer.get_pc(),))
-        lines.append("    continue")
-
-        box0 = self._get_as_box_after_promote(arg0, True)
+        box0 = self._get_as_box_nosync(arg0)
         lines.append("_b0 = %s" % box0)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_promote(arg0, True))
-        lines.append("_cond = int(%s)" % (py_expr % "_v0",))
-        lines.append("condbox = self.metainterp.history.record1_int(rop.%s, _b0, _cond)" % (
+        lines.append("condbox = self.metainterp.execute_and_record(rop.%s, None, _b0)" % (
             rop_name,))
         self._emit_sync_registers(lines)
         lines.append("self.opimpl_goto_if_not(condbox, %d, %d, replace=False)" % (
@@ -3476,12 +3887,6 @@ class Specializer(object):
         _, arg0, arg1, arg2 = self.insn
 
         target_pc = self.get_target_pc(arg2)
-
-        self._emit_n_ary_if([arg0, arg1], lines)
-        specializer = self.work_list.specialize_insn(
-            self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
-        lines.append("    pc = %d" % (specializer.get_pc(),))
-        lines.append("    continue")
 
         self._emit_sync_registers(lines)
         box0 = self._get_as_box_after_sync(arg0)
@@ -3565,13 +3970,6 @@ class Specializer(object):
 
         target_pc = self.get_target_pc(arg2)
 
-        # Handle constant folding case
-        self._emit_n_ary_if([arg0, arg1], lines)
-        specializer = self.work_list.specialize_insn(
-            self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
-        lines.append("    pc = %d" % (specializer.get_pc(),))
-        lines.append("    continue")
-
         box0 = self._get_as_box_nosync(arg0)
         box1 = self._get_as_box_nosync(arg1)
         # b1 is b2: x <cmp> x is constant, resolve the branch statically
@@ -3589,10 +3987,7 @@ class Specializer(object):
         lines.append("if _b0 is _b1:")
         lines.append("    pc = %s" % (same_box_spec.spec_pc,))
         lines.append("    continue")
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_promote(arg0, True))
-        lines.append("_v1 = %s" % self._get_as_unboxed_after_promote(arg1, True))
-        lines.append("_cond = int(_v0 %s _v1)" % py_op)
-        lines.append("condbox = self.metainterp.history.record2_int(rop.%s, _b0, _b1, _cond)" % (
+        lines.append("condbox = self.metainterp.execute_and_record(rop.%s, None, _b0, _b1)" % (
             rop_name,))
         self._emit_sync_registers(lines)
         lines.append("self.opimpl_goto_if_not(condbox, %d, %d, replace=False)" % (target_pc, self.orig_pc))
@@ -3634,20 +4029,11 @@ class Specializer(object):
 
         target_pc = self.get_target_pc(arg2)
 
-        self._emit_n_ary_if([arg0, arg1], lines)
-        specializer = self.work_list.specialize_insn(
-            self.insn, self.constant_registers.union({arg0, arg1}), self.orig_pc)
-        lines.append("    pc = %d" % (specializer.get_pc(),))
-        lines.append("    continue")
-
         box0 = self._get_as_box_nosync(arg0)
         box1 = self._get_as_box_nosync(arg1)
         lines.append("_b0 = %s" % box0)
         lines.append("_b1 = %s" % box1)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_promote(arg0, True))
-        lines.append("_v1 = %s" % self._get_as_unboxed_after_promote(arg1, True))
-        lines.append("_cond = int(_v0 %s _v1)" % py_op)
-        lines.append("condbox = self.metainterp.history.record2_int(rop.%s, _b0, _b1, _cond)" % (
+        lines.append("condbox = self.metainterp.execute_and_record(rop.%s, None, _b0, _b1)" % (
             rop_name,))
         self._emit_sync_registers(lines)
         lines.append("self.opimpl_goto_if_not(condbox, %d, %d, replace=False)" % (target_pc, self.orig_pc))

@@ -9,7 +9,7 @@ from rpython.jit.metainterp import jitprof, compile
 from rpython.jit.metainterp.optimizeopt.test.test_util import LLtypeMixin
 from rpython.jit.tool.oparser import parse, convert_loop_to_trace
 from rpython.jit.metainterp.optimizeopt import ALL_OPTS_DICT
-from rpython.jit.metainterp.resoperation import rop
+from rpython.jit.metainterp.resoperation import rop, ResOperation, InputArgRef
 
 class FakeCPU(object):
     supports_guard_gc_type = True
@@ -84,10 +84,25 @@ def test_genext_pure_arithmetic_shortcut_rejects_unsupported_ops():
     assert compile._is_pure_arithmetic_trace_op(rop.INT_ADD)
     assert compile._is_pure_arithmetic_trace_op(rop.FLOAT_TRUEDIV)
     assert compile._is_pure_arithmetic_trace_op(rop.GUARD_NO_OVERFLOW)
-    assert not compile._is_pure_arithmetic_trace_op(rop.INT_LT)
-    assert not compile._is_pure_arithmetic_trace_op(rop.FLOAT_EQ)
-    assert not compile._is_pure_arithmetic_trace_op(rop.GUARD_TRUE)
+    assert compile._is_pure_arithmetic_trace_op(rop.INT_LT)
+    assert compile._is_pure_arithmetic_trace_op(rop.UINT_GE)
+    assert compile._is_pure_arithmetic_trace_op(rop.FLOAT_EQ)
+    assert compile._is_pure_arithmetic_trace_op(rop.FLOAT_NE)
+    assert compile._is_pure_arithmetic_trace_op(rop.INT_IS_TRUE)
+    assert compile._is_pure_arithmetic_trace_op(rop.INT_IS_ZERO)
+    assert compile._is_pure_arithmetic_trace_op(rop.GUARD_TRUE)
+    assert compile._is_pure_arithmetic_trace_op(rop.GUARD_FALSE)
     assert not compile._is_pure_arithmetic_trace_op(rop.UINT_MUL_HIGH)
+
+
+def test_genext_pure_arithmetic_shortcut_rejects_ref_failargs():
+    guard_op = ResOperation(rop.GUARD_NO_OVERFLOW, [])
+    guard_op.setfailargs([InputArgRef()])
+    assert compile._has_ref_failargs(guard_op)
+
+    int_guard_op = ResOperation(rop.GUARD_NO_OVERFLOW, [])
+    int_guard_op.setfailargs([ConstInt(42), None])
+    assert not compile._has_ref_failargs(int_guard_op)
 
 def test_compile_loop():
     cpu = FakeCPU()
@@ -212,10 +227,8 @@ def test_hbp_should_throttle_dual_gate():
     lt = FakeLoopToken()
     d = object.__new__(ResumeGuardDescr)
 
-    # HBP GATE TURNED OFF: _hbp_should_throttle is hard-disabled and must
-    # return False for every input combination -- bridges compile as
-    # eagerly as stock PyPy (slow-path specialization via bridges).  The
-    # dual-gate fixtures are kept so re-enabling is a one-line revert.
+    # The throttle is dual-gated: dynamic bridge-storm confirmation plus the
+    # static genext HBP-candidate classification.
 
     # gate absent: rd_loop_token defaults to None
     assert d._hbp_should_throttle() is False
@@ -225,11 +238,11 @@ def test_hbp_should_throttle_dual_gate():
     lt.n_compiled_bridges = HBP_BRIDGE_STORM_THRESHOLD
     assert d._hbp_should_throttle() is False
 
-    # both sub-gates would be open, but the gate is disabled -> still False
+    # both sub-gates open -> throttle
     lt.n_compiled_bridges = HBP_BRIDGE_STORM_THRESHOLD + 1
-    assert d._hbp_should_throttle() is False
+    assert d._hbp_should_throttle() is True
 
-    # static sub-gate closed -> still False
+    # static sub-gate closed -> no throttle
     FakeJitCode.genext_hbp_candidate = False
     assert d._hbp_should_throttle() is False
     FakeJitCode.genext_hbp_candidate = True

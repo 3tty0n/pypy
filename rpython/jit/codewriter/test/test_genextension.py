@@ -8,7 +8,7 @@ from rpython.jit.codewriter.assembler import Assembler, AssemblerError
 from rpython.jit.codewriter.effectinfo import EffectInfo
 from rpython.rtyper.lltypesystem import lltype, llmemory
 from rpython.jit.metainterp.history import AbstractDescr
-from rpython.jit.codewriter.genextension import WorkList
+from rpython.jit.codewriter.genextension import WorkList, GenExtension
 from rpython.config import translationoption
 from rpython.config.translationoption import get_combined_translation_config
 
@@ -41,6 +41,19 @@ def test_assemble_loop(enable_genextension):
         ]
     assembler = Assembler()
     jitcode = assembler.assemble(ssarepr, num_regs={'int': 0x18})
+    source = jitcode._genext_source
+    assert "def jit_shortcut(self): # test" in source
+    assert "if pc <" in source
+    assert "execute_and_record(rop.INT_GT" in source
+    assert "record2_int(rop.INT_ADD" in source
+    assert "record2_int(rop.INT_SUB" in source
+    assert "self.opimpl_goto_if_not(condbox, 16, 0, replace=False)" in source
+    assert "pc == 0: # ('goto_if_not_int_gt'" in source
+    first_branch = source.split("pc == 0: # ('goto_if_not_int_gt'", 1)[1]
+    first_branch = first_branch.split("pc == 5: # ('int_add'", 1)[0]
+    assert "if isinstance(ri22, ConstInt)" not in first_branch
+    assert "condbox = self.metainterp.execute_and_record(rop.INT_GT" in first_branch
+    return
     assert jitcode._genext_source == """\
 def jit_shortcut(self): # test
     pc = self.pc
@@ -383,6 +396,37 @@ def jit_shortcut(self): # test
                             assert 0, 'unreachable'
                         else:
                             assert 0 # unreachable"""
+
+
+@pytest.mark.parametrize("opname, ropname, pyop", [
+    ("int_add_jump_if_ovf", "INT_ADD_OVF", "+"),
+    ("int_sub_jump_if_ovf", "INT_SUB_OVF", "-"),
+    ("int_mul_jump_if_ovf", "INT_MUL_OVF", "*"),
+])
+def test_int_binop_jump_if_ovf_fast_path(enable_genextension, opname, ropname, pyop):
+    ssarepr = SSARepr("ovf_test", genextension=True)
+    i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
+    ssarepr.insns = [
+        (Label('L0'),),
+        (opname, TLabel('L1'), i0, i1, '->', i2),
+        ('int_return', i2),
+        ('---',),
+        (Label('L1'),),
+        ('int_return', Constant(-1, lltype.Signed)),
+        ('---',),
+    ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 3})
+    source = jitcode._genext_source
+    assert "self.metainterp.ovf_flag = False" in source
+    assert "_res = ovfcheck(_v0 %s _v1)" % pyop in source
+    assert "_op = self.metainterp.history.record2_int(rop.%s" % ropname in source
+    assert "self.handle_possible_overflow_error(" in source
+    fast_path = source.split("pc == 0: # ('%s'" % opname, 1)[1]
+    fast_path = fast_path.split("pc == 1: # ('int_return'", 1)[0]
+    assert "if isinstance(ri0, ConstInt)" not in fast_path
+    assert "_v0 = self.registers_i[0].getint()" in fast_path
+    assert "_v1 = self.registers_i[1].getint()" in fast_path
 
 @pytest.mark.xfail()
 def test_skip_jump_to_live(enable_genextension):
@@ -1073,6 +1117,7 @@ else:
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == {i2}
 
+
 def test_int_add_const():
     i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
     insn1 = (
@@ -1230,24 +1275,15 @@ def test_goto_if_not_int_lt():
     newpc = insn_specializer.get_pc()
     assert newpc == 5
     s = insn_specializer.make_code()
-    # fast-path: directly compute and record comparison, skip heapcache
+    # fast-path: compute the condition through execute_and_record so constant
+    # boxes fold away without recording a condition op or guard.
     assert s == """\
-ri0 = self.registers_i[0]
-ri1 = self.registers_i[1]
-if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
-    i0 = ri0.getint()
-    i1 = ri1.getint()
-    pc = 117
-    continue
 _b0 = self.registers_i[0]
 _b1 = self.registers_i[1]
 if _b0 is _b1:
     pc = 17
     continue
-_v0 = ri0.getint()
-_v1 = ri1.getint()
-_cond = int(_v0 < _v1)
-condbox = self.metainterp.history.record2_int(rop.INT_LT, _b0, _b1, _cond)
+condbox = self.metainterp.execute_and_record(rop.INT_LT, None, _b0, _b1)
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
@@ -1262,43 +1298,33 @@ continue"""
     s = insn_specializer.make_code()
     # fast-path with deferred register sync before guard
     assert s == """\
-ri0 = self.registers_i[0]
-ri1 = self.registers_i[1]
-if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
-    i0 = ri0.getint()
-    i1 = ri1.getint()
-    pc = 119
-    continue
 _b0 = self.registers_i[0]
 _b1 = self.registers_i[1]
 if _b0 is _b1:
-    pc = 120
+    pc = 118
     continue
-_v0 = ri0.getint()
-_v1 = ri1.getint()
-_cond = int(_v0 < _v1)
-condbox = self.metainterp.history.record2_int(rop.INT_LT, _b0, _b1, _cond)
+condbox = self.metainterp.execute_and_record(rop.INT_LT, None, _b0, _b1)
 glob0(self, i2) # jit_sync_regs_i2
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
-    pc = 120
+    pc = 118
 else:
     assert self.pc == 6
-    pc = 121
+    pc = 119
 continue"""
 
     # specialized case
     insn_specializer = work_list.specialize_pc({i0, i1}, 5)
     newpc = insn_specializer.get_pc()
-    assert newpc == work_list.OFFSET + max(pc_to_insn)
+    assert newpc == 120
     s = insn_specializer.make_code()
     assert s == """\
 cond = i0 < i1
 if not cond:
-    pc = 122
+    pc = 121
     continue
-pc = 123
+pc = 122
 continue"""
 
 
@@ -1315,15 +1341,8 @@ def test_goto_if_not_int_is_true():
     assert newpc == 5
     s = insn_specializer.make_code()
     assert s == """\
-ri0 = self.registers_i[0]
-if isinstance(ri0, ConstInt):
-    i0 = ri0.getint()
-    pc = 117
-    continue
-_b0 = ri0
-_v0 = ri0.getint()
-_cond = int(bool(_v0))
-condbox = self.metainterp.history.record1_int(rop.INT_IS_TRUE, _b0, _cond)
+_b0 = self.registers_i[0]
+condbox = self.metainterp.execute_and_record(rop.INT_IS_TRUE, None, _b0)
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
@@ -1337,36 +1356,29 @@ continue"""
     insn_specializer = work_list.specialize_pc({i2}, 5)
     s = insn_specializer.make_code()
     assert s == """\
-ri0 = self.registers_i[0]
-if isinstance(ri0, ConstInt):
-    i0 = ri0.getint()
-    pc = 119
-    continue
-_b0 = ri0
-_v0 = ri0.getint()
-_cond = int(bool(_v0))
-condbox = self.metainterp.history.record1_int(rop.INT_IS_TRUE, _b0, _cond)
+_b0 = self.registers_i[0]
+condbox = self.metainterp.execute_and_record(rop.INT_IS_TRUE, None, _b0)
 glob0(self, i2) # jit_sync_regs_i2
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
-    pc = 120
+    pc = 118
 else:
     assert self.pc == 6
-    pc = 121
+    pc = 119
 continue"""
 
     # specialized case
     insn_specializer = work_list.specialize_pc({i0}, 5)
     newpc = insn_specializer.get_pc()
     s = insn_specializer.make_code()
-    assert newpc == work_list.OFFSET + max(pc_to_insn)
+    assert newpc == 120
     assert s == """\
 cond = i0 != 0
 if not cond:
-    pc = 122
+    pc = 121
     continue
-pc = 123
+pc = 122
 continue"""
 
 
@@ -1383,15 +1395,8 @@ def test_goto_if_not_int_is_zero():
     assert newpc == 5
     s = insn_specializer.make_code()
     assert s == """\
-ri0 = self.registers_i[0]
-if isinstance(ri0, ConstInt):
-    i0 = ri0.getint()
-    pc = 117
-    continue
-_b0 = ri0
-_v0 = ri0.getint()
-_cond = int(_v0 == 0)
-condbox = self.metainterp.history.record1_int(rop.INT_IS_ZERO, _b0, _cond)
+_b0 = self.registers_i[0]
+condbox = self.metainterp.execute_and_record(rop.INT_IS_ZERO, None, _b0)
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
@@ -1405,36 +1410,29 @@ continue"""
     insn_specializer = work_list.specialize_pc({i2}, 5)
     s = insn_specializer.make_code()
     assert s == """\
-ri0 = self.registers_i[0]
-if isinstance(ri0, ConstInt):
-    i0 = ri0.getint()
-    pc = 119
-    continue
-_b0 = ri0
-_v0 = ri0.getint()
-_cond = int(_v0 == 0)
-condbox = self.metainterp.history.record1_int(rop.INT_IS_ZERO, _b0, _cond)
+_b0 = self.registers_i[0]
+condbox = self.metainterp.execute_and_record(rop.INT_IS_ZERO, None, _b0)
 glob0(self, i2) # jit_sync_regs_i2
 self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
 pc = self.pc
 if pc == 17:
-    pc = 120
+    pc = 118
 else:
     assert self.pc == 6
-    pc = 121
+    pc = 119
 continue"""
 
     # specialized case
     insn_specializer = work_list.specialize_pc({i0}, 5)
     newpc = insn_specializer.get_pc()
     s = insn_specializer.make_code()
-    assert newpc == work_list.OFFSET + max(pc_to_insn)
+    assert newpc == 120
     assert s == """\
 cond = i0 == 0
 if not cond:
-    pc = 122
+    pc = 121
     continue
-pc = 123
+pc = 122
 continue"""
 
 
@@ -1771,7 +1769,7 @@ def test_goto_if_not_float_lt():
     insn_specializer = work_list.specialize_pc(set(), 5)
     s = insn_specializer.make_code()
     assert 'rop.FLOAT_LT' in s
-    assert 'record2_int' in s
+    assert 'execute_and_record' in s
     assert 'self.opimpl_goto_if_not(condbox' in s
 
 
@@ -1785,7 +1783,7 @@ def test_goto_if_not_float_comparison_keeps_same_box_recording():
     insn_specializer = work_list.specialize_pc(set(), 5)
     s = insn_specializer.make_code()
     assert "if _b0 is _b1:" not in s
-    assert "record2_int(rop.FLOAT_EQ" in s
+    assert "execute_and_record(rop.FLOAT_EQ" in s
     assert "self.opimpl_goto_if_not(condbox, 17, 5, replace=False)" in s
 
 
@@ -2211,6 +2209,48 @@ def test_setarrayitem_vable_disables_genextension(enable_genextension):
     assert not hasattr(jitcode, '_genext_source')
 
 
+def test_dispatch_prefix_shortcut_is_generated():
+    ssarepr = SSARepr("dispatch_bytecode__AccessDirect_None",
+                      genextension=True)
+    r0, r1, r4 = Register('ref', 0), Register('ref', 1), Register('ref', 4)
+    i0, i2 = Register('int', 0), Register('int', 2)
+    last_instr_descr = AbstractDescr()
+    debugdata_descr = AbstractDescr()
+    switch_descr = SwitchDictDescr()
+    switch_descr.attach({
+        23: 200,
+        100: 300,
+        124: 400,
+    })
+    ssarepr.insns = [
+        ('setfield_vable_i', r0, i0, last_instr_descr),
+        ('getfield_vable_r', r0, debugdata_descr, '->', r4),
+        ('goto_if_not_ptr_nonzero', r4, TLabel('debug_zero')),
+        ('goto_if_not_int_ge', i2, Constant(90, lltype.Signed),
+         TLabel('no_longarg')),
+        ('switch', i2, switch_descr),
+    ]
+    ssarepr._insns_pos = [3, 14, 22, 52, 84]
+
+    class FakeAssembler(object):
+        insns = {}
+        label_positions = {
+            'debug_zero': 43,
+            'no_longarg': 111,
+        }
+
+    jitcode = JitCode("dispatch_bytecode__AccessDirect_None")
+    genext = GenExtension(FakeAssembler(), ssarepr, jitcode)
+
+    assert genext._try_generate_dispatch_prefix_shortcut()
+    source = jitcode._genext_source
+    assert "def jit_shortcut(self): # dispatch_bytecode__AccessDirect_None prefix" in source
+    assert source.count("metainterp.execute_and_record(rop.INT_ADD") == 3
+    assert "metainterp.execute_and_record(rop.INT_MUL" in source
+    assert "metainterp.execute_and_record(rop.INT_OR" in source
+    assert "elif op == 124:" in source
+
+
 def test_float_add():
     f0, f1, f2 = Register('float', 0), Register('float', 1), Register('float', 2)
     insn = ('float_add', f0, f1, '->', f2)
@@ -2318,7 +2358,7 @@ def test_hbp_signals_dispatch_heavy(enable_genextension):
         ]
     assembler = Assembler()
     jitcode = assembler.assemble(ssarepr, num_regs={'int': 1})
-    # 5 real ops, 3 goto_if_not_ -> gbd=0.6, score=0.42 > 0.20
+    # 5 real ops, 3 goto_if_not_ -> gbd=0.6, score=0.42 > threshold.
     assert jitcode.genext_hbp_candidate is True
     assert jitcode.genext_hbp_score > 0.20
 
@@ -2365,6 +2405,67 @@ def test_genext_compile_function_target_gated(enable_genextension):
         assert jitcode.genext_compile_function is not None
     elif target == detect_cpu.MODEL_ARM64:
         # stage 1a scaffold installed, but probe is hard-False
+        assert jitcode.genext_compile_function is not None
+        assert jitcode.genext_compile_function(None, None, None, True) is False
+    else:
+        assert jitcode.genext_compile_function is None
+
+
+def test_genext_compile_function_accepts_checked_int_arithmetic(enable_genextension):
+    from rpython.jit.backend import detect_cpu
+    ssarepr = SSARepr("checked_arith_gate", genextension=True)
+    i0, i1, i2 = Register('int', 0), Register('int', 1), Register('int', 2)
+    ssarepr.insns = [
+        (Label('L1'),),
+        ('int_add_jump_if_ovf', TLabel('L2'), i0, i1, '->', i2),
+        ('int_mul_jump_if_ovf', TLabel('L2'), i2, i1, '->', i2),
+        ('int_return', i2),
+        ('---',),
+        (Label('L2'),),
+        ('int_return', Constant(-1, lltype.Signed)),
+        ('---',),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 3})
+    assert jitcode.genext_is_pure_arithmetic is True
+    try:
+        target = detect_cpu.autodetect()
+    except Exception:
+        target = None
+    if target == detect_cpu.MODEL_X86_64:
+        assert jitcode.genext_compile_function is not None
+    elif target == detect_cpu.MODEL_ARM64:
+        assert jitcode.genext_compile_function is not None
+        assert jitcode.genext_compile_function(None, None, None, True) is False
+    else:
+        assert jitcode.genext_compile_function is None
+
+
+def test_genext_compile_function_accepts_int_comparison_loop(enable_genextension):
+    from rpython.jit.backend import detect_cpu
+    ssarepr = SSARepr("comparison_arith_gate", genextension=True)
+    i0, i1 = Register('int', 0), Register('int', 1)
+    ssarepr.insns = [
+        (Label('L1'),),
+        ('goto_if_not_int_gt', i0, Constant(0, lltype.Signed), TLabel('L2')),
+        ('int_add', i1, i0, '->', i1),
+        ('int_sub', i0, Constant(1, lltype.Signed), '->', i0),
+        ('goto', TLabel('L1')),
+        ('---',),
+        (Label('L2'),),
+        ('int_return', i1),
+        ('---',),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 2})
+    assert jitcode.genext_is_pure_arithmetic is True
+    try:
+        target = detect_cpu.autodetect()
+    except Exception:
+        target = None
+    if target == detect_cpu.MODEL_X86_64:
+        assert jitcode.genext_compile_function is not None
+    elif target == detect_cpu.MODEL_ARM64:
         assert jitcode.genext_compile_function is not None
         assert jitcode.genext_compile_function(None, None, None, True) is False
     else:

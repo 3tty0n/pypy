@@ -15,7 +15,12 @@ def _genextension_enabled():
     return bool(getattr(translation_config, 'genextension', False))
 
 
-_GENEXT_PUREOP_BOOST = 2 if _genextension_enabled() else 1
+# Whether this is a genext build (decided at translation time, so the
+# checks below fold to constants in the produced binary).
+_GENEXT_ENABLED = _genextension_enabled()
+
+# Factor by which genext widens the per-opnum CSE history window.
+_GENEXT_PUREOP_BOOST = 2 if _GENEXT_ENABLED else 1
 
 
 
@@ -182,7 +187,30 @@ class OptPure(Optimization):
             return isinstance(oldop, AbstractResOp) and oldop.opnum == op.opnum
         return True
 
+    @staticmethod
+    def _pureop_window_boost(opnum):
+        # genext widens the CSE window, but only for *expensive* pure ops
+        # where removing a redundant computation is worth the longer live
+        # range it creates.  Cheap rematerializable ops (int_add/sub/and/
+        # or/xor, shifts, comparisons) keep the baseline window: widening
+        # them mostly extends live ranges and forces extra register spills
+        # in register-heavy loops (e.g. pyxl/spambayes), which costs more
+        # in steady state than the recomputation it would save.
+        if not _GENEXT_ENABLED:
+            return 1
+        if (opnum == rop.INT_MUL or
+            opnum == rop.INT_MUL_OVF or
+            opnum == rop.INT_ADD_OVF or
+            opnum == rop.INT_SUB_OVF or
+            opnum == rop.FLOAT_ADD or
+            opnum == rop.FLOAT_SUB or
+            opnum == rop.FLOAT_MUL or
+            opnum == rop.FLOAT_TRUEDIV):
+            return _GENEXT_PUREOP_BOOST
+        return 1
+
     def getrecentops(self, opnum, create=True):
+        raw_opnum = opnum
         if rop._OVF_FIRST <= opnum <= rop._OVF_LAST:
             opnum = opnum - rop._OVF_FIRST
         else:
@@ -191,7 +219,7 @@ class OptPure(Optimization):
         recentops = self._pure_operations[opnum]
         if recentops is None and create:
             length = self.optimizer.jitdriver_sd.warmstate.pureop_historylength
-            length = length * _GENEXT_PUREOP_BOOST
+            length = length * self._pureop_window_boost(raw_opnum)
             self._pure_operations[opnum] = recentops = RecentPureOps(length)
         return recentops
 

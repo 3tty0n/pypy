@@ -4,7 +4,7 @@
 
 import time
 from rpython.rlib.debug import debug_print, debug_start, debug_stop
-from rpython.rlib.debug import have_debug_prints
+from rpython.rlib.debug import have_debug_prints, have_debug_prints_for
 from rpython.rlib.objectmodel import specialize
 from rpython.jit.metainterp.jitexc import JitException
 from rpython.rlib.jit import Counters
@@ -20,6 +20,7 @@ class BaseProfiler(object):
 
 class EmptyProfiler(BaseProfiler):
     initialized = True
+    genext_stats_enabled = False
 
     def __init__(self, metainterp_sd=None):
         BaseProfiler.__init__(self, metainterp_sd)
@@ -84,6 +85,7 @@ class Profiler(BaseProfiler):
     calls = 0
     current = None
     cpu = None
+    genext_stats_enabled = False
 
     def start(self):
         self.starttime = self.timer()
@@ -92,6 +94,7 @@ class Profiler(BaseProfiler):
         self.counters = [0] * (Counters.ncounters - _CPU_LINES)
         self.calls = 0
         self.current = []
+        self.genext_stats_enabled = have_debug_prints_for("jit-genext-stats")
 
     def finish(self):
         self.tk = self.timer()
@@ -178,7 +181,36 @@ class Profiler(BaseProfiler):
         pass
 
     def _print_genext_stats(self):
-        pass
+        jitcodes = self.metainterp_sd.jitcodes
+        total_fast = 0
+        total_slow = 0
+        total_loops = 0
+        total_bridges = 0
+        printed = 0
+        for jitcode in jitcodes:
+            fast = jitcode.genext_fast_execs
+            slow = jitcode.genext_slow_execs
+            loops = jitcode.genext_compiled_loops
+            bridges = jitcode.genext_compiled_bridges
+            if fast == 0 and loops == 0 and bridges == 0:
+                continue
+            total_fast += fast
+            total_slow += slow
+            total_loops += loops
+            total_bridges += bridges
+            printed += 1
+            debug_print("jitcode", jitcode.index, jitcode.name,
+                        "fast", fast,
+                        "slow", slow,
+                        "loops", loops,
+                        "bridges", bridges,
+                        "hbp", jitcode.genext_hbp_score)
+        debug_print("total",
+                    "jitcodes", printed,
+                    "fast", total_fast,
+                    "slow", total_slow,
+                    "loops", total_loops,
+                    "bridges", total_bridges)
 
     def _print_stats(self):
         cnt = self.counters

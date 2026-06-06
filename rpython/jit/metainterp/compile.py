@@ -52,12 +52,18 @@ _GENEXT_COMPILE_SHORTCUT_OPS = (
     rop.GUARD_NO_OVERFLOW, rop.GUARD_OVERFLOW,
     rop.INT_AND, rop.INT_OR, rop.INT_XOR,
     rop.INT_LSHIFT, rop.INT_RSHIFT, rop.UINT_RSHIFT,
-    rop.INT_NEG, rop.INT_INVERT,
+    rop.INT_LT, rop.INT_LE, rop.INT_EQ, rop.INT_NE,
+    rop.INT_GT, rop.INT_GE,
+    rop.UINT_LT, rop.UINT_LE, rop.UINT_GT, rop.UINT_GE,
+    rop.INT_NEG, rop.INT_INVERT, rop.INT_IS_TRUE, rop.INT_IS_ZERO,
     rop.INT_FORCE_GE_ZERO, rop.INT_SIGNEXT,
     rop.FLOAT_ADD, rop.FLOAT_SUB, rop.FLOAT_MUL, rop.FLOAT_TRUEDIV,
+    rop.FLOAT_LT, rop.FLOAT_LE, rop.FLOAT_EQ, rop.FLOAT_NE,
+    rop.FLOAT_GT, rop.FLOAT_GE,
     rop.FLOAT_NEG, rop.FLOAT_ABS,
     rop.CAST_FLOAT_TO_INT, rop.CAST_INT_TO_FLOAT,
     rop.CAST_FLOAT_TO_SINGLEFLOAT, rop.CAST_SINGLEFLOAT_TO_FLOAT,
+    rop.GUARD_TRUE, rop.GUARD_FALSE,
 )
 
 
@@ -67,6 +73,16 @@ def _is_pure_arithmetic_trace_op(opnum):
     # x86 shortcut, emit partial code, raise CannotCompileGenExt, truncate the
     # assembler buffer, and then re-run the normal backend path.
     return opnum in _GENEXT_COMPILE_SHORTCUT_OPS
+
+
+def _has_ref_failargs(op):
+    failargs = op.getfailargs()
+    if not failargs:
+        return False
+    for arg in failargs:
+        if arg is not None and arg.type == 'r':
+            return True
+    return False
 
 
 def compile_pure_arithmetic_loop(metainterp, greenkey, trace, runtime_args,
@@ -96,6 +112,8 @@ def compile_pure_arithmetic_loop(metainterp, greenkey, trace, runtime_args,
         if not _is_pure_arithmetic_trace_op(op.getopnum()):
             return None
         if op.type == 'r':
+            return None
+        if _has_ref_failargs(op):
             return None
         ops.append(op)
 
@@ -675,6 +693,11 @@ def send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, loop, type,
     if metainterp_sd.warmrunnerdesc is not None:    # for tests
         metainterp_sd.warmrunnerdesc.memory_manager.keep_loop_alive(original_jitcell_token)
 
+    mainjitcode = jitdriver_sd.mainjitcode
+    if (mainjitcode is not None and
+            metainterp_sd.profiler.genext_stats_enabled):
+        mainjitcode.genext_compiled_loops += 1
+
 def send_bridge_to_backend(jitdriver_sd, metainterp_sd, faildescr, inputargs,
                            operations, original_loop_token, memo):
     forget_optimization_info(operations)
@@ -720,6 +743,11 @@ def send_bridge_to_backend(jitdriver_sd, metainterp_sd, faildescr, inputargs,
     metainterp_sd.logger_ops.log_bridge(inputargs, operations, None, faildescr,
                                         ops_offset, memo=memo)
     #
+    mainjitcode = jitdriver_sd.mainjitcode
+    if (mainjitcode is not None and
+            metainterp_sd.profiler.genext_stats_enabled):
+        mainjitcode.genext_compiled_bridges += 1
+
     #if metainterp_sd.warmrunnerdesc is not None:    # for tests
     #    metainterp_sd.warmrunnerdesc.memory_manager.keep_loop_alive(
     #        original_loop_token)
@@ -794,7 +822,7 @@ class ResumeDescr(AbstractFailDescr):
 # a bridge is compiled -- raising the bar, never lowering it.  Dual-gating
 # (static + dynamic) makes it impossible to fire on an arithmetic-dominated
 # loop, which is what prevents a bridge/trace explosion.
-HBP_BRIDGE_STORM_THRESHOLD = 30
+HBP_BRIDGE_STORM_THRESHOLD = 10
 HBP_THROTTLE_FACTOR = 4.0
 
 
@@ -856,16 +884,12 @@ class AbstractResumeGuardDescr(ResumeDescr):
         return self.status & self.ST_SHIFT_MASK
 
     def _hbp_should_throttle(self):
-        # HBP GATE TURNED OFF: always return False -> the per-guard
-        # jitcounter increment is never divided, so bridges compile as
-        # eagerly as stock PyPy.  Failing-guard slow paths are therefore
-        # specialized into compiled bridges instead of being throttled
-        # into repeated blackhole bail-outs.  The dual-gate logic below is
-        # retained (dead) so this is a one-line, fully reversible switch.
-        return False
-        # Dual gate: dynamic bridge-storm confirmation AND static
-        # genext HBP-candidate classification of the loop's portal jitcode.
-        # Either gate absent -> no throttling (exact current behavior).
+        # Dual gate: dynamic bridge-storm confirmation AND static genext
+        # HBP-candidate classification of the loop's portal jitcode.  The
+        # threshold is intentionally after initial specialization: early
+        # guard specialization stays as
+        # eager as stock PyPy, then bridge-heavy bytecode dispatch loops pay a
+        # higher failure-count bar before compiling more bridges.
         loop_token_ref = self.rd_loop_token
         if loop_token_ref is None:
             return False

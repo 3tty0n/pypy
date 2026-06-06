@@ -1982,29 +1982,37 @@ class MIFrame(object):
         staticdata = self.metainterp.staticdata
         try:
             if self.jitcode.genext_function:
+                if staticdata.profiler.genext_stats_enabled:
+                    self.jitcode.genext_fast_execs += 1
                 staticdata.profiler.count(Counters.FAST_TRACING_FUNCTION_EXECUTIONS)
                 return self.jitcode.genext_function(self)
 
+            if staticdata.profiler.genext_stats_enabled:
+                self.jitcode.genext_slow_execs += 1
             staticdata.profiler.count(Counters.SLOW_TRACING_FUNCTION_EXECUTIONS)
-            pc = self.pc
-            bytecode = self.bytecode
-            op_live = staticdata.op_live
-            op_goto = staticdata.op_goto
-            opcode_implementations = staticdata.opcode_implementations
-            while True:
-                op = ord(bytecode[pc])
-                if op == op_live:
-                    pc += OFFSET_SIZE + 1
-                    self.pc = pc
-                    continue
-                elif op == op_goto:
-                    pc = ord(bytecode[pc + 1]) | (ord(bytecode[pc + 2])<<8)
-                    self.pc = pc
-                    continue
-                opcode_implementations[op](self, pc)
-                pc = self.pc
+            return self._run_one_step_standard()
         except ChangeFrame:
             pass
+
+    def _run_one_step_standard(self):
+        staticdata = self.metainterp.staticdata
+        pc = self.pc
+        bytecode = self.bytecode
+        op_live = staticdata.op_live
+        op_goto = staticdata.op_goto
+        opcode_implementations = staticdata.opcode_implementations
+        while True:
+            op = ord(bytecode[pc])
+            if op == op_live:
+                pc += OFFSET_SIZE + 1
+                self.pc = pc
+                continue
+            elif op == op_goto:
+                pc = ord(bytecode[pc + 1]) | (ord(bytecode[pc + 2])<<8)
+                self.pc = pc
+                continue
+            opcode_implementations[op](self, pc)
+            pc = self.pc
 
     def implement_guard_value(self, box, orgpc):
         """Promote the given Box into a Const. """
