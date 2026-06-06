@@ -780,22 +780,41 @@ class WarmEnterState(object):
             if n1 < unroll_ws.loop_unroll_min_samples or \
                     n2 < unroll_ws.loop_unroll_min_samples:
                 return
-            # Pick the comparison metric: min (fastest entry, sensitive) or mean
-            # (representative).  Adaptive early stop: decide as soon as the gap is
-            # clearly past the noise margin, collapsing the trial's overhead.
-            if unroll_ws.loop_unroll_metric == 1:
-                a1 = cell.ab_min_f1
-                a2 = cell.ab_min_fk
-            else:
-                a1 = cell.ab_cycles_f1 // n1
-                a2 = cell.ab_cycles_fk // n2
+            # Decision metric: 1=min (fastest entry, sensitive), 0=mean
+            # (representative), 2=robust (adopt only if BOTH min and mean favour
+            # fK past the margin).  The robust metric rejects the lucky-min false
+            # adoptions measured on allocation-heavy loops, where the minimum
+            # entry can favour fK by noise while the mean disagrees.  Adaptive
+            # early stop in every mode: decide as soon as the gap clears margin.
             gain = unroll_ws.loop_unroll_min_gain   # permille
-            if a1 > 0 and a2 * 1000 < a1 * (1000 - gain):
-                _ab_decide(cell, True)     # fK clearly faster -> adopt it
-            elif a2 * 1000 > a1 * (1000 + gain):
-                _ab_decide(cell, False)    # fK clearly slower -> keep f1
-            elif n1 >= cell.ab_trial_left:
-                _ab_decide(cell, False)    # close, inconclusive -> keep f1
+            min1 = cell.ab_min_f1
+            min2 = cell.ab_min_fk
+            mean1 = cell.ab_cycles_f1 // n1
+            mean2 = cell.ab_cycles_fk // n2
+            if unroll_ws.loop_unroll_metric == 2:
+                min_faster = min1 > 0 and min2 * 1000 < min1 * (1000 - gain)
+                mean_faster = mean1 > 0 and mean2 * 1000 < mean1 * (1000 - gain)
+                min_slower = min1 > 0 and min2 * 1000 > min1 * (1000 + gain)
+                mean_slower = mean1 > 0 and mean2 * 1000 > mean1 * (1000 + gain)
+                if min_faster and mean_faster:
+                    _ab_decide(cell, True)     # both agree -> adopt fK
+                elif min_slower or mean_slower:
+                    _ab_decide(cell, False)    # either says slower -> keep f1
+                elif n1 >= cell.ab_trial_left:
+                    _ab_decide(cell, False)    # inconclusive -> keep f1
+            else:
+                if unroll_ws.loop_unroll_metric == 1:
+                    a1 = min1
+                    a2 = min2
+                else:
+                    a1 = mean1
+                    a2 = mean2
+                if a1 > 0 and a2 * 1000 < a1 * (1000 - gain):
+                    _ab_decide(cell, True)     # fK clearly faster -> adopt it
+                elif a2 * 1000 > a1 * (1000 + gain):
+                    _ab_decide(cell, False)    # fK clearly slower -> keep f1
+                elif n1 >= cell.ab_trial_left:
+                    _ab_decide(cell, False)    # close, inconclusive -> keep f1
 
         def execute_assembler(loop_token, *args):
             # Call the backend to run the 'looptoken' with the given

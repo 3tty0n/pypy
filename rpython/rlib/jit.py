@@ -631,7 +631,7 @@ PARAMETER_DOCS = {
     'vec_all': 'try to vectorize trace loops that occur outside of the numpypy library',
     'loop_unroll_factor': 'classical loop unrolling: when >1, each hot loop is compiled both normally (f1) and unrolled K-deep (fK), both are timed in-flight via a runtime A/B trial, and the faster variant is kept per loop (defaults to f1 unless fK is clearly faster, so it never regresses). 1=off/stock peeling only, 2-4 typical.',
     'loop_unroll_warmup': 'runtime A/B unroll: a loop must be entered this many times before its A/B trial starts, so cold/short-lived loops never build fK or pay the trial overhead. Only used when loop_unroll_factor>1.',
-    'loop_unroll_metric': 'runtime A/B unroll: decision metric, 1=min (fastest interleaved entry, sensitive) or 0=mean (representative). Only used when loop_unroll_factor>1.',
+    'loop_unroll_metric': 'runtime A/B unroll: decision metric, 1=min (fastest interleaved entry, sensitive), 0=mean (representative), or 2=robust (adopt fK only if min AND mean both favour it; rejects lucky-min false adoptions on allocation-heavy loops). Only used when loop_unroll_factor>1.',
     'loop_unroll_min_samples': 'runtime A/B unroll: interleaved samples per variant before an (early) decision; higher is more accurate but costlier. Only used when loop_unroll_factor>1.',
     'loop_unroll_trial': 'runtime A/B unroll: cap on timed entries per variant before forcing a decision (rarely reached thanks to early-stop). Only used when loop_unroll_factor>1.',
     'loop_unroll_min_gain': 'runtime A/B unroll: keep the unrolled fK variant only if it is at least this many permille faster than f1 (30 = 3%). Only used when loop_unroll_factor>1.',

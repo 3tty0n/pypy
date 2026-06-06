@@ -45,12 +45,13 @@ class UnrollVIHTests(object):
                 jj += 1
             return total
 
-        def f(outer, n, k, factor, vih):
+        def f(outer, n, k, factor, vih, metric=1):
             set_param(driver, 'threshold', 1)
             set_param(driver, 'loop_unroll_factor', factor)
             set_param(driver, 'loop_unroll_warmup', 2)
             set_param(driver, 'loop_unroll_trial', 1)
             set_param(driver, 'loop_unroll_min_gain', 0)
+            set_param(driver, 'loop_unroll_metric', metric)
             set_param(driver, 'enable_invariant_varindex_hoist', vih)
             a = [0.0] * n
             i = 0
@@ -80,8 +81,17 @@ class UnrollVIHTests(object):
         expected = self._interp(60, 40, 4)
         for factor in [1, 2, 4]:
             for vih in [0, 1]:
-                res = self.meta_interp(f, [60, 40, 4, factor, vih])
+                res = self.meta_interp(f, [60, 40, 4, factor, vih, 1])
                 assert res == expected
+
+    def test_unroll_vih_robust_metric_correct(self):
+        # The robust decision metric (loop_unroll_metric=2: adopt fK only if min
+        # AND mean agree) must also produce interpreter-identical results.
+        f = self._make()
+        expected = self._interp(60, 40, 4)
+        for factor in [1, 2, 4]:
+            res = self.meta_interp(f, [60, 40, 4, factor, 1, 2])
+            assert res == expected
 
     def test_unroll_vih_does_not_increase_body_reads(self):
         # With VIH on, unrolling must not multiply the invariant read across the
@@ -89,9 +99,9 @@ class UnrollVIHTests(object):
         # exceed (factor==1, VIH on) x K.  This is the optimisation-effectiveness
         # gate -- it fails if the hoist is duplicated per peeled copy.
         f = self._make()
-        self.meta_interp(f, [60, 40, 4, 1, 1])
+        self.meta_interp(f, [60, 40, 4, 1, 1, 1])
         base = _max_body_array_reads()
-        self.meta_interp(f, [60, 40, 4, 2, 1])
+        self.meta_interp(f, [60, 40, 4, 2, 1, 1])
         unrolled = _max_body_array_reads()
         assert unrolled <= base * 2
 
