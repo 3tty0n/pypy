@@ -799,6 +799,16 @@ HBP_POLICY_PRESETS += [
     # keeping it on scimark_lu).  numeric_only=0 so numeric kernels are trialed.
     ("eval_tv_u4_phase", _TV + ",loop_unroll_factor=4,loop_unroll_metric=2,loop_unroll_numeric_only=0,loop_unroll_phase=20"),
 ]
+# Code-size gate sweep: phase trial + skip loops whose estimated unrolled body
+# (f1 ops * factor) exceeds loop_unroll_max_ops.  Find a threshold that keeps
+# scimark_lu's tiny body while rejecting raytrace/pickle's large loops.
+_U4P = ",loop_unroll_factor=4,loop_unroll_metric=2,loop_unroll_numeric_only=0,loop_unroll_phase=20"
+HBP_POLICY_PRESETS += [
+    ("eval_tv_u4_mo80",  _TV + _U4P + ",loop_unroll_max_ops=80"),
+    ("eval_tv_u4_mo160", _TV + _U4P + ",loop_unroll_max_ops=160"),
+    ("eval_tv_u4_mo320", _TV + _U4P + ",loop_unroll_max_ops=320"),
+    ("eval_tv_u4_mo640", _TV + _U4P + ",loop_unroll_max_ops=640"),
+]
 
 #HBP_POLICY_DEFAULT = (
 #    "stock,hbp_stock_noinherit,hbp_stock_inherit1,base_rl1,"

@@ -464,6 +464,7 @@ class JitCellToken(AbstractDescr):
     # which variant this token is (1 = f1, 2 = fK).  None/0 when not in a trial.
     ab_cell = None
     ab_version = 0
+    ab_loop_ops = 0      # optimized op count of this loop (for the code-size gate)
     # and more data specified by the backend when the loop is compiled
     number = -1
     generation = r_int64(0)

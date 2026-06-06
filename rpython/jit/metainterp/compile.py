@@ -358,6 +358,8 @@ def compile_loop(metainterp, greenkey, start, inputargs, jumpargs,
             label_token.short_preamble, metainterp.box_names_memo)
     loop.operations = ([start_label] + preamble_ops + loop_info.extra_same_as +
                        loop_info.extra_before_label + [loop_info.label_op] + loop_ops)
+    # Record optimized op count for the A/B unroll code-size gate.
+    jitcell_token.ab_loop_ops = len(loop.operations)
     if not we_are_translated():
         loop.check_consistency()
     # check jump op has same number of args as label

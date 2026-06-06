@@ -325,6 +325,9 @@ class WarmEnterState(object):
     loop_unroll_phase = 0       # 0=per-entry interleave; >0=exclusive phase length
                                 # (run this many consecutive entries of one variant
                                 # before switching, to measure true steady-state cost)
+    loop_unroll_max_ops = 0     # 0=off; >0 => skip the trial when the estimated
+                                # unrolled body (f1 ops * factor) exceeds this, so
+                                # large loops are never unrolled (i-cache bloat gate)
 
     def __init__(self, warmrunnerdesc, jitdriver_sd):
         "NOT_RPYTHON"
@@ -438,6 +441,11 @@ class WarmEnterState(object):
         if value < 0:
             value = 0
         self.loop_unroll_phase = value
+
+    def set_param_loop_unroll_max_ops(self, value):
+        if value < 0:
+            value = 0
+        self.loop_unroll_max_ops = value
 
     def set_param_max_retrace_guards(self, value):
         if self.warmrunnerdesc:

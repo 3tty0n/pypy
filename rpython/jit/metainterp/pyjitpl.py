@@ -3483,6 +3483,13 @@ class MetaInterp(object):
             cell.ab_trial_left = ws.loop_unroll_trial
             cell.ab_state = AB_INTERLEAVE
         elif cell.ab_state == AB_OFF and ab_numeric:
+            # Code-size gate: skip loops whose estimated unrolled body (f1 op count
+            # * factor) would bloat the i-cache.  That bloat is what makes unrolling
+            # a net loss on large loops (raytrace/pickle), and it is invisible to
+            # per-loop timing -- so gate it statically here.
+            max_ops = ws.loop_unroll_max_ops
+            if max_ops > 0 and jitcell_token.ab_loop_ops * ws.loop_unroll_factor > max_ops:
+                return
             # first compile of a fresh numeric loop: run f1 and count entries; the
             # A/B trial only starts once the loop has stayed hot for
             # loop_unroll_warmup entries, so cold/short loops never pay the trial's

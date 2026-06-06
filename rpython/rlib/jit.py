@@ -637,6 +637,7 @@ PARAMETER_DOCS = {
     'loop_unroll_min_gain': 'runtime A/B unroll: keep the unrolled fK variant only if it is at least this many permille faster than f1 (30 = 3%). Only used when loop_unroll_factor>1.',
     'loop_unroll_numeric_only': 'runtime A/B unroll: when 1, only loops with no residual calls (tight numeric loops) enter the A/B trial; object-churn loops are excluded so they never pay the trial overhead. 0=trial every hot loop. Only used when loop_unroll_factor>1.',
     'loop_unroll_phase': 'runtime A/B unroll: 0=interleave f1/fK per entry (cancels drift but never runs a variant continuously); >0=run this many consecutive entries of one variant before switching, so the trial measures each variant true steady-state cost (catches fK regressions that only appear under continuous execution). Only used when loop_unroll_factor>1.',
+    'loop_unroll_max_ops': 'runtime A/B unroll: 0=off; >0 => a loop only enters the trial if its estimated unrolled body (f1 optimized op count * factor) is at most this, so large loops are never unrolled (avoids the i-cache bloat that makes unrolling a net loss on big loops). Only used when loop_unroll_factor>1.',
 }
 
 PARAMETERS = {'threshold': 1039, # just above 1024, prime
@@ -661,6 +662,7 @@ PARAMETERS = {'threshold': 1039, # just above 1024, prime
               'loop_unroll_min_gain': 30,
               'loop_unroll_numeric_only': 1,
               'loop_unroll_phase': 0,
+              'loop_unroll_max_ops': 0,
               'enable_hot_bridge_promotion': 0,
               'enable_hbp_class_promotion': 0,
               'enable_hbp_bool_promotion': 0,
