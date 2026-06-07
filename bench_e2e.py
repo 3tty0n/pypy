@@ -809,6 +809,11 @@ HBP_POLICY_PRESETS += [
     ("eval_tv_u4_mo320", _TV + _U4P + ",loop_unroll_max_ops=320"),
     ("eval_tv_u4_mo640", _TV + _U4P + ",loop_unroll_max_ops=640"),
 ]
+# SIMD probe: tunedvih + JIT vectorization enabled (param-only, no code change).
+HBP_POLICY_PRESETS += [
+    ("eval_tvvec",  _TV + ",vec=1,vec_all=1"),
+    ("eval_vec",    "enable_invariant_varindex_hoist=0,vec=1,vec_all=1"),
+]
 
 #HBP_POLICY_DEFAULT = (
 #    "stock,hbp_stock_noinherit,hbp_stock_inherit1,base_rl1,"
