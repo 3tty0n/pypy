@@ -352,10 +352,14 @@ class VectorizingOptimizer(Optimizer):
         is recognised as a single value and broadcast (vec_expand) instead of
         being packed as a bogus consecutive vec_load.
 
-        Sound only for arrays that are never stored in the loop (no aliasing
-        possible).  The same-array case (e.g. scimark LU's A[ii][j] read with an
-        A[ii][jj] write) additionally needs an index-disambiguation versioning
-        guard and is intentionally not handled here.
+        Two cases:
+          * read-only array (never stored in the loop): sound unconditionally.
+          * same array also stored at the induction index (scimark LU's
+            A[ii][j] read with an A[ii][jj] write): sound only if the invariant
+            index never collides with the store range.  We emit a loop-version
+            disambiguation guard `idx < iv or idx >= bound` (iv = induction
+            index, bound = loop bound); on failure it deopts to the unvectorised
+            snapshot taken in optimize_vector().
         """
         label_args = loop.label.getarglist()
         jump_args = loop.jump.getarglist()
@@ -365,10 +369,20 @@ class VectorizingOptimizer(Optimizer):
             if i < len(jump_args) and jump_args[i] is la:
                 invariant[la] = None
         stored = {}
+        store_indexes = {}
         for op in loop.operations:
             if rop.is_primitive_store(op.opnum) and op.is_primitive_array_access():
-                stored[op.getarg(0)] = None
+                arr = op.getarg(0)
+                stored[arr] = None
+                lst = store_indexes.get(arr, None)
+                if lst is None:
+                    lst = []
+                    store_indexes[arr] = lst
+                lst.append(op.getarg(1))
+        iv, bound, proto_descr = self._find_induction_and_bound(loop, invariant)
         canon = {}
+        guards = []
+        guarded_keys = {}
         renamer = Renamer()
         newops = []
         changed = False
@@ -378,19 +392,89 @@ class VectorizingOptimizer(Optimizer):
                 arr = op.getarg(0)
                 idx = op.getarg(1)
                 idx_inv = (idx in invariant) or idx.is_constant()
-                if arr in invariant and idx_inv and arr not in stored:
-                    if idx.is_constant():
-                        key = (arr, 'c', idx.getint())
-                    else:
-                        key = (arr, 'v', idx)
-                    if key in canon:
-                        renamer.start_renaming(op, canon[key])
-                        changed = True
-                        continue
-                    canon[key] = op
+                if arr in invariant and idx_inv:
+                    key = (arr, idx)
+                    read_only = arr not in stored
+                    sidx = store_indexes.get(arr, None)
+                    can_guard = (iv is not None and bound is not None and
+                                 proto_descr is not None and idx is not iv and
+                                 sidx is not None and
+                                 self._all_indexes_derive_from(sidx, iv))
+                    if read_only or can_guard:
+                        if key in canon:
+                            renamer.start_renaming(op, canon[key])
+                            changed = True
+                            continue
+                        if not read_only and key not in guarded_keys:
+                            guards.extend(self._disambiguation_guard(
+                                loop, idx, iv, bound, proto_descr))
+                            guarded_keys[key] = None
+                        canon[key] = op
             newops.append(op)
-        if changed:
-            loop.operations = newops
+        if changed or guards:
+            loop.operations = guards + newops
+
+    def _find_induction_and_bound(self, loop, invariant):
+        """ Find the induction index `iv` (a label arg that is advanced across
+        the loop, i.e. not loop-invariant) and the loop `bound` from the loop
+        condition guard `guard_true(int_lt/int_le(iv, bound))`.  Also return a
+        guard descr to clone resume attributes from.  Returns (None,None,None)
+        if not found. """
+        proto_descr = None
+        for op in loop.operations:
+            if op.is_guard() and op.getdescr() is not None and proto_descr is None:
+                proto_descr = op.getdescr()
+            if op.getopnum() == rop.GUARD_TRUE:
+                cmp = op.getarg(0)
+                if cmp.getopnum() in (rop.INT_LT, rop.INT_LE):
+                    a0 = cmp.getarg(0)
+                    a1 = cmp.getarg(1)
+                    if a0 not in invariant and not a0.is_constant():
+                        return a0, a1, proto_descr
+        return None, None, proto_descr
+
+    def _all_indexes_derive_from(self, indexes, iv):
+        """ True iff every store index derives from the induction var iv by
+        adding/subtracting constants (iv, int_add(iv,c), ...).  This guarantees
+        all those stores write inside iv's induction range [iv, bound), so the
+        `idx < iv or idx >= bound` guard fully disambiguates them.  A constant
+        or unrelated store index returns False (merge is then skipped). """
+        if not indexes:
+            return False
+        for box in indexes:
+            seen = 0
+            cur = box
+            while cur is not iv:
+                if cur.is_constant():
+                    return False
+                opnum = cur.getopnum()
+                if opnum not in (rop.INT_ADD, rop.INT_SUB):
+                    return False
+                a0 = cur.getarg(0)
+                a1 = cur.getarg(1)
+                if a1.is_constant() and not a0.is_constant():
+                    cur = a0
+                elif a0.is_constant() and not a1.is_constant() and opnum == rop.INT_ADD:
+                    cur = a1
+                else:
+                    return False
+                seen += 1
+                if seen > 8:
+                    return False
+        return True
+
+    def _disambiguation_guard(self, loop, idx, iv, bound, proto_descr):
+        """ Build `guard_true(int_or(int_lt(idx, iv), int_ge(idx, bound)))` with
+        a loop-version descr that deopts to the unvectorised snapshot. """
+        c_lt = ResOperation(rop.INT_LT, [idx, iv])
+        c_ge = ResOperation(rop.INT_GE, [idx, bound])
+        c_or = ResOperation(rop.INT_OR, [c_lt, c_ge])
+        descr = CompileLoopVersionDescr()
+        descr.copy_all_attributes_from(proto_descr)
+        descr.rd_vector_info = None
+        guard = ResOperation(rop.GUARD_TRUE, [c_or], descr=descr)
+        guard.setfailargs(loop.label.getarglist_copy())
+        return [c_lt, c_ge, c_or, guard]
 
     def copy_guard_descr(self, renamer, copied_op):
         descr = copied_op.getdescr()

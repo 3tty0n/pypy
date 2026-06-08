@@ -1155,6 +1155,55 @@ class TestVectorize(VecTestHelper):
         assert "vec_expand_f" in joined
         assert not any("vec_load_f(r4" in t for t in txt)
 
+    def test_invariant_load_samearray_lu_vectorizes(self):
+        # scimark LU inner SAXPY: A[ii][jj] -= A[ii][j] * A[j][jj].  The factor
+        # A[ii][j] (p0[i_jc], invariant) is read from the SAME array that is
+        # stored (p0[i0]).  A disambiguation versioning guard (i_jc < i0 or
+        # i_jc >= i89) lets it be merged + broadcast so the loop vectorizes.
+        txt = self._vectorize_text("""
+        [p0,i0,p1,i_jc,i89]
+        i129 = int_lt(i0, i89)
+        guard_true(i129) [p0,i0]
+        i131 = int_add(i0, 1)
+        f139 = getarrayitem_raw_f(p0, i0, descr=floatarraydescr)
+        f144 = getarrayitem_raw_f(p0, i_jc, descr=floatarraydescr)
+        f150 = getarrayitem_raw_f(p1, i0, descr=floatarraydescr)
+        f151 = float_mul(f144, f150)
+        f152 = float_sub(f139, f151)
+        setarrayitem_raw(p0, i0, f152, descr=floatarraydescr)
+        jump(p0,i131,p1,i_jc,i89)
+        """)
+        joined = "\n".join(txt)
+        assert "vec_float_sub" in joined
+        assert "vec_float_mul" in joined
+        assert "vec_expand_f" in joined
+        assert "int_or" in joined
+
+    def test_invariant_load_samearray_unsafe_not_merged(self):
+        # A same-array invariant load is NOT merged when the array also has a
+        # store at an index that does not derive from the induction var (here a
+        # constant index 5): the disambiguation guard cannot bound it, so the
+        # conservative check skips the merge (no int_or guard is emitted).
+        import pytest as _pytest
+        from rpython.jit.metainterp.jitexc import NotAProfitableLoop
+        ops = """
+        [p0,i0,p1,i_jc,i89]
+        i129 = int_lt(i0, i89)
+        guard_true(i129) [p0,i0]
+        i131 = int_add(i0, 1)
+        f139 = getarrayitem_raw_f(p0, i0, descr=floatarraydescr)
+        f144 = getarrayitem_raw_f(p0, i_jc, descr=floatarraydescr)
+        f150 = getarrayitem_raw_f(p1, i0, descr=floatarraydescr)
+        f151 = float_mul(f144, f150)
+        f152 = float_sub(f139, f151)
+        setarrayitem_raw(p0, i0, f152, descr=floatarraydescr)
+        setarrayitem_raw(p0, 5, f151, descr=floatarraydescr)
+        jump(p0,i131,p1,i_jc,i89)
+        """
+        loop = self.parse_loop(ops)
+        with _pytest.raises(NotAProfitableLoop):
+            self.vectorize(loop, 1)
+
     def test_variable_expansion(self):
         ops = """
         [p0,i0,f3]
