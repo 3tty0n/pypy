@@ -246,6 +246,8 @@ class VectorizingOptimizer(Optimizer):
         self.unroll_loop_iterations(loop, self.unroll_count,
                                     align_unroll_once=align_unroll)
 
+        self.merge_invariant_loads(loop)
+
         # vectorize
         graph = DependencyGraph(loop)
         self.find_adjacent_memory_refs(graph)
@@ -342,6 +344,53 @@ class VectorizingOptimizer(Optimizer):
             loop.operations = unrolled
         else:
             loop.operations = operations + unrolled
+
+    def merge_invariant_loads(self, loop):
+        """ After unrolling, a loop-invariant array load (array base and index
+        both loop-invariant) is duplicated into one identical load per unrolled
+        copy.  Collapse the duplicates onto the first occurrence so the operand
+        is recognised as a single value and broadcast (vec_expand) instead of
+        being packed as a bogus consecutive vec_load.
+
+        Sound only for arrays that are never stored in the loop (no aliasing
+        possible).  The same-array case (e.g. scimark LU's A[ii][j] read with an
+        A[ii][jj] write) additionally needs an index-disambiguation versioning
+        guard and is intentionally not handled here.
+        """
+        label_args = loop.label.getarglist()
+        jump_args = loop.jump.getarglist()
+        invariant = {}
+        for i in range(len(label_args)):
+            la = label_args[i]
+            if i < len(jump_args) and jump_args[i] is la:
+                invariant[la] = None
+        stored = {}
+        for op in loop.operations:
+            if rop.is_primitive_store(op.opnum) and op.is_primitive_array_access():
+                stored[op.getarg(0)] = None
+        canon = {}
+        renamer = Renamer()
+        newops = []
+        changed = False
+        for op in loop.operations:
+            renamer.rename(op)
+            if rop.is_primitive_load(op.opnum) and op.is_primitive_array_access():
+                arr = op.getarg(0)
+                idx = op.getarg(1)
+                idx_inv = (idx in invariant) or idx.is_constant()
+                if arr in invariant and idx_inv and arr not in stored:
+                    if idx.is_constant():
+                        key = (arr, 'c', idx.getint())
+                    else:
+                        key = (arr, 'v', idx)
+                    if key in canon:
+                        renamer.start_renaming(op, canon[key])
+                        changed = True
+                        continue
+                    canon[key] = op
+            newops.append(op)
+        if changed:
+            loop.operations = newops
 
     def copy_guard_descr(self, renamer, copied_op):
         descr = copied_op.getdescr()

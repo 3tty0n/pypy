@@ -103,7 +103,7 @@ class VecTestHelper(DependencyBaseTest):
         opt.schedule(state)
         return graph.loop
 
-    def vectoroptimizer_unrolled(self, loop, unroll_factor=-1):
+    def vectoroptimizer_unrolled(self, loop, unroll_factor=-1, merge_invariants=False):
         opt = self.vectoroptimizer(loop)
         opt.linear_find_smallest_type(loop)
         loop.setup_vectorization()
@@ -124,6 +124,8 @@ class VecTestHelper(DependencyBaseTest):
             state = SchedulerState(self.cpu, graph)
             opt.schedule(state)
         opt.unroll_loop_iterations(loop, unroll_factor)
+        if merge_invariants:
+            opt.merge_invariant_loads(loop)
         self.debug_print_operations(loop)
         graph = DependencyGraph(loop)
         self.last_graph = graph # legacy for test_dependency
@@ -175,7 +177,8 @@ class VecTestHelper(DependencyBaseTest):
     def vectorize(self, loop, unroll_factor=-1):
         info = FakeLoopInfo(loop)
         info.snapshot(loop)
-        opt, graph = self.vectoroptimizer_unrolled(loop, unroll_factor)
+        opt, graph = self.vectoroptimizer_unrolled(loop, unroll_factor,
+                                                   merge_invariants=True)
         opt.find_adjacent_memory_refs(graph)
         opt.extend_packset()
         opt.combine_packset()
@@ -1109,6 +1112,48 @@ class TestVectorize(VecTestHelper):
         loop = self.parse_loop(ops)
         vopt = self.vectorize(loop,1)
         self.assert_equal(loop, self.parse_loop(opt))
+
+    def _vectorize_text(self, ops):
+        loop = self.parse_loop(ops)
+        self.vectorize(loop, 1)
+        return [str(op) for op in loop.operations]
+
+    def test_invariant_load_readonly_broadcasts(self):
+        # A loop-invariant variable-index load on a read-only array must be
+        # broadcast (vec_expand) once, not packed as a bogus consecutive
+        # vec_load.  merge_invariant_loads collapses the unrolled duplicates.
+        txt = self._vectorize_text("""
+        [p0,i0,p1,i_jc,i89]
+        i129 = int_lt(i0, i89)
+        guard_true(i129) [p0,i0]
+        i131 = int_add(i0, 1)
+        f139 = getarrayitem_raw_f(p0, i0, descr=floatarraydescr)
+        f144 = getarrayitem_raw_f(p1, i_jc, descr=floatarraydescr)
+        f151 = float_mul(f139, f144)
+        setarrayitem_raw(p0, i0, f151, descr=floatarraydescr)
+        jump(p0,i131,p1,i_jc,i89)
+        """)
+        joined = "\n".join(txt)
+        assert "vec_expand_f" in joined
+        # exactly one scalar load of the invariant remains (not a vec_load)
+        assert sum("getarrayitem_raw_f(r4" in t for t in txt) == 1
+        assert not any("vec_load_f(r4" in t for t in txt)
+
+    def test_invariant_load_const_broadcasts(self):
+        txt = self._vectorize_text("""
+        [p0,i0,p1,i89]
+        i129 = int_lt(i0, i89)
+        guard_true(i129) [p0,i0]
+        i131 = int_add(i0, 1)
+        f139 = getarrayitem_raw_f(p0, i0, descr=floatarraydescr)
+        f144 = getarrayitem_raw_f(p1, 3, descr=floatarraydescr)
+        f151 = float_mul(f139, f144)
+        setarrayitem_raw(p0, i0, f151, descr=floatarraydescr)
+        jump(p0,i131,p1,i89)
+        """)
+        joined = "\n".join(txt)
+        assert "vec_expand_f" in joined
+        assert not any("vec_load_f(r4" in t for t in txt)
 
     def test_variable_expansion(self):
         ops = """
