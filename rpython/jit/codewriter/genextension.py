@@ -1,4 +1,5 @@
 import py
+import os
 import re
 import collections
 from rpython.jit.metainterp.history import (Const, ConstInt, ConstPtr,
@@ -58,6 +59,9 @@ DISPATCH_PREFIX_DIRECT_SWITCH_OPS = frozenset([
 
 HBP_CANDIDATE_SCORE_THRESHOLD = 0.20
 
+THREAD_BLOCKS = os.environ.get('PYPY_GENEXT_TRACEOPT', '0') == '1'
+_LOCAL_PC_ASSIGN_RE = re.compile(r'(?<![.\w])pc = (\d+)\b')
+
 def can_skip_heapcache(opname):
     return opname in HEAPCACHE_SKIP_OPS
 
@@ -103,6 +107,7 @@ class GenExtension(object):
         self.args_as_objects = None
         self.returncode = None
         self.returnindex = None
+        self.orig_pc = -1
 
     def _compute_hbp_signals(self):
         # Static Hot-Bridge-Promotion suitability predictor.  Computed once at
@@ -364,7 +369,6 @@ class GenExtension(object):
                 continue
             opname = insn[0]
             if (
-                    opname in ('raise', 'reraise') or
                     opname.startswith('inline_call_') or
                     opname.startswith('getarrayitem_vable_') or
                     opname.startswith('setarrayitem_vable_')
@@ -449,6 +453,8 @@ class GenExtension(object):
             self.code.append("%selse:" % p)
             _emit_bst(mid, hi, ind + 1)
 
+        if THREAD_BLOCKS:
+            entries = self._thread_entries(entries, starting_points)
         if entries:
             _emit_bst(0, len(entries), 0)
         else:
@@ -478,6 +484,101 @@ class GenExtension(object):
         self._install_source(allcode)
         self._classify_pure_arithmetic()
         self._generate_compile_function()
+
+    def _thread_entries(self, entries, starting_points):
+        blocks = {}
+        spec_by_pc = {}
+        all_pcs = []
+        for pc, code, spec in entries:
+            blocks[pc] = code
+            spec_by_pc[pc] = spec
+            all_pcs.append(pc)
+
+        pred_count = {}
+        for pc, code, spec in entries:
+            for tgt in _LOCAL_PC_ASSIGN_RE.findall(code):
+                tgt = int(tgt)
+                pred_count[tgt] = pred_count.get(tgt, 0) + 1
+
+        inline_succ = {}
+        inline_pred = {}
+        for pc, code, spec in entries:
+            tgt = self._pure_single_succ_target(code)
+            if tgt is None or tgt == pc:
+                continue
+            if tgt in starting_points:
+                continue
+            if tgt not in blocks:
+                continue
+            if pred_count.get(tgt, 0) != 1:
+                continue
+            inline_succ[pc] = tgt
+            inline_pred[tgt] = pc
+
+        while True:
+            reachable = set()
+            for pc in all_pcs:
+                if pc in inline_pred:
+                    continue
+                cur = pc
+                while cur is not None and cur not in reachable:
+                    reachable.add(cur)
+                    cur = inline_succ.get(cur)
+            unreached = [pc for pc in all_pcs if pc not in reachable]
+            if not unreached:
+                break
+            prev = inline_pred.pop(unreached[0], None)
+            if prev is not None:
+                inline_succ.pop(prev, None)
+
+        new_entries = []
+        for pc, code, spec in entries:
+            if pc in inline_pred:
+                continue
+            merged = self._build_chain(pc, blocks, inline_succ, spec_by_pc)
+            new_entries.append((pc, merged, spec))
+        return new_entries
+
+    def _build_chain(self, head_pc, blocks, inline_succ, spec_by_pc):
+        lines = blocks[head_pc].split('\n')
+        visited = set([head_pc])
+        cur = head_pc
+        while True:
+            tgt = inline_succ.get(cur)
+            if tgt is None or tgt in visited:
+                break
+            lines = self._strip_single_succ_tail(lines)
+            tgt_spec = spec_by_pc[tgt]
+            lines.append("self.pc = %s" % self.pc_to_nextpc[tgt_spec.orig_pc])
+            lines.extend(blocks[tgt].split('\n'))
+            visited.add(tgt)
+            cur = tgt
+        return '\n'.join(lines)
+
+    def _pure_single_succ_target(self, code):
+        matches = _LOCAL_PC_ASSIGN_RE.findall(code)
+        if len(matches) != 1:
+            return None
+        stripped = [ln for ln in code.split('\n') if ln.strip()]
+        if len(stripped) < 2:
+            return None
+        if stripped[-1].strip() != 'continue':
+            return None
+        if stripped[-2].strip() != ('pc = %s' % matches[0]):
+            return None
+        return int(matches[0])
+
+    def _strip_single_succ_tail(self, lines):
+        out = list(lines)
+        while out and not out[-1].strip():
+            out.pop()
+        assert out and out[-1].strip() == 'continue'
+        out.pop()
+        while out and not out[-1].strip():
+            out.pop()
+        assert out and out[-1].strip().startswith('pc = ')
+        out.pop()
+        return out
 
     def _classify_pure_arithmetic(self):
         """Check if this jitcode is pure arithmetic (no heap, no calls)."""
@@ -515,11 +616,14 @@ class GenExtension(object):
 
         def compile_shortcut(assembler, inputargs, operations):
             from rpython.jit.backend.x86.regloc import (
-                RegLoc, ImmedLoc, FrameLoc, eax, ecx, xmm0, xmm1,
-                r10, r11, xmm2, xmm3)
+                RegLoc, ImmedLoc, FrameLoc, eax, ecx, edx, esi, edi,
+                xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7,
+                xmm8, xmm9, xmm10, xmm11, xmm12, xmm13, xmm14,
+                r8, r9, r10, X86_64_SCRATCH_REG, X86_64_XMM_SCRATCH_REG)
+            from rpython.jit.backend.x86.jump import remap_frame_layout_mixed
             from rpython.jit.backend.x86 import rx86
             from rpython.jit.backend.x86.arch import (
-                JITFRAME_FIXED_SIZE, WORD, IS_X86_64)
+                JITFRAME_FIXED_SIZE, WORD, IS_X86_64, WIN64)
             from rpython.jit.metainterp.resoperation import rop
             from rpython.jit.backend.llsupport.assembler import GuardToken
             from rpython.jit.backend.llsupport.gcmap import allocate_gcmap
@@ -547,8 +651,13 @@ class GenExtension(object):
                         last_use[fa] = i
             cached_int = [None]
             cached_xmm = [None]
-            if IS_X86_64:
-                int_pool = [r11, r10]
+            if IS_X86_64 and not WIN64:
+                int_pool = [r10, r9, r8, edi, esi, edx]
+                xmm_pool = [
+                    xmm14, xmm13, xmm12, xmm11, xmm10, xmm9, xmm8,
+                    xmm7, xmm6, xmm5, xmm4, xmm3, xmm2]
+            elif IS_X86_64:
+                int_pool = [r10]
                 xmm_pool = [xmm3, xmm2]
             else:
                 int_pool = []
@@ -643,6 +752,14 @@ class GenExtension(object):
                     assembler.mc.MOV(reg, loc)
                 return reg
 
+            def _movsd_into(reg, loc):
+                if isinstance(loc, ImmedLoc):
+                    assembler.mc.MOV_ri(X86_64_SCRATCH_REG.value, loc.value)
+                    assembler.mc.MOVDQ(reg, X86_64_SCRATCH_REG)
+                    assembler.mc.forget_scratch_register()
+                else:
+                    assembler.mc.MOVSD(reg, loc)
+
             def _load_float(box, reg=xmm0):
                 if reg is xmm0 and cached_xmm[0] is box:
                     return xmm0
@@ -650,11 +767,11 @@ class GenExtension(object):
                     _spill_cached_xmm()
                 loc = _loc(box)
                 if loc is not reg:
-                    assembler.mc.MOVSD(reg, loc)
+                    _movsd_into(reg, loc)
                 return reg
 
             def _publish_int_result(op, op_index):
-                box = op.result
+                box = op if op.type != 'v' else None
                 if box is None:
                     cached_int[0] = None
                     return
@@ -669,7 +786,7 @@ class GenExtension(object):
                 _store_box_to_home(box, eax, is_float=False)
 
             def _publish_float_result(op, op_index):
-                box = op.result
+                box = op if op.type != 'v' else None
                 if box is None:
                     cached_xmm[0] = None
                     return
@@ -769,15 +886,14 @@ class GenExtension(object):
             def _emit_float_comparison(op, emit):
                 arg0 = _load_float(op.getarg(0))
                 arg1 = _loc(op.getarg(1))
-                if isinstance(arg1, FrameLoc):
-                    assembler.mc.MOVSD(xmm1, arg1)
-                    arg1 = xmm1
-                elif isinstance(arg1, ImmedLoc):
-                    assembler.mc.MOVSD(xmm1, arg1)
+                if isinstance(arg1, FrameLoc) or isinstance(arg1, ImmedLoc):
+                    _movsd_into(xmm1, arg1)
                     arg1 = xmm1
                 _spill_cached_int()
                 emit(op, [arg0, arg1], eax)
                 _publish_int_result(op, op_index)
+
+            assembler.guard_success_cc = rx86.cond_none
 
             for op_index, op in enumerate(operations):
                 current_op_index[0] = op_index
@@ -799,14 +915,22 @@ class GenExtension(object):
                     label_args = label_op.getarglist()
                     jump_args = op.getarglist()
                     assert len(label_args) == len(jump_args)
+                    src_int = []
+                    dst_int = []
+                    src_flt = []
+                    dst_flt = []
                     for i in range(len(jump_args)):
                         src = _loc(jump_args[i])
                         dst = _loc(label_args[i])
-                        if src is not dst:
-                            if label_args[i].type == 'f':
-                                assembler.mc.MOVSD(dst, src)
-                            else:
-                                assembler.mc.MOV(dst, src)
+                        if label_args[i].type == 'f':
+                            src_flt.append(src)
+                            dst_flt.append(dst)
+                        else:
+                            src_int.append(src)
+                            dst_int.append(dst)
+                    remap_frame_layout_mixed(
+                        assembler, src_int, dst_int, X86_64_SCRATCH_REG,
+                        src_flt, dst_flt, X86_64_XMM_SCRATCH_REG)
                     assembler.closing_jump(op.getdescr())
                 elif (opnum == rop.GUARD_NO_OVERFLOW or
                         opnum == rop.GUARD_OVERFLOW):
@@ -937,44 +1061,32 @@ class GenExtension(object):
                 elif opnum == rop.FLOAT_ADD:
                     arg0 = _load_float(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
-                    if isinstance(arg1, FrameLoc):
-                        assembler.mc.MOVSD(xmm1, arg1)
-                        arg1 = xmm1
-                    elif isinstance(arg1, ImmedLoc):
-                        assembler.mc.MOVSD(xmm1, arg1)
+                    if isinstance(arg1, FrameLoc) or isinstance(arg1, ImmedLoc):
+                        _movsd_into(xmm1, arg1)
                         arg1 = xmm1
                     assembler.genop_float_add(op, [arg0, arg1], arg0)
                     _publish_float_result(op, op_index)
                 elif opnum == rop.FLOAT_SUB:
                     arg0 = _load_float(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
-                    if isinstance(arg1, FrameLoc):
-                        assembler.mc.MOVSD(xmm1, arg1)
-                        arg1 = xmm1
-                    elif isinstance(arg1, ImmedLoc):
-                        assembler.mc.MOVSD(xmm1, arg1)
+                    if isinstance(arg1, FrameLoc) or isinstance(arg1, ImmedLoc):
+                        _movsd_into(xmm1, arg1)
                         arg1 = xmm1
                     assembler.genop_float_sub(op, [arg0, arg1], arg0)
                     _publish_float_result(op, op_index)
                 elif opnum == rop.FLOAT_MUL:
                     arg0 = _load_float(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
-                    if isinstance(arg1, FrameLoc):
-                        assembler.mc.MOVSD(xmm1, arg1)
-                        arg1 = xmm1
-                    elif isinstance(arg1, ImmedLoc):
-                        assembler.mc.MOVSD(xmm1, arg1)
+                    if isinstance(arg1, FrameLoc) or isinstance(arg1, ImmedLoc):
+                        _movsd_into(xmm1, arg1)
                         arg1 = xmm1
                     assembler.genop_float_mul(op, [arg0, arg1], arg0)
                     _publish_float_result(op, op_index)
                 elif opnum == rop.FLOAT_TRUEDIV:
                     arg0 = _load_float(op.getarg(0))
                     arg1 = _loc(op.getarg(1))
-                    if isinstance(arg1, FrameLoc):
-                        assembler.mc.MOVSD(xmm1, arg1)
-                        arg1 = xmm1
-                    elif isinstance(arg1, ImmedLoc):
-                        assembler.mc.MOVSD(xmm1, arg1)
+                    if isinstance(arg1, FrameLoc) or isinstance(arg1, ImmedLoc):
+                        _movsd_into(xmm1, arg1)
                         arg1 = xmm1
                     assembler.genop_float_truediv(op, [arg0, arg1], arg0)
                     _publish_float_result(op, op_index)
@@ -1056,6 +1168,7 @@ class GenExtension(object):
         assert not (isinstance(insn[0], Label) or insn[0] == '---')
         self.insn = insn
         pc = self.ssarepr._insns_pos[index]
+        self.orig_pc = pc
         nextpc = self.pc_to_nextpc[pc]
         instruction = self.insns[ord(self.jitcode.code[pc])]
         self.name, self.argcodes = instruction.split("/")
@@ -1284,6 +1397,12 @@ class GenExtension(object):
         self.resindex = resindex
         return lines, needed_orgpc, needed_label
 
+    def emit_standard_fallback(self):
+        return [
+            "self.pc = %s" % (self.orig_pc,),
+            "return self._run_one_step_standard()",
+        ]
+
     def emit_newframe_function(self):
         return ["self._result_argcode = %r" % (self.returncode, ), "return # change frame"]
     emit_inline_call_r_i = emit_newframe_function
@@ -1329,6 +1448,10 @@ class GenExtension(object):
     emit_int_return = emit_return
     emit_ref_return = emit_return
     emit_float_return = emit_return
+
+    def emit_raise(self):
+        return self.emit_standard_fallback()
+    emit_reraise = emit_raise
 
     def prepare_list_of_boxes(self, outvalue, startindex, position, argcode):
         assert argcode in 'IRF'

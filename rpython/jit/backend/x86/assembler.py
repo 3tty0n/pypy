@@ -535,8 +535,14 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
         genext_compile_fn = looptoken.genext_compile_function
         use_genext = False
         if genext_compile_fn is not None:
-            self.reserve_gcref_table([])
+            genext_gcrefs = []
+            for op in operations:
+                if rop.is_guard(op.getopnum()) or op.getopnum() == rop.FINISH:
+                    genext_gcrefs.append(
+                        cast_instance_to_gcref(op.getdescr()))
+            self.reserve_gcref_table(genext_gcrefs)
             functionpos = self.mc.get_relative_pos()
+            genext_saved_frame_size = self.mc._frame_size
             self._call_header_with_stack_check()
             self._check_frame_depth_debug(self.mc)
             looppos = self.mc.get_relative_pos()
@@ -545,8 +551,9 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
                     self, inputargs, operations)
                 use_genext = True
             except CannotCompileGenExt:
-                # truncate to 0 so normal path can re-reserve and re-emit
                 self.mc.truncate_to(0)
+                self.mc.force_frame_size(genext_saved_frame_size)
+                self.mc.forget_scratch_register()
 
         if use_genext:
             self.update_frame_depth(

@@ -27,6 +27,44 @@ def enable_genextension(request):
     return config
 
 
+def test_thread_blocks_inlines_chains(enable_genextension):
+    import rpython.jit.codewriter.genextension as genext
+
+    def build():
+        ssarepr = SSARepr("test", genextension=True)
+        i0, i1 = Register('int', 0x16), Register('int', 0x17)
+        ssarepr.insns = [
+            (Label('L1'),),
+            ('goto_if_not_int_gt', i0, Constant(4, lltype.Signed), TLabel('L2')),
+            ('int_add', i1, i0, '->', i1),
+            ('int_sub', i0, Constant(1, lltype.Signed), '->', i0),
+            ('goto', TLabel('L1')),
+            (Label('L2'),),
+            ('int_return', i1),
+            ]
+        assembler = Assembler()
+        jitcode = assembler.assemble(ssarepr, num_regs={'int': 0x18})
+        return jitcode._genext_source
+
+    old = genext.THREAD_BLOCKS
+    try:
+        genext.THREAD_BLOCKS = False
+        base = build()
+        genext.THREAD_BLOCKS = True
+        threaded = build()
+    finally:
+        genext.THREAD_BLOCKS = old
+
+    n_entries_base = len(re.findall(r'if pc == \d+:', base))
+    n_entries_thr = len(re.findall(r'if pc == \d+:', threaded))
+    n_selfpc_base = len(re.findall(r'self\.pc = \d+', base))
+    n_selfpc_thr = len(re.findall(r'self\.pc = \d+', threaded))
+
+    assert n_entries_thr < n_entries_base
+    assert n_selfpc_thr == n_selfpc_base
+    assert "def jit_shortcut(self): # test" in threaded
+
+
 def test_assemble_loop(enable_genextension):
     ssarepr = SSARepr("test", genextension=True)
     i0, i1 = Register('int', 0x16), Register('int', 0x17)
@@ -2153,7 +2191,7 @@ assert bool(i0)
 pc = 108
 continue"""
 
-def test_raise_disables_genextension(enable_genextension):
+def test_raise_generates_standard_fallback(enable_genextension):
     ssarepr = SSARepr("raise_test", genextension=True)
     r0 = Register('ref', 0)
     ssarepr.insns = [
@@ -2161,8 +2199,11 @@ def test_raise_disables_genextension(enable_genextension):
         ]
     assembler = Assembler()
     jitcode = assembler.assemble(ssarepr, num_regs={'ref': 1})
-    assert jitcode.genext_function is None
-    assert not hasattr(jitcode, '_genext_source')
+    source = jitcode._genext_source
+    assert jitcode.genext_function is not None
+    assert "def jit_shortcut(self): # raise_test" in source
+    assert "self.pc = 0" in source
+    assert "return self._run_one_step_standard()" in source
 
 
 def test_inline_call_disables_genextension(enable_genextension):
