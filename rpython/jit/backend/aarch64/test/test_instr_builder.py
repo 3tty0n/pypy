@@ -193,3 +193,11 @@ class TestInstrBuilder(object):
         cb = CodeBuilder()
         cb.CBZ(r.x25.value, -888)
         assert cb.hexdump() == assemble("CBZ x25, -888")
+
+    @settings(max_examples=20)
+    @given(r1=st.sampled_from(r.registers),
+           pages=st.integers(min_value=-(1 << 20), max_value=(1 << 20) - 1))
+    def test_ADRP(self, r1, pages):
+        cb = CodeBuilder()
+        cb.ADRP_r_imm(r1.value, pages)
+        assert cb.hexdump() == assemble("ADRP %r, %d" % (r1, pages * 4096))

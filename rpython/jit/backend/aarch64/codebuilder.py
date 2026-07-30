@@ -223,6 +223,13 @@ class AbstractAarch64Builder(object):
         assert offset & 0x3 == 0
         self.write32((base << 24) | ((0x7ffff & (offset >> 2)) << 5) | rt)
 
+    def ADRP_r_imm(self, rd, pages):
+        # rd = (PC & ~0xFFF) + (pages << 12); reach is +/-4GB
+        base = 0b10000
+        assert -(1 << 20) <= pages < (1 << 20)
+        self.write32((1 << 31) | ((pages & 0x3) << 29) | (base << 24) |
+                     ((0x7ffff & (pages >> 2)) << 5) | rd)
+
     def ADD_rr(self, rd, rn, rm, s=0):
         base = 0b10001011000 | (s << 8)
         self.write32((base << 21) | (rm << 16) | (rn << 5) | (rd))

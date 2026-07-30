@@ -244,6 +244,7 @@ class AssemblerARM64(ResOpAssembler):
         self.mc.datablockwrapper = self.datablockwrapper
         self.target_tokens_currently_compiling = {}
         self.frame_depth_to_patch = []
+        self.gc_table_far_patches = []
 
     def teardown(self):
         self.current_clt = None
@@ -1022,6 +1023,12 @@ class AssemblerARM64(ResOpAssembler):
     def patch_gcref_table(self, looptoken, rawstart):
         # the gc table is at the start of the machine code
         self.gc_table_addr = rawstart
+        for (pos, regnum, index) in self.gc_table_far_patches:
+            p_location = rawstart + pos
+            mc = InstrBuilder()
+            self.write_far_gc_table_load(mc, regnum, rawstart + index * WORD,
+                                         p_location)
+            mc.copy_to_raw_memory(p_location)
         tracer = self.cpu.gc_ll_descr.make_gcref_tracer(rawstart,
                                                         self._allgcrefs)
         gcreftracers = self.get_asmmemmgr_gcreftracers(looptoken)
@@ -1034,11 +1041,22 @@ class AssemblerARM64(ResOpAssembler):
             mc.gen_load_int(r.ip1.value, framedepth)
             mc.copy_to_raw_memory(ofs + rawstart)
 
+    def write_far_gc_table_load(self, mc, regnum, entry, p_location):
+        mc.ADRP_r_imm(regnum, (entry >> 12) - (p_location >> 12))
+        mc.LDR_ri(regnum, regnum, entry & 0xFFF)
+
     def load_from_gc_table(self, regnum, index):
         address_in_buffer = index * WORD   # at the start of the buffer
         p_location = self.mc.get_relative_pos(break_basic_block=False)
         offset = address_in_buffer - p_location
-        self.mc.LDR_r_literal(regnum, offset)
+        if -(1 << 20) <= offset < (1 << 20):
+            self.mc.LDR_r_literal(regnum, offset)
+        else:
+            # room for the ADRP + LDR that patch_gcref_table() writes
+            patch_pos = self.mc.currpos()
+            self.mc.NOP()
+            self.mc.NOP()
+            self.gc_table_far_patches.append((patch_pos, regnum, index))
 
     def materialize_loop(self, looptoken):
         self.datablockwrapper.done()      # finish using cpu.asmmemmgr
