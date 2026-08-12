@@ -2103,8 +2103,8 @@ class Specializer(object):
         lines.append("condbox = self.metainterp.history.record2_int(rop.%s, %s, %s, _cond)" % (
             rop_name, box0, box1))
 
-        # Call opimpl_goto_if_not for guard generation
-        lines.append("self.opimpl_goto_if_not(condbox, %d, %d, replace=False)" % (target_pc, self.orig_pc))
+        lines.append("self.genext_goto_if_not_comparison(condbox, rop.%s, %s, %s, %d, %d)" % (
+            rop_name, box0, box1, target_pc, self.orig_pc))
         lines.append("pc = self.pc")
         lines.append("if pc == %s:" % (target_pc,))
         specializer = self.work_list.specialize_pc(

@@ -118,6 +118,10 @@ class MIFrame(object):
         if num_regs_and_consts_f:
             self.registers_f = self.copy_constants(self.registers_f, jitcode.constants_f, jitcode.num_regs_f(), ConstFloat)
         self._result_argcode = 'v'
+        self._genext_last_guard_opnum = -1
+        self._genext_last_guard_box1 = None
+        self._genext_last_guard_box2 = None
+        self._genext_last_guard_value = -1
         # for resume.py operation
         self.parent_snapshot = -1
         # counter for unrolling inlined loops
@@ -546,6 +550,22 @@ class MIFrame(object):
             return
         if replace:
             self.metainterp.replace_box(box, promoted_box)
+
+    def genext_goto_if_not_comparison(self, box, opnum, box1, box2,
+                                      target, orgpc):
+        value = box.getint()
+        if (self._genext_last_guard_opnum == opnum and
+                self._genext_last_guard_box1 is box1 and
+                self._genext_last_guard_box2 is box2 and
+                self._genext_last_guard_value == value):
+            if not value:
+                self.pc = target
+            return
+        self.opimpl_goto_if_not(box, target, orgpc, replace=False)
+        self._genext_last_guard_opnum = opnum
+        self._genext_last_guard_box1 = box1
+        self._genext_last_guard_box2 = box2
+        self._genext_last_guard_value = value
 
     @arguments("box", "label", "orgpc")
     def opimpl_goto_if_not_int_is_true(self, box, target, orgpc):

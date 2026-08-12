@@ -7,12 +7,39 @@ from rpython.jit.codewriter.flatten import (
 from rpython.jit.codewriter.assembler import Assembler, AssemblerError
 from rpython.jit.codewriter.effectinfo import EffectInfo
 from rpython.rtyper.lltypesystem import lltype, llmemory
-from rpython.jit.metainterp.history import AbstractDescr
+from rpython.jit.metainterp.history import AbstractDescr, IntFrontendOp
+from rpython.jit.metainterp.pyjitpl import MIFrame
+from rpython.jit.metainterp.resoperation import rop
 from rpython.jit.codewriter.genextension import WorkList
 from rpython.config import translationoption
 from rpython.config.translationoption import get_combined_translation_config
 
 import pytest
+
+
+def test_genext_repeated_comparison_skips_guard():
+    class MetaInterp(object):
+        def __init__(self):
+            self.guards = 0
+
+        def generate_guard(self, *args, **kwargs):
+            self.guards += 1
+
+    metainterp = MetaInterp()
+    frame = MIFrame(metainterp)
+    frame._genext_last_guard_opnum = -1
+    frame._genext_last_guard_box1 = None
+    frame._genext_last_guard_box2 = None
+    frame._genext_last_guard_value = -1
+    box1 = IntFrontendOp(0, 4)
+    box2 = IntFrontendOp(1, 5)
+
+    frame.genext_goto_if_not_comparison(
+        IntFrontendOp(2, 1), rop.INT_LT, box1, box2, 17, 5)
+    frame.genext_goto_if_not_comparison(
+        IntFrontendOp(3, 1), rop.INT_LT, box1, box2, 17, 5)
+
+    assert metainterp.guards == 1
 
 
 @pytest.fixture
