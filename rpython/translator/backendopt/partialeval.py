@@ -218,6 +218,16 @@ class PartialEvaluator(object):
         residual = self.specialize(graph, static_env, {})
         return self._install_residual(graph, residual)
 
+    def make_template(self, key, graph, static_env, split_env,
+                      terminal_values=(-1,)):
+        """Build the first-stage template IR for one residual variant."""
+        from rpython.translator.backendopt.partialeval_template import (
+            ResidualTemplateGenerator)
+        residual = self.specialize(graph, static_env, split_env)
+        transitions = _find_split_transitions(residual)
+        generator = ResidualTemplateGenerator(terminal_values)
+        return generator.from_residual_graph(key, residual, transitions)
+
     def _install_residual(self, graph, residual):
         graph.startblock = residual.startblock
         graph.returnblock = residual.returnblock
@@ -255,6 +265,14 @@ class _SplitTransition(object):
         if isinstance(value, Constant):
             return value.value
         return None
+
+    def dynamic_values(self):
+        result = []
+        index = 1
+        while "item%d" % index in self.fields:
+            result.append(self.fields["item%d" % index])
+            index += 1
+        return result
 
 
 def _find_split_transitions(graph):

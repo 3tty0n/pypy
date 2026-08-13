@@ -6,6 +6,8 @@ from rpython.translator.backendopt.partialeval import (PartialEvaluator,
     specialize_graph, specialize_entry_point, specialize_variant,
     specialize_split_graph, install_split_graph, partial_evaluate,
     make_rtyped_constant)
+from rpython.translator.backendopt.partialeval_template import (
+    Continue, Finish, PcHole, ResidualTemplateCatalog)
 
 def get_graph(fn, signature):
     t = TranslationContext()
@@ -350,3 +352,33 @@ def test_partial_evaluate_installs_split_entry_point():
     assert "int_eq" not in summary(graph)
     res = LLInterpreter(t.rtyper).eval_graph(graph, [ll_code, 999, 4])
     assert res.item0 == -1 and res.item1 == 5
+
+
+def test_residual_template_ir_and_catalog():
+    code = chr(LOAD) + chr(HALT)
+
+    def dispatch(code, pc, x):
+        if ord(code[pc]) == LOAD:
+            return 1, x + 1
+        return -1, x
+
+    dispatch._pe_static_args_ = ("code",)
+    dispatch._pe_split_args_ = ("pc",)
+    graph, t = get_graph(dispatch, [str, int, int])
+    pe = PartialEvaluator(t)
+
+    template0 = pe.make_template(
+        LOAD, graph, {"code": code}, {"pc": 0})
+    template1 = pe.make_template(
+        HALT, graph, {"code": code}, {"pc": 1})
+
+    assert isinstance(template0.terminators[0], Continue)
+    assert template0.terminators[0].target == 1
+    assert isinstance(template1.terminators[0], Finish)
+    assert PcHole().kind == "pc"
+
+    catalog = ResidualTemplateCatalog()
+    catalog.add(template0)
+    catalog.add(template1)
+    assert catalog.lookup(LOAD) is template0
+    assert set(catalog.keys()) == set([LOAD, HALT])
