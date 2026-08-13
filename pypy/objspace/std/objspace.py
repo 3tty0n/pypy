@@ -610,6 +610,7 @@ class StdObjSpace(ObjSpace):
 
     _DescrOperation_is_true = is_true
 
+    @jit.warmup_critical_function
     def is_true(self, w_obj):
         # a shortcut for performance
         if type(w_obj) is W_BoolObject:

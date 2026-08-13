@@ -26,6 +26,7 @@ class W_IntObject(W_Object):
     def getrepr(self):
         return str(self.intvalue)
 
+    @warmup_critical_function
     def is_true(self):
         return self.intvalue != 0
 

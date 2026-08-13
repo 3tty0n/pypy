@@ -835,6 +835,12 @@ def cmd_run(args):
         prefix = args.out or "e2e"
         out_paths = ["%s_%s.json" % (prefix, _binary_short_name(p))
                      for p in pypys]
+        if len(set(out_paths)) != len(out_paths):
+            # two binaries with the same basename (e.g. baseline worktree +
+            # candidate both named pypy-jit-ext-c) would clobber each other
+            # and the comparison silently becomes self-vs-self
+            out_paths = ["%s_%s_%d.json" % (prefix, _binary_short_name(p), i)
+                         for i, p in enumerate(pypys)]
 
     if args.parallel_binaries and len(pypys) > 1:
         pypys_abs = []

@@ -68,7 +68,7 @@ def test_assemble_loop(enable_genextension):
         ]
     assembler = Assembler()
     jitcode = assembler.assemble(ssarepr, num_regs={'int': 0x18})
-    assert jitcode._genext_source == """\
+    old_source = """\
 def jit_shortcut(self): # test
     pc = self.pc
     i22 = 0xcafedead
@@ -187,6 +187,11 @@ def jit_shortcut(self): # test
             except ChangeFrame: return
             assert 0, 'unreachable'
         assert 0 # unreachable"""
+    source = jitcode._genext_source
+    assert old_source != source
+    assert "self.metainterp._record_int_binop(rop.INT_ADD" in source
+    assert "self.metainterp._record_int_binop(rop.INT_SUB" in source
+    assert "jit_sync_regs" not in source
 
 def test_integration_switch(enable_genextension):
     ssarepr = SSARepr("test", genextension=True)
@@ -541,15 +546,13 @@ continue"""
     insn_specializer = work_list.specialize_pc(set(), 5)
     s = insn_specializer.make_code()
     assert s == """\
-ri1 = self.registers_i[1]
-ri0 = self.registers_i[0]
-if isinstance(ri1, ConstInt) and isinstance(ri0, ConstInt):
-    i1 = ri1.getint()
-    i0 = ri0.getint()
-    pc = 108
-    continue
-else:
-    self.registers_i[1] = self.opimpl_int_add(ri1, ri0)
+_v0 = self.registers_i[1].getint()
+_v1 = self.registers_i[0].getint()
+_res = _v0 + _v1
+# fast-path recording, skip heapcache
+_op = self.metainterp._record_int_binop(rop.INT_ADD, _res, self.registers_i[1], self.registers_i[0])
+self.registers_i[1] = _op
+i1 = _res
 pc = 6
 continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
@@ -558,16 +561,14 @@ continue"""
     insn_specializer = work_list.specialize_insn(insn1, {i2}, 5) # i0 and i1 are unboxed in local variables already
     s = insn_specializer.make_code()
     assert s == """\
-ri1 = self.registers_i[1]
-ri0 = self.registers_i[0]
-if isinstance(ri1, ConstInt) and isinstance(ri0, ConstInt):
-    i1 = ri1.getint()
-    i0 = ri0.getint()
-    pc = 113
-    continue
-else:
-    self.registers_i[1] = self.opimpl_int_add(ri1, ri0)
-pc = 114
+_v0 = self.registers_i[1].getint()
+_v1 = self.registers_i[0].getint()
+_res = _v0 + _v1
+# fast-path recording, skip heapcache
+_op = self.metainterp._record_int_binop(rop.INT_ADD, _res, self.registers_i[1], self.registers_i[0])
+self.registers_i[1] = _op
+i1 = _res
+pc = 113
 continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == {i2}
@@ -593,15 +594,15 @@ continue"""
     assert newpc == 5
     s = insn_specializer.make_code()
     assert s == """\
-ri0 = self.registers_i[0]
-if isinstance(ri0, ConstInt):
-    i0 = ri0.getint()
-    pc = %d
-    continue
-else:
-    self.registers_i[1] = self.opimpl_int_add(ri0, ConstInt(1))
+_v0 = self.registers_i[0].getint()
+_v1 = 1
+_res = _v0 + _v1
+# fast-path recording, skip heapcache
+_op = self.metainterp._record_int_binop(rop.INT_ADD, _res, self.registers_i[0], ConstInt(1))
+self.registers_i[1] = _op
+i1 = _res
 pc = 7
-continue""" % (work_list.OFFSET + 7)
+continue"""
     next_constant_registers = insn_specializer.get_next_constant_registers()
     assert next_constant_registers == set()
 
@@ -723,12 +724,15 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
     i1 = ri1.getint()
     pc = 117
     continue
-_v0 = self.registers_i[0].getint()
-_v1 = self.registers_i[1].getint()
-_cond = int(_v0 < _v1)
-# fast-path: record comparison directly, skip heapcache
-condbox = self.metainterp.history.record2_int(rop.INT_LT, self.registers_i[0], self.registers_i[1], _cond)
-self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
+if self.registers_i[0] is self.registers_i[1]:
+    self.pc = 17
+else:
+    _v0 = self.registers_i[0].getint()
+    _v1 = self.registers_i[1].getint()
+    _cond = int(_v0 < _v1)
+    # fast-path: record comparison directly, skip heapcache
+    condbox = self.metainterp.history.record2_int(rop.INT_LT, self.registers_i[0], self.registers_i[1], _cond)
+    self.genext_goto_if_not_comparison(condbox, rop.INT_LT, self.registers_i[0], self.registers_i[1], 17, 5)
 pc = self.pc
 if pc == 17:
     pc = 17
@@ -750,12 +754,15 @@ if isinstance(ri0, ConstInt) and isinstance(ri1, ConstInt):
     pc = 119
     continue
 glob0(self, i2) # jit_sync_regs_i2
-_v0 = self.registers_i[0].getint()
-_v1 = self.registers_i[1].getint()
-_cond = int(_v0 < _v1)
-# fast-path: record comparison directly, skip heapcache
-condbox = self.metainterp.history.record2_int(rop.INT_LT, self.registers_i[0], self.registers_i[1], _cond)
-self.opimpl_goto_if_not(condbox, 17, 5, replace=False)
+if self.registers_i[0] is self.registers_i[1]:
+    self.pc = 17
+else:
+    _v0 = self.registers_i[0].getint()
+    _v1 = self.registers_i[1].getint()
+    _cond = int(_v0 < _v1)
+    # fast-path: record comparison directly, skip heapcache
+    condbox = self.metainterp.history.record2_int(rop.INT_LT, self.registers_i[0], self.registers_i[1], _cond)
+    self.genext_goto_if_not_comparison(condbox, rop.INT_LT, self.registers_i[0], self.registers_i[1], 17, 5)
 pc = self.pc
 if pc == 17:
     pc = 120
@@ -776,6 +783,26 @@ if not cond:
     continue
 pc = 123
 continue"""
+
+
+@pytest.mark.parametrize('opname, same_box_code', [
+    ('lt', '    self.pc = 17'),
+    ('gt', '    self.pc = 17'),
+    ('ne', '    self.pc = 17'),
+    ('le', '    pass'),
+    ('ge', '    pass'),
+    ('eq', '    pass'),
+])
+def test_goto_if_not_int_comparison_same_box(opname, same_box_code):
+    i0, i1 = Register('int', 0), Register('int', 1)
+    insn = ('goto_if_not_int_' + opname, i0, i1, TLabel('L1'))
+    work_list = WorkList(
+        {5: insn, 6: ('int_return', i0), 17: ('int_return', i1)},
+        label_to_pc={'L1': 17}, pc_to_nextpc={5: 6})
+
+    source = work_list.specialize_pc(set(), 5).make_code()
+    assert ('if self.registers_i[0] is self.registers_i[1]:\n' +
+            same_box_code + '\nelse:') in source
 
 
 def test_goto_if_not_int_is_true():

@@ -873,14 +873,13 @@ class Specializer(object):
         """Generate fast-path code for integer binary ops with non-constant args."""
         arg0, arg1, result = self._get_args_and_res()
         lines = []
-        self._emit_sync_registers(lines)
-        box0 = self._get_as_box_after_sync(arg0)
-        box1 = self._get_as_box_after_sync(arg1)
+        box0 = self._get_as_box_for_record(arg0)
+        box1 = self._get_as_box_for_record(arg1)
         lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
         lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
         lines.append("_res = _v0 %s _v1" % py_op)
         lines.append("# fast-path recording, skip heapcache")
-        lines.append("_op = self.metainterp.history.record2_int(rop.%s, %s, %s, _res)" % (
+        lines.append("_op = self.metainterp._record_int_binop(rop.%s, _res, %s, %s)" % (
             rop_name, box0, box1))
         lines.append("self.registers_i[%d] = _op" % result.index)
         lines.append("i%d = _res" % result.index)
@@ -1161,7 +1160,8 @@ class Specializer(object):
             lines.append('%s = %sllmemory.cast_adr_to_ptr(support.int2adr(i%s), %s).%s)' % (self._get_as_unboxed(res), resultcast, arg.index, self._add_global(PTRTYPE), name))
             self._emit_jump(lines, constant_registers=self.constant_registers.union({res}))
             return lines
-        raise Unsupported
+        # non-pure raw field: record it via the opimpl, keep the chain
+        return self._emit_getfield_raw_record()
     emit_specialized_getfield_raw_r = emit_specialized_getfield_raw_i
     emit_specialized_getfield_raw_f = emit_specialized_getfield_raw_i
 
@@ -1239,6 +1239,81 @@ class Specializer(object):
     emit_specialized_setfield_gc_r = emit_specialized_setfield_gc_i
     emit_specialized_setfield_gc_f = emit_specialized_setfield_gc_i
 
+    def _emit_allocation_common(self):
+        # 'new'/'new_with_vtable': no box args, just a descr.  The opimpl
+        # records the allocation and registers it with the heapcache; all we
+        # add here is keeping the constant-specialization chain alive instead
+        # of falling back to the generic code (which flushes all constants).
+        descr, res = self._get_args_and_res()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("self.registers_r[%d] = self.%s(%s)" % (
+            res.index, self.methodname, descrglob))
+        next_consts = self.constant_registers - {res}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+    emit_specialized_new = _emit_allocation_common
+    emit_unspecialized_new = _emit_allocation_common
+    emit_specialized_new_with_vtable = _emit_allocation_common
+    emit_unspecialized_new_with_vtable = _emit_allocation_common
+
+    def _emit_new_array_common(self):
+        length, descr, res = self._get_args_and_res()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("self.registers_r[%d] = self.%s(%s, %s)" % (
+            res.index, self.methodname,
+            self._get_as_box_after_sync(length), descrglob))
+        next_consts = self.constant_registers - {res}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+    emit_specialized_new_array = _emit_new_array_common
+    emit_unspecialized_new_array = _emit_new_array_common
+    emit_specialized_new_array_clear = _emit_new_array_common
+    emit_unspecialized_new_array_clear = _emit_new_array_common
+
+    def _emit_setarrayitem_gc_common(self):
+        arr, index, value, descr = self._get_args()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %s, %s, %s)" % (
+            self.methodname,
+            self._get_as_box_after_sync(arr),
+            self._get_as_box_after_sync(index),
+            self._get_as_box_after_sync(value),
+            descrglob))
+        self._emit_jump(lines)
+        return lines
+    emit_specialized_setarrayitem_gc_i = _emit_setarrayitem_gc_common
+    emit_unspecialized_setarrayitem_gc_i = _emit_setarrayitem_gc_common
+    emit_specialized_setarrayitem_gc_r = _emit_setarrayitem_gc_common
+    emit_unspecialized_setarrayitem_gc_r = _emit_setarrayitem_gc_common
+    emit_specialized_setarrayitem_gc_f = _emit_setarrayitem_gc_common
+    emit_unspecialized_setarrayitem_gc_f = _emit_setarrayitem_gc_common
+
+    def _emit_getarrayitem_gc_common(self):
+        arr, index, descr, res = self._get_args_and_res()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("self.registers_%s[%s] = self.%s(%s, %s, %s)" % (
+            res.kind[0], res.index, self.methodname,
+            self._get_as_box_after_sync(arr),
+            self._get_as_box_after_sync(index),
+            descrglob))
+        next_consts = self.constant_registers - {res}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+    emit_specialized_getarrayitem_gc_i = _emit_getarrayitem_gc_common
+    emit_unspecialized_getarrayitem_gc_i = _emit_getarrayitem_gc_common
+    emit_specialized_getarrayitem_gc_r = _emit_getarrayitem_gc_common
+    emit_unspecialized_getarrayitem_gc_r = _emit_getarrayitem_gc_common
+    emit_specialized_getarrayitem_gc_f = _emit_getarrayitem_gc_common
+    emit_unspecialized_getarrayitem_gc_f = _emit_getarrayitem_gc_common
+
     def emit_specialized_arraylen_gc(self):
         lines = []
         arg, descr, res = self._get_args_and_res()
@@ -1273,6 +1348,103 @@ class Specializer(object):
         self._emit_jump(lines)
         return lines
     emit_unspecialized_record_quasiimmut_field = emit_specialized_record_quasiimmut_field
+
+    def emit_unspecialized_assert_not_none(self):
+        # opimpl_assert_not_none may record ASSERT_NOT_NONE (sync first) and
+        # consults the heapcache nullity knowledge itself.
+        arg, = self._get_args()
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s)" % (
+            self.methodname, self._get_as_box_after_sync(arg)))
+        self._emit_jump(lines)
+        return lines
+
+    def _emit_getfield_raw_record(self):
+        # non-pure raw getfield: go through the opimpl (records the op),
+        # but keep the constant-specialization chain alive.
+        arg, descr, res = self._get_args_and_res()
+        descrglob = self._add_global(descr)
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("self.registers_%s[%s] = self.%s(%s, %s)" % (
+            res.kind[0], res.index, self.methodname,
+            self._get_as_box_after_sync(arg), descrglob))
+        next_consts = self.constant_registers - {res}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+    emit_unspecialized_getfield_raw_i = _emit_getfield_raw_record
+    emit_unspecialized_getfield_raw_r = _emit_getfield_raw_record
+    emit_unspecialized_getfield_raw_f = _emit_getfield_raw_record
+
+    def emit_specialized_int_force_ge_zero(self):
+        arg0, result = self._get_args_and_res()
+        v = self._get_as_unboxed(arg0)
+        lines = ["i%s = %s if %s >= 0 else 0" % (result.index, v, v)]
+        self._emit_jump(lines)
+        return lines
+
+    def emit_unspecialized_int_force_ge_zero(self):
+        arg0, result = self._get_args_and_res()
+        lines = []
+        self._emit_sync_registers(lines)
+        box0 = self._get_as_box_after_sync(arg0)
+        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
+        lines.append("_res = _v0 if _v0 >= 0 else 0")
+        lines.append("_op = self.metainterp.history.record1_int(rop.INT_FORCE_GE_ZERO, %s, _res)" % box0)
+        lines.append("self.registers_i[%d] = _op" % result.index)
+        lines.append("i%d = _res" % result.index)
+        next_consts = self.constant_registers - {result}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+
+    def _emit_last_exc_value_common(self):
+        # returns metainterp.last_exc_box; no recording, no guard
+        res = self.insn[self.resindex]
+        lines = ["self.registers_r[%d] = self.%s()" % (
+            res.index, self.methodname)]
+        next_consts = self.constant_registers - {res}
+        self._emit_jump(lines, constant_registers=next_consts)
+        return lines
+    emit_specialized_last_exc_value = _emit_last_exc_value_common
+    emit_unspecialized_last_exc_value = _emit_last_exc_value_common
+
+    def _emit_last_exception_common(self):
+        # opimpl_last_exception always returns a ConstInt, so the result
+        # joins the constant chain.
+        res = self.insn[self.resindex]
+        boxvar = self._get_new_temp_variable()
+        lines = ["%s = self.%s()" % (boxvar, self.methodname),
+                 "self.registers_i[%d] = %s" % (res.index, boxvar),
+                 "i%d = %s.getint()" % (res.index, boxvar)]
+        self._emit_jump(
+            lines, constant_registers=self.constant_registers.union({res}))
+        return lines
+    emit_specialized_last_exception = _emit_last_exception_common
+    emit_unspecialized_last_exception = _emit_last_exception_common
+
+    def _emit_goto_if_exception_mismatch_common(self):
+        # no recording and no guard: just branches on the class of
+        # metainterp.last_exc_value by (possibly) assigning self.pc
+        arg0, label = self._get_args()
+        target_pc = self.get_target_pc(label)
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("self.%s(%s, %d)" % (
+            self.methodname, self._get_as_box_after_sync(arg0), target_pc))
+        lines.append("pc = self.pc")
+        lines.append("if pc == %d:" % target_pc)
+        spec_t = self.work_list.specialize_pc(
+            self.constant_registers, target_pc)
+        lines.append("    pc = %d" % spec_t.spec_pc)
+        lines.append("else:")
+        spec_n = self.work_list.specialize_pc(
+            self.constant_registers, self.work_list.pc_to_nextpc[self.orig_pc])
+        lines.append("    pc = %d" % spec_n.spec_pc)
+        lines.append("continue")
+        return lines
+    emit_specialized_goto_if_exception_mismatch = _emit_goto_if_exception_mismatch_common
+    emit_unspecialized_goto_if_exception_mismatch = _emit_goto_if_exception_mismatch_common
 
     def emit_specialized_int_neg(self):
         arg0, result = self._get_args_and_res()
@@ -1527,6 +1699,11 @@ class Specializer(object):
         t = self._get_type_prefix(arg)
         return "self.registers_%s[%d]" % (t, arg.index)
 
+    def _get_as_box_for_record(self, arg):
+        if isinstance(arg, Constant) or arg in self.constant_registers:
+            return self._get_as_box(arg)
+        return self._get_as_box_after_sync(arg)
+
     def _emit_unbox_by_type(self, arg, lines, indent=''):
         t = self._get_type_prefix(arg)
         line = ''
@@ -1657,6 +1834,17 @@ class Specializer(object):
     emit_unspecialized_float_ne = _emit_unspecialized_float_binary
     emit_unspecialized_float_gt = _emit_unspecialized_float_binary
     emit_unspecialized_float_ge = _emit_unspecialized_float_binary
+
+    # Pure integer operations can record their operand boxes without first
+    # materializing unrelated constant registers.
+    def emit_unspecialized_int_add(self):
+        return self._emit_unspecialized_int_binary_fast("INT_ADD", "+")
+
+    def emit_unspecialized_int_sub(self):
+        return self._emit_unspecialized_int_binary_fast("INT_SUB", "-")
+
+    def emit_unspecialized_int_mul(self):
+        return self._emit_unspecialized_int_binary_fast("INT_MUL", "*")
 
     def emit_unspecialized_int_neg(self):
         return self._emit_unspecialized_int_unary_fast("INT_NEG", "-")
@@ -2078,7 +2266,8 @@ class Specializer(object):
         lines.append("continue")
         return lines
 
-    def _emit_goto_if_not_int_comparison_fast(self, rop_name, py_op):
+    def _emit_goto_if_not_int_comparison_fast(self, rop_name, py_op,
+                                               same_box_result):
         """Generate fast-path code for goto_if_not_int_* that skips heapcache."""
         lines = []
         _, arg0, arg1, arg2 = self.insn  # left, right, label
@@ -2096,15 +2285,23 @@ class Specializer(object):
         self._emit_sync_registers(lines)
         box0 = self._get_as_box_after_sync(arg0)
         box1 = self._get_as_box_after_sync(arg1)
-        lines.append("_v0 = %s" % self._get_as_unboxed_after_sync(arg0))
-        lines.append("_v1 = %s" % self._get_as_unboxed_after_sync(arg1))
-        lines.append("_cond = int(_v0 %s _v1)" % py_op)
-        lines.append("# fast-path: record comparison directly, skip heapcache")
-        lines.append("condbox = self.metainterp.history.record2_int(rop.%s, %s, %s, _cond)" % (
-            rop_name, box0, box1))
-
-        lines.append("self.genext_goto_if_not_comparison(condbox, rop.%s, %s, %s, %d, %d)" % (
-            rop_name, box0, box1, target_pc, self.orig_pc))
+        indent = ""
+        if not isinstance(arg0, Constant) and not isinstance(arg1, Constant):
+            lines.append("if %s is %s:" % (box0, box1))
+            if same_box_result:
+                lines.append("    pass")
+            else:
+                lines.append("    self.pc = %d" % target_pc)
+            lines.append("else:")
+            indent = "    "
+        lines.append("%s_v0 = %s" % (indent, self._get_as_unboxed_after_sync(arg0)))
+        lines.append("%s_v1 = %s" % (indent, self._get_as_unboxed_after_sync(arg1)))
+        lines.append("%s_cond = int(_v0 %s _v1)" % (indent, py_op))
+        lines.append("%s# fast-path: record comparison directly, skip heapcache" % indent)
+        lines.append("%scondbox = self.metainterp.history.record2_int(rop.%s, %s, %s, _cond)" % (
+            indent, rop_name, box0, box1))
+        lines.append("%sself.genext_goto_if_not_comparison(condbox, rop.%s, %s, %s, %d, %d)" % (
+            indent, rop_name, box0, box1, target_pc, self.orig_pc))
         lines.append("pc = self.pc")
         lines.append("if pc == %s:" % (target_pc,))
         specializer = self.work_list.specialize_pc(
@@ -2120,22 +2317,22 @@ class Specializer(object):
         return lines
 
     def emit_unspecialized_goto_if_not_int_lt(self):
-        return self._emit_goto_if_not_int_comparison_fast("INT_LT", "<")
+        return self._emit_goto_if_not_int_comparison_fast("INT_LT", "<", False)
 
     def emit_unspecialized_goto_if_not_int_gt(self):
-        return self._emit_goto_if_not_int_comparison_fast("INT_GT", ">")
+        return self._emit_goto_if_not_int_comparison_fast("INT_GT", ">", False)
 
     def emit_unspecialized_goto_if_not_int_le(self):
-        return self._emit_goto_if_not_int_comparison_fast("INT_LE", "<=")
+        return self._emit_goto_if_not_int_comparison_fast("INT_LE", "<=", True)
 
     def emit_unspecialized_goto_if_not_int_ge(self):
-        return self._emit_goto_if_not_int_comparison_fast("INT_GE", ">=")
+        return self._emit_goto_if_not_int_comparison_fast("INT_GE", ">=", True)
 
     def emit_unspecialized_goto_if_not_int_ne(self):
-        return self._emit_goto_if_not_int_comparison_fast("INT_NE", "!=")
+        return self._emit_goto_if_not_int_comparison_fast("INT_NE", "!=", False)
 
     def emit_unspecialized_goto_if_not_int_eq(self):
-        return self._emit_goto_if_not_int_comparison_fast("INT_EQ", "==")
+        return self._emit_goto_if_not_int_comparison_fast("INT_EQ", "==", True)
 
     def emit_unspecialized_switch(self):
         lines = []
@@ -2176,8 +2373,39 @@ class Specializer(object):
         return lines
     emit_unspecialized_int_return = emit_return
     emit_unspecialized_ref_return = emit_return
+    emit_unspecialized_float_return = emit_return
     emit_specialized_int_return = emit_return
     emit_specialized_ref_return = emit_return
+    emit_specialized_float_return = emit_return
+
+    def _emit_raise_common(self):
+        # opimpl_raise may generate a GUARD_CLASS (so registers must be
+        # synced for the resume data) and always leaves the frame via
+        # ChangeFrame (or lets SwitchToBlackhole propagate), like a return.
+        arg, = self._get_args()
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("try:")
+        lines.append("    self.%s(%s, %d)" % (
+            self.methodname, self._get_as_box_after_sync(arg), self.orig_pc))
+        lines.append("except ChangeFrame: return")
+        lines.append("assert 0, 'unreachable'")
+        return lines
+    emit_specialized_raise = _emit_raise_common
+    emit_unspecialized_raise = _emit_raise_common
+
+    def _emit_reraise_common(self):
+        # like raise, but no argument: pops the frame and dispatches the
+        # current exception; always leaves via ChangeFrame/SwitchToBlackhole
+        lines = []
+        self._emit_sync_registers(lines)
+        lines.append("try:")
+        lines.append("    self.%s()" % (self.methodname, ))
+        lines.append("except ChangeFrame: return")
+        lines.append("assert 0, 'unreachable'")
+        return lines
+    emit_specialized_reraise = _emit_reraise_common
+    emit_unspecialized_reraise = _emit_reraise_common
 
     def emit_void_return(self):
         lines = []

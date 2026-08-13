@@ -255,6 +255,7 @@ class DescrOperation(object):
 
     # would be cool to shortcut this too, but old-style classes return int from
     # __nonzero__
+    @jit.warmup_critical_function
     def is_true(space, w_obj):
         w_descr = space.lookup(w_obj, "__nonzero__")
         if w_descr is None:
