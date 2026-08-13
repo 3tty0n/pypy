@@ -37,33 +37,98 @@ def make_rtyped_constant(translator, var, value):
 
     return Constant(llvalue, var.concretetype)
 
+
+def _is_safe_pe_callable(fn):
+    return (
+        fn.__name__.startswith("ll_stritem")
+    )
+
+def try_fold_static_calls(translator, op):
+    if op.opname != "direct_call":
+        return None
+
+    if not all(isinstance(arg, Constant) for arg in op.args):
+        return None
+
+    fnptr = op.args[0].value
+    funcobj = fnptr._obj
+    callable = funcobj._callable
+
+    if not _is_safe_pe_callable(callable):
+        return None
+
+    args = [arg.value for arg in op.args[1:]]
+    result = callable(*args)
+    return Constant(result, op.result.concretetype)
+
+
+def fold_static_calls(translator, graph):
+    replacements = {}
+    for block in graph.iterblocks():
+        newops = []
+        for op in block.operations:
+            op.args = [replacements.get(arg, arg) for arg in op.args]
+
+            result = try_fold_static_calls(translator, op)
+
+            if result is not None:
+                replacements[op.result] = result
+            else:
+                newops.append(op)
+
+            block.operations = newops
+
+            block.exitswitch = replacements.get(
+                block.exitswitch, block.exitswitch)
+
+            for link in block.exits:
+                link.args = [replacements.get(arg, arg) for arg in link.args]
+
 def specialize_entry_point(translator, graph, static_values):
     func = graph.func
     argnames, vararg, kwarg = graph.signature
+    assert vararg is None
+    assert kwarg is None
 
-    declared_static = func._pe_static_args_
+    indexed_values = {}
 
-    static_args = {}
+    declared = func._pe_static_args_
 
-    for name in declared_static:
+    for name in declared:
         if name not in static_values:
-            raise Exception("missing static value for PE argument %r" % (name,))
-        index = argnames.index(name)
-        var = graph.startblock.inputargs[index]
-        const = make_rtyped_constant(translator, var, static_values[name])
-        static_args[index] = const
+            raise ValueError("missing static value for PE argument %r" % (name,))
 
-    return specialize_graph(translator, graph, static_args)
+        try:
+            index = argnames.index(name)
+        except ValueError:
+            raise ValueError("unknown PE argument %r: arguments are %r" % (name, argnames))
 
-def specialize_graph(translator, graph, static_args):
+        indexed_values[index] = static_values[name]
+
+    return specialize_graph(translator, graph, indexed_values)
+
+def specialize_graph(translator, graph, indexed_values):
+    static_constants = {}
+
+    for index, value in indexed_values.items():
+        original_var = graph.startblock.inputargs[index]
+
+        static_constants[index] = make_rtyped_constant(
+            translator,
+            original_var,
+            value,
+        )
+
     residual = copygraph(graph)
-    inputargs = residual.startblock.inputargs
     replacements = {}
 
-    for index, const in static_args.items():
-        replacements[inputargs[index]] = const
+    for index, const in static_constants.items():
+        residual_var = residual.startblock.inputargs[index]
+        replacements[residual_var] = const
 
     replace_uses(residual, replacements)
+
+    fold_static_calls(translator, residual)
 
     constant_fold_graph(residual)
     simplify.cleanup_graph(residual)
