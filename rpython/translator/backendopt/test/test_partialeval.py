@@ -219,3 +219,49 @@ def test_connect_split_backedge_reuses_variant():
     checkgraph(connected)
     assert len(pe.cache) == 2
     assert summary(connected) == {"int_add": 2}
+
+
+def test_connect_all_split_exits_in_dynamic_cfg():
+    code = chr(LOAD) + chr(ADD)
+
+    def dispatch(code, pc, x):
+        opcode = ord(code[pc])
+        if opcode == LOAD:
+            if x <= 0:
+                return -1, x
+            return 1, x - 1
+        if x <= 0:
+            return -1, x
+        return 0, x - 1
+
+    dispatch._pe_entry_point_ = True
+    dispatch._pe_static_args_ = ("code",)
+    dispatch._pe_split_args_ = ("pc",)
+
+    graph, t = get_graph(dispatch, [str, int, int])
+    pe = PartialEvaluator(t)
+    connected = specialize_split_graph(
+        pe, graph, {"code": code}, {"pc": 0})
+
+    # Both variants retain their dynamic exit test.  Their continuing exits
+    # form pc=0 -> pc=1 -> pc=0, while both terminal exits share one return.
+    checkgraph(connected)
+    assert len(pe.cache) == 2
+    ops = summary(connected)
+    assert ops["int_le"] == 2
+    assert ops["int_sub"] == 2
+
+    ll_code = to_llvalue(t, graph.startblock.inputargs[0], code)
+    interp = LLInterpreter(t.rtyper)
+    res = interp.eval_graph(connected, [ll_code, 999, 5])
+    assert res.item0 == -1 and res.item1 == 0
+
+    # The connected residual CFG is accepted by the meta-tracing codewriter
+    from rpython.jit.codewriter.codewriter import CodeWriter
+    from rpython.jit.codewriter.test.test_codewriter import (
+        FakeCPU, FakeJitDriverSD, FakePolicy)
+    jitdriver_sd = FakeJitDriverSD(connected)
+    codewriter = CodeWriter(FakeCPU(t.rtyper), [jitdriver_sd])
+    codewriter.find_all_graphs(FakePolicy())
+    codewriter.make_jitcodes()
+    assert "goto" in jitdriver_sd.mainjitcode.dump()

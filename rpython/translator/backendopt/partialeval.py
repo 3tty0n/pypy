@@ -120,7 +120,7 @@ def _argument_values(graph, declared, values, kind):
     return indexed_values
 
 
-class _CacheValue(object):
+class CacheValue(object):
     """Hash a specialization value with the RPython hashing primitive."""
     def __init__(self, value):
         self.value = value
@@ -150,9 +150,9 @@ class PartialEvaluator(object):
         static_names, split_names = _pe_argument_names(graph)
         return (
             graph,
-            tuple((name, _CacheValue(static_env[name]))
+            tuple((name, CacheValue(static_env[name]))
                   for name in static_names),
-            tuple((name, _CacheValue(split_env[name]))
+            tuple((name, CacheValue(split_env[name]))
                   for name in split_names),
         )
 
@@ -227,7 +227,8 @@ class _SplitTransition(object):
         return None
 
 
-def _find_split_transition(graph):
+def _find_split_transitions(graph):
+    transitions = []
     for block in graph.iterblocks():
         if len(block.exits) != 1 or block.exits[0].target is not graph.returnblock:
             continue
@@ -245,8 +246,8 @@ def _find_split_transition(graph):
                   isinstance(op.args[1], Constant)):
                 fields[op.args[1].value] = op.args[2]
         if found_malloc and "item0" in fields:
-            return _SplitTransition(block, tuple_var, fields)
-    return None
+            transitions.append(_SplitTransition(block, tuple_var, fields))
+    return transitions
 
 
 class _SplitGraphConnector(object):
@@ -263,10 +264,10 @@ class _SplitGraphConnector(object):
         self.connected_edges = set()
 
     def connect(self, residual):
-        transition = _find_split_transition(residual)
-        if transition is None:
-            return
+        for transition in _find_split_transitions(residual):
+            self._connect_transition(residual, transition)
 
+    def _connect_transition(self, residual, transition):
         next_value = transition.constant_next_value()
         if next_value is None:
             return
