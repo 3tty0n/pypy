@@ -279,6 +279,9 @@ translation_optiondescription = OptionDescription(
     BoolOption("rpython_translate",
                "Set to true by rpython/bin/rpython and translate.py",
                default=False),
+    BoolOption("partialeval",
+               "partial-evaluate interpreter befor JIT generation",
+               default=False)
 ])
 
 def get_combined_translation_config(other_optdescr=None,
@@ -405,4 +408,3 @@ def get_translation_config():
     """ Return the translation config when translating. When running
     un-translated returns None """
     return _GLOBAL_TRANSLATIONCONFIG
-

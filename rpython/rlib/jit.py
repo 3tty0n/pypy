@@ -265,6 +265,18 @@ def not_in_trace(func):
     func.oopspec = "jit.not_in_trace()"   # note that 'func' may take arguments
     return func
 
+def pe_entry_point(static=None, split=None):
+    if static is None:
+        static = []
+    if split is None:
+        split = []
+
+    def decorate(func):
+        func._pe_entry_pont_ = True
+        func._pe_static_args_ = tuple(static)
+        func._pe_split_args_ = tuple(split)
+
+    return decorate
 
 @oopspec("jit.isconstant(value)")
 @specialize.call_location()
