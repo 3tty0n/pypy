@@ -73,7 +73,7 @@ def test_specialize_static_string_getitem():
     assert "direct_call" not in ops
     assert "cast_char_to_int" not in ops
 
-def test_speicalize_dispatch_simple_1():
+def test_specicalize_dispatch_simple_1():
     opcode = chr(LOAD) + chr(ADD)
 
     def dispatch(opcode, pc, x):
@@ -99,3 +99,39 @@ def test_speicalize_dispatch_simple_1():
     interp = LLInterpreter(t.rtyper)
     ll_code = to_llvalue(t, graph.startblock.inputargs[0], opcode)
     assert interp.eval_graph(residual, [ll_code, 999, 1]) == 20 + 1
+
+
+def test_specialize_dispatch_simple_2():
+    code = chr(LOAD) + chr(ADD)
+
+    def dispatch(code, pc, x):
+        opcode = ord(code[pc])
+
+        if opcode == LOAD:
+            return 1, x + 10
+        elif opcode == ADD:
+            return 2, x + 20
+
+        return -1, x
+
+    dispatch._pe_entry_point_ = True
+    dispatch._pe_static_args_ = ("code",)
+
+    graph, t = get_graph(dispatch, [str, int, int])
+
+    residual = specialize_entry_point(
+        t,
+        graph,
+        {"code": code},
+    )
+
+    ops = summary(residual)
+    # pc is still dynamic, so dispatch remains for now.
+    assert "int_eq" in ops
+
+    ll_code = to_llvalue(t, graph.startblock.inputargs[0], code)
+    interp = LLInterpreter(t.rtyper)
+    res = interp.eval_graph(residual, [ll_code, 0, 1])
+    assert res.item0 == 1 and res.item1 == 11
+    res = interp.eval_graph(residual, [ll_code, 1, 1])
+    assert res.item0 == 2 and res.item1 == 21
