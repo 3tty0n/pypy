@@ -27,3 +27,21 @@ def test_specialize_static_integer():
     residual = specialize_entry_point(t, graph, {"x": 10})
 
     assert summary(residual) == {"int_add": 1}
+
+
+def test_specialize_static_branch():
+    def f(x, y):
+        if x == 0:
+            return y + 1
+        else:
+            return y * 2
+
+    f._pe_entry_point_ = True
+    f._pe_static_args_ = ("x",)
+
+    graph, t = get_graph(f, [int, int])
+    residual = specialize_entry_point(t, graph, {"x": 0})
+    assert summary(residual) == {"int_add": 1}
+
+    interp = LLInterpreter(t.rtyper)
+    assert interp.eval_graph(residual, [999, 10]) == 11
