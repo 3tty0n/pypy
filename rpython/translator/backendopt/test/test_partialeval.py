@@ -7,7 +7,9 @@ from rpython.translator.backendopt.partialeval import (PartialEvaluator,
     specialize_split_graph, install_split_graph, partial_evaluate,
     make_rtyped_constant)
 from rpython.translator.backendopt.partialeval_template import (
-    Continue, Finish, PcHole, ResidualTemplateCatalog)
+    AbsoluteTarget, Branch, Continue, Finish, NextPcHole, PcHole,
+    RelativeTarget, ResidualTemplateCatalog, ResidualTemplateGenerator,
+    ResidualTemplateLinker)
 
 def get_graph(fn, signature):
     t = TranslationContext()
@@ -24,6 +26,17 @@ def to_llvalue(t, var, value):
     s_value = t.annotator.binding(var)
     r_value = t.rtyper.getrepr(s_value)
     return r_value.convert_const(value)
+
+
+def assert_codewriter_accepts(graph, translator):
+    from rpython.jit.codewriter.codewriter import CodeWriter
+    from rpython.jit.codewriter.test.test_codewriter import (
+        FakeCPU, FakeJitDriverSD, FakePolicy)
+    jitdriver_sd = FakeJitDriverSD(graph)
+    codewriter = CodeWriter(FakeCPU(translator.rtyper), [jitdriver_sd])
+    codewriter.find_all_graphs(FakePolicy())
+    codewriter.make_jitcodes()
+    return jitdriver_sd.mainjitcode
 
 
 def test_pe_entry_point_split_metadata():
@@ -260,14 +273,7 @@ def test_connect_all_split_exits_in_dynamic_cfg():
     assert res.item0 == -1 and res.item1 == 0
 
     # The connected residual CFG is accepted by the meta-tracing codewriter
-    from rpython.jit.codewriter.codewriter import CodeWriter
-    from rpython.jit.codewriter.test.test_codewriter import (
-        FakeCPU, FakeJitDriverSD, FakePolicy)
-    jitdriver_sd = FakeJitDriverSD(connected)
-    codewriter = CodeWriter(FakeCPU(t.rtyper), [jitdriver_sd])
-    codewriter.find_all_graphs(FakePolicy())
-    codewriter.make_jitcodes()
-    assert "goto" in jitdriver_sd.mainjitcode.dump()
+    assert "goto" in assert_codewriter_accepts(connected, t).dump()
 
 
 def test_install_split_graph_replaces_registered_entry_graph():
@@ -382,3 +388,137 @@ def test_residual_template_ir_and_catalog():
     catalog.add(template1)
     assert catalog.lookup(LOAD) is template0
     assert set(catalog.keys()) == set([LOAD, HALT])
+
+
+def test_symbolic_template_targets_resolve_without_concrete_code():
+    generator = ResidualTemplateGenerator()
+    fallthrough = generator.symbolic_fallthrough(
+        "LOAD_FAST", ("load-fast",), ("frame",), 3)
+    absolute = generator.symbolic_absolute_jump(
+        "JUMP_ABSOLUTE", (), ("frame",))
+    relative = generator.symbolic_relative_jump(
+        "JUMP_FORWARD", (), ("frame",), 3)
+    branch = generator.symbolic_absolute_branch(
+        "POP_JUMP_IF_FALSE", ("is-true",), "condition", ("frame",), 3)
+    finish = generator.symbolic_finish(
+        "RETURN_VALUE", ("pop",), ("result",))
+
+    assert isinstance(fallthrough.terminators[0].target, NextPcHole)
+    assert fallthrough.resolve_targets({"pc": 10}) == [13]
+    assert isinstance(absolute.terminators[0].target, AbsoluteTarget)
+    assert absolute.resolve_targets({"oparg": 24}) == [24]
+    assert isinstance(relative.terminators[0].target, RelativeTarget)
+    assert relative.resolve_targets({"pc": 10, "oparg": 7}) == [20]
+    assert isinstance(branch.terminators[0], Branch)
+    assert branch.terminators[0].condition == "condition"
+    assert branch.resolve_targets({"pc": 10, "oparg": 24}) == [(13, 24)]
+    assert isinstance(finish.terminators[0], Finish)
+    assert finish.resolve_targets({}) == [None]
+
+
+def test_offline_pe_of_small_symbolic_interpreter():
+    OP_ADD = 0
+    OP_JUMP = 1
+    OP_HALT = 2
+
+    def interpret_one(opcode, oparg, pc, value):
+        if opcode == OP_ADD:
+            return pc + 1, value + oparg
+        if opcode == OP_JUMP:
+            return oparg, value
+        return -1, value
+
+    # opcode semantics are offline-static.  pc/oparg remain late-static and
+    # value remains dynamic.
+    interpret_one._pe_static_args_ = ("opcode",)
+    interpret_one._pe_split_args_ = ()
+    graph, t = get_graph(interpret_one, [int, int, int, int])
+    original_ops = summary(graph)
+    assert original_ops["int_eq"] == 2
+
+    pe = PartialEvaluator(t)
+    add = pe.make_symbolic_template(
+        OP_ADD, graph, {"opcode": OP_ADD})
+    jump = pe.make_symbolic_template(
+        OP_JUMP, graph, {"opcode": OP_JUMP})
+    halt = pe.make_symbolic_template(
+        OP_HALT, graph, {"opcode": OP_HALT})
+
+    for opcode in [OP_ADD, OP_JUMP, OP_HALT]:
+        residual = pe.specialize(graph, {"opcode": opcode}, {})
+        assert_codewriter_accepts(residual, t)
+
+    # PE selected one opcode arm: dispatch comparisons are absent, while the
+    # genuinely dynamic ADD operation remains in the residual template.
+    assert not any(op.opname == "int_eq" for op in add.operations)
+    assert [op.opname for op in add.operations] == ["int_add"]
+    assert add.resolve_targets({"pc": 10, "oparg": 7}) == [11]
+    assert jump.resolve_targets({"pc": 10, "oparg": 7}) == [7]
+    assert isinstance(halt.terminators[0], Finish)
+
+
+def test_link_small_interpreter_dispatch_loop_without_tracing():
+    OP_DEC_JUMP = 0
+    OP_HALT = 1
+
+    def interpret_one(opcode, oparg, pc, value):
+        if opcode == OP_DEC_JUMP:
+            if value > 0:
+                return oparg, value - 1
+            return pc + 2, value
+        return -1, value
+
+    def dispatch(code, value):
+        pc = 0
+        while pc >= 0:
+            opcode = ord(code[pc])
+            oparg = ord(code[pc + 1])
+            pc, value = interpret_one(opcode, oparg, pc, value)
+        return value
+
+    interpret_one._pe_static_args_ = ("opcode",)
+    interpret_one._pe_split_args_ = ()
+    graph, t = get_graph(interpret_one, [int, int, int, int])
+    pe = PartialEvaluator(t)
+
+    catalog = ResidualTemplateCatalog()
+    catalog.add(pe.make_symbolic_template(
+        OP_DEC_JUMP, graph, {"opcode": OP_DEC_JUMP}))
+    catalog.add(pe.make_symbolic_template(
+        OP_HALT, graph, {"opcode": OP_HALT}))
+
+    for opcode in [OP_DEC_JUMP, OP_HALT]:
+        residual = pe.specialize(graph, {"opcode": opcode}, {})
+        assert_codewriter_accepts(residual, t)
+
+    # Two-byte instructions: DEC_JUMP 0 loops until value reaches zero, then
+    # falls through to HALT at pc=2.
+    code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_HALT) + chr(0)
+    assert dispatch(code, 5) == 0
+
+    linked = ResidualTemplateLinker(catalog).link(code)
+    assert set(linked.blocks) == set([0, 2])
+    assert set(linked.blocks[0].successors) == set([0, 2])
+    assert 0 in linked.blocks[0].successors       # cached self-backedge
+    assert linked.blocks[2].has_finish
+    assert linked.loop_headers == (0,)
+    assert linked.backedges == ((0, 0),)
+    assert linked.blocks[0].is_loop_header
+
+    # Opcode selection happened offline/in the linker.  No dispatch comparison
+    # remains in either linked opcode template.
+    for block in linked.blocks.values():
+        assert not any(op.opname == "int_eq"
+                       for op in block.template.operations)
+
+    # Offline-discovered loop facts survive codewriter lowering as a JitCode
+    # side table, ready for the meta-interpreter to consume.
+    dec_graph = pe.specialize(graph, {"opcode": OP_DEC_JUMP}, {})
+    jitcode = assert_codewriter_accepts(dec_graph, t)
+    linked.attach_to_jitcode(jitcode)
+    assert jitcode.pe_metadata == {
+        "entry_pc": 0,
+        "block_pcs": (0, 2),
+        "loop_headers": (0,),
+        "backedges": ((0, 0),),
+    }

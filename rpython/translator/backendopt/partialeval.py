@@ -228,6 +228,18 @@ class PartialEvaluator(object):
         generator = ResidualTemplateGenerator(terminal_values)
         return generator.from_residual_graph(key, residual, transitions)
 
+    def make_symbolic_template(self, key, graph, static_env,
+                               terminal_values=(-1,), pc_name="pc",
+                               oparg_name="oparg"):
+        """Specialize offline-static inputs and lift late-static pc values."""
+        from rpython.translator.backendopt.partialeval_template import (
+            ResidualTemplateGenerator)
+        residual = self.specialize(graph, static_env, {})
+        transitions = _find_split_transitions(residual)
+        generator = ResidualTemplateGenerator(terminal_values)
+        return generator.from_symbolic_residual_graph(
+            key, residual, transitions, pc_name, oparg_name)
+
     def _install_residual(self, graph, residual):
         graph.startblock = residual.startblock
         graph.returnblock = residual.returnblock
