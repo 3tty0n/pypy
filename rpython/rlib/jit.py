@@ -272,9 +272,10 @@ def pe_entry_point(static=None, split=None):
         split = []
 
     def decorate(func):
-        func._pe_entry_pont_ = True
+        func._pe_entry_point_ = True
         func._pe_static_args_ = tuple(static)
         func._pe_split_args_ = tuple(split)
+        return func
 
     return decorate
 
