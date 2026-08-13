@@ -2398,6 +2398,17 @@ class MetaInterpGlobalData(object):
 
 # ____________________________________________________________
 
+def get_pe_trace_start_position(jitcode):
+    """Return an offline-selected loop entry, or the regular portal entry."""
+    metadata = jitcode.pe_metadata
+    if metadata is None:
+        return 0
+    entry_pc = metadata.entry_pc
+    if not metadata.is_loop_header(entry_pc):
+        return 0
+    return metadata.position_for_pc(entry_pc)
+
+
 class MetaInterp(object):
     portal_call_depth = 0
     cancel_count = 0
@@ -2420,6 +2431,8 @@ class MetaInterp(object):
         self.retracing_from = (-1, -1, -1, -1, -1)
         self.call_pure_results = args_dict()
         self.heapcache = HeapCache()
+        self.pe_metadata_consumed = False
+        self.pe_trace_start_position = 0
 
         self.call_ids = []
         self.current_call_id = 0
@@ -3293,11 +3306,16 @@ class MetaInterp(object):
         self.framestack = []
         f = self.newframe(self.jitdriver_sd.mainjitcode)
         f.setup_call(original_boxes)
+        jitcode = self.jitdriver_sd.mainjitcode
+        f.pc = get_pe_trace_start_position(jitcode)
+        self.pe_trace_start_position = f.pc
+        self.pe_metadata_consumed = jitcode.pe_metadata is not None
+        if self.pe_metadata_consumed:
+            self.staticdata.stats.pe_metadata_used()
         assert self.portal_call_depth == 0
         self.virtualref_boxes = []
         self.initialize_withgreenfields(original_boxes)
         self.initialize_virtualizable(original_boxes)
-
     def initialize_state_from_guard_failure(self, resumedescr, deadframe):
         # guard failure: rebuild a complete MIFrame stack
         # This is stack-critical code: it must not be interrupted by StackOverflow,

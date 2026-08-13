@@ -237,6 +237,7 @@ class WarmRunnerDesc(object):
     def __init__(self, translator, policy=None, backendopt=True, CPUClass=None,
                  ProfilerClass=EmptyProfiler, **kwds):
         pyjitpl._warmrunnerdesc = self   # this is a global for debugging only!
+        pe_jitcode_setup = kwds.pop("pe_jitcode_setup", None)
         self.set_translator(translator)
         self.memory_manager = memmgr.MemoryManager()
         self.build_cpu(CPUClass, **kwds)
@@ -279,6 +280,9 @@ class WarmRunnerDesc(object):
         self.rewrite_access_helpers()
         self.create_jit_entry_points()
         jitcodes = self.codewriter.make_jitcodes(verbose=verbose)
+        if pe_jitcode_setup is not None:
+            for jd in self.jitdrivers_sd:
+                pe_jitcode_setup(jd.mainjitcode)
         self.metainterp_sd.jitcodes = jitcodes
         self.rewrite_can_enter_jits()
         self.rewrite_set_param_and_get_stats()

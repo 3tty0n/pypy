@@ -515,10 +515,124 @@ def test_link_small_interpreter_dispatch_loop_without_tracing():
     # side table, ready for the meta-interpreter to consume.
     dec_graph = pe.specialize(graph, {"opcode": OP_DEC_JUMP}, {})
     jitcode = assert_codewriter_accepts(dec_graph, t)
-    linked.attach_to_jitcode(jitcode)
-    assert jitcode.pe_metadata == {
-        "entry_pc": 0,
-        "block_pcs": (0, 2),
-        "loop_headers": (0,),
-        "backedges": ((0, 0),),
-    }
+    linked.attach_to_jitcode(jitcode, {0: 7, 2: 19})
+    assert jitcode.pe_metadata.entry_pc == 0
+    assert jitcode.pe_metadata.block_pcs == (0, 2)
+    assert jitcode.pe_metadata.loop_headers == (0,)
+    assert jitcode.pe_metadata.backedge_sources == (0,)
+    assert jitcode.pe_metadata.backedge_targets == (0,)
+    assert jitcode.pe_metadata.entry_pcs == (0, 2)
+    assert jitcode.pe_metadata.entry_positions == (7, 19)
+
+    from rpython.jit.metainterp.pyjitpl import get_pe_trace_start_position
+    assert get_pe_trace_start_position(jitcode) == 7
+
+
+def test_meta_interpreter_starts_at_offline_loop_header():
+    from rpython.jit.codewriter.jitcode import JitCode, PEJitCodeMetadata
+    from rpython.jit.metainterp.pyjitpl import (
+        MetaInterp, get_pe_trace_start_position)
+
+    jitcode = JitCode("offline-loop")
+    jitcode.pe_metadata = PEJitCodeMetadata(
+        10, (10,), (10,), (), (), (10,), (23,))
+
+    class FakeFrame(object):
+        def setup_call(self, boxes):
+            self.boxes = boxes
+            self.pc = 0
+
+    class FakeJitDriverSD(object):
+        mainjitcode = jitcode
+
+    metainterp = MetaInterp.__new__(MetaInterp)
+    metainterp.jitdriver_sd = FakeJitDriverSD()
+    class FakeStats(object):
+        def pe_metadata_used(self):
+            pass
+    class FakeStaticData(object):
+        stats = FakeStats()
+    metainterp.staticdata = FakeStaticData()
+    frame = FakeFrame()
+
+    def newframe(jitcode_arg):
+        assert jitcode_arg is jitcode
+        metainterp.portal_call_depth = 0
+        metainterp.framestack.append(frame)
+        return frame
+
+    metainterp.newframe = newframe
+    metainterp.initialize_withgreenfields = lambda boxes: None
+    metainterp.initialize_virtualizable = lambda boxes: None
+    boxes = [object()]
+    metainterp.initialize_state_from_start(boxes)
+
+    assert frame.boxes == boxes
+    assert frame.pc == 23
+
+    # Metadata is advisory: incomplete metadata and non-loop entries retain
+    # the existing portal position zero.
+    jitcode.pe_metadata = PEJitCodeMetadata(
+        10, (10,), (10,), (), (), (), ())
+    assert get_pe_trace_start_position(jitcode) == 0
+    jitcode.pe_metadata = PEJitCodeMetadata(
+        10, (10, 20), (20,), (), (), (10,), (23,))
+    assert get_pe_trace_start_position(jitcode) == 0
+
+
+def test_meta_traces_small_interpreter_with_offline_metadata():
+    from rpython.rlib.jit import JitDriver
+    from rpython.jit.metainterp.test.support import LLJitMixin
+
+    OP_DEC_JUMP = 0
+    OP_HALT = 1
+
+    def interpret_one(opcode, oparg, pc, value):
+        if opcode == OP_DEC_JUMP:
+            if value > 0:
+                return oparg, value - 1
+            return pc + 2, value
+        return -1, value
+
+    interpret_one._pe_static_args_ = ("opcode",)
+    interpret_one._pe_split_args_ = ()
+    graph, t = get_graph(interpret_one, [int, int, int, int])
+    pe = PartialEvaluator(t)
+    catalog = ResidualTemplateCatalog()
+    catalog.add(pe.make_symbolic_template(
+        OP_DEC_JUMP, graph, {"opcode": OP_DEC_JUMP}))
+    catalog.add(pe.make_symbolic_template(
+        OP_HALT, graph, {"opcode": OP_HALT}))
+
+    code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_HALT) + chr(0)
+    linked = ResidualTemplateLinker(catalog).link(code)
+    assert linked.loop_headers == (0,)
+
+    driver = JitDriver(greens=["pc"], reds=["value"])
+
+    def dispatch(value):
+        pc = 0
+        while pc >= 0:
+            driver.can_enter_jit(pc=pc, value=value)
+            driver.jit_merge_point(pc=pc, value=value)
+            opcode = ord(code[pc])
+            oparg = ord(code[pc + 1])
+            pc, value = interpret_one(opcode, oparg, pc, value)
+        return value
+
+    def attach_offline_metadata(jitcode):
+        # The mini portal starts at its loop header, so its JitCode offset is
+        # zero.  Later stencil lowering will compute non-zero offsets.
+        linked.attach_to_jitcode(jitcode, {0: 0, 2: 0})
+
+    runner = LLJitMixin()
+    result = runner.meta_interp(
+        dispatch, [8], pe_jitcode_setup=attach_offline_metadata,
+        enable_opts="")
+
+    assert result == 0
+    from rpython.jit.metainterp.warmspot import get_stats
+    assert get_stats().pe_metadata_count > 0
+    runner.check_trace_count(1)
+    runner.check_resops(int_gt=1, int_sub=1,
+                        strgetitem=0, int_eq=0)

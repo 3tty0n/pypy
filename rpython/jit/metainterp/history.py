@@ -854,12 +854,16 @@ class NoStats(object):
     def add_jitcell_token(self, token):
         pass
 
+    def pe_metadata_used(self):
+        pass
+
 class Stats(object):
     """For tests."""
 
     compiled_count = 0
     enter_count = 0
     aborted_count = 0
+    pe_metadata_count = 0
 
     def __init__(self, metainterp_sd):
         self.loops = []
@@ -879,12 +883,16 @@ class Stats(object):
         self.compiled_count = 0
         self.enter_count = 0
         self.aborted_count = 0
+        self.pe_metadata_count = 0
         for dict in self.jitcell_dicts:
             dict.clear()
 
     def add_jitcell_token(self, token):
         assert isinstance(token, JitCellToken)
         self.jitcell_token_wrefs.append(weakref.ref(token))
+
+    def pe_metadata_used(self):
+        self.pe_metadata_count += 1
 
     def set_history(self, history):
         self.history = history

@@ -6,6 +6,29 @@ from rpython.rlib.objectmodel import we_are_translated, specialize
 from rpython.rlib.rarithmetic import base_int
 
 
+class PEJitCodeMetadata(object):
+    """RPython-friendly offline PE facts attached to a JitCode."""
+
+    def __init__(self, entry_pc, block_pcs, loop_headers, backedge_sources,
+                 backedge_targets, entry_pcs, entry_positions):
+        self.entry_pc = entry_pc
+        self.block_pcs = block_pcs
+        self.loop_headers = loop_headers
+        self.backedge_sources = backedge_sources
+        self.backedge_targets = backedge_targets
+        self.entry_pcs = entry_pcs
+        self.entry_positions = entry_positions
+
+    def is_loop_header(self, pc):
+        return pc in self.loop_headers
+
+    def position_for_pc(self, pc):
+        for index in range(len(self.entry_pcs)):
+            if self.entry_pcs[index] == pc:
+                return self.entry_positions[index]
+        return 0
+
+
 class JitCode(AbstractDescr):
     _empty_i = []
     _empty_r = []
@@ -16,6 +39,7 @@ class JitCode(AbstractDescr):
         self.fnaddr = fnaddr
         self.calldescr = calldescr
         self.jitdriver_sd = None # None for non-portals
+        self.pe_metadata = None
         self._called_from = called_from   # debugging
         self._ssarepr     = None          # debugging
 

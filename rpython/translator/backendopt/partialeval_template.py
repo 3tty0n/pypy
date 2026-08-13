@@ -173,17 +173,29 @@ class LinkedResidualProgram(object):
         self.loop_headers = tuple(loop_headers)
         return self
 
-    def metadata(self):
-        return {
+    def metadata(self, entry_positions=None):
+        metadata = {
             "entry_pc": self.entry_pc,
             "block_pcs": tuple(sorted(self.blocks)),
             "loop_headers": self.loop_headers,
             "backedges": self.backedges,
         }
+        if entry_positions is not None:
+            metadata["entry_positions"] = entry_positions
+        return metadata
 
-    def attach_to_jitcode(self, jitcode):
+    def attach_to_jitcode(self, jitcode, entry_positions=None):
         """Preserve offline CFG facts for the meta-interpreter."""
-        jitcode.pe_metadata = self.metadata()
+        from rpython.jit.codewriter.jitcode import PEJitCodeMetadata
+        if entry_positions is None:
+            entry_positions = {}
+        entry_pcs = tuple(sorted(entry_positions))
+        positions = tuple(entry_positions[pc] for pc in entry_pcs)
+        sources = tuple(source for source, target in self.backedges)
+        targets = tuple(target for source, target in self.backedges)
+        jitcode.pe_metadata = PEJitCodeMetadata(
+            self.entry_pc, tuple(sorted(self.blocks)), self.loop_headers,
+            sources, targets, entry_pcs, positions)
         return jitcode
 
 
