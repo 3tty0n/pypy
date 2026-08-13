@@ -198,10 +198,34 @@ class PartialEvaluator(object):
         residual = self.specialize(graph, static_env, split_env)
         connector = _SplitGraphConnector(
             self, graph, static_env, split_names[0], terminal_values,
-            residual.returnblock)
+            residual.returnblock, residual.exceptblock)
         connector.connect(residual)
         checkgraph(residual)
         return residual
+
+    def install_split_graph(self, graph, static_env, split_env,
+                            terminal_values=(-1,)):
+        """Install a connected residual CFG in the original graph object.
+
+        Keeping the original FunctionGraph preserves all existing call targets
+        and its position in ``translator.graphs``.
+        """
+        residual = self.specialize_split_graph(
+            graph, static_env, split_env, terminal_values)
+        return self._install_residual(graph, residual)
+
+    def install_graph(self, graph, static_env):
+        residual = self.specialize(graph, static_env, {})
+        return self._install_residual(graph, residual)
+
+    def _install_residual(self, graph, residual):
+        graph.startblock = residual.startblock
+        graph.returnblock = residual.returnblock
+        graph.exceptblock = residual.exceptblock
+        if graph not in self.translator.graphs:
+            self.translator.graphs.append(graph)
+        checkgraph(graph)
+        return graph
 
 
 def specialize_variant(pe, graph, static_values, split_values):
@@ -211,6 +235,12 @@ def specialize_variant(pe, graph, static_values, split_values):
 def specialize_split_graph(pe, graph, static_values, split_values,
                            terminal_values=(-1,)):
     return pe.specialize_split_graph(
+        graph, static_values, split_values, terminal_values)
+
+
+def install_split_graph(pe, graph, static_values, split_values,
+                        terminal_values=(-1,)):
+    return pe.install_split_graph(
         graph, static_values, split_values, terminal_values)
 
 
@@ -254,16 +284,18 @@ class _SplitGraphConnector(object):
     """Turn static ``next_split`` results into residual CFG edges."""
 
     def __init__(self, pe, graph, static_env, split_name, terminal_values,
-                 final_returnblock):
+                 final_returnblock, final_exceptblock):
         self.pe = pe
         self.graph = graph
         self.static_env = static_env
         self.split_name = split_name
         self.terminal_values = terminal_values
         self.final_returnblock = final_returnblock
+        self.final_exceptblock = final_exceptblock
         self.connected_edges = set()
 
     def connect(self, residual):
+        self._connect_to_final_exception(residual)
         for transition in _find_split_transitions(residual):
             self._connect_transition(residual, transition)
 
@@ -297,6 +329,14 @@ class _SplitGraphConnector(object):
         return_value = list(transition.block.exits[0].args)
         transition.block.recloseblock(
             Link(return_value, self.final_returnblock))
+
+    def _connect_to_final_exception(self, residual):
+        if residual.exceptblock is self.final_exceptblock:
+            return
+        for block in list(residual.iterblocks()):
+            for link in block.exits:
+                if link.target is residual.exceptblock:
+                    link.target = self.final_exceptblock
 
     def _successor_arguments(self, transition, next_split_env):
         static_names, split_names = _pe_argument_names(self.graph)
@@ -376,9 +416,35 @@ def _specialize_copied_graph(translator, graph, residual, indexed_values):
     checkgraph(residual)
 
 def partial_evaluate(translator, static_program):
+    """Specialize and install all declared PE entry points.
+
+    ``static_program`` maps a graph (or its function) to either a static-value
+    dictionary, or to ``(static_values, initial_split_values)``.
+    """
     graphs = find_pe_entrypoints(translator)
+    pe = PartialEvaluator(translator)
+    installed = []
 
     for graph in graphs:
-        specialize_entry_point(translator, graph)
-        simplify.cleanup_graph(graph)
-        checkgraph(graph)
+        if graph in static_program:
+            entry = static_program[graph]
+        elif graph.func in static_program:
+            entry = static_program[graph.func]
+        else:
+            raise ValueError("missing PE values for graph %r" % (graph,))
+
+        if isinstance(entry, tuple):
+            static_env, split_env = entry
+        else:
+            static_env, split_env = entry, {}
+
+        _, split_names = _pe_argument_names(graph)
+        if split_names:
+            installed_graph = pe.install_split_graph(
+                graph, static_env, split_env)
+        else:
+            installed_graph = pe.install_graph(graph, static_env)
+        simplify.cleanup_graph(installed_graph)
+        checkgraph(installed_graph)
+        installed.append(installed_graph)
+    return installed

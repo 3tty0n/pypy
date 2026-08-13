@@ -4,7 +4,8 @@ from rpython.rtyper.llinterp import LLInterpreter
 from rpython.rlib.jit import pe_entry_point
 from rpython.translator.backendopt.partialeval import (PartialEvaluator,
     specialize_graph, specialize_entry_point, specialize_variant,
-    specialize_split_graph, make_rtyped_constant)
+    specialize_split_graph, install_split_graph, partial_evaluate,
+    make_rtyped_constant)
 
 def get_graph(fn, signature):
     t = TranslationContext()
@@ -265,3 +266,87 @@ def test_connect_all_split_exits_in_dynamic_cfg():
     codewriter.find_all_graphs(FakePolicy())
     codewriter.make_jitcodes()
     assert "goto" in jitdriver_sd.mainjitcode.dump()
+
+
+def test_install_split_graph_replaces_registered_entry_graph():
+    code = chr(LOAD) + chr(HALT)
+
+    def dispatch(code, pc, x):
+        opcode = ord(code[pc])
+        if opcode == LOAD:
+            return 1, x + 10
+        return -1, x
+
+    dispatch._pe_entry_point_ = True
+    dispatch._pe_static_args_ = ("code",)
+    dispatch._pe_split_args_ = ("pc",)
+
+    graph, t = get_graph(dispatch, [str, int, int])
+    original_startblock = graph.startblock
+    ll_code = to_llvalue(t, original_startblock.inputargs[0], code)
+    graph_count = len(t.graphs)
+    installed = install_split_graph(
+        PartialEvaluator(t), graph, {"code": code}, {"pc": 0})
+
+    assert installed is graph
+    assert graphof(t, dispatch) is graph
+    assert graph in t.graphs
+    assert len(t.graphs) == graph_count
+    assert graph.startblock is not original_startblock
+    assert "int_eq" not in summary(graph)
+
+    res = LLInterpreter(t.rtyper).eval_graph(graph, [ll_code, 999, 3])
+    assert res.item0 == -1 and res.item1 == 13
+
+
+def test_split_variants_share_exception_block():
+    code = chr(LOAD) + chr(ADD)
+
+    def dispatch(code, pc, x):
+        opcode = ord(code[pc])
+        if x < 0:
+            raise ValueError
+        if opcode == LOAD:
+            return 1, x - 1
+        return 0, x - 1
+
+    dispatch._pe_entry_point_ = True
+    dispatch._pe_static_args_ = ("code",)
+    dispatch._pe_split_args_ = ("pc",)
+
+    graph, t = get_graph(dispatch, [str, int, int])
+    pe = PartialEvaluator(t)
+    connected = specialize_split_graph(
+        pe, graph, {"code": code}, {"pc": 0})
+
+    checkgraph(connected)
+    assert len(pe.cache) == 2
+    exitblocks = [block for block in connected.iterblocks()
+                  if not block.exits]
+    # This program has no normal loop exit, so only the shared exception block
+    # is reachable.  Variant-local exception blocks must not remain.
+    assert exitblocks == [connected.exceptblock]
+
+
+def test_partial_evaluate_installs_split_entry_point():
+    code = chr(LOAD) + chr(HALT)
+
+    def dispatch(code, pc, x):
+        if ord(code[pc]) == LOAD:
+            return 1, x + 1
+        return -1, x
+
+    dispatch._pe_entry_point_ = True
+    dispatch._pe_static_args_ = ("code",)
+    dispatch._pe_split_args_ = ("pc",)
+
+    graph, t = get_graph(dispatch, [str, int, int])
+    ll_code = to_llvalue(t, graph.startblock.inputargs[0], code)
+    installed = partial_evaluate(
+        t, {dispatch: ({"code": code}, {"pc": 0})})
+
+    assert installed == [graph]
+    assert graphof(t, dispatch) is graph
+    assert "int_eq" not in summary(graph)
+    res = LLInterpreter(t.rtyper).eval_graph(graph, [ll_code, 999, 4])
+    assert res.item0 == -1 and res.item1 == 5
