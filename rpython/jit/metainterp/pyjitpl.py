@@ -76,6 +76,10 @@ class MIFrame(object):
         assert isinstance(jitcode, JitCode)
         self.jitcode = jitcode
         self.bytecode = jitcode.code
+        # Resolved once here rather than on every goto: which position, if
+        # any, this frame should read as an offline-linked loop's back edge.
+        # -1 never equals a real target, so the check below costs one compare.
+        self.pe_loop_header = jitcode.pe_loop_header_position()
         # this is not None for frames that are recursive portal calls
         self.greenkey = greenkey
         # create registers_* lists and copy the constants in place
@@ -506,17 +510,14 @@ class MIFrame(object):
     @arguments("label")
     def opimpl_goto(self, target):
         self.pc = target
-        self.reached_offline_loop_header(target)
+        if target == self.pe_loop_header:
+            self.reached_offline_loop_header()
 
-    def reached_offline_loop_header(self, target):
-        metadata = self.jitcode.pe_metadata
-        if (metadata is not None and metadata.owns_linked_jitcode
-                and not metadata.has_merge_points
-                and target == metadata.entry_position):
-            boxes = self.metainterp.pe_portal_boxes
-            num_green = self.metainterp.jitdriver_sd.num_green_args
-            self.metainterp.reached_loop_header(
-                boxes[:num_green], boxes[num_green:])
+    def reached_offline_loop_header(self):
+        boxes = self.metainterp.pe_portal_boxes
+        num_green = self.metainterp.jitdriver_sd.num_green_args
+        self.metainterp.reached_loop_header(
+            boxes[:num_green], boxes[num_green:])
 
     @arguments("box", "label", "orgpc")
     def opimpl_goto_if_not(self, box, target, orgpc, replace=True):
@@ -1919,7 +1920,8 @@ class MIFrame(object):
                     target = (ord(bytecode[pc + 1]) |
                               (ord(bytecode[pc + 2]) << 8))
                     self.pc = pc
-                    self.reached_offline_loop_header(target)
+                    if target == self.pe_loop_header:
+                        self.reached_offline_loop_header()
                     pc = target
                     self.pc = target
                     continue

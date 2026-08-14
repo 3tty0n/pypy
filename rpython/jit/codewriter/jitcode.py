@@ -102,7 +102,12 @@ class PEJitCodeMetadata(object):
         return len(self.linked_programs) > 0
 
     def linked_program_for(self, boxes):
-        """The program linked for the code object the portal is entering."""
+        """The program linked for the code object the portal is entering.
+
+        A linear walk, even with one program per generated method: indexing it
+        on the guarded pc was measured and made no difference, because each
+        program rejects on a single integer compare anyway.
+        """
         for program in self.linked_programs:
             if program.matches(boxes):
                 return program
@@ -229,6 +234,19 @@ class JitCode(AbstractDescr):
         labelvalue = ord(code[position]) | (ord(code[position+1])<<8)
         assert labelvalue < len(code)
         return labelvalue
+
+    def pe_loop_header_position(self):
+        """Where a jump means an offline-linked loop's back edge, or -1.
+
+        Resolved once per frame rather than on every goto.  A JitCode with
+        real merge points closes its loops through those instead, so it wants
+        no position check at all.
+        """
+        metadata = self.pe_metadata
+        if (metadata is None or not metadata.owns_linked_jitcode
+                or metadata.has_merge_points):
+            return -1
+        return metadata.entry_position
 
     def dump(self):
         if self._ssarepr is None:
