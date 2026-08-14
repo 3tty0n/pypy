@@ -122,53 +122,69 @@ class Frame(object):
             jitdriver.jit_merge_point(bytecode=bytecode, pc=pc, self=self)
             opcode = ord(bytecode[pc])
             pc += 1
-
-            if opcode == CONST_INT:
-                value = ord(bytecode[pc])
+            if HASARG[opcode]:
+                oparg = ord(bytecode[pc])
                 pc += 1
-                w_z = W_IntObject(value)
-                self.push(w_z)
-
-            elif opcode == POP:
-                self.pop()
-
-            elif opcode == DUP:
-                w_x = self.pop()
-                self.push(w_x)
-                self.push(w_x)
-
-            elif opcode == ADD:
-                w_y = self.pop()
-                w_x = self.pop()
-                w_z = w_x.add(w_y)
-                self.push(w_z)
-
-            elif opcode == SUB:
-                w_y = self.pop()
-                w_x = self.pop()
-                w_z = w_x.sub(w_y)
-                self.push(w_z)
-            elif opcode == JUMP_IF:
-                target = ord(bytecode[pc])
-                pc += 1
-                w_x = self.pop()
-                if w_x.is_true():
-                    pc = target
-                    jitdriver.can_enter_jit(bytecode=bytecode, pc=pc, self=self)
-
-            elif opcode == NEWSTR:
-                char = bytecode[pc]
-                pc += 1
-                w_z = W_StringObject(char)
-                self.push(w_z)
-
-            elif opcode == RETURN:
-                w_x = self.pop()
-                assert self.stackpos == 0
-                return w_x
-
             else:
-                assert False, 'Unknown opcode: %d' % opcode
+                oparg = 0
+
+            pc, w_result, frame = self.interp_step(
+                bytecode, opcode, oparg, pc)
+            assert frame is self
+            if w_result is not None:
+                return w_result
+
+    def interp_step(self, bytecode, opcode, oparg, pc):
+        if opcode == CONST_INT:
+            w_z = W_IntObject(oparg)
+            self.push(w_z)
+
+        elif opcode == POP:
+            self.pop()
+
+        elif opcode == DUP:
+            w_x = self.pop()
+            self.push(w_x)
+            self.push(w_x)
+
+        elif opcode == ADD:
+            w_y = self.pop()
+            w_x = self.pop()
+            w_z = w_x.add(w_y)
+            self.push(w_z)
+
+        elif opcode == SUB:
+            w_y = self.pop()
+            w_x = self.pop()
+            w_z = w_x.sub(w_y)
+            self.push(w_z)
+        elif opcode == JUMP_IF:
+            w_x = self.pop()
+            if w_x.is_true():
+                jitdriver.can_enter_jit(
+                    bytecode=bytecode, pc=oparg, self=self)
+                return oparg, None, self
+            return pc, None, self
+
+        elif opcode == NEWSTR:
+            char = chr(oparg)
+            w_z = W_StringObject(char)
+            self.push(w_z)
+
+        elif opcode == RETURN:
+            w_x = self.pop()
+            assert self.stackpos == 0
+            return -1, w_x, self
+
+        else:
+            assert False, 'Unknown opcode: %d' % opcode
+
+        return pc, None, self
+
+
+Frame.interp_step.im_func._pe_static_args_ = ("opcode",)
+Frame.interp_step.im_func._pe_split_args_ = ()
+Frame.interp_step.im_func._always_inline_ = True
 
 
 def run(bytecode, w_arg):

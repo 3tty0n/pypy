@@ -1,5 +1,6 @@
 import py
 from rpython.jit.tl.tla import tla
+from rpython.jit.tl.tla import offline
 
 def test_stack():
     f = tla.Frame('')
@@ -178,3 +179,94 @@ class TestLLtype(LLJitMixin):
             return w_result.intvalue
         res = self.meta_interp(interp_w, [42], listops=True)
         assert res == 0
+
+
+def test_offline_pe_catalog_and_linked_tla_loop():
+    from rpython.jit.codewriter.codewriter import CodeWriter
+    from rpython.jit.codewriter.test.test_codewriter import FakeCPU
+    from rpython.translator.translator import TranslationContext
+
+    t = TranslationContext()
+    t.buildannotator().build_types(tla.run, [str, tla.W_IntObject])
+    t.buildrtyper().specialize()
+    catalog = offline.build_template_catalog(t)
+
+    assert set(catalog.keys()) == set(range(len(tla.OPNAMES)))
+    for opcode in catalog.keys():
+        template = catalog.lookup(opcode)
+        # The nine-way opcode dispatch is gone.  A few opcode semantics retain
+        # their own integer comparisons (for example type/stack checks).
+        assert sum(op.opname == "int_eq"
+                   for op in template.operations) < 9
+
+    bytecode = assemble([
+        tla.CONST_INT, 1,
+        tla.SUB,
+        tla.DUP,
+        tla.JUMP_IF, 0,
+        tla.RETURN,
+    ])
+    linked = offline.link_bytecode(catalog, bytecode)
+
+    assert set(linked.blocks) == set([0, 2, 3, 4, 6])
+    assert 0 in linked.loop_headers
+    assert (4, 0) in linked.backedges
+    assert linked.blocks[6].has_finish
+
+    codewriter = CodeWriter(FakeCPU(t.rtyper), [])
+    codewriter.callcontrol.candidate_graphs = set(t.graphs)
+    lowered = linked.lower(codewriter, "linked-tla-countdown")
+    dump = lowered.jitcode.dump()
+    assert "goto_if_not" in dump
+    assert "strgetitem" not in dump
+    assert set(lowered.entry_positions) == set(linked.blocks)
+
+
+class TestOfflineTracing(LLJitMixin):
+    def test_compare_tracing_work(self):
+        from rpython.rlib.jit import Counters
+        from rpython.jit.metainterp.jitprof import Profiler
+        from rpython.jit.metainterp.warmspot import get_stats
+        from rpython.jit.metainterp import pyjitpl
+        from rpython.translator.translator import TranslationContext
+
+        code = [
+            tla.CONST_INT, 1,
+            tla.SUB,
+            tla.DUP,
+            tla.JUMP_IF, 0,
+            tla.RETURN,
+        ]
+        bytecode = assemble(code)
+
+        def interp_w(intvalue):
+            w_result = interp(code, tla.W_IntObject(intvalue))
+            assert isinstance(w_result, tla.W_IntObject)
+            return w_result.intvalue
+
+        baseline = self.meta_interp(
+            interp_w, [42], listops=True, ProfilerClass=Profiler)
+        assert baseline == 0
+        baseline_profiler = pyjitpl._warmrunnerdesc.metainterp_sd.profiler
+        baseline_time = baseline_profiler.get_times(Counters.TRACING)
+        baseline_ops = baseline_profiler.get_counter(Counters.RECORDED_OPS)
+
+        def install_linked(codewriter, jitdriver_sd, translator):
+            return offline.lower_and_install(
+                codewriter, jitdriver_sd, translator, bytecode)
+
+        pe_result = self.meta_interp(
+            interp_w, [42], listops=True, ProfilerClass=Profiler,
+            pe_linked_setup=install_linked)
+        assert pe_result == baseline
+        pe_profiler = pyjitpl._warmrunnerdesc.metainterp_sd.profiler
+        pe_time = pe_profiler.get_times(Counters.TRACING)
+        pe_ops = pe_profiler.get_counter(Counters.RECORDED_OPS)
+
+        assert get_stats().pe_metadata_count > 0
+        print("TLA tracing baseline: %.9fs, %d recorded ops" %
+              (baseline_time, baseline_ops))
+        print("TLA tracing offline PE: %.9fs, %d recorded ops" %
+              (pe_time, pe_ops))
+        assert baseline_ops > 0 and pe_ops > 0
+        assert pe_ops < baseline_ops
