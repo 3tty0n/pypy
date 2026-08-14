@@ -288,7 +288,12 @@ class WarmRunnerDesc(object):
             for jd in self.jitdrivers_sd:
                 lowered = pe_linked_setup(self.codewriter, jd, translator)
                 if lowered is not None:
-                    pe_linked_programs.append(lowered)
+                    # One portal may carry several linked programs, one per
+                    # code object the offline PE was given.
+                    if isinstance(lowered, list):
+                        pe_linked_programs.extend(lowered)
+                    else:
+                        pe_linked_programs.append(lowered)
         jitcodes = self.codewriter.make_jitcodes(verbose=verbose)
         for lowered in pe_linked_programs:
             lowered.jitcode.index = len(jitcodes)

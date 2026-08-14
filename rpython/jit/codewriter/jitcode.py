@@ -4,6 +4,59 @@ from rpython.jit.metainterp.history import AbstractDescr, ConstInt
 from rpython.jit.metainterp.support import adr2int
 from rpython.rlib.objectmodel import we_are_translated, specialize
 from rpython.rlib.rarithmetic import base_int
+from rpython.rtyper.lltypesystem import llmemory, lltype
+
+
+def _never_matches(gcref):
+    return False
+
+
+class PELinkedProgram(object):
+    """One offline-linked JitCode, and the portal entry it stands for.
+
+    A portal runs many code objects, so a program says which one it was linked
+    for.  An interpreter with a single bytecode string (TLA) leaves both guard
+    indices at -1 and always matches.
+    """
+
+    def __init__(self, jitcode, argument_sources, argument_constants):
+        self.jitcode = jitcode
+        # Lists keep one homogeneous RPython annotation whether linked
+        # lowering is enabled or not; fixed-size tuples of () and (2, 1)
+        # cannot be unified during native translation.
+        self.argument_sources = list(argument_sources)
+        self.argument_constants = list(argument_constants)
+        self.guard_pc_index = -1
+        self.guard_pc = -1
+        self.guard_ref_index = -1
+        self.guard_ref = lltype.nullptr(llmemory.GCREF.TO)
+        # A program is built from a bytecode image, so the code object it
+        # belongs to does not exist yet at translation time.  The matcher
+        # recognises it the first time the portal hands one over, and the
+        # pointer is remembered from then on.
+        self.guard_match = _never_matches
+
+    def set_guard(self, pc_index, pc, ref_index):
+        self.guard_pc_index = pc_index
+        self.guard_pc = pc
+        self.guard_ref_index = ref_index
+
+    def matches(self, boxes):
+        """Is the portal entering the code object this program was linked for?"""
+        index = self.guard_pc_index
+        if index >= 0 and boxes[index].getint() != self.guard_pc:
+            return False
+        index = self.guard_ref_index
+        if index >= 0:
+            actual = boxes[index].getref_base()
+            expected = self.guard_ref
+            if not expected:
+                if not self.guard_match(actual):
+                    return False
+                self.guard_ref = actual
+            elif actual != expected:
+                return False
+        return True
 
 
 class PEJitCodeMetadata(object):
@@ -12,26 +65,54 @@ class PEJitCodeMetadata(object):
     def __init__(self, entry_pc, block_pcs, loop_headers, backedge_sources,
                  backedge_targets, entry_pcs, entry_positions):
         self.entry_pc = entry_pc
-        self.block_pcs = block_pcs
-        self.loop_headers = loop_headers
-        self.backedge_sources = backedge_sources
-        self.backedge_targets = backedge_targets
-        # These are searched with a runtime index.  They must be RPython
-        # lists: tuple getitem is only supported with a constant index.
+        # All of these must be RPython lists rather than tuples.  A portal may
+        # carry several linked programs, whose CFGs differ in size, and tuples
+        # of different lengths cannot be unified; the searched ones would also
+        # need a constant index as tuples.
+        self.block_pcs = list(block_pcs)
+        self.loop_headers = list(loop_headers)
+        self.backedge_sources = list(backedge_sources)
+        self.backedge_targets = list(backedge_targets)
         self.entry_pcs = list(entry_pcs)
         self.entry_positions = list(entry_positions)
-        self.linked_jitcode = None
-        # Lists keep one homogeneous RPython annotation whether linked
-        # lowering is enabled or not; fixed-size tuples of () and (2, 1)
-        # cannot be unified during native translation.
-        self.linked_argument_sources = []
-        self.linked_argument_constants = []
+        # One portal serves every code object the interpreter runs, so it can
+        # carry several linked programs; the first whose guard matches wins.
+        self.linked_programs = []
+        # Read on every goto while tracing linked code, so it is resolved once
+        # here rather than searched for each time.
+        self.entry_position = self.position_for_pc(entry_pc)
+        self.owns_linked_jitcode = False
+        # True when the linked JitCode carries real jit_merge_points, which
+        # close loops themselves -- including loops nested inside the program.
+        self.has_merge_points = False
 
     def attach_linked_jitcode(self, jitcode, argument_sources,
                               argument_constants):
-        self.linked_jitcode = jitcode
-        self.linked_argument_sources = list(argument_sources)
-        self.linked_argument_constants = list(argument_constants)
+        """Add an unguarded program -- for a portal with one code object."""
+        program = PELinkedProgram(jitcode, argument_sources,
+                                  argument_constants)
+        self.linked_programs.append(program)
+        if jitcode.pe_metadata is self:
+            # This metadata belongs to the linked JitCode itself, which is what
+            # the goto check below asks about.
+            self.owns_linked_jitcode = True
+        return program
+
+    def has_linked_programs(self):
+        return len(self.linked_programs) > 0
+
+    def linked_program_for(self, boxes):
+        """The program linked for the code object the portal is entering."""
+        for program in self.linked_programs:
+            if program.matches(boxes):
+                return program
+        return None
+
+    def is_linked_jitcode(self, jitcode):
+        for program in self.linked_programs:
+            if program.jitcode is jitcode:
+                return True
+        return False
 
     def is_loop_header(self, pc):
         return pc in self.loop_headers

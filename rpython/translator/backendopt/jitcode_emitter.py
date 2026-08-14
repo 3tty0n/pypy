@@ -1,0 +1,620 @@
+"""Assemble each residual template once, and emit a program by concatenation.
+
+The whole-program lowerer in ``partialeval_template`` builds one FunctionGraph
+for a generated program and hands it to the codewriter.  That works, but it
+puts the codewriter *after* generation, which is why generation cannot happen
+anywhere but during translation: ``transform_graph`` resolves each call into a
+JitCode to enter or a residual call to record, and that needs the whole-program
+view a translated binary no longer has.
+
+Nothing the codewriter does actually depends on the program, though.  Only
+three things do:
+
+  * the values filling the templates' holes,
+  * which templates get strung together,
+  * where the branches go.
+
+So the codewriter can run once per *template*, offline, and emitting a program
+becomes concatenate-and-patch.  This module is that arrangement.
+
+A fragment is the instruction list the flattener produces for one template,
+with two properties that make it relocatable:
+
+  * its boundary values arrive in the lowest registers of each kind, which
+    ``GraphFlattener.enforce_input_args`` already guarantees, and leave in
+    registers the exit records;
+  * its late-static values are ``HoleConstant`` placeholders, replaced when a
+    concrete instruction supplies them.
+"""
+
+from rpython.flowspace.model import Constant
+
+#: A value no real late-static operand is likely to take, so a placeholder
+#: that escapes patching shows up as an obviously wrong number rather than as
+#: a plausible one.
+HOLE_SENTINEL = 0x5E7717E1
+
+
+class HoleConstant(Constant):
+    """A Constant standing in for a late-static value until a program supplies it.
+
+    It behaves as an ordinary Constant through transformation, register
+    allocation and flattening, so the hole survives into the instruction list
+    at exactly the positions the value is used.
+    """
+
+    def __init__(self, name, concretetype):
+        Constant.__init__(self, HOLE_SENTINEL, concretetype)
+        self.hole_name = name
+
+    def __repr__(self):
+        return "hole(%s)" % (self.hole_name,)
+
+
+class FragmentExit(object):
+    """One way out of a fragment.
+
+    ``operands`` holds, per boundary name, the ssarepr operand carrying that
+    value where the fragment leaves off -- a register, or a constant.  The
+    concatenator turns those into moves into the calling convention before the
+    jump to the successor.
+    """
+
+    def __init__(self, index, operands, terminator):
+        self.index = index
+        self.operands = operands
+        self.terminator = terminator
+
+
+class TemplateFragment(object):
+    """One template, assembled once and ready to be placed in a program."""
+
+    def __init__(self, insns, exits, num_regs, boundary_entry, prologue=()):
+        self.insns = insns
+        self.exits = exits
+        self.num_regs = num_regs
+        # Register each boundary value arrives in, by name.
+        self.boundary_entry = boundary_entry
+        # (kind, index, value) triples to assign before the fragment runs.
+        self.prologue = tuple(prologue)
+
+
+class FragmentCompiler(object):
+    """Run the codewriter once per template, producing relocatable fragments.
+
+    The template is reshaped first so that each of its exits becomes a plain
+    ``return <exit index>``: that is a shape the flattener handles, and it
+    leaves a mark the concatenator can find and turn into a jump.  Where the
+    boundary values sit at that point is read out of the register allocation
+    rather than guessed.
+    """
+
+    def __init__(self, codewriter, portal_jd, static_name, hole_names,
+                 boundary_names, jit_merge_point_args=()):
+        self.codewriter = codewriter
+        self.portal_jd = portal_jd
+        self.static_name = static_name
+        self.hole_names = tuple(hole_names)
+        self.boundary_names = tuple(boundary_names)
+        self.jit_merge_point_args = tuple(jit_merge_point_args)
+
+    def compile(self, template, bindings={}, merge_point=False):
+        from rpython.flowspace.model import Block, Link, Variable, copygraph
+        from rpython.jit.codewriter.flatten import flatten_graph, KINDS
+        from rpython.jit.codewriter.jtransform import transform_graph
+        from rpython.jit.codewriter.regalloc import perform_register_allocation
+        from rpython.rtyper.lltypesystem import lltype
+        from rpython.translator.backendopt.partialeval import (
+            _find_split_transitions, replace_uses)
+        from rpython.translator.backendopt.partialeval_template import (
+            Finish, LinkedResidualLowerer)
+
+        graph = copygraph(template.residual_graph, shallowvars=True)
+        named = dict(zip(graph.signature[0], graph.startblock.inputargs))
+        replace_uses(graph, self._placeholders(template, named, bindings))
+        helper = LinkedResidualLowerer(
+            self.boundary_names, (), (), self.jit_merge_point_args)
+        helper.portal_jd = self.portal_jd
+        if merge_point and self.jit_merge_point_args:
+            # A real merge point, exactly as the whole-graph lowerer plants
+            # one.  Without it the metainterp has to recognise the back edge by
+            # position, and the -live- record it then needs cannot be placed:
+            # the assembler hoists a label above a -live- that follows it.
+            helper._remove_runtime_loop_markers(graph)
+            helper._insert_merge_point(graph)
+        # Substitution comes after the merge point so that its greens are the
+        # bound values: a merge point on an unbound pc names every instruction
+        # of the program alike, and the metainterp identifies loops by it.
+        # Its *reds* may not be constants, though -- the jitdriver rejects that
+        # -- so a late-static red is assigned into its register instead.
+        reds = self._bound_reds(named, bindings) if merge_point else ()
+        replace_uses(graph, self._placeholders(
+            template, named, bindings, skip=[n for n, _v in reds]))
+        # And the reorder comes after both, because ``_insert_merge_point``
+        # rebuilds the name-to-argument map from the signature: the portal
+        # fills the entry registers in *its* order, not the step function's.
+        ordered = self._reorder_arguments(graph, named)
+
+        transitions = _find_split_transitions(graph)
+        terminators = self._align(template, len(transitions))
+        # The step function returns its late-static state ahead of the dynamic
+        # values.  Skipping the wrong number of them shifts every boundary
+        # value by one, which shows up as a copy between mismatched kinds.
+        helper.state_names = self._state_names(terminators)
+        helper.state_count = len(helper.state_names)
+        finishing = [isinstance(t, Finish) for t in terminators]
+        if any(finishing) and not all(finishing):
+            # One graph has one return block, so its type has to be either the
+            # exit index or the program's result -- it cannot be both.
+            raise ValueError("template %r mixes Finish and Continue exits"
+                             % (template.key,))
+
+        if all(finishing):
+            # Return the result itself: after ``_remove_result_tuple`` nothing
+            # else uses it, and a value no exit consumes gets no register.
+            exit_block = Block([self._like(transitions[0].fields["item1"])])
+        else:
+            exit_block = Block([self._signed()])
+        exit_block.operations = ()
+        exit_block.exits = ()
+
+        tails = []
+        for index, transition in enumerate(transitions):
+            values = self._boundary_values(helper, graph, transition)
+            helper._remove_result_tuple(transition)
+            if all(finishing):
+                tails.append(None)
+                transition.block.recloseblock(
+                    Link([transition.fields["item1"]], exit_block))
+                continue
+            # A tail block per exit, taking every boundary value: nothing else
+            # uses them once the result tuple is gone, and the allocator only
+            # places values that something consumes.  Where they land is then
+            # read off the tail's own arguments.
+            args, tail = self._tail_block(named, values, index, exit_block)
+            transition.block.recloseblock(Link(args, tail))
+            tails.append(tail)
+        graph.returnblock = exit_block
+
+        callcontrol = self.codewriter.callcontrol
+        transform_graph(graph, self.codewriter.cpu, callcontrol, self.portal_jd)
+        regallocs = dict((kind, perform_register_allocation(graph, kind))
+                         for kind in KINDS)
+        ssarepr = flatten_graph(graph, regallocs, cpu=callcontrol.cpu)
+
+        entry = self._entry_registers(ordered)
+        exits = []
+        for index, tail in enumerate(tails):
+            exits.append(FragmentExit(
+                index, self._tail_registers(regallocs, tail, entry),
+                terminators[index]))
+        num_regs = dict(
+            (kind, max(regallocs[kind]._coloring.values()) + 1
+             if regallocs[kind]._coloring else 0)
+            for kind in KINDS)
+        return TemplateFragment(ssarepr.insns, exits, num_regs, entry,
+                                self._prologue(ordered, reds))
+
+    def _state_names(self, terminators):
+        """The late-static state the template carries, read off its exits."""
+        for terminator in terminators:
+            state = getattr(terminator, "state", ())
+            if state:
+                return tuple(name for name, _expression in state)
+        return ()
+
+    def _align(self, template, count):
+        """One terminator per split transition."""
+        terminators = template.terminators
+        if len(terminators) == 1 and count > 1:
+            # RTyping can keep equivalent syntactic exits that the symbolic
+            # template already canonicalised into one terminator.
+            terminators = terminators * count
+        if len(terminators) != count:
+            raise ValueError(
+                "template %r has %d exits but %d terminators"
+                % (template.key, count, len(terminators)))
+        return terminators
+
+    def _like(self, var):
+        from rpython.flowspace.model import Variable
+        fresh = Variable()
+        fresh.concretetype = var.concretetype
+        return fresh
+
+    # ------------------------------------------------------------------
+
+    def _signed(self):
+        from rpython.flowspace.model import Variable
+        from rpython.rtyper.lltypesystem import lltype
+        var = Variable()
+        var.concretetype = lltype.Signed
+        return var
+
+    def _bound_reds(self, named, bindings):
+        """Merge-point reds this block knows the value of."""
+        if self.portal_jd is None:
+            return ()
+        jitdriver = self.portal_jd.jitdriver
+        reds = self.jit_merge_point_args[len(jitdriver.greens):]
+        return [(name, bindings[name]) for name in reds
+                if name in bindings and name in named]
+
+    def _prologue(self, ordered, reds):
+        """Where to put each late-static red before the merge point sees it."""
+        from rpython.jit.metainterp.history import getkind
+        counts = {}
+        places = {}
+        for name, var in ordered:
+            kind = getkind(var.concretetype)
+            if kind == "void":
+                continue
+            places[name] = (kind, counts.get(kind, 0))
+            counts[kind] = places[name][1] + 1
+        return [(places[name][0], places[name][1], value)
+                for name, value in reds if name in places]
+
+    def _placeholders(self, template, named, bindings, skip=()):
+        """Fix the static key and every late-static value this block knows.
+
+        Whatever the decoder bound becomes a real constant, so nothing has to
+        be patched later.  A declared hole the caller left unbound still gets a
+        ``HoleConstant``, which keeps the fragment usable by a copy-and-patch
+        back end.
+        """
+        replacements = {}
+        if self.static_name in named:
+            var = named[self.static_name]
+            replacements[var] = Constant(template.key, var.concretetype)
+        for name, value in bindings.items():
+            if name in skip:
+                continue
+            if name in named and name != self.static_name:
+                var = named[name]
+                replacements[var] = Constant(value, var.concretetype)
+        for name in self.hole_names:
+            if name in named and name not in bindings:
+                var = named[name]
+                replacements[var] = HoleConstant(name, var.concretetype)
+        return replacements
+
+    def _boundary_values(self, helper, graph, transition):
+        """Which value carries each boundary name where this exit leaves off.
+
+        Dynamic values are consumed in the step function's own argument order,
+        the same order the whole-program lowerer feeds a successor, so the two
+        paths cannot disagree about which value is which.
+        """
+        carried = helper._available_carried_values(graph, transition.block)
+        dynamic = iter(helper._runtime_values(transition))
+        values = {}
+        for name in graph.signature[0]:
+            if name not in self.boundary_names:
+                continue
+            try:
+                values[name] = next(dynamic)
+            except StopIteration:
+                values[name] = carried.get(name)
+        return values
+
+    def _tail_block(self, named, values, index, exit_block):
+        """A block taking every boundary value, so each one gets a register."""
+        from rpython.flowspace.model import Block, Link
+        from rpython.rtyper.lltypesystem import lltype
+
+        args = []
+        inputargs = []
+        for name in self.boundary_names:
+            var = named[name]
+            value = values.get(name)
+            args.append(var if value is None else value)
+            inputargs.append(self._like(var))
+        tail = Block(inputargs)
+        tail.operations = ()
+        tail.closeblock(Link([Constant(index, lltype.Signed)], exit_block))
+        return args, tail
+
+    def _tail_registers(self, regallocs, tail, entry):
+        from rpython.jit.metainterp.history import getkind
+        if tail is None:
+            return {}
+        result = {}
+        for name, var in zip(self.boundary_names, tail.inputargs):
+            kind = getkind(var.concretetype)
+            try:
+                result[name] = (kind, regallocs[kind].getcolor(var))
+            except KeyError:
+                # Untouched all the way through: still in its entry register.
+                result[name] = entry.get(name)
+        return result
+
+    def _reorder_arguments(self, graph, named):
+        """Boundary arguments first, in the order the portal supplies them.
+
+        Everything else is a late-static value the placeholders already turned
+        into a constant, so where it sits no longer matters.
+
+        Returns the (name, variable) pairs in their new order.
+        """
+        ordered = [(name, named[name]) for name in self.boundary_names
+                   if name in named]
+        ordered += [(name, named[name]) for name in self.jit_merge_point_args
+                    if name in named and name not in self.boundary_names]
+        taken = set(name for name, _var in ordered)
+        ordered.extend((name, var) for name, var in
+                       zip(graph.signature[0], graph.startblock.inputargs)
+                       if name not in taken)
+        graph.startblock.inputargs = [var for _name, var in ordered]
+        return ordered
+
+    def _entry_registers(self, ordered):
+        """Where each boundary value arrives.
+
+        ``enforce_input_args`` puts the start arguments in the lowest registers
+        of each kind, in order, so this needs no lookup.
+        """
+        from rpython.jit.metainterp.history import getkind
+        counts = {}
+        result = {}
+        for name, var in ordered:
+            kind = getkind(var.concretetype)
+            if kind == "void":
+                continue
+            index = counts.get(kind, 0)
+            counts[kind] = index + 1
+            if name in self.boundary_names:
+                result[name] = (kind, index)
+        return result
+
+
+class ProgramEmitter(object):
+    """Emit a generated program by concatenating fragments.
+
+    No register renaming is needed between fragments.  Boundary values live in
+    the registers ``enforce_input_args`` pinned them to, and every fragment
+    re-establishes them on the way out, so what a fragment does with the
+    registers above those is its own business and cannot disturb its
+    neighbours.  Only the exits are rewritten: the ``return <index>`` a
+    fragment ends on becomes the moves into the calling convention followed by
+    a jump to whichever block the generated program says comes next.
+    """
+
+    def __init__(self, codewriter, portal_jd, static_name, split_names,
+                 hole_names, boundary_names, jit_merge_point_args=()):
+        self.compiler = FragmentCompiler(
+            codewriter, portal_jd, static_name, hole_names, boundary_names,
+            jit_merge_point_args)
+        self.codewriter = codewriter
+        self.split_names = tuple(split_names)
+        self.boundary_names = tuple(boundary_names)
+        self._fragments = {}
+
+    def fragment_for(self, block, merge_point=False):
+        """The fragment for this block, shared with every block like it.
+
+        Two blocks share a fragment when they run the same instruction with the
+        same late-static values -- so a program of a thousand instructions still
+        only compiles as many fragments as it has distinct specializations.
+        """
+        key = (block.key, merge_point) + tuple(sorted(block.bindings.items()))
+        if key not in self._fragments:
+            self._fragments[key] = self.compiler.compile(
+                block.template, block.bindings, merge_point)
+        return self._fragments[key]
+
+    def emit(self, program, name="emitted-residual"):
+        from rpython.jit.codewriter.assembler import JitCode
+        from rpython.jit.codewriter.flatten import Label, SSARepr, TLabel
+        from rpython.jit.codewriter.liveness import compute_liveness
+        from rpython.rtyper.lltypesystem import llmemory
+
+        if (self.compiler.portal_jd is not None
+                and not self.compiler.jit_merge_point_args):
+            # The metainterp would then have to spot the back edge by position
+            # and read a -live- immediately before it, which cannot be placed:
+            # the assembler hoists a label above a -live- that follows it.
+            raise ValueError(
+                "emitting a program needs jit_merge_point_args")
+        headers = set()
+        if self.compiler.jit_merge_point_args:
+            headers = set(program.loop_headers) | set([program.entry_pc])
+        fragments = dict((pc, self.fragment_for(block, pc in headers))
+                         for pc, block in program.blocks.items())
+        num_regs = self._widest(fragments.values())
+        scratch = dict((kind, count) for kind, count in num_regs.items())
+
+        # One more register per kind than any fragment used, for the scratch
+        # that breaks cycles in the parallel moves between fragments.
+        counts = dict((kind, scratch[kind] + 1) for kind in scratch)
+
+        ssarepr = SSARepr(name)
+        # The entry block goes first rather than behind a prologue goto: that
+        # goto would target the entry position, which is what the metainterp
+        # takes for a back edge, and would close an empty loop at trace start.
+        order = [program.entry_pc] + sorted(
+            pc for pc in program.blocks if pc != program.entry_pc)
+        for index, pc in enumerate(order):
+            # Every entry into a block is a jump, never a fall-through, so the
+            # liveness scan must not carry anything across the boundary: it
+            # would make each block's guards capture registers its own path
+            # never wrote.
+            ssarepr.insns.append(("---",))
+            ssarepr.insns.append((Label(("block", pc)),))
+            if index == 0 and headers:
+                self._initialise_scratch(ssarepr, fragments, counts)
+            self._place(ssarepr, program, pc, fragments, scratch)
+
+        compute_liveness(ssarepr)
+        self.last_ssarepr = ssarepr
+        self.last_program = program
+        jitcode = JitCode(name, fnaddr=llmemory.NULL)
+        self.codewriter.assembler.assemble(ssarepr, jitcode, counts)
+        entry_positions = dict(
+            (pc, self.codewriter.assembler.label_positions[("block", pc)])
+            for pc in program.blocks)
+        return jitcode, entry_positions
+
+    # ------------------------------------------------------------------
+
+    def _initialise_scratch(self, ssarepr, fragments, counts):
+        """Give every register above the calling convention a defined value.
+
+        Only needed where a merge point snapshots mid-program:
+        ``compute_liveness`` over-approximates around a loop, so a register a
+        fragment writes before reading still comes out live at the loop's entry.
+        In a single lowered graph that is harmless, because every block boundary
+        is a link that assigns all of them.  Here the boundaries assign only the
+        calling convention, so an over-approximated live set can name a register
+        no path has written, and the metainterp finds None when it snapshots.
+
+        These values are dead by construction -- nothing reads them before its
+        own fragment writes them -- so what they hold does not matter, only that
+        they hold something.
+        """
+        from rpython.flowspace.model import Constant
+        from rpython.rtyper.lltypesystem import llmemory, lltype
+
+        entry = {}
+        for fragment in fragments.values():
+            for kind, index in fragment.boundary_entry.values():
+                entry[kind] = max(entry.get(kind, 0), index + 1)
+        for kind in sorted(counts):
+            if kind == "ref":
+                zero = Constant(lltype.nullptr(llmemory.GCREF.TO),
+                                llmemory.GCREF)
+            elif kind == "int":
+                zero = Constant(0, lltype.Signed)
+            else:
+                continue
+            for index in range(entry.get(kind, 0), counts[kind]):
+                ssarepr.insns.append(
+                    ("%s_copy" % kind, zero, "->", self._register(kind, index)))
+
+    def _widest(self, fragments):
+        from rpython.jit.codewriter.flatten import KINDS
+        return dict(
+            (kind, max([0] + [f.num_regs.get(kind, 0) for f in fragments]))
+            for kind in KINDS)
+
+    def _register(self, kind, index):
+        from rpython.jit.codewriter.flatten import Register
+        return Register(kind, index)
+
+    def _place(self, ssarepr, program, pc, fragments, scratch):
+        """Copy a fragment in, rewriting its exits to jump to the successors."""
+        from rpython.jit.codewriter.flatten import Label, TLabel
+
+        from rpython.flowspace.model import Constant
+        from rpython.rtyper.lltypesystem import lltype
+
+        fragment = fragments[pc]
+        for kind, index, value in fragment.prologue:
+            # A late-static value the merge point takes as a red: it has to be
+            # in a register by the time the merge point reads it.
+            ssarepr.insns.append(
+                ("%s_copy" % kind, Constant(value, lltype.Signed), "->",
+                 self._register(kind, index)))
+        block = program.blocks[pc]
+        targets = block.template.resolve_targets(block.bindings)
+        if len(targets) == 1 and len(fragment.exits) > 1:
+            targets = targets * len(fragment.exits)
+
+        for insn in fragment.insns:
+            exit_index = self._exit_index(insn)
+            if exit_index is None:
+                ssarepr.insns.append(self._localise(insn, pc))
+                continue
+            exit = fragment.exits[exit_index]
+            target = targets[exit_index]
+            # Into the *successor's* entry registers: two fragments allocate
+            # independently, so only the successor knows where it reads from.
+            self._emit_moves(ssarepr, exit.operands,
+                             fragments[target].boundary_entry, scratch)
+            # No -live- before the goto: a goto cannot generate a guard, so it
+            # needs no snapshot, and an extra one only widens the live sets the
+            # fragments' own guards capture.
+            ssarepr.insns.append(("goto", TLabel(("block", target))))
+
+    def _exit_index(self, insn):
+        from rpython.flowspace.model import Constant
+        if len(insn) == 2 and insn[0] == "int_return" and \
+                isinstance(insn[1], Constant):
+            return insn[1].value
+        return None
+
+    def _localise(self, insn, pc):
+        """Make a fragment's own labels unique to where it was placed."""
+        from rpython.jit.codewriter.flatten import Label, TLabel
+        from rpython.jit.codewriter.jitcode import SwitchDictDescr
+        out = []
+        for item in insn:
+            if isinstance(item, Label):
+                out.append(Label(("in", pc, item.name)))
+            elif isinstance(item, TLabel):
+                out.append(TLabel(("in", pc, item.name)))
+            elif isinstance(item, SwitchDictDescr):
+                # A switch keeps its targets inside the descriptor rather than
+                # in the instruction, and the descriptor is the fragment's --
+                # shared with every other placement of it, so it has to be
+                # copied rather than renamed in place.
+                fresh = SwitchDictDescr()
+                fresh._labels = [(key, TLabel(("in", pc, label.name)))
+                                 for key, label in item._labels]
+                out.append(fresh)
+            else:
+                out.append(item)
+        return tuple(out)
+
+    def _emit_moves(self, ssarepr, sources, destinations, scratch):
+        """Place each boundary value in the register its successor reads.
+
+        Done as a parallel move: a destination that is still somebody's source
+        goes through a scratch register, so a rotation between two boundary
+        values cannot lose one of them.
+        """
+        from rpython.flowspace.model import Constant
+        from rpython.rtyper.lltypesystem import llmemory, lltype
+
+        moves = []
+        for name, destination in destinations.items():
+            if destination is None:
+                continue
+            kind, index = destination
+            source = sources.get(name)
+            if source is None:
+                if kind == "ref":
+                    source = Constant(lltype.nullptr(llmemory.GCREF.TO),
+                                      llmemory.GCREF)
+                else:
+                    source = Constant(0, lltype.Signed)
+            elif isinstance(source, tuple):
+                if source == destination:
+                    continue
+                source = self._register(*source)
+            moves.append((kind, index, source))
+
+        pending = list(moves)
+        emitted = []
+        while pending:
+            progressed = False
+            for move in list(pending):
+                kind, index, source = move
+                blocked = any(
+                    isinstance(other[2], type(self._register(kind, 0))) and
+                    other[2].kind == kind and other[2].index == index
+                    for other in pending if other is not move)
+                if blocked:
+                    continue
+                emitted.append(move)
+                pending.remove(move)
+                progressed = True
+            if not progressed:
+                # A cycle: break it by parking one source in the scratch.
+                kind, index, source = pending[0]
+                park = self._register(kind, scratch[kind])
+                emitted.append((kind, scratch[kind], source))
+                pending[0] = (kind, index, park)
+
+        for kind, index, source in emitted:
+            ssarepr.insns.append(
+                ("%s_copy" % kind, source, "->", self._register(kind, index)))

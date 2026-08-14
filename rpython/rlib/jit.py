@@ -265,16 +265,27 @@ def not_in_trace(func):
     func.oopspec = "jit.not_in_trace()"   # note that 'func' may take arguments
     return func
 
-def pe_entry_point(static=None, split=None):
+def pe_entry_point(static=None, split=None, holes=None):
+    """Declare how the offline partial evaluator should treat the arguments.
+
+    ``static`` values are fixed when the template catalogue is built, one
+    template per value.  ``split`` values are late-static and drive the linked
+    control flow: a pc, an operand-stack depth.  ``holes`` are late-static too,
+    supplied per bytecode by the linker's decoder, but do not drive control
+    flow -- a second operand byte, or a send's argument count.
+    """
     if static is None:
         static = []
     if split is None:
         split = []
+    if holes is None:
+        holes = []
 
     def decorate(func):
         func._pe_entry_point_ = True
         func._pe_static_args_ = tuple(static)
         func._pe_split_args_ = tuple(split)
+        func._pe_hole_args_ = tuple(holes)
         return func
 
     return decorate

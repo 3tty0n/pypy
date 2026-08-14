@@ -8,8 +8,17 @@ from rpython.translator.backendopt.partialeval import (PartialEvaluator,
     make_rtyped_constant)
 from rpython.translator.backendopt.partialeval_template import (
     AbsoluteTarget, Branch, Continue, Finish, NextPcHole, PcHole,
-    RelativeTarget, ResidualTemplateCatalog, ResidualTemplateGenerator,
-    ResidualTemplateLinker)
+    RelativeTarget, ResidualTemplateGenerator)
+from rpython.translator.backendopt.generating_extension import (
+    GeneratingExtension)
+
+
+def byte_pair_decoder(code, pc):
+    """A decoder for the flat ``<opcode><operand>`` streams used below."""
+    opcode = ord(code[pc])
+    oparg = ord(code[pc + 1])
+    return opcode, {"pc": pc, "oparg": oparg, "code": code}
+
 
 def get_graph(fn, signature):
     t = TranslationContext()
@@ -383,11 +392,11 @@ def test_residual_template_ir_and_catalog():
     assert isinstance(template1.terminators[0], Finish)
     assert PcHole().kind == "pc"
 
-    catalog = ResidualTemplateCatalog()
-    catalog.add(template0)
-    catalog.add(template1)
-    assert catalog.lookup(LOAD) is template0
-    assert set(catalog.keys()) == set([LOAD, HALT])
+    extension = GeneratingExtension({LOAD: template0, HALT: template1},
+                                    byte_pair_decoder, "opcode")
+    assert extension.templates[LOAD] is template0
+    assert set(extension.templates) == set([LOAD, HALT])
+    assert extension.handles(LOAD) and not extension.handles(LOAD + 99)
 
 
 def test_symbolic_template_targets_resolve_without_concrete_code():
@@ -485,11 +494,8 @@ def test_link_small_interpreter_dispatch_loop_without_tracing():
     graph, t = get_graph(interpret_one, [int, int, int, int])
     pe = PartialEvaluator(t)
 
-    catalog = ResidualTemplateCatalog()
-    catalog.add(pe.make_symbolic_template(
-        OP_DEC_JUMP, graph, {"opcode": OP_DEC_JUMP}))
-    catalog.add(pe.make_symbolic_template(
-        OP_HALT, graph, {"opcode": OP_HALT}))
+    extension = GeneratingExtension.from_step_function(
+        t, interpret_one, [OP_DEC_JUMP, OP_HALT], byte_pair_decoder)
 
     for opcode in [OP_DEC_JUMP, OP_HALT]:
         residual = pe.specialize(
@@ -501,7 +507,7 @@ def test_link_small_interpreter_dispatch_loop_without_tracing():
     code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_HALT) + chr(0)
     assert dispatch(code, 5) == 0
 
-    linked = ResidualTemplateLinker(catalog).link(code)
+    linked = extension.generate(code)
     assert set(linked.blocks) == set([0, 2])
     assert set(linked.blocks[0].successors) == set([0, 2])
     assert 0 in linked.blocks[0].successors       # cached self-backedge
@@ -523,10 +529,10 @@ def test_link_small_interpreter_dispatch_loop_without_tracing():
     jitcode = assert_codewriter_accepts(dec_graph, t)
     linked.attach_to_jitcode(jitcode, {0: 7, 2: 19})
     assert jitcode.pe_metadata.entry_pc == 0
-    assert jitcode.pe_metadata.block_pcs == (0, 2)
-    assert jitcode.pe_metadata.loop_headers == (0,)
-    assert jitcode.pe_metadata.backedge_sources == (0,)
-    assert jitcode.pe_metadata.backedge_targets == (0,)
+    assert jitcode.pe_metadata.block_pcs == [0, 2]
+    assert jitcode.pe_metadata.loop_headers == [0]
+    assert jitcode.pe_metadata.backedge_sources == [0]
+    assert jitcode.pe_metadata.backedge_targets == [0]
     assert jitcode.pe_metadata.entry_pcs == [0, 2]
     assert jitcode.pe_metadata.entry_positions == [7, 19]
 
@@ -606,14 +612,11 @@ def test_meta_traces_small_interpreter_with_offline_metadata():
     interpret_one._pe_split_args_ = ("pc",)
     graph, t = get_graph(interpret_one, [int, int, int, int])
     pe = PartialEvaluator(t)
-    catalog = ResidualTemplateCatalog()
-    catalog.add(pe.make_symbolic_template(
-        OP_DEC_JUMP, graph, {"opcode": OP_DEC_JUMP}))
-    catalog.add(pe.make_symbolic_template(
-        OP_HALT, graph, {"opcode": OP_HALT}))
+    extension = GeneratingExtension.from_step_function(
+        t, interpret_one, [OP_DEC_JUMP, OP_HALT], byte_pair_decoder)
 
     code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_HALT) + chr(0)
-    linked = ResidualTemplateLinker(catalog).link(code)
+    linked = extension.generate(code)
     assert linked.loop_headers == (0,)
 
     driver = JitDriver(greens=["pc"], reds=["value"])

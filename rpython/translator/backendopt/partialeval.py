@@ -1,5 +1,5 @@
-from rpython.flowspace.model import (checkgraph, copygraph, Constant, Link,
-                                     Variable)
+from rpython.flowspace.model import (c_last_exception, checkgraph, copygraph,
+                                     Constant, Link, Variable)
 from rpython.rlib.objectmodel import compute_hash
 from rpython.translator import simplify
 from rpython.translator.backendopt.constfold import constant_fold_graph
@@ -22,11 +22,43 @@ def replace_uses(graph, replacements):
         for op in block.operations:
             op.args = [replacements.get(arg, arg) for arg in op.args]
 
-            if block.exitswitch in replacements:
-                block.exitswitch = replacements[block.exitswitch]
+        # Not inside the loop above: a block that merely switches on a value
+        # has no operations at all, and its exitswitch still needs replacing.
+        if block.exitswitch in replacements:
+            block.exitswitch = replacements[block.exitswitch]
+            _resolve_constant_switch(block)
 
-            for link in block.exits:
-                link.args = [replacements.get(arg, arg) for arg in link.args]
+        for link in block.exits:
+            link.args = [replacements.get(arg, arg) for arg in link.args]
+
+
+def _resolve_constant_switch(block):
+    """Collapse a switch whose selector just became a constant.
+
+    Substituting a static value straight into ``exitswitch`` leaves a block
+    with several exits and no runtime condition, which ``checkgraph`` rejects.
+    Pick the taken exit here so the caller always sees a valid graph.  This is
+    where a long ``if opcode == ...`` chain gets pruned: RPython merges it into
+    a single operation-free switch block before the partial evaluator runs.
+    """
+    switch = block.exitswitch
+    if not isinstance(switch, Constant) or switch is c_last_exception:
+        return
+    if block.exits[-1].exitcase == "default":
+        default, candidates = block.exits[-1], block.exits[:-1]
+    else:
+        default, candidates = None, block.exits
+    for taken in candidates:
+        if taken.llexitcase == switch.value:
+            break
+    else:
+        if default is None:
+            return
+        taken = default
+    block.exitswitch = None
+    taken.exitcase = None
+    taken.llexitcase = None
+    block.recloseblock(taken)
 
 
 def make_rtyped_constant(translator, var, value):
@@ -67,24 +99,28 @@ def try_fold_static_calls(translator, op):
 def fold_static_calls(translator, graph):
     replacements = {}
     for block in graph.iterblocks():
-        newops = []
-        for op in block.operations:
-            op.args = [replacements.get(arg, arg) for arg in op.args]
+        # Guarded: the return and except blocks carry an empty *tuple*, and
+        # checkgraph insists on that exact type.
+        if block.operations:
+            newops = []
+            for op in block.operations:
+                op.args = [replacements.get(arg, arg) for arg in op.args]
 
-            result = try_fold_static_calls(translator, op)
+                result = try_fold_static_calls(translator, op)
 
-            if result is not None:
-                replacements[op.result] = result
-            else:
-                newops.append(op)
+                if result is not None:
+                    replacements[op.result] = result
+                else:
+                    newops.append(op)
 
             block.operations = newops
 
-            block.exitswitch = replacements.get(
-                block.exitswitch, block.exitswitch)
+        if block.exitswitch in replacements:
+            block.exitswitch = replacements[block.exitswitch]
+            _resolve_constant_switch(block)
 
-            for link in block.exits:
-                link.args = [replacements.get(arg, arg) for arg in link.args]
+        for link in block.exits:
+            link.args = [replacements.get(arg, arg) for arg in link.args]
 
 def specialize_entry_point(translator, graph, static_values):
     return PartialEvaluator(translator).specialize(graph, static_values, {})
@@ -234,12 +270,16 @@ class PartialEvaluator(object):
         """Specialize offline-static inputs and lift late-static pc values."""
         from rpython.translator.backendopt.partialeval_template import (
             ResidualTemplateGenerator)
+        _, split_names = _pe_argument_names(graph)
         if pc_name is None:
-            _, split_names = _pe_argument_names(graph)
-            if len(split_names) != 1:
+            if not split_names:
                 raise ValueError(
-                    "symbolic templates require exactly one split argument")
+                    "symbolic templates require at least one split argument")
             pc_name = split_names[0]
+        # Any further split arguments are late-static interpreter state which
+        # the linker resolves per block, exactly like the pc.  They arrive back
+        # as tuple items 2, 3, ... of the step function's result.
+        state_names = tuple(name for name in split_names if name != pc_name)
         # Fix only offline-static arguments.  The declared split argument
         # remains a graph variable and is lifted into a PcHole below.
         static_names, _ = _pe_argument_names(graph)
@@ -250,8 +290,13 @@ class PartialEvaluator(object):
             self.translator, graph, residual, indexed_values)
         transitions = _find_split_transitions(residual)
         generator = ResidualTemplateGenerator(terminal_values)
+        # Late-static operands the decoder supplies per bytecode.  Declared
+        # rather than assumed: an interpreter with two operand bytes, or one
+        # that needs a send's argument count, says so itself.
+        hole_names = getattr(graph.func, "_pe_hole_args_", ("oparg2",))
         return generator.from_symbolic_residual_graph(
-            key, residual, transitions, pc_name, oparg_name)
+            key, residual, transitions, pc_name, oparg_name,
+            extra_oparg_names=hole_names, state_names=state_names)
 
     def _install_residual(self, graph, residual):
         graph.startblock = residual.startblock
@@ -291,13 +336,24 @@ class _SplitTransition(object):
             return value.value
         return None
 
-    def dynamic_values(self):
+    def dynamic_values(self, skip=0):
+        """Residual values passed to the successor.
+
+        ``item0`` is the next split value and ``item1`` the return value; the
+        next ``skip`` items are further late-static state (a stack depth, say)
+        and are resolved at link time rather than carried at runtime.
+        """
         result = []
         index = 1
         while "item%d" % index in self.fields:
-            result.append(self.fields["item%d" % index])
+            if not (2 <= index < 2 + skip):
+                result.append(self.fields["item%d" % index])
             index += 1
         return result
+
+    def state_values(self, count):
+        return [self.fields["item%d" % (2 + offset)]
+                for offset in range(count)]
 
 
 def _find_split_transitions(graph):

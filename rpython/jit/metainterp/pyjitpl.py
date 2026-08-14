@@ -510,8 +510,9 @@ class MIFrame(object):
 
     def reached_offline_loop_header(self, target):
         metadata = self.jitcode.pe_metadata
-        if (metadata is not None and metadata.linked_jitcode is self.jitcode
-                and target == metadata.position_for_pc(metadata.entry_pc)):
+        if (metadata is not None and metadata.owns_linked_jitcode
+                and not metadata.has_merge_points
+                and target == metadata.entry_position):
             boxes = self.metainterp.pe_portal_boxes
             num_green = self.metainterp.jitdriver_sd.num_green_args
             self.metainterp.reached_loop_header(
@@ -2417,7 +2418,7 @@ def get_pe_trace_start_position(jitcode):
     metadata = jitcode.pe_metadata
     if metadata is None:
         return 0
-    if metadata.linked_jitcode is jitcode:
+    if metadata.is_linked_jitcode(jitcode):
         # A linked JitCode has a small entry wrapper at bytecode position 0
         # which loads late-static constants and moves portal arguments into
         # the registers expected by the first specialized block.  Starting at
@@ -3330,20 +3331,30 @@ class MetaInterp(object):
         metadata = mainjitcode.pe_metadata
         jitcode = mainjitcode
         call_boxes = original_boxes
-        if metadata is not None and metadata.linked_jitcode is not None:
-            jitcode = metadata.linked_jitcode
+        program = None
+        if metadata is not None:
+            program = metadata.linked_program_for(original_boxes)
+        if program is not None:
+            jitcode = program.jitcode
             call_boxes = []
             constant_index = 0
-            for source in metadata.linked_argument_sources:
+            for source in program.argument_sources:
                 if source >= 0:
                     call_boxes.append(original_boxes[source])
                 else:
                     call_boxes.append(ConstInt(
-                        metadata.linked_argument_constants[constant_index]))
+                        program.argument_constants[constant_index]))
                     constant_index += 1
         f = self.newframe(jitcode)
         f.setup_call(call_boxes)
-        f.pc = get_pe_trace_start_position(jitcode)
+        if jitcode is mainjitcode and metadata is not None and \
+                metadata.has_linked_programs():
+            # Linked programs exist, but none was built for this code object
+            # and entry pc.  Their entry positions index the linked JitCodes,
+            # so they are meaningless here: enter the generic portal.
+            f.pc = 0
+        else:
+            f.pc = get_pe_trace_start_position(jitcode)
         self.pe_trace_start_position = f.pc
         self.pe_metadata_consumed = metadata is not None
         if self.pe_metadata_consumed:

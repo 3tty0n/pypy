@@ -6,6 +6,7 @@ JitCode details.
 """
 
 from rpython.flowspace.model import Constant
+from rpython.rtyper.lltypesystem.lloperation import llop
 
 
 class TemplateHole(object):
@@ -73,29 +74,83 @@ class RelativeTarget(object):
                 bindings[self.oparg.name])
 
 
+class ExprTarget(object):
+    """A target computed from holes by a pure operation.
+
+    SOM-style bytecodes reach their target as ``pc + oparg`` (relative),
+    ``pc - oparg`` (backward), or ``pc + (oparg + (oparg2 << 8))`` (two-byte
+    offset).  Those expressions are late-static: every leaf is either a hole or
+    a compile-time constant, so the whole tree collapses to an integer once a
+    concrete code object is linked.
+
+    The operation is evaluated with RPython's own ``llop`` implementation
+    rather than one written out here, so a resolved target has exactly the
+    width and wrap-around behaviour the interpreter itself would produce.
+    """
+
+    def __init__(self, opname, restype, args):
+        self.opname = opname
+        self.restype = restype
+        self.args = tuple(args)
+
+    def __repr__(self):
+        return "%s(%s)" % (self.opname,
+                           ", ".join([repr(arg) for arg in self.args]))
+
+    def resolve(self, bindings):
+        values = [_resolve_operand(arg, bindings) for arg in self.args]
+        return getattr(llop, self.opname)(self.restype, *values)
+
+
+def _is_late_static_operation(opname):
+    """Can this operation be evaluated at link time from holes alone?
+
+    ``canfold`` is RPython's own purity flag: a foldable operation is a pure
+    function of its arguments and cannot raise, which is precisely the
+    condition for lifting it out of the residual code into a target
+    expression.  Anything that reads memory or calls out stays dynamic.
+    """
+    try:
+        return getattr(llop, opname).canfold
+    except AttributeError:
+        return False
+
+
+def _resolve_operand(value, bindings):
+    if hasattr(value, "resolve"):
+        return value.resolve(bindings)
+    return value
+
+
 class Continue(object):
     """Continue execution at a late-static or concrete split value."""
 
-    def __init__(self, target, dynamic_values):
+    def __init__(self, target, dynamic_values, state=()):
         self.target = target
         self.dynamic_values = tuple(dynamic_values)
+        # Further late-static interpreter state for the successor, as
+        # (name, expression) pairs -- an operand-stack depth, for instance.
+        self.state = tuple(state)
 
 
 class Finish(object):
     """Return from the residual program."""
 
-    def __init__(self, values):
+    def __init__(self, values, state=()):
         self.values = tuple(values)
+        self.state = tuple(state)
 
 
 class Branch(object):
     """Keep a dynamic condition with two late-static bytecode targets."""
 
-    def __init__(self, condition, true_target, false_target, dynamic_values):
+    def __init__(self, condition, true_target, false_target, dynamic_values,
+                 state=()):
         self.condition = condition
         self.true_target = true_target
         self.false_target = false_target
         self.dynamic_values = tuple(dynamic_values)
+        self.state = tuple(state)
 
 
 class ResidualTemplate(object):
@@ -110,6 +165,12 @@ class ResidualTemplate(object):
         # the graph to preserve arbitrary residual control flow and exception
         # edges without reconstructing it from a flat operation list.
         self.residual_graph = residual_graph
+
+    def resolve_state(self, bindings):
+        """Resolve each terminator's late-static successor state."""
+        return [dict((name, _resolve_operand(expr, bindings))
+                     for name, expr in terminator.state)
+                for terminator in self.terminators]
 
     def resolve_targets(self, bindings):
         """Resolve only late-static control targets for a code instance."""
@@ -132,30 +193,23 @@ def _resolve_target(target, bindings):
     return target
 
 
-class ResidualTemplateCatalog(object):
-    def __init__(self):
-        self._templates = {}
-
-    def add(self, template):
-        if template.key in self._templates:
-            raise ValueError("duplicate residual template %r" %
-                             (template.key,))
-        self._templates[template.key] = template
-
-    def lookup(self, key):
-        return self._templates[key]
-
-    def keys(self):
-        return self._templates.keys()
-
-
 class LinkedTemplateBlock(object):
-    def __init__(self, pc, opcode, oparg, template, bindings=None):
+    """One instruction of a program, and the template generated for it.
+
+    ``bindings`` is the complete specialization environment for this block:
+    every late-static name the template left as a hole, *including* the static
+    key under the name the step function declared for it.  Keeping it complete
+    is what lets the lowerer substitute constants without knowing which name
+    means what.
+    """
+
+    def __init__(self, pc, key, template, bindings):
         self.pc = pc
-        self.opcode = opcode
-        self.oparg = oparg
+        self.key = key
         self.template = template
-        self.bindings = bindings or {"pc": pc, "oparg": oparg}
+        self.bindings = bindings
+        # Extra late-static values this block was reached with.
+        self.state = {}
         self.successors = []
         self.has_finish = False
         self.is_loop_header = False
@@ -167,6 +221,8 @@ class LinkedResidualProgram(object):
         self.blocks = blocks
         self.backedges = ()
         self.loop_headers = ()
+        # Names of the extra late-static values carried through the CFG.
+        self.state_names = ()
 
     def analyze_loops(self):
         dominators = _compute_dominators(self.entry_pc, self.blocks)
@@ -208,16 +264,22 @@ class LinkedResidualProgram(object):
             sources, targets, entry_pcs, positions)
         return jitcode
 
-    def lower(self, codewriter, name="offline-residual", portal_jd=None):
-        """Lower all linked blocks as one graph and one relocatable JitCode.
+    def lower(self, codewriter, name="offline-residual", portal_jd=None,
+              runtime_names=("self", "bytecode"), null_names=("bytecode",),
+              jit_merge_point_args=()):
+        """Build the residual graph and assemble it into one JitCode.
 
-        This is deliberately a translation-time operation.  The resulting
-        JitCode, including its concrete entry offsets, can be embedded in the
-        translated runtime; no FunctionGraph copying or register allocation is
-        needed when the code is executed.
+        Two stages with quite different dependencies, kept separate on the
+        lowerer below: building the graph is pure flow-graph work, while
+        assembling needs the codewriter, and through it the whole-program view
+        that turns a call into either a JitCode or a residual call.  Only the
+        second stage is inherently translation-time, so it is the one a runtime
+        linker would have to replace -- by assembling each *template* once,
+        offline, and patching the result.
         """
-        return LinkedResidualLowerer(codewriter).lower(
-            self, name, portal_jd=portal_jd)
+        lowerer = LinkedResidualLowerer(runtime_names, null_names,
+                                        self.state_names, jit_merge_point_args)
+        return lowerer.lower(codewriter, self, name, portal_jd=portal_jd)
 
 
 class LoweredResidualProgram(object):
@@ -228,20 +290,49 @@ class LoweredResidualProgram(object):
 
 
 class LinkedResidualLowerer(object):
-    """Turn a linked template CFG into a single codewriter JitCode."""
+    """Turn a linked template CFG into a graph, and that graph into a JitCode.
 
-    def __init__(self, codewriter):
-        self.codewriter = codewriter
+    The codewriter is deliberately not held here: it is an argument of
+    ``assemble`` alone, so that ``build_graph`` cannot come to depend on it by
+    accident.  That boundary is the interesting one -- everything on the graph
+    side is ordinary flow-graph manipulation that a runtime linker could do,
+    and everything past it needs a compiler that only exists while translating.
+    """
 
-    def lower(self, program, name="offline-residual", portal_jd=None):
-        self.portal_jd = portal_jd
-        graph, entry_blocks = self._make_graph(program, name)
-        jitcode, entry_positions = self._assemble(
-            graph, entry_blocks, name, portal_jd)
+    def __init__(self, runtime_names=("self", "bytecode"),
+                 null_names=("bytecode",), state_names=(),
+                 jit_merge_point_args=()):
+        # Result-tuple items after the return value that are late-static state
+        # rather than values carried to the successor at runtime.
+        self.state_names = tuple(state_names)
+        self.state_count = len(self.state_names)
+        # Step-function arguments holding the jitdriver's greens then reds, in
+        # that order.  When given, each loop header of the linked program gets
+        # a real jit_merge_point, which is what lets the meta-interpreter close
+        # a loop *inside* the program rather than only at its entry.
+        self.jit_merge_point_args = tuple(jit_merge_point_args)
+        # Residual parameters the portal supplies at trace start, in the order
+        # the entry wrapper expects them.
+        self.runtime_names = tuple(runtime_names)
+        # Residual pointer parameters that are dead in the linked CFG and may
+        # be passed as null on a successor edge.
+        self.null_names = tuple(null_names)
+
+    def lower(self, codewriter, program, name="offline-residual",
+              portal_jd=None):
+        graph, entry_blocks = self.build_graph(program, name, portal_jd)
+        jitcode, entry_positions = self.assemble(
+            codewriter, graph, entry_blocks, name, portal_jd)
         program.attach_to_jitcode(jitcode, entry_positions)
         return LoweredResidualProgram(graph, jitcode, entry_positions)
 
-    def _make_graph(self, program, name):
+    def build_graph(self, program, name, portal_jd=None):
+        """The residual FunctionGraph for a generated program.
+
+        No codewriter, no JitCode: instantiating templates, substituting the
+        late-static bindings and wiring the edges is flow-graph work only.
+        """
+        self.portal_jd = portal_jd
         from rpython.flowspace.model import (checkgraph, Constant,
                                              FunctionGraph, Link, copygraph)
         from rpython.translator.backendopt.partialeval import (
@@ -259,6 +350,9 @@ class LinkedResidualLowerer(object):
                 graph, linked_block)
             replace_uses(graph, replacements)
             self._remove_runtime_loop_markers(graph)
+            if self.jit_merge_point_args and (
+                    pc in program.loop_headers or pc == program.entry_pc):
+                self._insert_merge_point(graph)
             transitions = _find_split_transitions(graph)
             terminators = linked_block.template.terminators
             if len(terminators) == 1 and len(transitions) > 1:
@@ -333,7 +427,7 @@ class LinkedResidualLowerer(object):
 
     def _make_entry_wrapper(self, entry_graph, linked_block):
         from rpython.flowspace.model import Block, Constant, Link, Variable
-        runtime_names = ("self", "bytecode")
+        runtime_names = self.runtime_names
         original = self._named_start_arguments(entry_graph)
         inputs = []
         runtime = {}
@@ -344,8 +438,7 @@ class LinkedResidualLowerer(object):
             inputs.append(value)
             runtime[name] = value
         wrapper = Block(inputs)
-        static = dict(linked_block.bindings)
-        static["opcode"] = linked_block.opcode
+        static = linked_block.bindings
         args = []
         for name, target in zip(entry_graph.signature[0],
                                 entry_graph.startblock.inputargs):
@@ -441,10 +534,10 @@ class LinkedResidualLowerer(object):
                 elif variable_name.startswith("oparg"):
                     resolved = linked_block.bindings["oparg"]
                 else:
-                    lifted = _lift_target(
-                        target_value, all_definitions, all_stored, origins,
-                        named.get("pc"), named.get("oparg"), PcHole(),
-                        OpargHole())
+                    ctx = _LiftContext(graph, named.get("pc"),
+                                       named.get("oparg"), PcHole(),
+                                       OpargHole(), self._state_holes(named))
+                    lifted = _lift_target(target_value, ctx)
                     resolved = _resolve_target(
                         lifted, linked_block.bindings)
                 if isinstance(resolved, int):
@@ -489,8 +582,7 @@ class LinkedResidualLowerer(object):
 
     def _late_static_replacements(self, graph, linked_block):
         from rpython.flowspace.model import Constant
-        values = dict(linked_block.bindings)
-        values["opcode"] = linked_block.opcode
+        values = linked_block.bindings
         replacements = {}
         for name, var in zip(graph.signature[0], graph.startblock.inputargs):
             if name in values:
@@ -500,9 +592,22 @@ class LinkedResidualLowerer(object):
     def _named_start_arguments(self, graph):
         return dict(zip(graph.signature[0], graph.startblock.inputargs))
 
+    def _state_holes(self, named):
+        """Holes for the late-static state names this program carries."""
+        return [(named[name], TemplateHole("state", name))
+                for name in self.state_names if name in named]
+
     def _remove_runtime_loop_markers(self, graph):
-        """The linked CFG already carries its loop structure offline."""
+        """Drop the interpreter's own loop markers from a linked block.
+
+        With merge points inserted, ``can_enter_jit`` is kept: it becomes the
+        ``loop_header`` that arms the meta-interpreter, and the merge point at
+        the target block is what actually closes the loop.  Without them the
+        linked CFG carries its loop structure offline instead.
+        """
         from rpython.flowspace.model import Constant
+        dropped = ("loop_header",) if self.jit_merge_point_args else (
+            "can_enter_jit", "loop_header")
         for block in graph.iterblocks():
             operations = [
                 op for op in block.operations
@@ -510,10 +615,35 @@ class LinkedResidualLowerer(object):
                          self.portal_jd is None) or
                         (op.opname == "jit_marker" and op.args and
                          isinstance(op.args[0], Constant) and
-                         op.args[0].value in
-                         ("can_enter_jit", "loop_header")))]
+                         op.args[0].value in dropped))]
             if len(operations) != len(block.operations):
                 block.operations = operations
+
+    def _insert_merge_point(self, graph):
+        """Put a jit_merge_point at the top of a linked loop header.
+
+        The greens and reds are taken from the block's own input arguments, so
+        the meta-interpreter sees the values as they are *here*, not as they
+        were when the trace started.  That is what lets it close a loop nested
+        inside the linked program; with only the entry marked, such a loop has
+        nothing to close it and tracing unrolls it until memory runs out.
+        """
+        from rpython.flowspace.model import Constant, SpaceOperation, Variable
+        from rpython.rtyper.lltypesystem import lltype
+
+        block = graph.startblock
+        named = dict(zip(graph.signature[0], block.inputargs))
+        missing = [n for n in self.jit_merge_point_args if n not in named]
+        if missing:
+            raise ValueError("jit_merge_point args %r are not arguments of %r"
+                             % (missing, graph.name))
+        result = Variable()
+        result.concretetype = lltype.Void
+        args = [Constant("jit_merge_point", lltype.Void),
+                Constant(self.portal_jd.jitdriver, lltype.Void)]
+        args += [named[name] for name in self.jit_merge_point_args]
+        block.operations = [SpaceOperation("jit_marker", args, result)] + list(
+            block.operations)
 
     def _available_carried_values(self, graph, block):
         origins = _variable_origins(graph)
@@ -536,14 +666,13 @@ class LinkedResidualLowerer(object):
                     (value.value is None or
                      (isinstance(value.concretetype, lltype.Ptr) and
                       not value.value)))
-        return [value for value in transition.dynamic_values()
+        return [value for value in transition.dynamic_values(self.state_count)
                 if not is_null(value)]
 
     def _successor_arguments(self, graph, argnames, linked_block,
                              dynamic_values, carried_values=None):
         from rpython.flowspace.model import Constant
-        static_values = dict(linked_block.bindings)
-        static_values["opcode"] = linked_block.opcode
+        static_values = linked_block.bindings
         dynamic_values = iter(dynamic_values)
         result = []
         for name, var in zip(argnames, graph.startblock.inputargs):
@@ -555,7 +684,7 @@ class LinkedResidualLowerer(object):
                 except StopIteration:
                     if carried_values is not None and name in carried_values:
                         result.append(carried_values[name])
-                    elif name == "bytecode":
+                    elif name in self.null_names:
                         from rpython.rtyper.lltypesystem import lltype
                         result.append(Constant(
                             lltype.nullptr(var.concretetype.TO),
@@ -585,7 +714,14 @@ class LinkedResidualLowerer(object):
             if not (op.result is tuple_var or
                     (op.opname == "setfield" and op.args[0] is tuple_var))]
 
-    def _assemble(self, graph, entry_blocks, name, portal_jd=None):
+    def assemble(self, codewriter, graph, entry_blocks, name, portal_jd=None):
+        """Compile the residual graph into a JitCode.
+
+        This is the translation-time half.  ``transform_graph`` resolves each
+        call into either a JitCode to enter or a residual call to record, which
+        needs the whole-program view a translated binary no longer has.
+        """
+        self.codewriter = codewriter
         from rpython.flowspace.model import copygraph
         from rpython.jit.codewriter.assembler import JitCode
         from rpython.jit.codewriter.flatten import flatten_graph, KINDS
@@ -636,51 +772,6 @@ class LinkedResidualLowerer(object):
             (pc, self.codewriter.assembler.label_positions[block])
             for pc, block in lowered_entries.items())
         return jitcode, entry_positions
-
-
-class ResidualTemplateLinker(object):
-    """Link code-independent templates into a code-specific residual CFG."""
-
-    def __init__(self, catalog, instruction_size=2, decoder=None):
-        self.catalog = catalog
-        self.instruction_size = instruction_size
-        self.decoder = decoder
-
-    def link(self, code, entry_pc=0):
-        blocks = {}
-        pending = [entry_pc]
-        while pending:
-            pc = pending.pop()
-            if pc in blocks:
-                continue
-
-            if self.decoder is None:
-                opcode = ord(code[pc])
-                oparg = ord(code[pc + 1])
-                bindings = {"pc": pc, "oparg": oparg, "code": code}
-            else:
-                opcode, oparg, bindings = self.decoder(code, pc)
-            template = self.catalog.lookup(opcode)
-            block = LinkedTemplateBlock(pc, opcode, oparg, template, bindings)
-            # Publish before following successors so backedges hit the cache.
-            blocks[pc] = block
-
-            for terminator, targets in zip(
-                    template.terminators,
-                    template.resolve_targets(bindings)):
-                if isinstance(terminator, Finish):
-                    block.has_finish = True
-                    continue
-                if isinstance(targets, tuple):
-                    resolved = targets
-                else:
-                    resolved = (targets,)
-                for target in resolved:
-                    if target not in block.successors:
-                        block.successors.append(target)
-                    if target not in blocks:
-                        pending.append(target)
-        return LinkedResidualProgram(entry_pc, blocks).analyze_loops()
 
 
 def _compute_dominators(entry_pc, blocks):
@@ -739,7 +830,9 @@ class ResidualTemplateGenerator(object):
         return ResidualTemplate(key, operations, (), terminators)
 
     def from_symbolic_residual_graph(self, key, graph, transitions,
-                                     pc_name="pc", oparg_name="oparg"):
+                                     pc_name="pc", oparg_name="oparg",
+                                     extra_oparg_names=("oparg2",),
+                                     state_names=()):
         """Lift expressions rooted at the declared split pc to targets."""
         argnames = graph.signature[0]
         inputs = dict(zip(argnames, graph.startblock.inputargs))
@@ -748,27 +841,58 @@ class ResidualTemplateGenerator(object):
             raise ValueError("split argument %r is not in the graph" %
                              (pc_name,))
         oparg_var = inputs.get(oparg_name)
-        definitions = _operation_definitions(graph)
-        stored_fields = _stored_fields(graph)
-        origins = _variable_origins(graph)
 
         pc = PcHole()
         oparg = OpargHole()
         holes = [pc, oparg]
+        # Interpreters with multi-byte operands (SOM's two-byte jumps) decode
+        # more than one operand; each extra one is its own late-static hole.
+        extra_holes = []
+        for name in extra_oparg_names:
+            var = inputs.get(name)
+            if var is None:
+                continue
+            hole = TemplateHole("oparg", name)
+            extra_holes.append((var, hole))
+            holes.append(hole)
+        # Further late-static state (an operand-stack depth, say) behaves just
+        # like the pc: its own hole, and its successor value lifted from the
+        # step function's result rather than carried at runtime.
+        state_holes = []
+        for name in state_names:
+            var = inputs.get(name)
+            if var is None:
+                raise ValueError("split argument %r is not in the graph" %
+                                 (name,))
+            hole = TemplateHole("state", name)
+            state_holes.append((var, hole))
+            extra_holes.append((var, hole))
+            holes.append(hole)
+
+        ctx = _LiftContext(graph, pc_var, oparg_var, pc, oparg, extra_holes)
         terminators = []
         lifted_results = set()
         for transition in transitions:
             split_value = transition.fields["item0"]
-            target = _lift_target(
-                split_value, definitions, stored_fields, origins,
-                pc_var, oparg_var, pc, oparg)
-            if split_value in definitions:
+            target = _lift_target(split_value, ctx)
+            if split_value in ctx.definitions:
                 lifted_results.add(split_value)
-            dynamic_values = transition.dynamic_values()
+
+            state = []
+            for offset, value in enumerate(
+                    transition.state_values(len(state_names))):
+                expr = _lift_target(value, ctx)
+                if isinstance(expr, Constant):
+                    expr = expr.value
+                if value in ctx.definitions:
+                    lifted_results.add(value)
+                state.append((state_names[offset], expr))
+
+            dynamic_values = transition.dynamic_values(skip=len(state_names))
             if isinstance(target, Constant) and target.value in self.terminal_values:
-                terminators.append(Finish(dynamic_values))
+                terminators.append(Finish(dynamic_values, state))
             else:
-                terminators.append(Continue(target, dynamic_values))
+                terminators.append(Continue(target, dynamic_values, state))
 
         operations = []
         for block in graph.iterblocks():
@@ -858,34 +982,133 @@ def _variable_origins(graph):
     return origins
 
 
-def _lift_target(value, definitions, stored_fields, origins,
-                 pc_var, oparg_var, pc, oparg):
-    origin = origins.get(value, value)
-    if origin is pc_var:
-        return pc
-    if origin is oparg_var:
-        return AbsoluteTarget(oparg)
+def _phi_sources(graph):
+    """For each block input, the values its predecessors pass in.
+
+    Indexing a list with a possibly-negative index makes RPython emit a branch
+    (``if i < 0: i += len(l)``), so even a value the interpreter never merges
+    reaches its use as a two-predecessor phi.  Recording every source lets such
+    a degenerate merge be seen through.
+    """
+    sources = {}
+    for block in graph.iterblocks():
+        for link in block.exits:
+            for value, target_var in zip(link.args, link.target.inputargs):
+                sources.setdefault(target_var, []).append(value)
+    return sources
+
+
+def _same_value(one, other):
+    if one is other:
+        return True
+    return (isinstance(one, Constant) and isinstance(other, Constant) and
+            one.concretetype == other.concretetype and one.value == other.value)
+
+
+class _LiftContext(object):
+    """Everything needed to decide whether a value is late-static."""
+
+    def __init__(self, graph, pc_var, oparg_var, pc, oparg, extra_holes):
+        self.definitions = _operation_definitions(graph)
+        self.stored_fields = _stored_fields(graph)
+        self.origins = _variable_origins(graph)
+        self.phi_sources = _phi_sources(graph)
+        self.pc_var = pc_var
+        self.oparg_var = oparg_var
+        self.pc = pc
+        self.oparg = oparg
+        self.extra_holes = tuple(extra_holes)
+
+    def follow(self, value, seen=None):
+        """See through merges whose incoming values are all the same.
+
+        Stops at a genuine merge -- one whose predecessors really do supply
+        different values -- and returns it unchanged, so the caller treats it
+        as dynamic.
+        """
+        if seen is None:
+            seen = ()
+        if any(value is entry for entry in seen):
+            return value
+        sources = self.phi_sources.get(value)
+        if not sources:
+            return value
+        resolved = [self.follow(source, seen + (value,)) for source in sources]
+        first = resolved[0]
+        for other in resolved[1:]:
+            if not _same_value(first, other):
+                return value
+        return first
+
+    def defining_op(self, value):
+        return self.definitions.get(value)
+
+
+def _lift_target(value, ctx):
+    value = ctx.follow(value)
+    origin = ctx.origins.get(value, value)
+    if origin is ctx.pc_var:
+        return ctx.pc
+    if origin is ctx.oparg_var:
+        return AbsoluteTarget(ctx.oparg)
     if isinstance(value, Constant):
         return value
 
-    op = definitions.get(value)
+    op = ctx.defining_op(value)
     if op is not None and op.opname == "same_as":
-        return _lift_target(
-            op.args[0], definitions, stored_fields, origins,
-            pc_var, oparg_var, pc, oparg)
+        return _lift_target(op.args[0], ctx)
     if (op is not None and op.opname == "getfield" and
             isinstance(op.args[1], Constant)):
-        stored = stored_fields.get((op.args[0], op.args[1].value))
+        stored = ctx.stored_fields.get((op.args[0], op.args[1].value))
         if stored is not None:
-            return _lift_target(
-                stored, definitions, stored_fields, origins,
-                pc_var, oparg_var, pc, oparg)
+            return _lift_target(stored, ctx)
     if op is not None and op.opname == "int_add":
         left, right = op.args
-        left_origin = origins.get(left, left)
-        right_origin = origins.get(right, right)
-        if left_origin is pc_var and isinstance(right, Constant):
-            return NextPcHole(pc, right.value)
-        if right_origin is pc_var and isinstance(left, Constant):
-            return NextPcHole(pc, left.value)
+        left_origin = ctx.origins.get(left, left)
+        right_origin = ctx.origins.get(right, right)
+        if left_origin is ctx.pc_var and isinstance(right, Constant):
+            return NextPcHole(ctx.pc, right.value)
+        if right_origin is ctx.pc_var and isinstance(left, Constant):
+            return NextPcHole(ctx.pc, left.value)
+    # General case: any integer expression over holes and constants, which is
+    # how relative, backward and two-byte-offset jumps compute their target,
+    # and how a bytecode's stack effect updates the operand-stack depth.
+    lifted = _lift_operand(value, ctx)
+    if lifted is not None:
+        return lifted
     raise ValueError("unsupported symbolic split expression %r" % (value,))
+
+
+def _lift_operand(value, ctx):
+    """Lift one operand of a target expression, or None if it stays dynamic."""
+    value = ctx.follow(value)
+    origin = ctx.origins.get(value, value)
+    if origin is ctx.pc_var:
+        return ctx.pc
+    if origin is ctx.oparg_var:
+        return ctx.oparg
+    for var, hole in ctx.extra_holes:
+        if origin is var:
+            return hole
+    if isinstance(value, Constant):
+        return value.value
+
+    op = ctx.defining_op(value)
+    if op is None:
+        return None
+    if op.opname == "same_as":
+        return _lift_operand(op.args[0], ctx)
+    if op.opname == "getfield" and isinstance(op.args[1], Constant):
+        stored = ctx.stored_fields.get((op.args[0], op.args[1].value))
+        if stored is None:
+            return None
+        return _lift_operand(stored, ctx)
+    if _is_late_static_operation(op.opname):
+        args = []
+        for arg in op.args:
+            lifted = _lift_operand(arg, ctx)
+            if lifted is None:
+                return None
+            args.append(lifted)
+        return ExprTarget(op.opname, op.result.concretetype, args)
+    return None
