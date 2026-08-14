@@ -506,6 +506,16 @@ class MIFrame(object):
     @arguments("label")
     def opimpl_goto(self, target):
         self.pc = target
+        self.reached_offline_loop_header(target)
+
+    def reached_offline_loop_header(self, target):
+        metadata = self.jitcode.pe_metadata
+        if (metadata is not None and metadata.linked_jitcode is self.jitcode
+                and target == metadata.position_for_pc(metadata.entry_pc)):
+            boxes = self.metainterp.pe_portal_boxes
+            num_green = self.metainterp.jitdriver_sd.num_green_args
+            self.metainterp.reached_loop_header(
+                boxes[:num_green], boxes[num_green:])
 
     @arguments("box", "label", "orgpc")
     def opimpl_goto_if_not(self, box, target, orgpc, replace=True):
@@ -1905,8 +1915,12 @@ class MIFrame(object):
                     self.pc = pc
                     continue
                 elif op == staticdata.op_goto:
-                    pc = ord(bytecode[pc + 1]) | (ord(bytecode[pc + 2])<<8)
+                    target = (ord(bytecode[pc + 1]) |
+                              (ord(bytecode[pc + 2]) << 8))
                     self.pc = pc
+                    self.reached_offline_loop_header(target)
+                    pc = target
+                    self.pc = target
                     continue
                 staticdata.opcode_implementations[op](self, pc)
                 pc = self.pc
@@ -2403,6 +2417,13 @@ def get_pe_trace_start_position(jitcode):
     metadata = jitcode.pe_metadata
     if metadata is None:
         return 0
+    if metadata.linked_jitcode is jitcode:
+        # A linked JitCode has a small entry wrapper at bytecode position 0
+        # which loads late-static constants and moves portal arguments into
+        # the registers expected by the first specialized block.  Starting at
+        # that block's label would bypass those moves and leave registers
+        # uninitialized.  Backedges still target the block label directly.
+        return 0
     entry_pc = metadata.entry_pc
     if not metadata.is_loop_header(entry_pc):
         return 0
@@ -2433,6 +2454,7 @@ class MetaInterp(object):
         self.heapcache = HeapCache()
         self.pe_metadata_consumed = False
         self.pe_trace_start_position = 0
+        self.pe_portal_boxes = []
 
         self.call_ids = []
         self.current_call_id = 0
@@ -3304,16 +3326,34 @@ class MetaInterp(object):
         # ----- make a new frame -----
         self.portal_call_depth = -1 # always one portal around
         self.framestack = []
-        f = self.newframe(self.jitdriver_sd.mainjitcode)
-        f.setup_call(original_boxes)
-        jitcode = self.jitdriver_sd.mainjitcode
+        mainjitcode = self.jitdriver_sd.mainjitcode
+        metadata = mainjitcode.pe_metadata
+        jitcode = mainjitcode
+        call_boxes = original_boxes
+        if metadata is not None and metadata.linked_jitcode is not None:
+            jitcode = metadata.linked_jitcode
+            call_boxes = []
+            constant_index = 0
+            for source in metadata.linked_argument_sources:
+                if source >= 0:
+                    call_boxes.append(original_boxes[source])
+                else:
+                    call_boxes.append(ConstInt(
+                        metadata.linked_argument_constants[constant_index]))
+                    constant_index += 1
+        f = self.newframe(jitcode)
+        f.setup_call(call_boxes)
         f.pc = get_pe_trace_start_position(jitcode)
         self.pe_trace_start_position = f.pc
-        self.pe_metadata_consumed = jitcode.pe_metadata is not None
+        self.pe_metadata_consumed = metadata is not None
         if self.pe_metadata_consumed:
             self.staticdata.stats.pe_metadata_used()
         assert self.portal_call_depth == 0
         self.virtualref_boxes = []
+        num_green = self.jitdriver_sd.num_green_args
+        num_red = self.jitdriver_sd.num_red_args
+        portal_arg_count = num_green + num_red
+        self.pe_portal_boxes = original_boxes[:portal_arg_count]
         self.initialize_withgreenfields(original_boxes)
         self.initialize_virtualizable(original_boxes)
     def initialize_state_from_guard_failure(self, resumedescr, deadframe):

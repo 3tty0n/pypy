@@ -37,6 +37,9 @@ from rpython.rlib.entrypoint import all_jit_entrypoints,\
 
 def apply_jit(translator, backend_name="auto", inline=False,
               vec=False, enable_opts=ALL_OPTS_NAMES, **kwds):
+    pe_linked_setup = getattr(translator, "_pe_linked_setup", None)
+    if pe_linked_setup is not None:
+        kwds["pe_linked_setup"] = pe_linked_setup
     if 'CPUClass' not in kwds:
         from rpython.jit.backend.detect_cpu import getcpuclass
         kwds['CPUClass'] = getcpuclass(backend_name)
@@ -238,6 +241,7 @@ class WarmRunnerDesc(object):
                  ProfilerClass=EmptyProfiler, **kwds):
         pyjitpl._warmrunnerdesc = self   # this is a global for debugging only!
         pe_jitcode_setup = kwds.pop("pe_jitcode_setup", None)
+        pe_linked_setup = kwds.pop("pe_linked_setup", None)
         self.set_translator(translator)
         self.memory_manager = memmgr.MemoryManager()
         self.build_cpu(CPUClass, **kwds)
@@ -279,7 +283,16 @@ class WarmRunnerDesc(object):
         verbose = False # not self.cpu.translate_support_code
         self.rewrite_access_helpers()
         self.create_jit_entry_points()
+        pe_linked_programs = []
+        if pe_linked_setup is not None:
+            for jd in self.jitdrivers_sd:
+                lowered = pe_linked_setup(self.codewriter, jd, translator)
+                if lowered is not None:
+                    pe_linked_programs.append(lowered)
         jitcodes = self.codewriter.make_jitcodes(verbose=verbose)
+        for lowered in pe_linked_programs:
+            lowered.jitcode.index = len(jitcodes)
+            jitcodes.append(lowered.jitcode)
         if pe_jitcode_setup is not None:
             for jd in self.jitdrivers_sd:
                 pe_jitcode_setup(jd.mainjitcode)

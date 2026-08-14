@@ -16,8 +16,22 @@ class PEJitCodeMetadata(object):
         self.loop_headers = loop_headers
         self.backedge_sources = backedge_sources
         self.backedge_targets = backedge_targets
-        self.entry_pcs = entry_pcs
-        self.entry_positions = entry_positions
+        # These are searched with a runtime index.  They must be RPython
+        # lists: tuple getitem is only supported with a constant index.
+        self.entry_pcs = list(entry_pcs)
+        self.entry_positions = list(entry_positions)
+        self.linked_jitcode = None
+        # Lists keep one homogeneous RPython annotation whether linked
+        # lowering is enabled or not; fixed-size tuples of () and (2, 1)
+        # cannot be unified during native translation.
+        self.linked_argument_sources = []
+        self.linked_argument_constants = []
+
+    def attach_linked_jitcode(self, jitcode, argument_sources,
+                              argument_constants):
+        self.linked_jitcode = jitcode
+        self.linked_argument_sources = list(argument_sources)
+        self.linked_argument_constants = list(argument_constants)
 
     def is_loop_header(self, pc):
         return pc in self.loop_headers

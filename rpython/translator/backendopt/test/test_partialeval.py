@@ -521,8 +521,8 @@ def test_link_small_interpreter_dispatch_loop_without_tracing():
     assert jitcode.pe_metadata.loop_headers == (0,)
     assert jitcode.pe_metadata.backedge_sources == (0,)
     assert jitcode.pe_metadata.backedge_targets == (0,)
-    assert jitcode.pe_metadata.entry_pcs == (0, 2)
-    assert jitcode.pe_metadata.entry_positions == (7, 19)
+    assert jitcode.pe_metadata.entry_pcs == [0, 2]
+    assert jitcode.pe_metadata.entry_positions == [7, 19]
 
     from rpython.jit.metainterp.pyjitpl import get_pe_trace_start_position
     assert get_pe_trace_start_position(jitcode) == 7
@@ -544,6 +544,8 @@ def test_meta_interpreter_starts_at_offline_loop_header():
 
     class FakeJitDriverSD(object):
         mainjitcode = jitcode
+        num_green_args = 0
+        num_red_args = 1
 
     metainterp = MetaInterp.__new__(MetaInterp)
     metainterp.jitdriver_sd = FakeJitDriverSD()
