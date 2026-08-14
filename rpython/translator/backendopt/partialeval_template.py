@@ -740,10 +740,13 @@ class ResidualTemplateGenerator(object):
 
     def from_symbolic_residual_graph(self, key, graph, transitions,
                                      pc_name="pc", oparg_name="oparg"):
-        """Lift simple residual pc expressions to late-static targets."""
+        """Lift expressions rooted at the declared split pc to targets."""
         argnames = graph.signature[0]
         inputs = dict(zip(argnames, graph.startblock.inputargs))
         pc_var = inputs.get(pc_name)
+        if pc_var is None:
+            raise ValueError("split argument %r is not in the graph" %
+                             (pc_name,))
         oparg_var = inputs.get(oparg_name)
         definitions = _operation_definitions(graph)
         stored_fields = _stored_fields(graph)

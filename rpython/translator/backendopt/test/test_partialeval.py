@@ -431,7 +431,7 @@ def test_offline_pe_of_small_symbolic_interpreter():
     # opcode semantics are offline-static.  pc/oparg remain late-static and
     # value remains dynamic.
     interpret_one._pe_static_args_ = ("opcode",)
-    interpret_one._pe_split_args_ = ()
+    interpret_one._pe_split_args_ = ("pc",)
     graph, t = get_graph(interpret_one, [int, int, int, int])
     original_ops = summary(graph)
     assert original_ops["int_eq"] == 2
@@ -444,8 +444,12 @@ def test_offline_pe_of_small_symbolic_interpreter():
     halt = pe.make_symbolic_template(
         OP_HALT, graph, {"opcode": OP_HALT})
 
+    assert isinstance(add.holes[0], PcHole)
+    assert add.holes[0].name == "pc"
+
     for opcode in [OP_ADD, OP_JUMP, OP_HALT]:
-        residual = pe.specialize(graph, {"opcode": opcode}, {})
+        residual = pe.specialize(
+            graph, {"opcode": opcode}, {"pc": 0})
         assert_codewriter_accepts(residual, t)
 
     # PE selected one opcode arm: dispatch comparisons are absent, while the
@@ -477,7 +481,7 @@ def test_link_small_interpreter_dispatch_loop_without_tracing():
         return value
 
     interpret_one._pe_static_args_ = ("opcode",)
-    interpret_one._pe_split_args_ = ()
+    interpret_one._pe_split_args_ = ("pc",)
     graph, t = get_graph(interpret_one, [int, int, int, int])
     pe = PartialEvaluator(t)
 
@@ -488,7 +492,8 @@ def test_link_small_interpreter_dispatch_loop_without_tracing():
         OP_HALT, graph, {"opcode": OP_HALT}))
 
     for opcode in [OP_DEC_JUMP, OP_HALT]:
-        residual = pe.specialize(graph, {"opcode": opcode}, {})
+        residual = pe.specialize(
+            graph, {"opcode": opcode}, {"pc": 0})
         assert_codewriter_accepts(residual, t)
 
     # Two-byte instructions: DEC_JUMP 0 loops until value reaches zero, then
@@ -513,7 +518,8 @@ def test_link_small_interpreter_dispatch_loop_without_tracing():
 
     # Offline-discovered loop facts survive codewriter lowering as a JitCode
     # side table, ready for the meta-interpreter to consume.
-    dec_graph = pe.specialize(graph, {"opcode": OP_DEC_JUMP}, {})
+    dec_graph = pe.specialize(
+        graph, {"opcode": OP_DEC_JUMP}, {"pc": 0})
     jitcode = assert_codewriter_accepts(dec_graph, t)
     linked.attach_to_jitcode(jitcode, {0: 7, 2: 19})
     assert jitcode.pe_metadata.entry_pc == 0
@@ -597,7 +603,7 @@ def test_meta_traces_small_interpreter_with_offline_metadata():
         return -1, value
 
     interpret_one._pe_static_args_ = ("opcode",)
-    interpret_one._pe_split_args_ = ()
+    interpret_one._pe_split_args_ = ("pc",)
     graph, t = get_graph(interpret_one, [int, int, int, int])
     pe = PartialEvaluator(t)
     catalog = ResidualTemplateCatalog()

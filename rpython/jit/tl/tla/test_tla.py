@@ -270,3 +270,9 @@ class TestOfflineTracing(LLJitMixin):
               (pe_time, pe_ops))
         assert baseline_ops > 0 and pe_ops > 0
         assert pe_ops < baseline_ops
+
+
+def test_interp_step_declares_pc_as_split_argument():
+    interp_step = tla.Frame.interp_step.im_func
+    assert interp_step._pe_static_args_ == ('opcode',)
+    assert interp_step._pe_split_args_ == ('pc',)

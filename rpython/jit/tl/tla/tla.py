@@ -182,8 +182,11 @@ class Frame(object):
         return pc, None, self
 
 
+# The opcode selects an offline semantics template.  The pc is deliberately
+# late-static: each linked bytecode position instantiates a separate PcHole,
+# while frame and bytecode remain residual runtime values.
 Frame.interp_step.im_func._pe_static_args_ = ("opcode",)
-Frame.interp_step.im_func._pe_split_args_ = ()
+Frame.interp_step.im_func._pe_split_args_ = ("pc",)
 Frame.interp_step.im_func._always_inline_ = True
 
 
