@@ -1,5 +1,6 @@
 
-from rpython.rlib import pe
+from rpython.rlib.pe import pe_specialize
+from rpython.rlib.objectmodel import always_inline
 from rpython.rlib.jit import JitDriver
 
 
@@ -135,6 +136,11 @@ class Frame(object):
             if w_result is not None:
                 return w_result
 
+    # The opcode selects an offline semantics template.  The pc is late-static:
+    # each linked bytecode position instantiates its own hole, while frame and
+    # bytecode stay residual runtime values.
+    @always_inline
+    @pe_specialize("opcode", split="pc")
     def interp_step(self, bytecode, opcode, oparg, pc):
         if opcode == CONST_INT:
             w_z = W_IntObject(oparg)
@@ -183,11 +189,7 @@ class Frame(object):
         return pc, None, self
 
 
-# The opcode selects an offline semantics template.  The pc is deliberately
-# late-static: each linked bytecode position instantiates a separate PcHole,
-# while frame and bytecode remain residual runtime values.
-pe.step(static="opcode", split=("pc",))(Frame.interp_step.im_func)
-Frame.interp_step.im_func._always_inline_ = True
+
 
 
 def run(bytecode, w_arg):

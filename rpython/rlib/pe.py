@@ -51,6 +51,13 @@ FILE_SIZE = 3
 OUT_OF_FILE = FILE_SIZE
 
 
+def _names(value):
+    """Argument names, written either as a string or as a sequence."""
+    if isinstance(value, str):
+        return tuple(value.split())
+    return tuple(value)
+
+
 def value_file(array, file, late_static):
     """Declare an array whose late-static accesses are held in scalars.
 
@@ -61,7 +68,7 @@ def value_file(array, file, late_static):
     this module fold, and without it the file costs more than it saves.
     """
     def decorate(func):
-        func._pe_value_file_ = (array, tuple(file), tuple(late_static))
+        func._pe_value_file_ = (array, _names(file), _names(late_static))
         return func
 
     return decorate
@@ -180,51 +187,66 @@ def refill(array, i0, i1, i2):
     return v0, v1, v2
 
 
-def step(static, split=(), holes=(), never=(), worth_generating=None):
-    """Declare how an interpreter's step function may be specialized.
+def pe_specialize(static, split=(), holes=()):
+    """Declare how the partial evaluator may specialize this function.
 
-    One decorator carries the whole agreement between an interpreter and the
-    partial evaluator, next to the function it describes:
-
-        @pe.step(static="opcode", split=("pc", "stack_ptr"),
-                 holes=("oparg2", "send_argc"),
-                 never=SELF_MODIFYING, worth_generating=pe.at_least(20))
+        @pe_specialize("opcode", split="pc stack_ptr", holes="oparg2 send_argc")
         def _interp_step(opcode, oparg, ..., stack):
 
     ``static`` is fixed when the interpreter is translated -- the instruction
-    being executed.  ``split`` is unknown then but known as soon as a program
-    is chosen, and the residual code branches on it.  ``holes`` are late-static
-    too but only flow through, so they become typed slots rather than branches.
-
-    ``never`` names instructions the evaluator must leave alone: ones that
-    rewrite their own bytecode, say, where a generated program would be stale
-    the moment it ran.  ``worth_generating`` decides which programs earn the
-    cost of being carried; see ``at_least``.
+    being executed, so there is one residual template per instruction.
+    ``split`` is unknown then but known once a program is chosen, and the
+    residual code branches on it.  ``holes`` are late-static too but only flow
+    through, so they become typed slots rather than branches.  Name lists may
+    be written as one space-separated string.
     """
 
     def decorate(func):
         func._pe_entry_point_ = True
-        func._pe_static_args_ = ((static,) if isinstance(static, str)
-                                 else tuple(static))
-        func._pe_split_args_ = tuple(split)
-        func._pe_hole_args_ = tuple(holes)
-        func._pe_skip_keys_ = tuple(never)
-        func._pe_link_policy_ = worth_generating
+        func._pe_static_args_ = _names(static)
+        func._pe_split_args_ = _names(split)
+        func._pe_hole_args_ = _names(holes)
         return func
 
     return decorate
 
 
-def at_least(instructions):
-    """Generate a program only for methods of at least this many instructions.
+def dont_pe_specialize(*keys):
+    """Instructions the partial evaluator must leave alone.
 
-    The usual shape of the judgement: what specializing saves is the dispatch
-    removed from every instruction executed, so it grows with the method, while
-    what it costs -- a JitCode in the binary, one more guard at every trace
-    start -- does not.  Below some size the cost wins, and where that lies is a
-    property of the interpreter, decided from the program text like any
-    inlining budget.
+    Ones that rewrite their own bytecode, say, where a generated program would
+    be stale the moment it ran.  A program reaching such an instruction is not
+    generated at all, and that method keeps meta-tracing as before.
     """
+
+    def decorate(func):
+        func._pe_skip_keys_ = tuple(keys) + getattr(func, "_pe_skip_keys_", ())
+        return func
+
+    return decorate
+
+
+def worth_pe_specialize(min_size=0, predicate=None):
+    """Which programs earn the cost of being generated and carried.
+
+    What specializing saves is the dispatch removed from every instruction
+    executed, so it grows with the method; what it costs -- a JitCode in the
+    binary, one more guard at every trace start -- does not.  ``min_size`` is
+    where the interpreter's designer puts that line, in instructions, read off
+    the program text like any inlining budget.  ``predicate`` takes the
+    generated program and its code instead, for a judgement size cannot make.
+    """
+
+    def decorate(func):
+        func._pe_link_policy_ = predicate or _at_least(min_size)
+        return func
+
+    return decorate
+
+
+def _at_least(instructions):
+    if not instructions:
+        return None
 
     def worth_generating(program, code):
         return len(program.blocks) >= instructions

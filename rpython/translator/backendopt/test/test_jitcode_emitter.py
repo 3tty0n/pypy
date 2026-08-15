@@ -107,7 +107,8 @@ def test_the_interpreter_decides_what_may_be_specialized():
             return pc + 2, value
         return -1, value
 
-    pe.step(static="opcode", split=("pc",), never=(OP_HALT,))(step)
+    pe.pe_specialize("opcode", split="pc")(step)
+    pe.dont_pe_specialize(OP_HALT)(step)
 
     _graph, translator = get_graph(step, [int, int, int, int])
     extension = GeneratingExtension.from_step_function(
@@ -138,8 +139,8 @@ def test_the_interpreter_decides_what_is_worth_linking():
             return pc + 2, value
         return -1, value
 
-    pe.step(static="opcode", split=("pc",),
-            worth_generating=only_with_loops)(step)
+    pe.pe_specialize("opcode", split="pc")(step)
+    pe.worth_pe_specialize(predicate=only_with_loops)(step)
     _graph, translator = get_graph(step, [int, int, int, int])
     extension = GeneratingExtension.from_step_function(
         translator, step, [OP_DEC_JUMP, OP_HALT], byte_pair_decoder)

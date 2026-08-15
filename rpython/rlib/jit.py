@@ -266,9 +266,9 @@ def not_in_trace(func):
     return func
 
 def pe_entry_point(static=None, split=None, holes=None):
-    """Deprecated alias for rpython.rlib.pe.step, which says the same thing."""
+    """Deprecated alias for rpython.rlib.pe.pe_specialize."""
     from rpython.rlib import pe
-    return pe.step(static or (), split or (), holes or ())
+    return pe.pe_specialize(static or (), split or (), holes or ())
 
 @oopspec("jit.isconstant(value)")
 @specialize.call_location()
