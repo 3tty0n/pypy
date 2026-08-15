@@ -70,7 +70,12 @@ class PortalLinker(object):
         linked_program = mainjitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, self.portal_sources, ())
         if guard is not None:
-            linked_program.set_guard(guard[0], program.entry_pc, guard[1])
+            # The loop headers and the entry: exactly the instructions the
+            # emitted code can be entered at, so one program serves every point
+            # the JIT may start a trace from in this method.
+            entries = sorted(set(program.loop_headers) |
+                             set([program.entry_pc]))
+            linked_program.set_guard(guard[0], entries, guard[1])
         lowered.jitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, (), ())
         # Either back end plants jit_merge_points when the interpreter named

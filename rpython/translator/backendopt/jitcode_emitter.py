@@ -440,7 +440,13 @@ class ProgramEmitter(object):
             # never wrote.
             ssarepr.insns.append(("---",))
             ssarepr.insns.append((Label(("block", pc)),))
-            if index == 0 and headers:
+            if pc in headers:
+                # Every block a trace may start at, not only the first: the
+                # metainterp enters a program wherever its merge points are,
+                # and a block entered from outside has none of the registers
+                # above the calling convention set yet.  Reaching one of these
+                # by an ordinary jump re-runs the copies, which the optimiser
+                # removes; reaching it as a trace start is what needs them.
                 self._initialise_scratch(ssarepr, fragments, counts)
             self._place(ssarepr, program, pc, fragments, scratch)
 
