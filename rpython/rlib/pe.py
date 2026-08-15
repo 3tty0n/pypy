@@ -59,20 +59,19 @@ def _names(value):
     return tuple(value)
 
 
-def value_file(array, file, late_static):
+def value_file(array, scalars, late_static):
     """Declare an array whose late-static accesses are held in scalars.
 
-    ``array`` names the argument holding the array, ``file`` the arguments
-    holding the scalars, and ``late_static`` the arguments whose values must be
-    known at link time for the slot numbers to be constants.  Every name in
-    ``late_static`` has to be a split argument; that is what makes the tests in
-    this module fold, and without it the file costs more than it saves.
-    """
-    def decorate(func):
-        func._pe_value_file_ = (array, _names(file), _names(late_static))
-        return func
+    ``array`` names the argument holding the array, ``scalars`` the arguments
+    standing in for its hot slots, and ``late_static`` the arguments whose
+    values must be known at link time for the slot numbers to be constants.
+    Every name in ``late_static`` has to be a split argument; that is what
+    makes the tests in this module fold, and without it the file costs more
+    than it saves.  Name lists may be written as a string or a list.
 
-    return decorate
+    Pass the result to PEDriver's ``value_file``.
+    """
+    return (array, _names(scalars), _names(late_static))
 
 
 def check_value_file(func):
@@ -83,7 +82,7 @@ def check_value_file(func):
     declaration = getattr(func, "_pe_value_file_", None)
     if declaration is None:
         return None
-    array, file, late_static = declaration
+    array, scalars, late_static = declaration
     split = getattr(func, "_pe_split_args_", ())
     for name in late_static:
         if name not in split:
@@ -92,12 +91,12 @@ def check_value_file(func):
                 "split arguments are %r -- an index that is not known at link "
                 "time leaves the file's tests in the residual code"
                 % (func, name, split))
-    if len(file) != FILE_SIZE:
+    if len(scalars) != FILE_SIZE:
         raise ValueError(
             "%r declares %d value-file slots, but this module implements %d"
-            % (func, len(file), FILE_SIZE))
+            % (func, len(scalars), FILE_SIZE))
     argnames = func.func_code.co_varnames[:func.func_code.co_argcount]
-    for name in (array,) + tuple(file) + tuple(late_static):
+    for name in (array,) + tuple(scalars) + tuple(late_static):
         if name not in argnames:
             raise ValueError(
                 "%r declares value-file name %r, which is not one of its "
@@ -263,8 +262,9 @@ class PEDriver(object):
         func._pe_skip_keys_ = self.never
         func._pe_link_policy_ = self.link_policy
         if self.value_file is not None:
-            array, file, late_static = self.value_file
-            func._pe_value_file_ = (array, _names(file), _names(late_static))
+            array, scalars, late_static = self.value_file
+            func._pe_value_file_ = (array, _names(scalars),
+                                    _names(late_static))
         return func
 
     def _make_extregistryentries(self):
@@ -274,11 +274,6 @@ class PEDriver(object):
 
         class Entry(ExtPEMergePoint):
             _about_ = self.pe_merge_point
-
-
-def value_file_of(array, file, late_static):
-    """The value-file declaration a PEDriver takes, as a plain tuple."""
-    return (array, _names(file), _names(late_static))
 
 
 def _at_least(instructions):
