@@ -3349,11 +3349,8 @@ class MetaInterp(object):
                     constant_index += 1
         f = self.newframe(jitcode)
         f.setup_call(call_boxes)
-        if program is not None:
-            # Enter at the instruction the portal came in on, which is not
-            # always the one the program was generated from.
-            f.pc = program.start_position(original_boxes)
-        elif metadata is not None and metadata.has_linked_programs():
+        if jitcode is mainjitcode and metadata is not None and \
+                metadata.has_linked_programs():
             # Linked programs exist, but none was built for this code object
             # and entry pc.  Their entry positions index the linked JitCodes,
             # so they are meaningless here: enter the generic portal.
