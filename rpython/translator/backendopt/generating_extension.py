@@ -84,6 +84,8 @@ class GeneratingExtension(object):
         # that failed to specialize, so a program reaching it is left to the
         # portal and one that never does costs nothing.
         skipped = getattr(graph.func, "_pe_skip_keys_", ())
+        if policy is None:
+            policy = getattr(graph.func, "_pe_link_policy_", None)
         templates = {}
         unsupported = {}
         for key in skipped:

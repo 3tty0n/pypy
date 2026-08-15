@@ -1,4 +1,5 @@
 
+from rpython.rlib import pe
 from rpython.rlib.jit import JitDriver
 
 
@@ -185,8 +186,7 @@ class Frame(object):
 # The opcode selects an offline semantics template.  The pc is deliberately
 # late-static: each linked bytecode position instantiates a separate PcHole,
 # while frame and bytecode remain residual runtime values.
-Frame.interp_step.im_func._pe_static_args_ = ("opcode",)
-Frame.interp_step.im_func._pe_split_args_ = ("pc",)
+pe.step(static="opcode", split=("pc",))(Frame.interp_step.im_func)
 Frame.interp_step.im_func._always_inline_ = True
 
 

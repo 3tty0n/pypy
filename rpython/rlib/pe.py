@@ -180,41 +180,53 @@ def refill(array, i0, i1, i2):
     return v0, v1, v2
 
 
-def dont_specialize(*keys):
-    """Declare instructions the partial evaluator must leave alone.
+def step(static, split=(), holes=(), never=(), worth_generating=None):
+    """Declare how an interpreter's step function may be specialized.
 
-    The interpreter implementer knows things the evaluator cannot see: that an
-    instruction rewrites its own bytecode, say, so a program generated for it
-    would be stale the moment it ran.  Declaring the key here is the same
-    statement as declaring which argument is static -- part of the interface
-    between the interpreter and the evaluator, written next to the handler
-    rather than kept in a list somewhere else.
+    One decorator carries the whole agreement between an interpreter and the
+    partial evaluator, next to the function it describes:
 
-    A program that reaches such an instruction is simply not generated, and
-    that method keeps meta-tracing as before.
+        @pe.step(static="opcode", split=("pc", "stack_ptr"),
+                 holes=("oparg2", "send_argc"),
+                 never=SELF_MODIFYING, worth_generating=pe.at_least(20))
+        def _interp_step(opcode, oparg, ..., stack):
+
+    ``static`` is fixed when the interpreter is translated -- the instruction
+    being executed.  ``split`` is unknown then but known as soon as a program
+    is chosen, and the residual code branches on it.  ``holes`` are late-static
+    too but only flow through, so they become typed slots rather than branches.
+
+    ``never`` names instructions the evaluator must leave alone: ones that
+    rewrite their own bytecode, say, where a generated program would be stale
+    the moment it ran.  ``worth_generating`` decides which programs earn the
+    cost of being carried; see ``at_least``.
     """
 
     def decorate(func):
-        func._pe_skip_keys_ = tuple(keys) + getattr(func, "_pe_skip_keys_", ())
+        func._pe_entry_point_ = True
+        func._pe_static_args_ = ((static,) if isinstance(static, str)
+                                 else tuple(static))
+        func._pe_split_args_ = tuple(split)
+        func._pe_hole_args_ = tuple(holes)
+        func._pe_skip_keys_ = tuple(never)
+        func._pe_link_policy_ = worth_generating
         return func
 
     return decorate
 
 
-def link_policy(func):
-    """Mark the predicate that decides which programs are worth generating.
+def at_least(instructions):
+    """Generate a program only for methods of at least this many instructions.
 
-    Specializing an interpreter for a program is only half the decision: the
-    other half is whether carrying the result is worth it, since every
-    generated program is examined at each trace start and its JitCode travels
-    in the binary.  That judgement belongs to whoever designed the interpreter,
-    and it has to be made without running anything -- an offline partial
-    evaluator has the program text and nothing else.
-
-    The marked function is called with the generated program and the code it
-    came from, and returns False to decline.  What it may look at is exactly
-    what is statically there: how many instructions the program reaches, where
-    its loops are, what the code says.
+    The usual shape of the judgement: what specializing saves is the dispatch
+    removed from every instruction executed, so it grows with the method, while
+    what it costs -- a JitCode in the binary, one more guard at every trace
+    start -- does not.  Below some size the cost wins, and where that lies is a
+    property of the interpreter, decided from the program text like any
+    inlining budget.
     """
-    func._pe_link_policy_ = True
-    return func
+
+    def worth_generating(program, code):
+        return len(program.blocks) >= instructions
+
+    return worth_generating

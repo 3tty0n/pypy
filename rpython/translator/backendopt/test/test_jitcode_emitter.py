@@ -107,9 +107,7 @@ def test_the_interpreter_decides_what_may_be_specialized():
             return pc + 2, value
         return -1, value
 
-    step._pe_static_args_ = ("opcode",)
-    step._pe_split_args_ = ("pc",)
-    pe.dont_specialize(OP_HALT)(step)
+    pe.step(static="opcode", split=("pc",), never=(OP_HALT,))(step)
 
     _graph, translator = get_graph(step, [int, int, int, int])
     extension = GeneratingExtension.from_step_function(
@@ -123,7 +121,9 @@ def test_the_interpreter_decides_what_may_be_specialized():
 
 
 def test_the_interpreter_decides_what_is_worth_linking():
-    """A policy sees the finished program, loop headers included."""
+    """The declared policy is picked up from the step function itself."""
+    from rpython.rlib import pe
+
     seen = []
 
     def only_with_loops(program, code):
@@ -131,10 +131,18 @@ def test_the_interpreter_decides_what_is_worth_linking():
         assert len(code) > 0
         return len(program.loop_headers) > 0
 
-    _graph, translator = get_graph(interpret_one, [int, int, int, int])
+    def step(opcode, oparg, pc, value):
+        if opcode == OP_DEC_JUMP:
+            if value > 0:
+                return oparg, value - 1
+            return pc + 2, value
+        return -1, value
+
+    pe.step(static="opcode", split=("pc",),
+            worth_generating=only_with_loops)(step)
+    _graph, translator = get_graph(step, [int, int, int, int])
     extension = GeneratingExtension.from_step_function(
-        translator, interpret_one, [OP_DEC_JUMP, OP_HALT], byte_pair_decoder,
-        policy=only_with_loops)
+        translator, step, [OP_DEC_JUMP, OP_HALT], byte_pair_decoder)
 
     # Jumping to 0 makes a loop; jumping past the end does not.
     looping = extension.generate(chr(OP_DEC_JUMP) + chr(0) +
