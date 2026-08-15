@@ -126,8 +126,9 @@ def test_the_interpreter_decides_what_is_worth_linking():
     """A policy sees the finished program, loop headers included."""
     seen = []
 
-    def only_with_loops(program):
+    def only_with_loops(program, code):
         seen.append(len(program.loop_headers))
+        assert len(code) > 0
         return len(program.loop_headers) > 0
 
     _graph, translator = get_graph(interpret_one, [int, int, int, int])

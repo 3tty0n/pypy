@@ -199,3 +199,22 @@ def dont_specialize(*keys):
         return func
 
     return decorate
+
+
+def link_policy(func):
+    """Mark the predicate that decides which programs are worth generating.
+
+    Specializing an interpreter for a program is only half the decision: the
+    other half is whether carrying the result is worth it, since every
+    generated program is examined at each trace start and its JitCode travels
+    in the binary.  That judgement belongs to whoever designed the interpreter,
+    and it has to be made without running anything -- an offline partial
+    evaluator has the program text and nothing else.
+
+    The marked function is called with the generated program and the code it
+    came from, and returns False to decline.  What it may look at is exactly
+    what is statically there: how many instructions the program reaches, where
+    its loops are, what the code says.
+    """
+    func._pe_link_policy_ = True
+    return func

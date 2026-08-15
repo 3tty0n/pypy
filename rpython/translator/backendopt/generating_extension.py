@@ -49,8 +49,8 @@ class GeneratingExtension(object):
                  unsupported=None, policy=None):
         self.templates = dict(templates)
         self.decoder = decoder
-        # Consulted once a program has been generated, with the program as its
-        # only argument; returning False declines it.  Generating is cheap and
+        # Consulted once a program has been generated, with the program and
+        # the code it came from; returning False declines it.  Generating is cheap and
         # installing is not -- every installed program is looked at on every
         # trace start, and the JitCodes are carried in the binary -- so which
         # programs are worth that is a judgement about the interpreter, and
@@ -165,7 +165,7 @@ class GeneratingExtension(object):
         # After the loop analysis, so a policy can ask about loop headers --
         # the usual reason to decline is that there is nothing here the
         # meta-tracer will re-enter often enough to pay for the install.
-        if self.policy is not None and not self.policy(program):
+        if self.policy is not None and not self.policy(program, code):
             return None
         return program
 
