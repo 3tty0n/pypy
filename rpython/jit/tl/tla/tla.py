@@ -1,5 +1,5 @@
 
-from rpython.rlib.pe import pe_specialize
+from rpython.rlib.pe import PEDriver
 from rpython.rlib.objectmodel import always_inline
 from rpython.rlib.jit import JitDriver
 
@@ -96,6 +96,12 @@ jitdriver = JitDriver(greens=['pc', 'bytecode'],
                       virtualizables=['self'],
                       get_printable_location=get_printable_location)
 
+# The opcode selects a residual template; the pc is late-static, so each
+# linked bytecode position gets its own hole, while self and bytecode stay
+# residual runtime values.
+pedriver = PEDriver(static="opcode", split="pc")
+
+
 class Frame(object):
     _virtualizable_ = ['stackpos', 'stack[*]']
     
@@ -140,8 +146,9 @@ class Frame(object):
     # each linked bytecode position instantiates its own hole, while frame and
     # bytecode stay residual runtime values.
     @always_inline
-    @pe_specialize("opcode", split="pc")
     def interp_step(self, bytecode, opcode, oparg, pc):
+        pedriver.pe_merge_point(self=self, bytecode=bytecode, opcode=opcode,
+                                oparg=oparg, pc=pc)
         if opcode == CONST_INT:
             w_z = W_IntObject(oparg)
             self.push(w_z)

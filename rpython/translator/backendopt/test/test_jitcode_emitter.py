@@ -107,8 +107,7 @@ def test_the_interpreter_decides_what_may_be_specialized():
             return pc + 2, value
         return -1, value
 
-    pe.pe_specialize("opcode", split="pc")(step)
-    pe.dont_pe_specialize(OP_HALT)(step)
+    pe.PEDriver(static="opcode", split="pc", never=(OP_HALT,)).bind(step)
 
     _graph, translator = get_graph(step, [int, int, int, int])
     extension = GeneratingExtension.from_step_function(
@@ -139,8 +138,8 @@ def test_the_interpreter_decides_what_is_worth_linking():
             return pc + 2, value
         return -1, value
 
-    pe.pe_specialize("opcode", split="pc")(step)
-    pe.worth_pe_specialize(predicate=only_with_loops)(step)
+    pe.PEDriver(static="opcode", split="pc",
+                worth_generating=only_with_loops).bind(step)
     _graph, translator = get_graph(step, [int, int, int, int])
     extension = GeneratingExtension.from_step_function(
         translator, step, [OP_DEC_JUMP, OP_HALT], byte_pair_decoder)
@@ -152,3 +151,24 @@ def test_the_interpreter_decides_what_is_worth_linking():
     assert looping is not None
     assert straight is None
     assert seen == [1, 0]
+
+
+def test_the_merge_point_binds_the_driver_to_its_function():
+    """The declaration reaches the evaluator from the call site, as JitDriver's does."""
+    from rpython.rlib.pe import PEDriver
+
+    driver = PEDriver(static="opcode", split="pc", min_size=2)
+
+    def step(opcode, oparg, pc, value):
+        driver.pe_merge_point(opcode=opcode, oparg=oparg, pc=pc, value=value)
+        if opcode == OP_DEC_JUMP:
+            return oparg, value - 1
+        return -1, value
+
+    graph, _translator = get_graph(step, [int, int, int, int])
+    assert graph.func._pe_static_args_ == ("opcode",)
+    assert graph.func._pe_split_args_ == ("pc",)
+    assert graph.func._pe_link_policy_ is not None
+    # and it leaves nothing behind for the evaluator to strip
+    assert not [op for block in graph.iterblocks()
+                for op in block.operations if "pe_merge" in op.opname]

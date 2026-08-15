@@ -265,11 +265,6 @@ def not_in_trace(func):
     func.oopspec = "jit.not_in_trace()"   # note that 'func' may take arguments
     return func
 
-def pe_entry_point(static=None, split=None, holes=None):
-    """Deprecated alias for rpython.rlib.pe.pe_specialize."""
-    from rpython.rlib import pe
-    return pe.pe_specialize(static or (), split or (), holes or ())
-
 @oopspec("jit.isconstant(value)")
 @specialize.call_location()
 def isconstant(value):

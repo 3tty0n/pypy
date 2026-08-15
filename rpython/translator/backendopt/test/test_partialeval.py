@@ -1,7 +1,6 @@
 from rpython.flowspace.model import checkgraph, summary
 from rpython.translator.translator import TranslationContext, graphof
 from rpython.rtyper.llinterp import LLInterpreter
-from rpython.rlib.jit import pe_entry_point
 from rpython.translator.backendopt.partialeval import (PartialEvaluator,
     specialize_graph, specialize_entry_point, specialize_variant,
     specialize_split_graph, install_split_graph, partial_evaluate,
@@ -48,11 +47,13 @@ def assert_codewriter_accepts(graph, translator):
     return jitdriver_sd.mainjitcode
 
 
-def test_pe_entry_point_split_metadata():
-    @pe_entry_point(static=("code",), split=("pc",))
+def test_pe_driver_split_metadata():
+    from rpython.rlib.pe import PEDriver
+
     def dispatch(code, pc, x):
         return x
 
+    PEDriver(static="code", split="pc").bind(dispatch)
     assert dispatch._pe_entry_point_
     assert dispatch._pe_static_args_ == ("code",)
     assert dispatch._pe_split_args_ == ("pc",)

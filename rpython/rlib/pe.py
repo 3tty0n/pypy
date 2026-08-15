@@ -43,6 +43,7 @@ signatures: widening the file means changing them and the interpreter's step
 function together.
 """
 
+from rpython.rtyper.extregistry import ExtRegistryEntry
 from rpython.rlib.objectmodel import always_inline, specialize
 
 FILE_SIZE = 3
@@ -187,61 +188,97 @@ def refill(array, i0, i1, i2):
     return v0, v1, v2
 
 
-def pe_specialize(static, split=(), holes=()):
-    """Declare how the partial evaluator may specialize this function.
+class PEDriver(object):
+    """Declares how an interpreter may be partially evaluated, ahead of time.
 
-        @pe_specialize("opcode", split="pc stack_ptr", holes="oparg2 send_argc")
-        def _interp_step(opcode, oparg, ..., stack):
+    The shape mirrors JitDriver: one object naming the variables and their
+    roles, and a marker called at the point it describes.
+
+        pedriver = PEDriver(static="opcode", split="pc stack_ptr",
+                            holes="oparg2 send_argc",
+                            never=SELF_MODIFYING, min_size=20)
+
+        def _interp_step(opcode, oparg, oparg2, send_argc, pc, stack_ptr,
+                         s0, s1, s2, method, frame, stack):
+            pedriver.pe_merge_point(
+                opcode=opcode, oparg=oparg, oparg2=oparg2,
+                send_argc=send_argc, pc=pc, stack_ptr=stack_ptr,
+                s0=s0, s1=s1, s2=s2,
+                method=method, frame=frame, stack=stack)
+            ...
 
     ``static`` is fixed when the interpreter is translated -- the instruction
     being executed, so there is one residual template per instruction.
     ``split`` is unknown then but known once a program is chosen, and the
     residual code branches on it.  ``holes`` are late-static too but only flow
-    through, so they become typed slots rather than branches.  Name lists may
-    be written as one space-separated string.
+    through, so they become typed slots rather than branches.  Everything else
+    named at the merge point stays dynamic.  Name lists may be written as one
+    space-separated string.
+
+    ``never`` names instructions the evaluator must leave alone -- ones that
+    rewrite their own bytecode, where a generated program would be stale the
+    moment it ran.  ``min_size`` is the smallest program worth generating, in
+    instructions: what specializing saves is the dispatch removed from every
+    instruction executed, so it grows with the method, while what it costs --
+    a JitCode in the binary, one more guard at every trace start -- does not.
+    ``worth_generating`` takes a predicate instead, for a judgement size cannot
+    make.
+
+    Calling the merge point checks that its keywords are exactly the step
+    function's arguments, and binds this declaration to the function it is
+    called from, the way jit_merge_point binds a JitDriver to its loop.
     """
 
-    def decorate(func):
+    name = "pedriver"
+
+    def __init__(self, static, split=(), holes=(), never=(), min_size=0,
+                 worth_generating=None, value_file=None):
+        self.static = _names(static)
+        self.split = _names(split)
+        self.holes = _names(holes)
+        self.never = tuple(never)
+        self.link_policy = worth_generating or _at_least(min_size)
+        self.value_file = value_file
+        self._make_extregistryentries()
+
+    def _freeze_(self):
+        # A declaration, not data: the annotator treats it as a constant, which
+        # is what lets pe_merge_point resolve to its registry entry.
+        return True
+
+    def pe_merge_point(_self, **livevars):
+        # special-cased by ExtRegistryEntry below
+        pass
+
+    def bind(self, func):
+        """Attach this declaration to a step function.
+
+        Called for you when the merge point is annotated; also usable directly
+        for a function the annotator never sees, as in a test.
+        """
         func._pe_entry_point_ = True
-        func._pe_static_args_ = _names(static)
-        func._pe_split_args_ = _names(split)
-        func._pe_hole_args_ = _names(holes)
+        func._pe_static_args_ = self.static
+        func._pe_split_args_ = self.split
+        func._pe_hole_args_ = self.holes
+        func._pe_skip_keys_ = self.never
+        func._pe_link_policy_ = self.link_policy
+        if self.value_file is not None:
+            array, file, late_static = self.value_file
+            func._pe_value_file_ = (array, _names(file), _names(late_static))
         return func
 
-    return decorate
+    def _make_extregistryentries(self):
+        # As in JitDriver: an ExtRegistryEntry cannot be declared for a method
+        # of a frozen object, so the bound method is attached back to self.
+        self.pe_merge_point = self.pe_merge_point
+
+        class Entry(ExtPEMergePoint):
+            _about_ = self.pe_merge_point
 
 
-def dont_pe_specialize(*keys):
-    """Instructions the partial evaluator must leave alone.
-
-    Ones that rewrite their own bytecode, say, where a generated program would
-    be stale the moment it ran.  A program reaching such an instruction is not
-    generated at all, and that method keeps meta-tracing as before.
-    """
-
-    def decorate(func):
-        func._pe_skip_keys_ = tuple(keys) + getattr(func, "_pe_skip_keys_", ())
-        return func
-
-    return decorate
-
-
-def worth_pe_specialize(min_size=0, predicate=None):
-    """Which programs earn the cost of being generated and carried.
-
-    What specializing saves is the dispatch removed from every instruction
-    executed, so it grows with the method; what it costs -- a JitCode in the
-    binary, one more guard at every trace start -- does not.  ``min_size`` is
-    where the interpreter's designer puts that line, in instructions, read off
-    the program text like any inlining budget.  ``predicate`` takes the
-    generated program and its code instead, for a judgement size cannot make.
-    """
-
-    def decorate(func):
-        func._pe_link_policy_ = predicate or _at_least(min_size)
-        return func
-
-    return decorate
+def value_file_of(array, file, late_static):
+    """The value-file declaration a PEDriver takes, as a plain tuple."""
+    return (array, _names(file), _names(late_static))
 
 
 def _at_least(instructions):
@@ -252,3 +289,43 @@ def _at_least(instructions):
         return len(program.blocks) >= instructions
 
     return worth_generating
+
+
+class ExtPEMergePoint(ExtRegistryEntry):
+    """Bind a PEDriver to the function its merge point is called from.
+
+    Nothing is emitted: the partial evaluator reads the declaration off the
+    function, so the marker leaves no trace in the residual code.
+    """
+
+    def compute_result_annotation(self, **kwds_s):
+        from rpython.annotator import model as annmodel
+
+        driver = self.instance.im_self
+        graph = self.bookkeeper.position_key[0]
+        declared = set(driver.static + driver.split + driver.holes)
+        given = set(name[2:] for name in kwds_s)
+        missing = declared - given
+        if missing:
+            raise PEHintError(
+                "%s names %s, which pe_merge_point was not given"
+                % (driver.name, ", ".join(sorted(missing))))
+        arguments = set(graph.func.func_code.co_varnames[
+            :graph.func.func_code.co_argcount])
+        stray = given - arguments
+        if stray:
+            raise PEHintError(
+                "pe_merge_point was given %s, which %s does not take"
+                % (", ".join(sorted(stray)), graph.func.__name__))
+        driver.bind(graph.func)
+        return annmodel.s_None
+
+    def specialize_call(self, hop, **kwds_i):
+        from rpython.rtyper.lltypesystem import lltype
+        # Nothing is emitted: the marker exists to be read by the annotator.
+        hop.exception_cannot_occur()
+        return hop.inputconst(lltype.Void, None)
+
+
+class PEHintError(Exception):
+    """Raised when a pe_merge_point disagrees with its driver."""
