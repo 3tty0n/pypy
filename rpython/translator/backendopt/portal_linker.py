@@ -51,7 +51,8 @@ class PortalLinker(object):
 
         ``guard`` is ``(pc_index, ref_index)`` into the merge point's greens for
         a portal that serves more than one program; None means the portal has
-        only this one.
+        only this one.  The guard covers every instruction of the program, so
+        one program serves every entry point into the method it came from.
         """
         mainjitcode = self.mainjitcode(codewriter)
         if whole_graph:
@@ -70,7 +71,10 @@ class PortalLinker(object):
         linked_program = mainjitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, self.portal_sources, ())
         if guard is not None:
-            linked_program.set_guard(guard[0], program.entry_pc, guard[1])
+            # Every instruction the program reaches, not only the one it was
+            # generated from: a trace may start at any of them, and each has
+            # its own entry position in the JitCode.
+            linked_program.set_guard(guard[0], sorted(program.blocks), guard[1])
         lowered.jitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, (), ())
         # Either back end plants jit_merge_points when the interpreter named

@@ -27,7 +27,11 @@ class PELinkedProgram(object):
         self.argument_sources = list(argument_sources)
         self.argument_constants = list(argument_constants)
         self.guard_pc_index = -1
-        self.guard_pc = -1
+        # Every pc this program stands for.  One generated program covers each
+        # instruction it reaches, so a method traced from several entry points
+        # needs one program, not one per point -- the later ones would be the
+        # same code with its front cut off.
+        self.guard_pcs = []
         self.guard_ref_index = -1
         self.guard_ref = lltype.nullptr(llmemory.GCREF.TO)
         # A program is built from a bytecode image, so the code object it
@@ -36,15 +40,35 @@ class PELinkedProgram(object):
         # pointer is remembered from then on.
         self.guard_match = _never_matches
 
-    def set_guard(self, pc_index, pc, ref_index):
+    def set_guard(self, pc_index, pcs, ref_index):
         self.guard_pc_index = pc_index
-        self.guard_pc = pc
+        self.guard_pcs = list(pcs)
         self.guard_ref_index = ref_index
+
+    def _covers(self, pc):
+        for covered in self.guard_pcs:
+            if covered == pc:
+                return True
+        return False
+
+    def start_position(self, boxes):
+        """Where in this program tracing begins, for the pc that matched.
+
+        A program is entered wherever the portal came in, not only at the pc it
+        was generated from; every instruction it reaches has its own position.
+        """
+        index = self.guard_pc_index
+        if index < 0:
+            return 0
+        metadata = self.jitcode.pe_metadata
+        if metadata is None:
+            return 0
+        return metadata.position_for_pc(boxes[index].getint())
 
     def matches(self, boxes):
         """Is the portal entering the code object this program was linked for?"""
         index = self.guard_pc_index
-        if index >= 0 and boxes[index].getint() != self.guard_pc:
+        if index >= 0 and not self._covers(boxes[index].getint()):
             return False
         index = self.guard_ref_index
         if index >= 0:
