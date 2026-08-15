@@ -178,3 +178,24 @@ def refill(array, i0, i1, i2):
     v1 = array[i1] if i1 >= 0 else None
     v2 = array[i2] if i2 >= 0 else None
     return v0, v1, v2
+
+
+def dont_specialize(*keys):
+    """Declare instructions the partial evaluator must leave alone.
+
+    The interpreter implementer knows things the evaluator cannot see: that an
+    instruction rewrites its own bytecode, say, so a program generated for it
+    would be stale the moment it ran.  Declaring the key here is the same
+    statement as declaring which argument is static -- part of the interface
+    between the interpreter and the evaluator, written next to the handler
+    rather than kept in a list somewhere else.
+
+    A program that reaches such an instruction is simply not generated, and
+    that method keeps meta-tracing as before.
+    """
+
+    def decorate(func):
+        func._pe_skip_keys_ = tuple(keys) + getattr(func, "_pe_skip_keys_", ())
+        return func
+
+    return decorate

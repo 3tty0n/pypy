@@ -94,3 +94,51 @@ def test_emitting_for_a_portal_requires_merge_point_arguments():
                              ("pc", "oparg", "code"), ("value",))
     error = py.test.raises(ValueError, emitter.emit, program)
     assert "jit_merge_point_args" in str(error.value)
+
+
+def test_the_interpreter_decides_what_may_be_specialized():
+    """pe.dont_specialize is the interpreter's veto, not the evaluator's."""
+    from rpython.rlib import pe
+
+    def step(opcode, oparg, pc, value):
+        if opcode == OP_DEC_JUMP:
+            if value > 0:
+                return oparg, value - 1
+            return pc + 2, value
+        return -1, value
+
+    step._pe_static_args_ = ("opcode",)
+    step._pe_split_args_ = ("pc",)
+    pe.dont_specialize(OP_HALT)(step)
+
+    _graph, translator = get_graph(step, [int, int, int, int])
+    extension = GeneratingExtension.from_step_function(
+        translator, step, [OP_DEC_JUMP, OP_HALT], byte_pair_decoder)
+
+    assert extension.handles(OP_DEC_JUMP)
+    assert not extension.handles(OP_HALT)
+    # A program that reaches the vetoed instruction is declined whole.
+    assert extension.generate(chr(OP_DEC_JUMP) + chr(0) +
+                              chr(OP_HALT) + chr(0)) is None
+
+
+def test_the_interpreter_decides_what_is_worth_linking():
+    """A policy sees the finished program, loop headers included."""
+    seen = []
+
+    def only_with_loops(program):
+        seen.append(len(program.loop_headers))
+        return len(program.loop_headers) > 0
+
+    _graph, translator = get_graph(interpret_one, [int, int, int, int])
+    extension = GeneratingExtension.from_step_function(
+        translator, interpret_one, [OP_DEC_JUMP, OP_HALT], byte_pair_decoder,
+        policy=only_with_loops)
+
+    # Jumping to 0 makes a loop; jumping past the end does not.
+    looping = extension.generate(chr(OP_DEC_JUMP) + chr(0) +
+                                 chr(OP_HALT) + chr(0))
+    straight = extension.generate(chr(OP_HALT) + chr(0))
+    assert looping is not None
+    assert straight is None
+    assert seen == [1, 0]

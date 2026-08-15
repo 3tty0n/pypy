@@ -46,9 +46,16 @@ class GeneratingExtension(object):
     """
 
     def __init__(self, templates, decoder, static_name,
-                 unsupported=None):
+                 unsupported=None, policy=None):
         self.templates = dict(templates)
         self.decoder = decoder
+        # Consulted once a program has been generated, with the program as its
+        # only argument; returning False declines it.  Generating is cheap and
+        # installing is not -- every installed program is looked at on every
+        # trace start, and the JitCodes are carried in the binary -- so which
+        # programs are worth that is a judgement about the interpreter, and
+        # belongs to whoever wrote it.  None accepts everything.
+        self.policy = policy
         # The step function's static argument, under the name it
         # declared.  Every generated block binds the key to it, so
         # the back end never has to know which name that is.
@@ -57,7 +64,8 @@ class GeneratingExtension(object):
 
     @classmethod
     def from_step_function(cls, translator, step_function, keys, decoder,
-                           static_name=None, terminal_values=(-1,)):
+                           static_name=None, terminal_values=(-1,),
+                           policy=None):
         """Specialize ``step_function`` once per key.
 
         A key that cannot be specialized is recorded rather than raised on: it
@@ -72,9 +80,17 @@ class GeneratingExtension(object):
             static_name = graph.func._pe_static_args_[0]
         evaluator = PartialEvaluator(translator)
 
+        # Keys the interpreter declared off limits: recorded exactly like one
+        # that failed to specialize, so a program reaching it is left to the
+        # portal and one that never does costs nothing.
+        skipped = getattr(graph.func, "_pe_skip_keys_", ())
         templates = {}
         unsupported = {}
+        for key in skipped:
+            unsupported[key] = ValueError("declared not specializable")
         for key in keys:
+            if key in unsupported:
+                continue
             try:
                 templates[key] = evaluator.make_symbolic_template(
                     key, graph, {static_name: key},
@@ -83,7 +99,8 @@ class GeneratingExtension(object):
                 import traceback
                 error.pe_traceback = traceback.format_exc()
                 unsupported[key] = error
-        return cls(templates, decoder, static_name, unsupported)
+        return cls(templates, decoder, static_name, unsupported,
+                   policy=policy)
 
     def handles(self, key):
         return key in self.templates
@@ -144,7 +161,13 @@ class GeneratingExtension(object):
 
         program = LinkedResidualProgram(entry_pc, blocks)
         program.state_names = state_names
-        return program.analyze_loops()
+        program = program.analyze_loops()
+        # After the loop analysis, so a policy can ask about loop headers --
+        # the usual reason to decline is that there is nothing here the
+        # meta-tracer will re-enter often enough to pay for the install.
+        if self.policy is not None and not self.policy(program):
+            return None
+        return program
 
     def report(self, name_of=None):
         """Which instructions specialized, and why the rest did not."""
