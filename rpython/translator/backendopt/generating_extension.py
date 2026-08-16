@@ -61,6 +61,16 @@ class GeneratingExtension(object):
         # the back end never has to know which name that is.
         self.static_name = static_name
         self.unsupported = dict(unsupported or {})
+        # The (pc, key) that made the most recent generate() call return
+        # None because that instruction has no template, so a caller can say
+        # *why* nothing came out instead of only that nothing did.  Plain
+        # Python state: this only runs at translation time, never inside the
+        # generated program.
+        self.last_blocked = None
+        # Set instead of last_blocked when every reachable instruction did
+        # specialize but the policy declined the resulting program anyway
+        # (the usual case: too small to be worth a JitCode and a guard).
+        self.decline_reason = None
 
     @classmethod
     def from_step_function(cls, translator, step_function, keys, decoder,
@@ -123,6 +133,11 @@ class GeneratingExtension(object):
         blocks = {}
         state_names = tuple(sorted(entry_state or ()))
         pending = [(entry_pc, dict(entry_state or {}))]
+        # Reset both: a call that succeeds, or fails for the other reason,
+        # must not leave a stale explanation from some earlier call lying
+        # around.
+        self.last_blocked = None
+        self.decline_reason = None
 
         while pending:
             pc, state = pending.pop()
@@ -135,6 +150,7 @@ class GeneratingExtension(object):
 
             key, bindings = self.decoder(code, pc)
             if key not in self.templates:
+                self.last_blocked = (pc, key)
                 return None
             template = self.templates[key]
 
@@ -168,6 +184,8 @@ class GeneratingExtension(object):
         # the usual reason to decline is that there is nothing here the
         # meta-tracer will re-enter often enough to pay for the install.
         if self.policy is not None and not self.policy(program, code):
+            self.decline_reason = (
+                "declined by policy (%d blocks)" % len(program.blocks))
             return None
         return program
 
