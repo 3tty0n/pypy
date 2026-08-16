@@ -57,13 +57,112 @@ def test_concatenated_fragments_assemble_into_one_jitcode():
     assert str(HOLE_SENTINEL) not in dump
 
 
-def test_each_template_is_assembled_once_per_specialization():
+def test_each_template_is_assembled_once_per_opcode():
     code = (chr(OP_DEC_JUMP) + chr(0) + chr(OP_DEC_JUMP) + chr(0) +
             chr(OP_HALT) + chr(0))
     program, emitter, jitcode, entry_positions = emit(code)
-    # One fragment per reachable specialization point, and no more: the
-    # codewriter ran that many times rather than once over a whole program.
-    assert len(emitter._fragments) == len(program.blocks)
+    distinct = set(block.key for block in program.blocks.values())
+    assert len(program.blocks) == 3
+    assert len(distinct) == 2
+    assert len(emitter._fragments) == len(distinct)
+
+
+def test_fragment_identity_is_shared_across_pc():
+    """The whole point: two blocks of the same opcode share one fragment."""
+    code = (chr(OP_DEC_JUMP) + chr(0) + chr(OP_DEC_JUMP) + chr(0) +
+            chr(OP_HALT) + chr(0))
+    program, emitter, jitcode, entry_positions = emit(code)
+    block_a = program.blocks[0]
+    block_b = program.blocks[2]
+    assert block_a.key == block_b.key == OP_DEC_JUMP
+    assert block_a.bindings != block_b.bindings
+    assert emitter.fragment_for(block_a) is emitter.fragment_for(block_b)
+
+
+def test_shared_fragment_patches_each_instance_with_its_own_values():
+    """Sharing patches each instance's own pc/oparg, not the sentinel."""
+    from rpython.flowspace.model import Constant
+
+    OP_X = 3
+    OP_HALT = 1
+
+    def step(opcode, oparg, pc, value):
+        if opcode == OP_X:
+            checksum = pc + oparg
+            return pc + 2, value + checksum
+        return -1, value
+
+    step._pe_static_args_ = ("opcode",)
+    step._pe_split_args_ = ("pc",)
+
+    from rpython.jit.codewriter.codewriter import CodeWriter
+    from rpython.jit.codewriter.test.test_codewriter import FakeCPU
+
+    code = chr(OP_X) + chr(7) + chr(OP_X) + chr(11) + chr(OP_HALT) + chr(0)
+    graph, translator = get_graph(step, [int, int, int, int])
+    extension = GeneratingExtension.from_step_function(
+        translator, step, [OP_X, OP_HALT], byte_pair_decoder)
+    program = extension.generate(code)
+
+    codewriter = CodeWriter(FakeCPU(translator.rtyper), [])
+    emitter = ProgramEmitter(codewriter, None, "opcode", ("pc",),
+                             ("pc", "oparg", "code"), ("value",))
+    jitcode, entry_positions = emitter.emit(program, "emitted-x")
+
+    assert emitter.fragment_for(program.blocks[0]) is \
+        emitter.fragment_for(program.blocks[2])
+    assert str(HOLE_SENTINEL) not in jitcode.dump()
+
+    sums = []
+    for insn in emitter.last_ssarepr.insns:
+        if insn[0] == "int_add" and isinstance(insn[1], Constant) and \
+                isinstance(insn[2], Constant):
+            sums.append((insn[1].value, insn[2].value))
+    assert (0, 7) in sums
+    assert (2, 11) in sums
+
+
+def test_shared_fragment_reuses_calldescr_objects():
+    """A calldescr baked into a shared fragment is reused, not rebuilt."""
+    from rpython.jit.codewriter.codewriter import CodeWriter
+    from rpython.jit.codewriter.test.test_codewriter import FakeCPU, \
+        FakeJitDriverSD
+    from rpython.jit.metainterp.history import AbstractDescr
+
+    OP_ADD = 2
+
+    def helper(x, y):
+        return x + y
+
+    def step(opcode, oparg, pc, value):
+        if opcode == OP_ADD:
+            return pc + 2, helper(value, oparg)
+        return -1, value
+
+    step._pe_static_args_ = ("opcode",)
+    step._pe_split_args_ = ("pc",)
+
+    class NoInlinePolicy(object):
+        def look_inside_graph(self, graph):
+            # Residual call keeps the calldescr; inlining drops it.
+            return False
+
+    code = chr(OP_ADD) + chr(5) + chr(OP_ADD) + chr(9) + chr(OP_HALT) + chr(0)
+    graph, translator = get_graph(step, [int, int, int, int])
+    extension = GeneratingExtension.from_step_function(
+        translator, step, [OP_ADD, OP_HALT], byte_pair_decoder)
+    program = extension.generate(code)
+    codewriter = CodeWriter(FakeCPU(translator.rtyper),
+                            [FakeJitDriverSD(graph)])
+    codewriter.find_all_graphs(NoInlinePolicy())
+    emitter = ProgramEmitter(codewriter, None, "opcode", ("pc",),
+                             ("pc", "oparg", "code"), ("value",))
+    emitter.emit(program, "emitted-add")
+
+    descrs = [item for insn in emitter.last_ssarepr.insns for item in insn
+             if isinstance(item, AbstractDescr)]
+    assert len(descrs) == 2
+    assert descrs[0] is descrs[1]
 
 
 def test_emitting_for_a_portal_requires_merge_point_arguments():

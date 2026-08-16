@@ -138,7 +138,7 @@ class FragmentCompiler(object):
         # -- so a late-static red is assigned into its register instead.
         reds = self._bound_reds(named, bindings) if merge_point else ()
         replace_uses(graph, self._placeholders(
-            template, named, bindings, skip=[n for n, _v in reds]))
+            template, named, bindings, skip=reds))
         # And the reorder comes after both, because ``_insert_merge_point``
         # rebuilds the name-to-argument map from the signature: the portal
         # fills the entry registers in *its* order, not the step function's.
@@ -241,16 +241,18 @@ class FragmentCompiler(object):
         return var
 
     def _bound_reds(self, named, bindings):
-        """Merge-point reds this block knows the value of."""
+        """Which merge-point reds this opcode knows late-statically, by
+        name -- only bindings' keys matter, not its values."""
         if self.portal_jd is None:
             return ()
         jitdriver = self.portal_jd.jitdriver
         reds = self.jit_merge_point_args[len(jitdriver.greens):]
-        return [(name, bindings[name]) for name in reds
-                if name in bindings and name in named]
+        return [name for name in reds if name in bindings and name in named]
 
     def _prologue(self, ordered, reds):
-        """Where to put each late-static red before the merge point sees it."""
+        """Where to put each late-static red before the merge point sees it
+        -- only the register is fixed here; ProgramEmitter._place fills
+        the value in from block.bindings."""
         from rpython.jit.metainterp.history import getkind
         counts = {}
         places = {}
@@ -260,29 +262,22 @@ class FragmentCompiler(object):
                 continue
             places[name] = (kind, counts.get(kind, 0))
             counts[kind] = places[name][1] + 1
-        return [(places[name][0], places[name][1], value)
-                for name, value in reds if name in places]
+        return [(places[name][0], places[name][1], name)
+                for name in reds if name in places]
 
     def _placeholders(self, template, named, bindings, skip=()):
-        """Fix the static key and every late-static value this block knows.
-
-        Whatever the decoder bound becomes a real constant, so nothing has to
-        be patched later.  A declared hole the caller left unbound still gets a
-        ``HoleConstant``, which keeps the fragment usable by a copy-and-patch
-        back end.
-        """
+        """Fix the static key; every other late-static name gets a hole,
+        not bindings' value -- one fragment is shared by every instance
+        of the opcode, so no one instance's value belongs baked in."""
         replacements = {}
         if self.static_name in named:
             var = named[self.static_name]
             replacements[var] = Constant(template.key, var.concretetype)
-        for name, value in bindings.items():
-            if name in skip:
+        late_static = set(bindings) | set(self.hole_names)
+        for name in late_static:
+            if name == self.static_name or name in skip:
                 continue
-            if name in named and name != self.static_name:
-                var = named[name]
-                replacements[var] = Constant(value, var.concretetype)
-        for name in self.hole_names:
-            if name in named and name not in bindings:
+            if name in named:
                 var = named[name]
                 replacements[var] = HoleConstant(name, var.concretetype)
         return replacements
@@ -399,13 +394,10 @@ class ProgramEmitter(object):
         self._fragments = {}
 
     def fragment_for(self, block, merge_point=False):
-        """The fragment for this block, shared with every block like it.
-
-        Two blocks share a fragment when they run the same instruction with the
-        same late-static values -- so a program of a thousand instructions still
-        only compiles as many fragments as it has distinct specializations.
-        """
-        key = (block.key, merge_point) + tuple(sorted(block.bindings.items()))
+        """The fragment for this block, keyed on (opcode, merge_point) --
+        late-static values don't enter the key, since the fragment carries
+        them as holes patched in per block by _place/_localise."""
+        key = (block.key, merge_point)
         if key not in self._fragments:
             self._fragments[key] = self.compiler.compile(
                 block.template, block.bindings, merge_point)
@@ -527,13 +519,15 @@ class ProgramEmitter(object):
         from rpython.rtyper.lltypesystem import lltype
 
         fragment = fragments[pc]
-        for kind, index, value in fragment.prologue:
-            # A late-static value the merge point takes as a red: it has to be
-            # in a register by the time the merge point reads it.
-            ssarepr.insns.append(
-                ("%s_copy" % kind, Constant(value, lltype.Signed), "->",
-                 self._register(kind, index)))
         block = program.blocks[pc]
+        for kind, index, name in fragment.prologue:
+            # A late-static value the merge point takes as a red: it has to be
+            # in a register by the time the merge point reads it.  The
+            # fragment only fixed *which* register; the value is this block's
+            # own, from resolving the shared fragment's hole by name.
+            ssarepr.insns.append(
+                ("%s_copy" % kind, Constant(block.bindings[name], lltype.Signed),
+                 "->", self._register(kind, index)))
         targets = block.template.resolve_targets(block.bindings)
         if len(targets) == 1 and len(fragment.exits) > 1:
             targets = targets * len(fragment.exits)
@@ -541,7 +535,7 @@ class ProgramEmitter(object):
         for insn in fragment.insns:
             exit_index = self._exit_index(insn)
             if exit_index is None:
-                ssarepr.insns.append(self._localise(insn, pc))
+                ssarepr.insns.append(self._localise(insn, pc, block.bindings))
                 continue
             exit = fragment.exits[exit_index]
             target = targets[exit_index]
@@ -561,8 +555,10 @@ class ProgramEmitter(object):
             return insn[1].value
         return None
 
-    def _localise(self, insn, pc):
-        """Make a fragment's own labels unique to where it was placed."""
+    def _localise(self, insn, pc, bindings):
+        """Copy one fragment insn in for this placement: relabel, and
+        patch each HoleConstant with this block's own bindings value."""
+        from rpython.flowspace.model import Constant
         from rpython.jit.codewriter.flatten import Label, TLabel
         from rpython.jit.codewriter.jitcode import SwitchDictDescr
         out = []
@@ -571,6 +567,8 @@ class ProgramEmitter(object):
                 out.append(Label(("in", pc, item.name)))
             elif isinstance(item, TLabel):
                 out.append(TLabel(("in", pc, item.name)))
+            elif isinstance(item, HoleConstant):
+                out.append(Constant(bindings[item.hole_name], item.concretetype))
             elif isinstance(item, SwitchDictDescr):
                 # A switch keeps its targets inside the descriptor rather than
                 # in the instruction, and the descriptor is the fragment's --
