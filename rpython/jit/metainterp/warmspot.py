@@ -305,10 +305,13 @@ class WarmRunnerDesc(object):
         # inside make_jitcodes() above sets it unconditionally), so its
         # pe_metadata -- present only when an offline PE program was linked --
         # can be read now to tell maybe_compile_and_run() (warmstate.py) which
-        # green identifies "the method" for pe_bailout_point tick suppression.
+        # greens identify "the method" and "the pc" for pe_bailout_point tick
+        # suppression.
         for jd in self.jitdrivers_sd:
             jd.warmstate.pe_suppress_greenref_index = (
                 self._pe_suppress_greenref_index(jd))
+            jd.warmstate.pe_suppress_greenint_index = (
+                self._pe_suppress_greenint_index(jd))
         self.metainterp_sd.jitcodes = jitcodes
         self.rewrite_can_enter_jits()
         self.rewrite_set_param_and_get_stats()
@@ -738,6 +741,26 @@ class WarmRunnerDesc(object):
         return len([T for T in green_types[:ref_index]
                     if history.getkind(T) == 'ref'])
 
+    def _pe_suppress_greenint_index(self, jd):
+        """Which green of jd is "the pc", for pe_bailout_point tick
+        suppression (see warmstate.pe_tick_suppressed) -- as a position
+        among jd's green INT args only, mirroring
+        _pe_suppress_greenref_index above but for guard_pc_index instead of
+        guard_ref_index (also uniform across every program of one driver).
+        Returns -1 -- "no pc green identified", see warmstate.py -- when
+        there is no offline-PE linked program, no guard_pc_index, or the
+        guarded green is not int-kind.
+        """
+        metadata = jd.mainjitcode.pe_metadata
+        if metadata is None or not metadata.linked_programs:
+            return -1
+        pc_index = metadata.linked_programs[0].guard_pc_index
+        green_types = jd._green_args_spec
+        if pc_index < 0 or history.getkind(green_types[pc_index]) != 'int':
+            return -1
+        return len([T for T in green_types[:pc_index]
+                    if history.getkind(T) == 'int'])
+
     def rewrite_jitcell_accesses(self):
         jitdrivers_by_name = {}
         for jd in self.jitdrivers_sd:
@@ -1031,46 +1054,38 @@ class WarmRunnerDesc(object):
                     # A ContinueRunningNormallyNoTick (subclass, checked
                     # first) is a pe_bailout_point re-entry: it must be
                     # exactly as counter-invisible as the blackhole run it
-                    # shortcuts, but only for the SAME method that bailed --
-                    # other methods' keys reached during the re-entered tail
-                    # (e.g. deep recursion) must keep ticking normally, or
-                    # their compilation is delayed for no reason (measured:
-                    # quicksort regressed).  state.pe_suppress_method_ref
-                    # records which method (the green ref at
-                    # state.pe_suppress_greenref_index, see
-                    # WarmRunnerDesc._pe_suppress_greenref_index) is being
-                    # replayed; maybe_compile_and_run() (warmstate.py) skips
-                    # a tick only when the greenkey it is about to tick
-                    # names that same method.  -1 there means no ref green
-                    # could be identified as "the method" (no offline-PE
-                    # linked program, or an all-int greenkey driver), so
-                    # nothing is suppressed rather than falling back to
-                    # suppressing everything.  It is a WarmEnterState-level
-                    # value, not scoped to this call, so nested portal calls
-                    # made from within the replay are covered too --
-                    # intentional, the whole re-entered tail is
-                    # bookkeeping-invisible for this one method.  It is
-                    # cleared in the 'finally' below on every exit from this
-                    # replay, including via the 'continue' on a further
-                    # JitException, so it can never leak into an unrelated
-                    # later portal entry.
-                    # ponytail: single-threaded assumption (a global
-                    # value on the warmstate, not a per-call one); revisit
-                    # if the portal runner ever becomes re-entrant across
-                    # threads.
+                    # shortcuts.  state.pe_suppress_ticks marks the whole
+                    # re-entered tail as that window; within it,
+                    # pe_tick_suppressed() (warmstate.py) decides per
+                    # greenkey whether ticking it would duplicate a residual
+                    # loop a linked program already provides -- not simply
+                    # every greenkey in the window (measured: that delays
+                    # unrelated methods, e.g. quicksort), and not only the
+                    # bailing method's own greenkey either (measured: that
+                    # lets OTHER linked methods' mid-pc keys in the tail
+                    # duplicate loops, e.g. towers). It is a
+                    # WarmEnterState-level flag, not scoped to this call, so
+                    # nested portal calls made from within the replay are in
+                    # the window too -- intentional, the whole re-entered
+                    # tail is one bailout's bookkeeping-invisible shortcut.
+                    # It is cleared in the 'finally' below on every exit
+                    # from this replay, including via the 'continue' on a
+                    # further JitException, so it can never leak into an
+                    # unrelated later portal entry.
+                    # ponytail: single-threaded assumption (a global flag
+                    # on the warmstate, not a per-call one); revisit if the
+                    # portal runner ever becomes re-entrant across threads.
                     no_tick = isinstance(e, jitexc.ContinueRunningNormallyNoTick)
-                    greenref_index = state.pe_suppress_greenref_index
-                    if no_tick and greenref_index >= 0:
-                        state.pe_suppress_method_ref = e.green_ref[greenref_index]
+                    if no_tick:
+                        state.pe_suppress_ticks = True
                     try:
                         result = support.maybe_on_top_of_llinterp(rtyper,
                                                             portal_ptr)(*args)
                     except jitexc.JitException as e:
                         continue
                     finally:
-                        if no_tick and greenref_index >= 0:
-                            state.pe_suppress_method_ref = (
-                                lltype.nullptr(llmemory.GCREF.TO))
+                        if no_tick:
+                            state.pe_suppress_ticks = False
                     if result_kind != 'void':
                         result = unspecialize_value(result)
                     return result

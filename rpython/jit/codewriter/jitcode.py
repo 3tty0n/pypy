@@ -36,19 +36,34 @@ class PELinkedProgram(object):
         self.guard_pcs = []
         self.guard_ref_index = -1
         self.guard_ref = lltype.nullptr(llmemory.GCREF.TO)
+        # Subset of guard_pcs where a trace may legitimately start: this
+        # program's loop headers plus its primary entry pc, exactly what the
+        # offline CFG declares as trace starts.  A pc in guard_pcs but not
+        # here is a mid-block pc some OTHER trace duplicated into this
+        # program's tail -- looping there again would duplicate a residual
+        # loop this program already provides (see pe_tick_suppressed in
+        # warmstate.py).
+        self.legit_entry_pcs = []
         # A program is built from a bytecode image, so the code object it
         # belongs to does not exist yet at translation time.  The matcher
         # recognises it the first time the portal hands one over, and the
         # pointer is remembered from then on.
         self.guard_match = _never_matches
 
-    def set_guard(self, pc_index, pcs, ref_index):
+    def set_guard(self, pc_index, pcs, ref_index, legit_entry_pcs):
         self.guard_pc_index = pc_index
         self.guard_pcs = list(pcs)
         self.guard_ref_index = ref_index
+        self.legit_entry_pcs = list(legit_entry_pcs)
 
     def _covers(self, pc):
         for covered in self.guard_pcs:
+            if covered == pc:
+                return True
+        return False
+
+    def is_legit_entry_pc(self, pc):
+        for covered in self.legit_entry_pcs:
             if covered == pc:
                 return True
         return False

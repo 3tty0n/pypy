@@ -76,7 +76,16 @@ class PortalLinker(object):
             # matches this program instead of falling back to a generic
             # portal trace for a region that duplicates it.
             entries = sorted(lowered.entry_positions)
-            linked_program.set_guard(guard[0], entries, guard[1])
+            # The loop headers and the entry: exactly the pcs where a trace
+            # may legitimately start without duplicating a loop this program
+            # already provides.  A stricter subset of `entries` above, used
+            # by pe_tick_suppressed (warmstate.py) to tell a genuine loop
+            # start apart from a mid-block pc some other trace's tail landed
+            # on inside this program's coverage.
+            legit_entries = sorted(set(program.loop_headers) |
+                                   set([program.entry_pc]))
+            linked_program.set_guard(guard[0], entries, guard[1],
+                                     legit_entries)
         lowered.jitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, (), ())
         # Either back end plants jit_merge_points when the interpreter named
