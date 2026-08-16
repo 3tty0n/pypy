@@ -995,11 +995,38 @@ class WarmRunnerDesc(object):
                         x = getattr(e, attrname)[count]
                         x = specialize_value(ARGTYPE, x)
                         args = args + (x,)
+                    # A ContinueRunningNormallyNoTick (subclass, checked
+                    # first) is a pe_bailout_point re-entry: it must be
+                    # exactly as counter-invisible as the blackhole run
+                    # it shortcuts.  state.pe_suppress_ticks makes every
+                    # maybe_compile_and_run() reached while replaying
+                    # this portal call skip warmup ticks and compile
+                    # decisions, while still running already-compiled
+                    # code when a procedure token exists (see
+                    # warmstate.py).  It is a WarmEnterState-level flag,
+                    # not scoped to this call, so nested portal calls
+                    # made from within the replay are counter-invisible
+                    # too -- intentional, the whole re-entered tail is
+                    # bookkeeping-invisible.  It is cleared in the
+                    # 'finally' below on every exit from this replay,
+                    # including via the 'continue' on a further
+                    # JitException, so it can never leak into an
+                    # unrelated later portal entry.
+                    # ponytail: single-threaded assumption (a global
+                    # flag on the warmstate, not a per-call one); revisit
+                    # if the portal runner ever becomes re-entrant across
+                    # threads.
+                    no_tick = isinstance(e, jitexc.ContinueRunningNormallyNoTick)
+                    if no_tick:
+                        state.pe_suppress_ticks = True
                     try:
                         result = support.maybe_on_top_of_llinterp(rtyper,
                                                             portal_ptr)(*args)
                     except jitexc.JitException as e:
                         continue
+                    finally:
+                        if no_tick:
+                            state.pe_suppress_ticks = False
                     if result_kind != 'void':
                         result = unspecialize_value(result)
                     return result

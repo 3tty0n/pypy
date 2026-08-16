@@ -1093,12 +1093,40 @@ class BlackholeInterpreter(object):
             assert False
 
     # pe_bailout_point is a no-op while tracing (see opimpl_pe_bailout_point
-    # in pyjitpl.py), but in the blackhole interpreter it must behave
-    # exactly like jit_merge_point: it is what lets a residual (offline PE)
-    # jitcode bail out cheaply at a block boundary instead of being
-    # interpreted all the way to the next real merge point.  Same method,
-    # under both names.
-    bhimpl_pe_bailout_point = bhimpl_jit_merge_point
+    # in pyjitpl.py). In the blackhole interpreter it lets a residual
+    # (offline PE) jitcode bail out cheaply at a block boundary instead of
+    # being interpreted all the way to the next real merge point. It is
+    # almost bhimpl_jit_merge_point, except that the last-level bailout
+    # (the common case: falling off the end of blackholing straight back
+    # to the real interpreter) must be exactly as counter-invisible as the
+    # blackhole run it shortcuts -- so it raises the no-tick variant,
+    # which the portal_runner catch site in warmspot.py recognizes and
+    # replays without ticking any warmup counters.
+    @arguments("self", "i", "I", "R", "F", "I", "R", "F")
+    def bhimpl_pe_bailout_point(self, jdindex, *args):
+        if self.nextblackholeinterp is None:    # we are the last level
+            raise jitexc.ContinueRunningNormallyNoTick(*args)
+        else:
+            # This occurs when we reach 'pe_bailout_point' in the portal
+            # function called by recursion (an inlined level). Unlike the
+            # last-level case above, this nested-level bailout still
+            # ticks like a normal jit_merge_point: it is a known,
+            # already-measured second-order effect, out of scope here.
+            sd = self.builder.metainterp_sd
+            result_type = sd.jitdrivers_sd[jdindex].result_type
+            if result_type == 'v':
+                self.bhimpl_recursive_call_v(jdindex, *args)
+                self.bhimpl_void_return()
+            elif result_type == 'i':
+                x = self.bhimpl_recursive_call_i(jdindex, *args)
+                self.bhimpl_int_return(x)
+            elif result_type == 'r':
+                x = self.bhimpl_recursive_call_r(jdindex, *args)
+                self.bhimpl_ref_return(x)
+            elif result_type == 'f':
+                x = self.bhimpl_recursive_call_f(jdindex, *args)
+                self.bhimpl_float_return(x)
+            assert False
 
     def get_portal_runner(self, jdindex):
         jitdriver_sd = self.builder.metainterp_sd.jitdrivers_sd[jdindex]

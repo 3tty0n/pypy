@@ -65,6 +65,14 @@ class ContinueRunningNormally(JitException):
             self.green_int, self.green_ref, self.green_float,
             self.red_int, self.red_ref, self.red_float)
 
+class ContinueRunningNormallyNoTick(ContinueRunningNormally):
+    """Raised instead of ContinueRunningNormally by the last-level
+    bhimpl_pe_bailout_point (see blackhole.py): a residual (offline PE)
+    bailout re-entry must be exactly as counter-invisible as the
+    blackhole run it shortcuts, so the portal_runner catch site in
+    warmspot.py must not tick warmup counters while replaying it.  See
+    WarmEnterState.pe_suppress_ticks in warmstate.py."""
+
 class NotAVectorizeableLoop(JitException):
     def __str__(self):
         return 'NotAVectorizeableLoop()'

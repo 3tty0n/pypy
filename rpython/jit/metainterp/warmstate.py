@@ -234,6 +234,11 @@ class WarmEnterState(object):
         "NOT_RPYTHON"
         self.warmrunnerdesc = warmrunnerdesc
         self.jitdriver_sd = jitdriver_sd
+        # Set around a pe_bailout_point re-entry replay by the
+        # portal_runner catch site in warmspot.py (see there for the
+        # full lifetime story). While set, maybe_compile_and_run() below
+        # must not tick warmup counters or make compile decisions.
+        self.pe_suppress_ticks = False
         if warmrunnerdesc is not None:       # for tests
             self.cpu = warmrunnerdesc.cpu
         try:
@@ -463,7 +468,13 @@ class WarmEnterState(object):
                     break    # found
                 cell = cell.next
             else:
-                # not found. increment the counter
+                # not found. No cell means no compiled code exists for
+                # this greenkey yet, so a suppressed pe_bailout_point
+                # replay has nothing useful to do here besides ticking,
+                # which it must not do.
+                if self.pe_suppress_ticks:
+                    return
+                # increment the counter
                 if jitcounter.tick(hash, increment_threshold):
                     bound_reached(hash, None, *args)
                 return
@@ -475,6 +486,8 @@ class WarmEnterState(object):
                     # tracing already happening in some outer invocation of
                     # this function. don't trace a second time.
                     return
+                if self.pe_suppress_ticks:
+                    return
                 # attached by compile_tmp_callback().  count normally
                 if jitcounter.tick(hash, increment_threshold):
                     bound_reached(hash, cell, *args)
@@ -482,6 +495,8 @@ class WarmEnterState(object):
             # machine code was already compiled for these greenargs
             procedure_token = cell.get_procedure_token()
             if procedure_token is None:
+                if self.pe_suppress_ticks:
+                    return
                 if cell.flags & JC_DONT_TRACE_HERE:
                     if not cell.has_seen_a_procedure_token():
                         # A JC_DONT_TRACE_HERE, i.e. a non-inlinable function.
