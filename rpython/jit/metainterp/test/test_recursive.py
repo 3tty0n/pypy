@@ -604,6 +604,53 @@ class RecursiveTests:
         self.meta_interp(portal, [2], inline=True)
         self.check_history(call_assembler_n=1)
 
+    def test_pe_linked_recursive_call_uses_assembler_when_compiled(self):
+        # A linked-program callee (metadata.linked_program_for() matches)
+        # that already has compiled code must be called via CALL_ASSEMBLER
+        # at the recursive-call site itself, instead of being inlined (which
+        # would push a frame for it and immediately hit the *separate*,
+        # pre-existing "nested loop reaches its own merge point a second
+        # time -> bail to assembler_call" logic in opimpl_jit_merge_point).
+        # If _opimpl_recursive_call's compiled-target check is bypassed or
+        # dead, this test still passes call_assembler_n=1 (that older
+        # mechanism papers over it) but enter_portal_frame/debug_merge_point
+        # stop being 0/1: portal(1) gets entered and its own merge point
+        # traced once before the escape.  Comment out the "already_compiled"
+        # short-circuit in _opimpl_recursive_call to see it flip.
+        driver = JitDriver(greens=['codeno'], reds=['i'],
+                           get_printable_location=lambda codeno: str(codeno))
+
+        def portal(codeno):
+            i = 0
+            while i < 10:
+                driver.can_enter_jit(codeno=codeno, i=i)
+                driver.jit_merge_point(codeno=codeno, i=i)
+                if codeno == 2:
+                    portal(1)
+                i += 1
+
+        def install_pe_metadata(mainjitcode):
+            # A trivial self-link: portal's own mainjitcode, linked for
+            # "any" code object (guard_pc_index/guard_ref_index left at -1
+            # so matches() always succeeds), with an identity argument
+            # mapping (codeno, i) -> (codeno, i).  By the time codeno=2
+            # recurses into codeno=1, codeno=1 has already compiled its own
+            # loop via ordinary warmup (as in test_directly_call_assembler),
+            # so the callee greenkey has a real, non-fake compiled target.
+            from rpython.jit.codewriter.jitcode import PEJitCodeMetadata
+            metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+            metadata.attach_linked_jitcode(mainjitcode, [0, 1], [])
+            mainjitcode.pe_metadata = metadata
+
+        self.meta_interp(portal, [2], inline=True,
+                         pe_jitcode_setup=install_pe_metadata)
+        # 2, not 1: the trace unrolls one extra iteration of codeno=2's own
+        # loop before closing, each iteration contributing one merge point
+        # for codeno=2 -- but *never* one for codeno=1, which is what this
+        # test is really checking.
+        self.check_history(call_assembler_n=1, enter_portal_frame=0,
+                           leave_portal_frame=0, debug_merge_point=2)
+
     def test_recursion_cant_call_assembler_directly(self):
         driver = JitDriver(greens = ['codeno'], reds = ['i', 'j'],
                            get_printable_location = lambda codeno : str(codeno))

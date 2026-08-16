@@ -1391,14 +1391,48 @@ class MIFrame(object):
         warmrunnerstate = targetjitdriver_sd.warmstate
         assembler_call = False
         if warmrunnerstate.inlining:
-            if warmrunnerstate.can_inline_callable(greenboxes):
+            # Look up a linked program for this callee, and whether it is
+            # already compiled, *before* consulting can_inline_callable().
+            # can_inline_callable() turns permanently False for a greenkey
+            # once dont_trace_here() below has fired for it once (typically
+            # after one over-deep or trace-too-long recursive trace) -- and
+            # that is exactly the population of hot recursive functions this
+            # check exists for.  Gating the compiled-target check on
+            # can_inline_callable() first would make it unreachable for
+            # precisely the callees it is meant to help, for the rest of the
+            # run: they would fall straight through to the generic
+            # assembler_call path below without ever being tried here again.
+            # A compiled target is always cheaper than either inlining or
+            # the recursion-count/dont_trace_here machinery, so it takes
+            # priority regardless of those.
+            portal_code = targetjitdriver_sd.mainjitcode
+            metadata = portal_code.pe_metadata
+            program = None
+            if metadata is not None:
+                program = metadata.linked_program_for(allboxes)
+            already_compiled = False
+            if program is not None:
+                ptoken = self.metainterp.get_procedure_token(
+                    greenboxes, targetjitdriver_sd)
+                already_compiled = has_compiled_targets(ptoken)
+            if already_compiled:
+                # the linked program already has compiled machine code:
+                # call it via CALL_ASSEMBLER instead of re-inlining/
+                # re-tracing the whole recursion tree from this sibling
+                # root (avoids compiling several overlapping copies of the
+                # same recursion tree).
+                if have_debug_prints():
+                    debug_start("jit-pe-asmcall")
+                    loc = targetjitdriver_sd.warmstate.get_location_str(
+                        greenboxes)
+                    debug_print("asmcall: compiled target found", loc)
+                    debug_stop("jit-pe-asmcall")
+            elif warmrunnerstate.can_inline_callable(greenboxes):
                 # We've found a potentially inlinable function; now we need to
                 # see if it's already on the stack. In other words: are we about
                 # to enter recursion? If so, we don't want to inline the
                 # recursion, which would be equivalent to unrolling a while
                 # loop.
-                portal_code = targetjitdriver_sd.mainjitcode
-                metadata = portal_code.pe_metadata
                 count = 0
                 for f in self.metainterp.framestack:
                     if f.jitcode is not portal_code:
@@ -1425,34 +1459,29 @@ class MIFrame(object):
                         loc = targetjitdriver_sd.warmstate.get_location_str(greenboxes)
                         debug_print("recursive function (not inlined):", loc)
                     warmrunnerstate.dont_trace_here(greenboxes)
+                elif program is None:
+                    return self.metainterp.perform_call(portal_code, allboxes,
+                                greenkey=greenboxes)
                 else:
-                    program = None
-                    if metadata is not None:
-                        program = metadata.linked_program_for(allboxes)
-                    if program is None:
-                        return self.metainterp.perform_call(portal_code, allboxes,
-                                    greenkey=greenboxes)
-                    ptoken = self.metainterp.get_procedure_token(
-                        greenboxes, targetjitdriver_sd)
-                    if not has_compiled_targets(ptoken):
-                        # no compiled code for the linked program yet:
-                        # inline its residual jitcode into this trace.
-                        # Same argument layout as initialize_state_from_start,
-                        # built the same way so the two cannot diverge.
-                        call_boxes = program.build_call_boxes(allboxes)
-                        f = self.metainterp.newframe(program.jitcode,
-                                    greenkey=greenboxes)
-                        f.setup_call(call_boxes)
-                        # setup_call() defaults pc to 0, which is right for a
-                        # program entered at its own start; a program linked
-                        # for a later merge point needs its real entry pc.
-                        f.pc = program.start_position(allboxes)
-                        raise ChangeFrame
-                    # the linked program already has compiled machine code:
-                    # fall through to call it via CALL_ASSEMBLER instead of
-                    # re-inlining/re-tracing the whole recursion tree from
-                    # this sibling root (avoids compiling several
-                    # overlapping copies of the same recursion tree).
+                    # program matched but has no compiled target yet:
+                    # inline its residual jitcode into this trace.
+                    if have_debug_prints():
+                        debug_start("jit-pe-asmcall")
+                        loc = targetjitdriver_sd.warmstate.get_location_str(
+                            greenboxes)
+                        debug_print("inline: no compiled target", loc)
+                        debug_stop("jit-pe-asmcall")
+                    # Same argument layout as initialize_state_from_start,
+                    # built the same way so the two cannot diverge.
+                    call_boxes = program.build_call_boxes(allboxes)
+                    f = self.metainterp.newframe(program.jitcode,
+                                greenkey=greenboxes)
+                    f.setup_call(call_boxes)
+                    # setup_call() defaults pc to 0, which is right for a
+                    # program entered at its own start; a program linked
+                    # for a later merge point needs its real entry pc.
+                    f.pc = program.start_position(allboxes)
+                    raise ChangeFrame
             assembler_call = True
             # verify that we have all green args, needed to make sure
             # that assembler that we call is still correct
