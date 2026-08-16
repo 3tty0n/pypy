@@ -70,8 +70,9 @@ class ContinueRunningNormallyNoTick(ContinueRunningNormally):
     bhimpl_pe_bailout_point (see blackhole.py): a residual (offline PE)
     bailout re-entry must be exactly as counter-invisible as the
     blackhole run it shortcuts, so the portal_runner catch site in
-    warmspot.py must not tick warmup counters while replaying it.  See
-    WarmEnterState.pe_suppress_ticks in warmstate.py."""
+    warmspot.py must not tick warmup counters for the SAME method while
+    replaying it.  See WarmEnterState.pe_suppress_method_ref in
+    warmstate.py."""
 
 class NotAVectorizeableLoop(JitException):
     def __str__(self):

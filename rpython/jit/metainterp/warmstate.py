@@ -236,9 +236,21 @@ class WarmEnterState(object):
         self.jitdriver_sd = jitdriver_sd
         # Set around a pe_bailout_point re-entry replay by the
         # portal_runner catch site in warmspot.py (see there for the
-        # full lifetime story). While set, maybe_compile_and_run() below
-        # must not tick warmup counters or make compile decisions.
-        self.pe_suppress_ticks = False
+        # full lifetime story): the GCREF of the green identifying "the
+        # method" being replayed, or null when nothing is being replayed.
+        # While set, maybe_compile_and_run() below must not tick warmup
+        # counters or make compile decisions for THAT method's greenkeys
+        # -- other methods reached during the replay still tick normally.
+        self.pe_suppress_method_ref = lltype.nullptr(llmemory.GCREF.TO)
+        # Position, among jd's green REF args only, of the green compared
+        # against pe_suppress_method_ref above; -1 means no ref green can
+        # identify "the method" (no offline-PE linked program, or an
+        # all-int greenkey driver), so nothing is ever suppressed. Filled
+        # in by WarmRunnerDesc._pe_suppress_greenref_index once the
+        # offline-PE linking metadata exists (see warmspot.py); -1 is also
+        # the correct value for tests that construct a WarmEnterState
+        # directly and never touch it.
+        self.pe_suppress_greenref_index = -1
         if warmrunnerdesc is not None:       # for tests
             self.cpu = warmrunnerdesc.cpu
         try:
@@ -366,6 +378,32 @@ class WarmEnterState(object):
         vinfo = jitdriver_sd.virtualizable_info
         index_of_virtualizable = jitdriver_sd.index_of_virtualizable
         num_green_args = jitdriver_sd.num_green_args
+        # (position, TYPE) of every green REF arg, in order -- unrolled so
+        # that pe_tick_suppressed() below can pick greenargs[position] with
+        # a compile-time-constant index (a runtime index into the
+        # heterogeneous greenargs tuple is not valid RPython); same idiom
+        # as green_args_name_spec in make_jitcell_subclass(). Restricted to
+        # ref-kind greens up front (unlike that one) so the cast_opaque_ptr
+        # below is only ever generated for a green that is actually a GC
+        # pointer.
+        green_ref_args = unrolling_iterable(
+            [(i, TYPE) for i, TYPE in enumerate(jitdriver_sd._green_args_spec)
+             if history.getkind(TYPE) == 'ref'])
+
+        def pe_tick_suppressed(greenargs):
+            method_ref = self.pe_suppress_method_ref
+            if not method_ref:
+                return False
+            wanted = self.pe_suppress_greenref_index
+            position = 0
+            for i, TYPE in green_ref_args:
+                if position == wanted:
+                    actual = lltype.cast_opaque_ptr(llmemory.GCREF,
+                                                     greenargs[i])
+                    return actual == method_ref
+                position += 1
+            return False
+
         JitCell = self.make_jitcell_subclass()
         self.make_jitdriver_callbacks()
         confirm_enter_jit = self.confirm_enter_jit
@@ -472,7 +510,7 @@ class WarmEnterState(object):
                 # this greenkey yet, so a suppressed pe_bailout_point
                 # replay has nothing useful to do here besides ticking,
                 # which it must not do.
-                if self.pe_suppress_ticks:
+                if pe_tick_suppressed(greenargs):
                     return
                 # increment the counter
                 if jitcounter.tick(hash, increment_threshold):
@@ -486,7 +524,7 @@ class WarmEnterState(object):
                     # tracing already happening in some outer invocation of
                     # this function. don't trace a second time.
                     return
-                if self.pe_suppress_ticks:
+                if pe_tick_suppressed(greenargs):
                     return
                 # attached by compile_tmp_callback().  count normally
                 if jitcounter.tick(hash, increment_threshold):
@@ -495,7 +533,7 @@ class WarmEnterState(object):
             # machine code was already compiled for these greenargs
             procedure_token = cell.get_procedure_token()
             if procedure_token is None:
-                if self.pe_suppress_ticks:
+                if pe_tick_suppressed(greenargs):
                     return
                 if cell.flags & JC_DONT_TRACE_HERE:
                     if not cell.has_seen_a_procedure_token():
