@@ -394,56 +394,61 @@ class WarmEnterState(object):
         green_int_args = unrolling_iterable(
             [(i, TYPE) for i, TYPE in enumerate(jitdriver_sd._green_args_spec)
              if history.getkind(TYPE) == 'int'])
-        # Resolved once here, NOT_RPYTHON, rather than read from
-        # jitdriver_sd.mainjitcode inside pe_tick_suppressed(): closing over
-        # the concrete metadata (or lack of it) lets a jitdriver with no
-        # offline-PE linking get a trivial always-False closure below, so
-        # its flow graph never contains a pe_metadata lookup on what would
-        # otherwise be a possibly-None mainjitcode.
-        mainjitcode = getattr(jitdriver_sd, 'mainjitcode', None)
-        pe_metadata = mainjitcode.pe_metadata if mainjitcode is not None \
-            else None
-
-        if pe_metadata is not None:
-            def pe_tick_suppressed(greenargs):
-                # Cheap gate first: this only runs inside a
-                # pe_bailout_point replay tail (rare), and only when a
-                # linked program exists that could name both "the method"
-                # and "the pc" greens.
-                if not self.pe_suppress_ticks:
-                    return False
-                wanted_ref = self.pe_suppress_greenref_index
-                wanted_pc = self.pe_suppress_greenint_index
-                if wanted_ref < 0 or wanted_pc < 0:
-                    return False
-                method_ref = lltype.nullptr(llmemory.GCREF.TO)
-                position = 0
-                for i, TYPE in green_ref_args:
-                    if position == wanted_ref:
-                        method_ref = lltype.cast_opaque_ptr(
-                            llmemory.GCREF, greenargs[i])
-                    position += 1
-                if not method_ref:
-                    return False
-                pc = 0
-                position = 0
-                for i, TYPE in green_int_args:
-                    if position == wanted_pc:
-                        pc = greenargs[i]
-                    position += 1
-                # Suppress iff some linked program was bound (guard_ref
-                # set) to this method AND pc is not one of ITS legitimate
-                # trace starts -- a pc covered by a DIFFERENT linked
-                # program's guard_pcs is not this program's concern, and
-                # unlinked methods never match any program here, so their
-                # keys always keep ticking.
-                for program in pe_metadata.linked_programs:
-                    if program.guard_ref and program.guard_ref == method_ref:
-                        return not program.is_legit_entry_pc(pc)
+        # jitdriver_sd.mainjitcode does not exist yet at this point --
+        # make_enter_functions() (which calls make_entry_point) runs
+        # BEFORE WarmRunnerDesc.__init__ links any offline-PE program onto
+        # a portal's mainjitcode (see the pe_linked_setup / make_jitcodes
+        # sequencing in warmspot.py) -- so reading it here, NOT_RPYTHON,
+        # would permanently bake in "no PE metadata" for every jitdriver
+        # regardless of what gets linked later (measured: pe_tick_suppressed
+        # never fired in a real translation). jitdriver_sd.mainjitcode.
+        # pe_metadata is read fresh inside pe_tick_suppressed() below
+        # instead: that function body is only actually run once the whole
+        # program is running, by which point every mainjitcode and its
+        # pe_metadata are long since final.
+        def pe_tick_suppressed(greenargs):
+            # Cheap gate first: this only runs inside a pe_bailout_point
+            # replay tail (rare), and only when a linked program exists
+            # that could name both "the method" and "the pc" greens.
+            if not self.pe_suppress_ticks:
                 return False
-        else:
-            def pe_tick_suppressed(greenargs):
+            wanted_ref = self.pe_suppress_greenref_index
+            wanted_pc = self.pe_suppress_greenint_index
+            if wanted_ref < 0 or wanted_pc < 0:
                 return False
+            metadata = jitdriver_sd.mainjitcode.pe_metadata
+            if metadata is None:
+                return False
+            method_ref = lltype.nullptr(llmemory.GCREF.TO)
+            position = 0
+            for i, TYPE in green_ref_args:
+                if position == wanted_ref:
+                    method_ref = lltype.cast_opaque_ptr(
+                        llmemory.GCREF, greenargs[i])
+                position += 1
+            if not method_ref:
+                return False
+            pc = 0
+            position = 0
+            for i, TYPE in green_int_args:
+                if position == wanted_pc:
+                    pc = greenargs[i]
+                position += 1
+            # Suppress iff some linked program was bound (guard_ref set)
+            # to this method AND pc is not one of ITS legitimate trace
+            # starts -- a pc covered by a DIFFERENT linked program's
+            # guard_pcs is not this program's concern, and unlinked
+            # methods never match any program here, so their keys always
+            # keep ticking.
+            for program in metadata.linked_programs:
+                if program.guard_ref and program.guard_ref == method_ref:
+                    suppressed = not program.is_legit_entry_pc(pc)
+                    if suppressed:
+                        debug_start("jit-pe-suppress")
+                        debug_print("suppressed tick, pc", pc)
+                        debug_stop("jit-pe-suppress")
+                    return suppressed
+            return False
 
         JitCell = self.make_jitcell_subclass()
         self.make_jitdriver_callbacks()
