@@ -1711,6 +1711,26 @@ class Transformer(object):
         # and one for inlined short preambles
         return ops + [op3, op1, op2]
 
+    def handle_jit_marker__pe_bailout_point(self, op, jitdriver):
+        # Same operand shape as jit_merge_point (jd index, greens, reds),
+        # but no promote_greens and no -live- pair: unlike a real merge
+        # point, pe_bailout_point takes no action at all while tracing (see
+        # opimpl_pe_bailout_point), so there is nothing here for a guard to
+        # need liveness for and nothing to specialize the trace on.  For the
+        # same reason a "red" here is free to already be a Constant --
+        # jit_merge_point forbids that because its reds feed the
+        # warmrunnerstate's loop-closing machinery; pe_bailout_point's
+        # don't, they are just reported to the blackhole interpreter as-is.
+        assert self.portal_jd is not None, (
+            "'pe_bailout_point' in non-portal graph!")
+        assert jitdriver is self.portal_jd.jitdriver, (
+            "general mix-up of jitdrivers?")
+        num_green_args = len(jitdriver.greens)
+        args = ([Constant(self.portal_jd.index, lltype.Signed)] +
+                self.make_three_lists(op.args[2:2+num_green_args]) +
+                self.make_three_lists(op.args[2+num_green_args:]))
+        return [SpaceOperation('pe_bailout_point', args, None)]
+
     def handle_jit_marker__loop_header(self, op, jitdriver):
         jd = self.callcontrol.jitdriver_sd_from_jitdriver(jitdriver)
         assert jd is not None

@@ -628,6 +628,23 @@ class LinkedResidualLowerer(object):
         inside the linked program; with only the entry marked, such a loop has
         nothing to close it and tracing unrolls it until memory runs out.
         """
+        self._insert_marker(graph, "jit_merge_point")
+
+    def _insert_bailout_point(self, graph):
+        """Put a pe_bailout_point at the top of a linked (non-header) block.
+
+        Same greens and reds, read off the block's own input arguments, as
+        ``_insert_merge_point`` would use -- jtransform just turns the
+        "pe_bailout_point" marker into a no-op while tracing instead of a
+        real merge point.  What it buys is a cheap place for the *blackhole*
+        interpreter to bail out of a residual jitcode at every block
+        boundary, rather than running all the way to the next real
+        jit_merge_point.
+        """
+        self._insert_marker(graph, "pe_bailout_point")
+
+    def _insert_marker(self, graph, key):
+        """Shared operand construction for _insert_merge_point/_insert_bailout_point."""
         from rpython.flowspace.model import Constant, SpaceOperation, Variable
         from rpython.rtyper.lltypesystem import lltype
 
@@ -635,11 +652,11 @@ class LinkedResidualLowerer(object):
         named = dict(zip(graph.signature[0], block.inputargs))
         missing = [n for n in self.jit_merge_point_args if n not in named]
         if missing:
-            raise ValueError("jit_merge_point args %r are not arguments of %r"
-                             % (missing, graph.name))
+            raise ValueError("%s args %r are not arguments of %r"
+                             % (key, missing, graph.name))
         result = Variable()
         result.concretetype = lltype.Void
-        args = [Constant("jit_merge_point", lltype.Void),
+        args = [Constant(key, lltype.Void),
                 Constant(self.portal_jd.jitdriver, lltype.Void)]
         args += [named[name] for name in self.jit_merge_point_args]
         block.operations = [SpaceOperation("jit_marker", args, result)] + list(

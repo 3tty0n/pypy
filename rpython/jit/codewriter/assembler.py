@@ -333,6 +333,7 @@ USE_C_FORM = set([
     'int_return',
     'int_sub',
     'jit_merge_point',
+    'pe_bailout_point',
     'new_array',
     'new_array_clear',
     'newstr',

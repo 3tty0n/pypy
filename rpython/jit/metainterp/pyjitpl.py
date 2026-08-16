@@ -1630,6 +1630,20 @@ class MIFrame(object):
             self.metainterp.leave_portal_frame(jd_no)
             raise ChangeFrame
 
+    @arguments("int", "boxes3", "jitcode_position", "boxes3", "orgpc")
+    def opimpl_pe_bailout_point(self, jdindex, greenboxes,
+                                jcposition, redboxes, orgpc):
+        # Complete no-op while tracing.  pe_bailout_point exists only so
+        # that the *blackhole* interpreter has a cheap place to bail out
+        # of a residual (offline PE) jitcode at every block boundary,
+        # instead of running all the way to the next real jit_merge_point
+        # (which, in a residual jitcode, may be a whole method away).
+        # Unlike opimpl_jit_merge_point above, it never closes or merges a
+        # loop and never triggers a recursive portal call here -- see
+        # bhimpl_pe_bailout_point in blackhole.py for the part of its
+        # behaviour that actually does something.
+        pass
+
     def debug_merge_point(self, jitdriver_sd, jd_index, portal_call_depth, current_call_id, greenkey):
         # debugging: produce a DEBUG_MERGE_POINT operation
         if have_debug_prints():

@@ -122,6 +122,15 @@ class FragmentCompiler(object):
             # the assembler hoists a label above a -live- that follows it.
             helper._remove_runtime_loop_markers(graph)
             helper._insert_merge_point(graph)
+        elif self.jit_merge_point_args:
+            # Every other block boundary gets a cheap pe_bailout_point
+            # instead.  It carries the same greens+reds a merge point here
+            # would, but is a no-op while tracing -- see
+            # opimpl_pe_bailout_point.  What it buys is a place for the
+            # *blackhole* interpreter to bail out of this residual jitcode
+            # one block at a time, instead of running all the way to the
+            # next real jit_merge_point (a whole method away).
+            helper._insert_bailout_point(graph)
         # Substitution comes after the merge point so that its greens are the
         # bound values: a merge point on an unbound pc names every instruction
         # of the program alike, and the metainterp identifies loops by it.
