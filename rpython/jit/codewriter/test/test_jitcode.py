@@ -1,4 +1,7 @@
-from rpython.jit.codewriter.jitcode import JitCode
+from rpython.jit.codewriter.jitcode import (JitCode, PEJitCodeMetadata,
+    PELinkedProgram)
+from rpython.jit.metainterp.history import ConstInt, ConstPtr
+from rpython.rtyper.lltypesystem import lltype, llmemory
 
 
 def test_num_regs():
@@ -15,3 +18,106 @@ def test_num_regs():
     assert j.num_regs_i() == 255
     assert j.num_regs_r() == 255
     assert j.num_regs_f() == 255
+
+
+# ____________________________________________________________
+# linked_program_for's ref-keyed cache (see PEJitCodeMetadata in jitcode.py)
+
+def _new_ref():
+    S = lltype.GcStruct('S')
+    s = lltype.malloc(S)
+    return lltype.cast_opaque_ptr(llmemory.GCREF, s)
+
+
+def _make_program(ref_index, pc_index=-1, pcs=None):
+    jitcode = JitCode("callee")
+    jitcode.setup(code='')
+    program = PELinkedProgram(jitcode, [], [])
+    program.set_guard(pc_index, pcs or [], ref_index, pcs or [])
+    return program
+
+
+def _counting_matcher(expected_ref):
+    # Stands in for the real guard_match (a full bytecode compare): records
+    # every call so the tests can assert the cache stops it from re-running.
+    calls = []
+    def guard_match(actual):
+        calls.append(actual)
+        return actual == expected_ref
+    guard_match.calls = calls
+    return guard_match
+
+
+def test_linked_program_for_caches_ref_and_skips_guard_match_on_hit():
+    ref_a = _new_ref()
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+    decoy1 = _make_program(ref_index=0)
+    decoy2 = _make_program(ref_index=0)
+    match = _make_program(ref_index=0)
+    decoy1.guard_match = _counting_matcher(lltype.nullptr(llmemory.GCREF.TO))
+    decoy2.guard_match = _counting_matcher(lltype.nullptr(llmemory.GCREF.TO))
+    match.guard_match = _counting_matcher(ref_a)
+    metadata.linked_programs = [decoy1, decoy2, match]
+
+    boxes = [ConstPtr(ref_a)]
+    assert metadata.linked_program_for(boxes) is match
+    assert len(decoy1.guard_match.calls) == 1
+    assert len(decoy2.guard_match.calls) == 1
+    assert len(match.guard_match.calls) == 1
+
+    # second lookup, same ref: cache hit, no guard_match re-invoked at all
+    assert metadata.linked_program_for(boxes) is match
+    assert len(decoy1.guard_match.calls) == 1
+    assert len(decoy2.guard_match.calls) == 1
+    assert len(match.guard_match.calls) == 1
+
+
+def test_linked_program_for_pc_only_failure_not_cached_as_none():
+    ref_a = _new_ref()
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+    program = _make_program(ref_index=0, pc_index=1, pcs=[10])
+    program.guard_match = _counting_matcher(ref_a)
+    metadata.linked_programs = [program]
+
+    # ref matches but this call's pc isn't covered -> None, but the ref
+    # must still get cached to *this* program, not to "no match".
+    boxes_uncovered = [ConstPtr(ref_a), ConstInt(999)]
+    assert metadata.linked_program_for(boxes_uncovered) is None
+    assert len(program.guard_match.calls) == 1
+
+    # same ref, now with a covered pc: must find the program from cache,
+    # without re-running guard_match.
+    boxes_covered = [ConstPtr(ref_a), ConstInt(10)]
+    assert metadata.linked_program_for(boxes_covered) is program
+    assert len(program.guard_match.calls) == 1
+
+
+def test_linked_program_for_non_matching_ref_caches_none():
+    ref_a = _new_ref()
+    ref_b = _new_ref()
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+    program = _make_program(ref_index=0)
+    program.guard_match = _counting_matcher(ref_a)
+    metadata.linked_programs = [program]
+
+    boxes = [ConstPtr(ref_b)]
+    assert metadata.linked_program_for(boxes) is None
+    assert len(program.guard_match.calls) == 1
+
+    # second lookup, same non-matching ref: cache hit on None, guard_match
+    # not re-run.
+    assert metadata.linked_program_for(boxes) is None
+    assert len(program.guard_match.calls) == 1
+
+
+def test_is_linked_jitcode_uses_flag_set_by_attach():
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+    linked = JitCode("linked")
+    linked.setup(code='')
+    other = JitCode("other")
+    other.setup(code='')
+    assert not metadata.is_linked_jitcode(linked)
+    assert not metadata.is_linked_jitcode(other)
+    metadata.attach_linked_jitcode(linked, [], [])
+    assert metadata.is_linked_jitcode(linked)
+    assert not metadata.is_linked_jitcode(other)

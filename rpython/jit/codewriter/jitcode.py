@@ -1,6 +1,6 @@
 from __future__ import print_function
 
-from rpython.jit.metainterp.history import AbstractDescr, ConstInt
+from rpython.jit.metainterp.history import AbstractDescr, ConstInt, new_ref_dict
 from rpython.jit.metainterp.support import adr2int
 from rpython.rlib.objectmodel import we_are_translated, specialize
 from rpython.rlib.rarithmetic import base_int
@@ -113,16 +113,25 @@ class PELinkedProgram(object):
         if index >= 0 and not self._covers(boxes[index].getint()):
             return False
         index = self.guard_ref_index
-        if index >= 0:
-            actual = boxes[index].getref_base()
-            expected = self.guard_ref
-            if not expected:
-                if not self.guard_match(actual):
-                    return False
-                self.guard_ref = actual
-            elif actual != expected:
+        if index < 0:
+            return True
+        return self.matches_ref(boxes[index].getref_base())
+
+    def matches_ref(self, actual):
+        """Ref-only half of matches(): does this program own 'actual'?
+
+        Split out so PEJitCodeMetadata.linked_program_for can resolve the
+        ref independently of the per-call pc guard, and cache the result.
+        """
+        if self.guard_ref_index < 0:
+            return True
+        expected = self.guard_ref
+        if not expected:
+            if not self.guard_match(actual):
                 return False
-        return True
+            self.guard_ref = actual
+            return True
+        return actual == expected
 
 
 class PEJitCodeMetadata(object):
@@ -151,6 +160,11 @@ class PEJitCodeMetadata(object):
         # True when the linked JitCode carries real jit_merge_points, which
         # close loops themselves -- including loops nested inside the program.
         self.has_merge_points = False
+        # ref -> program (or None) cache for linked_program_for, keyed by the
+        # runtime method GCREF.  Built lazily: most metadata never links more
+        # than a couple of programs, where the linear walk is cheap enough
+        # that a cache would just be overhead.
+        self._program_cache = None
 
     def attach_linked_jitcode(self, jitcode, argument_sources,
                               argument_constants):
@@ -162,6 +176,10 @@ class PEJitCodeMetadata(object):
             # This metadata belongs to the linked JitCode itself, which is what
             # the goto check below asks about.
             self.owns_linked_jitcode = True
+        # A residual jitcode is only ever attached to one portal, so a flag
+        # on the jitcode itself is equivalent to (and cheaper than) asking
+        # this metadata's is_linked_jitcode() to search for it.
+        jitcode.pe_is_linked = True
         return program
 
     def has_linked_programs(self):
@@ -170,20 +188,53 @@ class PEJitCodeMetadata(object):
     def linked_program_for(self, boxes):
         """The program linked for the code object the portal is entering.
 
-        A linear walk, even with one program per generated method: indexing it
-        on the guarded pc was measured and made no difference, because each
-        program rejects on a single integer compare anyway.
+        All programs on one portal share the same guard_ref_index (derived
+        from the portal's green layout), so the runtime method ref resolves
+        to at most one program; cache that resolution keyed by ref instead
+        of re-walking every program -- each doing a full guard_match byte
+        compare -- on every call.  The pc guard still varies per call, so it
+        is checked fresh after a cache hit.  Portals with no ref to guard on
+        (guard_ref_index < 0, e.g. TLA's single-program case) fall back to
+        the plain linear walk.
         """
-        for program in self.linked_programs:
+        programs = self.linked_programs
+        if programs and programs[0].guard_ref_index >= 0:
+            ref = boxes[programs[0].guard_ref_index].getref_base()
+            if ref:
+                cache = self._program_cache
+                if cache is None:
+                    cache = self._program_cache = new_ref_dict()
+                if ref in cache:
+                    program = cache[ref]
+                else:
+                    program = self._resolve_ref(ref)
+                    cache[ref] = program
+                if program is None:
+                    return None
+                index = program.guard_pc_index
+                if index >= 0 and not program._covers(boxes[index].getint()):
+                    return None
+                return program
+        for program in programs:
             if program.matches(boxes):
                 return program
         return None
 
-    def is_linked_jitcode(self, jitcode):
+    def _resolve_ref(self, ref):
+        """Which program owns 'ref', ignoring the pc guard.
+
+        Kept independent of the pc check: a program that owns this ref but
+        whose pc guard fails on this particular call must still be cached
+        under the ref, so a later call with a covered pc finds it instead of
+        being cached as a permanent non-match.
+        """
         for program in self.linked_programs:
-            if program.jitcode is jitcode:
-                return True
-        return False
+            if program.matches_ref(ref):
+                return program
+        return None
+
+    def is_linked_jitcode(self, jitcode):
+        return jitcode.pe_is_linked
 
     def is_loop_header(self, pc):
         return pc in self.loop_headers
@@ -210,6 +261,7 @@ class JitCode(AbstractDescr):
         self.calldescr = calldescr
         self.jitdriver_sd = None # None for non-portals
         self.pe_metadata = None
+        self.pe_is_linked = False # set True by attach_linked_jitcode
         self._called_from = called_from   # debugging
         self._ssarepr     = None          # debugging
 
