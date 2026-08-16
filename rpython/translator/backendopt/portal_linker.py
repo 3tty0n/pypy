@@ -70,11 +70,12 @@ class PortalLinker(object):
         linked_program = mainjitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, self.portal_sources, ())
         if guard is not None:
-            # The loop headers and the entry: exactly the instructions the
-            # emitted code can be entered at, so one program serves every point
-            # the JIT may start a trace from in this method.
-            entries = sorted(set(program.loop_headers) |
-                             set([program.entry_pc]))
+            # Every block boundary the emitted code has an entry position for
+            # -- not just loop headers and the entry -- so a greenkey that
+            # goes hot at any block the residual program already covers still
+            # matches this program instead of falling back to a generic
+            # portal trace for a region that duplicates it.
+            entries = sorted(lowered.entry_positions)
             linked_program.set_guard(guard[0], entries, guard[1])
         lowered.jitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, (), ())

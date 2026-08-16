@@ -27,10 +27,11 @@ class PELinkedProgram(object):
         self.argument_sources = list(argument_sources)
         self.argument_constants = list(argument_constants)
         self.guard_pc_index = -1
-        # Every instruction this program may be entered at -- its loop headers
-        # and its entry.  One generated program covers each of them, so a
-        # method the JIT traced from several points needs one program, not one
-        # per point: the later ones would be the same code with its front cut
+        # Every block boundary this program may be entered at -- one entry
+        # per block the emitted code has a position for, not only its loop
+        # headers.  One generated program covers each of them, so a method
+        # the JIT traced from several points needs one program, not one per
+        # point: the later ones would be the same code with its front cut
         # off.  Only these carry the register setup a trace start needs.
         self.guard_pcs = []
         self.guard_ref_index = -1
@@ -168,6 +169,10 @@ class PEJitCodeMetadata(object):
         return pc in self.loop_headers
 
     def position_for_pc(self, pc):
+        # Linear scan, even though every block boundary is now a guard pc and
+        # this list can run to dozens of entries: it only runs once per trace
+        # start, which is rare, so a dict would trade a real cost (building
+        # and keeping it) for a saving that never shows up in profiles.
         for index in range(len(self.entry_pcs)):
             if self.entry_pcs[index] == pc:
                 return self.entry_positions[index]
