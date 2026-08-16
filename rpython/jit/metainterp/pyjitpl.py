@@ -2893,6 +2893,18 @@ class MetaInterp(object):
         length = self.history.length()
         if (length > warmrunnerstate.trace_limit or
                 self.history.trace_tag_overflow()):
+            debug_start("jit-segment-decision")
+            num_merge_points = len(self.current_merge_points)
+            from_start = isinstance(self.resumekey,
+                                     compile.ResumeFromInterpDescr)
+            debug_print("abort too long: merge_points", num_merge_points,
+                        "from_start", from_start, "length", length)
+            if self.current_merge_points:
+                jd_sd = self.jitdriver_sd
+                greenkey = self.current_merge_points[0][0][:jd_sd.num_green_args]
+                loc = jd_sd.warmstate.get_location_str(greenkey)
+                debug_print("abort too long greenkey", loc)
+            debug_stop("jit-segment-decision")
             jd_sd, greenkey_of_huge_function = self.find_biggest_function()
             self.staticdata.stats.record_aborted(greenkey_of_huge_function)
             self.portal_trace_positions = None
@@ -3408,10 +3420,17 @@ class MetaInterp(object):
         self.pe_portal_boxes = original_boxes[:portal_arg_count]
         self.initialize_withgreenfields(original_boxes)
         self.initialize_virtualizable(original_boxes)
+        debug_start("jit-segment-decision")
+        debug_print("trace start: from-interp linked", program is not None)
+        debug_stop("jit-segment-decision")
+
     def initialize_state_from_guard_failure(self, resumedescr, deadframe):
         # guard failure: rebuild a complete MIFrame stack
         # This is stack-critical code: it must not be interrupted by StackOverflow,
         # otherwise the jit_virtual_refs are left in a dangling state.
+        debug_start("jit-segment-decision")
+        debug_print("trace start: from-guard-failure")
+        debug_stop("jit-segment-decision")
         rstack._stack_criticalcode_start()
         try:
             self.portal_call_depth = -1 # always one portal around
