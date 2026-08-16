@@ -1429,7 +1429,14 @@ class MIFrame(object):
                     program = None
                     if metadata is not None:
                         program = metadata.linked_program_for(allboxes)
-                    if program is not None:
+                    if program is None:
+                        return self.metainterp.perform_call(portal_code, allboxes,
+                                    greenkey=greenboxes)
+                    ptoken = self.metainterp.get_procedure_token(
+                        greenboxes, targetjitdriver_sd)
+                    if not has_compiled_targets(ptoken):
+                        # no compiled code for the linked program yet:
+                        # inline its residual jitcode into this trace.
                         # Same argument layout as initialize_state_from_start,
                         # built the same way so the two cannot diverge.
                         call_boxes = program.build_call_boxes(allboxes)
@@ -1441,8 +1448,11 @@ class MIFrame(object):
                         # for a later merge point needs its real entry pc.
                         f.pc = program.start_position(allboxes)
                         raise ChangeFrame
-                    return self.metainterp.perform_call(portal_code, allboxes,
-                                greenkey=greenboxes)
+                    # the linked program already has compiled machine code:
+                    # fall through to call it via CALL_ASSEMBLER instead of
+                    # re-inlining/re-tracing the whole recursion tree from
+                    # this sibling root (avoids compiling several
+                    # overlapping copies of the same recursion tree).
             assembler_call = True
             # verify that we have all green args, needed to make sure
             # that assembler that we call is still correct
@@ -3241,8 +3251,10 @@ class MetaInterp(object):
         else:
             self.history.set_inputargs(inputargs)
 
-    def get_procedure_token(self, greenkey):
-        JitCell = self.jitdriver_sd.warmstate.JitCell
+    def get_procedure_token(self, greenkey, jitdriver_sd=None):
+        if jitdriver_sd is None:
+            jitdriver_sd = self.jitdriver_sd
+        JitCell = jitdriver_sd.warmstate.JitCell
         cell = JitCell.get_jit_cell_at_key(greenkey)
         if cell is None:
             return None
