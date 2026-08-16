@@ -642,8 +642,14 @@ class RecursiveTests:
             metadata.attach_linked_jitcode(mainjitcode, [0, 1], [])
             mainjitcode.pe_metadata = metadata
 
+        # pe_call_threshold defaults to 1024 bytes; this synthetic linked
+        # program is tiny, so pin the threshold to 0 (always call) --
+        # otherwise the size check alone would send this to the inline
+        # path regardless of whether a token exists, which is not what
+        # this test is checking.
         self.meta_interp(portal, [2], inline=True,
-                         pe_jitcode_setup=install_pe_metadata)
+                         pe_jitcode_setup=install_pe_metadata,
+                         pe_call_threshold=0)
         # 2, not 1: the trace unrolls one extra iteration of codeno=2's own
         # loop before closing, each iteration contributing one merge point
         # for codeno=2 -- but *never* one for codeno=1, which is what this
@@ -695,8 +701,11 @@ class RecursiveTests:
             metadata.attach_linked_jitcode(mainjitcode, [0, 1], [])
             mainjitcode.pe_metadata = metadata
 
+        # pin the threshold to 0 (always call) -- see the comment in
+        # test_pe_linked_recursive_call_uses_assembler_when_compiled above.
         self.meta_interp(main, [0], inline=True,
-                         pe_jitcode_setup=install_pe_metadata)
+                         pe_jitcode_setup=install_pe_metadata,
+                         pe_call_threshold=0)
 
         # (a) settle H1 vs H2: does the cell get a procedure_token at all
         # for a loop-less callee, and does it have target_tokens?
@@ -717,6 +726,49 @@ class RecursiveTests:
         # enter_portal_frame=1 and an extra debug_merge_point for '1'.
         self.check_history(call_assembler_i=1, enter_portal_frame=0,
                            debug_merge_point=1)
+
+    def test_pe_call_threshold_forces_inline_even_when_compiled(self):
+        # The other direction of test_pe_linked_loopless_callee_uses_
+        # assembler_when_compiled: a token exists (same setup), but the
+        # threshold is set higher than the linked program's code_size, so
+        # _opimpl_recursive_call must inline anyway instead of calling
+        # assembler -- proving the size check is load-bearing, not just
+        # "ptoken is not None" with the size compared but ignored.
+        driver = JitDriver(greens=['codeno'], reds=['n'],
+                           get_printable_location=lambda codeno: str(codeno))
+
+        def portal(codeno, n):
+            driver.jit_merge_point(codeno=codeno, n=n)
+            if codeno == 2:
+                portal(1, n)
+            return n
+
+        def main(n):
+            i = 0
+            while i < 5:
+                portal(1, i)
+                i += 1
+            i = 0
+            while i < 10:
+                portal(2, i)
+                i += 1
+            return 0
+
+        def install_pe_metadata(mainjitcode):
+            from rpython.jit.codewriter.jitcode import PEJitCodeMetadata
+            metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+            metadata.attach_linked_jitcode(mainjitcode, [0, 1], [])
+            mainjitcode.pe_metadata = metadata
+
+        self.meta_interp(main, [0], inline=True,
+                         pe_jitcode_setup=install_pe_metadata,
+                         pe_call_threshold=999999999)
+        # codeno=1's token exists (same as the sibling test above) but its
+        # residual jitcode is nowhere near 999999999 bytes, so this must
+        # take the inline-then-escape route: portal(1)'s own merge point
+        # gets entered once, unlike the threshold=0 test above.
+        self.check_history(call_assembler_i=1, enter_portal_frame=1,
+                           debug_merge_point=2)
 
     def test_recursion_cant_call_assembler_directly(self):
         driver = JitDriver(greens = ['codeno'], reds = ['i', 'j'],

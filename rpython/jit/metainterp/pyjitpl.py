@@ -1426,7 +1426,15 @@ class MIFrame(object):
             # send_loop_to_backend() already ran and set its
             # compiled_loop_token before attach_procedure_to_interp() made
             # the cell reachable, for both loops and entry bridges alike.
-            already_compiled = ptoken is not None
+            # Small residual bodies are cheaper inlined (share optimizer
+            # context with the caller, no call/guard overhead); large ones
+            # are cheaper called (four sibling traces each re-inlining the
+            # same big recursion tree was the regression this all started
+            # from).  pe_call_threshold (rlib/jit.py PARAMETERS) is the
+            # tunable byte-size cutoff between the two, read the same way
+            # warmstate.trace_limit is read in blackhole_if_trace_too_long.
+            already_compiled = (ptoken is not None and
+                program.code_size >= warmrunnerstate.pe_call_threshold)
             if already_compiled:
                 # the linked program already has compiled machine code:
                 # call it via CALL_ASSEMBLER instead of re-inlining/
@@ -1437,7 +1445,8 @@ class MIFrame(object):
                     debug_start("jit-pe-asmcall")
                     loc = targetjitdriver_sd.warmstate.get_location_str(
                         greenboxes)
-                    debug_print("asmcall: compiled target found", loc)
+                    debug_print("asmcall: compiled target found", loc,
+                               program.code_size)
                     debug_stop("jit-pe-asmcall")
             elif warmrunnerstate.can_inline_callable(greenboxes):
                 # We've found a potentially inlinable function; now we need to
@@ -1475,15 +1484,20 @@ class MIFrame(object):
                     return self.metainterp.perform_call(portal_code, allboxes,
                                 greenkey=greenboxes)
                 else:
-                    # program matched but the cell has no procedure_token at
-                    # all yet (neither a loop nor an entry bridge has been
-                    # compiled for it): inline its residual jitcode into
-                    # this trace.
+                    # program matched, but either the cell has no
+                    # procedure_token at all yet (neither a loop nor an
+                    # entry bridge has been compiled for it), or it does
+                    # but the program is smaller than pe_call_threshold:
+                    # inline its residual jitcode into this trace.
                     if have_debug_prints():
                         debug_start("jit-pe-asmcall")
                         loc = targetjitdriver_sd.warmstate.get_location_str(
                             greenboxes)
-                        debug_print("inline: no token", loc)
+                        if ptoken is None:
+                            debug_print("inline: no token", loc)
+                        else:
+                            debug_print("inline: token too small", loc,
+                                       program.code_size)
                         debug_stop("jit-pe-asmcall")
                     # Same argument layout as initialize_state_from_start,
                     # built the same way so the two cannot diverge.

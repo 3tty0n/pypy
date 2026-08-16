@@ -97,6 +97,7 @@ def jittify_and_run(interp, graph, args, repeat=1, graph_and_interp_only=False,
                     disable_unrolling=sys.maxint,
                     enable_opts=ALL_OPTS_NAMES, max_retrace_guards=15,
                     max_unroll_recursion=7, vec=0, vec_all=0, vec_cost=0,
+                    pe_call_threshold=1024,
                     **kwds):
     from rpython.config.config import ConfigError
     translator = interp.typer.annotator.translator
@@ -124,6 +125,7 @@ def jittify_and_run(interp, graph, args, repeat=1, graph_and_interp_only=False,
         jd.warmstate.set_param_vec(vec)
         jd.warmstate.set_param_vec_all(vec_all)
         jd.warmstate.set_param_vec_cost(vec_cost)
+        jd.warmstate.set_param_pe_call_threshold(pe_call_threshold)
     warmrunnerdesc.finish()
     if graph_and_interp_only:
         return interp, graph

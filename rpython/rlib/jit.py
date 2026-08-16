@@ -582,6 +582,10 @@ PARAMETER_DOCS = {
     'vec_cost': 'threshold for which traces to bail. Unpacking increases the counter,'\
                 ' vector operation decrease the cost',
     'vec_all': 'try to vectorize trace loops that occur outside of the numpypy library',
+    'pe_call_threshold': 'minimum size in bytes of a linked callee\'s residual '
+                         'jitcode before a compiled call to it is emitted as '
+                         'CALL_ASSEMBLER instead of being inlined; 0 = always '
+                         'call, a very large value = never call',
 }
 
 PARAMETERS = {'threshold': 1039, # just above 1024, prime
@@ -601,6 +605,7 @@ PARAMETERS = {'threshold': 1039, # just above 1024, prime
               'vec': 0,
               'vec_all': 0,
               'vec_cost': 0,
+              'pe_call_threshold': 1024,
               }
 unroll_parameters = unrolling_iterable(PARAMETERS.items())
 

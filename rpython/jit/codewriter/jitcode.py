@@ -21,6 +21,11 @@ class PELinkedProgram(object):
 
     def __init__(self, jitcode, argument_sources, argument_constants):
         self.jitcode = jitcode
+        # Size of the assembled residual jitcode, in bytes -- the axis
+        # pe_call_threshold (rlib/jit.py) compares against to decide
+        # whether an already-compiled call to this program is worth an
+        # assembler call (large body) or better off inlined (tiny body).
+        self.code_size = len(jitcode.code)
         # Lists keep one homogeneous RPython annotation whether linked
         # lowering is enabled or not; fixed-size tuples of () and (2, 1)
         # cannot be unified during native translation.
