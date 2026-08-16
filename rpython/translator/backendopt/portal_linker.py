@@ -40,7 +40,8 @@ class PortalLinker(object):
         self.hole_names = tuple(hole_names)
         self.name = name
 
-    def install(self, codewriter, program, whole_graph=False, guard=None):
+    def install(self, codewriter, program, whole_graph=False, guard=None,
+               emitter=None):
         """Compile ``program`` and register it on the portal.
 
         The default back end assembles each residual template once and
@@ -52,6 +53,11 @@ class PortalLinker(object):
         ``guard`` is ``(pc_index, ref_index)`` into the merge point's greens for
         a portal that serves more than one program; None means the portal has
         only this one.
+
+        ``emitter``, only meaningful with the default back end, is a
+        ``ProgramEmitter`` whose fragments were already built by
+        ``precompile_fragments`` -- passing one runs no codewriter at all.
+        None builds a fresh, empty-cached ``ProgramEmitter`` as before.
         """
         mainjitcode = self.mainjitcode(codewriter)
         if whole_graph:
@@ -60,7 +66,7 @@ class PortalLinker(object):
                 runtime_names=self.runtime_names, null_names=self.null_names,
                 jit_merge_point_args=self.jit_merge_point_args)
         else:
-            lowered = self._emit(codewriter, program)
+            lowered = self._emit(codewriter, program, emitter=emitter)
         lowered.jitcode.jitdriver_sd = self.jitdriver_sd
 
         # Order matters: the first program to arrive creates the metadata that
@@ -129,16 +135,17 @@ class PortalLinker(object):
             jitdriver_sd.mainjitcode.jitdriver_sd = jitdriver_sd
         return jitdriver_sd.mainjitcode
 
-    def _emit(self, codewriter, program):
+    def _emit(self, codewriter, program, emitter=None):
         from rpython.translator.backendopt.jitcode_emitter import ProgramEmitter
         from rpython.translator.backendopt.partialeval_template import (
             LoweredResidualProgram)
 
-        emitter = ProgramEmitter(
-            codewriter, self.jitdriver_sd, self.static_name,
-            split_names=self.split_names, hole_names=self.hole_names,
-            boundary_names=self.runtime_names,
-            jit_merge_point_args=self.jit_merge_point_args)
+        if emitter is None:
+            emitter = ProgramEmitter(
+                codewriter, self.jitdriver_sd, self.static_name,
+                split_names=self.split_names, hole_names=self.hole_names,
+                boundary_names=self.runtime_names,
+                jit_merge_point_args=self.jit_merge_point_args)
         jitcode, entry_positions = emitter.emit(program, self.name)
         # Leave the same state ``lower`` does: the block map lives on the
         # JitCode, and the metainterp reads it from there.

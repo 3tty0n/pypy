@@ -403,6 +403,27 @@ class ProgramEmitter(object):
                 block.template, block.bindings, merge_point)
         return self._fragments[key]
 
+    def precompile_fragments(self, templates, state_names=()):
+        """Compile every opcode's fragment(s) before any program exists.
+
+        split_names (typically "pc") must be holed here too, even though
+        every real block's bindings carries it anyway: baking a dummy pc
+        in as a real constant would still assemble, and even run
+        correctly for the one block matching the dummy, but every other
+        placement of the shared fragment would silently carry it wrong.
+        """
+        bindings = dict.fromkeys(self.compiler.hole_names, 0)
+        bindings.update(dict.fromkeys(self.split_names, 0))
+        bindings.update(dict.fromkeys(state_names, 0))
+        variants = (False, True) if self.compiler.jit_merge_point_args \
+            else (False,)
+        for key, template in templates.items():
+            for merge_point in variants:
+                cache_key = (key, merge_point)
+                if cache_key not in self._fragments:
+                    self._fragments[cache_key] = self.compiler.compile(
+                        template, bindings, merge_point)
+
     def emit(self, program, name="emitted-residual"):
         from rpython.jit.codewriter.assembler import JitCode
         from rpython.jit.codewriter.flatten import Label, SSARepr, TLabel

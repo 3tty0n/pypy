@@ -165,6 +165,63 @@ def test_shared_fragment_reuses_calldescr_objects():
     assert descrs[0] is descrs[1]
 
 
+def test_precompile_fragments_runs_the_codewriter_zero_additional_times():
+    """The eager fragment table (runtime cogen milestone 1): build every
+    opcode's fragment(s) once, before any program exists, so that generating
+    and emitting a program afterwards is pure concatenation -- no call to
+    ``FragmentCompiler.compile`` left over for ``fragment_for`` to make."""
+    from rpython.jit.codewriter.codewriter import CodeWriter
+    from rpython.jit.codewriter.test.test_codewriter import FakeCPU
+
+    code = (chr(OP_DEC_JUMP) + chr(0) + chr(OP_DEC_JUMP) + chr(0) +
+            chr(OP_HALT) + chr(0))
+    graph, translator = get_graph(interpret_one, [int, int, int, int])
+    extension = GeneratingExtension.from_step_function(
+        translator, interpret_one, [OP_DEC_JUMP, OP_HALT], byte_pair_decoder)
+    codewriter = CodeWriter(FakeCPU(translator.rtyper), [])
+    emitter = ProgramEmitter(codewriter, None, "opcode", ("pc",),
+                             ("pc", "oparg", "code"), ("value",))
+
+    emitter.precompile_fragments(extension.templates)
+    # No portal here, so fragment_for only ever asks for merge_point=False:
+    # one fragment per opcode, not per (opcode, merge_point) pair.
+    assert len(emitter._fragments) == 2
+
+    calls = []
+    real_compile = emitter.compiler.compile
+    emitter.compiler.compile = lambda *a, **kw: (calls.append(1) or
+                                                 real_compile(*a, **kw))
+    try:
+        program = extension.generate(code)
+        jitcode, entry_positions = emitter.emit(program, "emitted-precompiled")
+    finally:
+        emitter.compiler.compile = real_compile
+
+    assert calls == []
+    assert set(entry_positions) == set(program.blocks)
+    assert str(HOLE_SENTINEL) not in jitcode.dump()
+
+
+def test_precompile_fragments_skips_untemplated_opcodes():
+    """An opcode with no template is simply absent from the table -- a
+    program that never reaches it costs nothing, exactly like the lazy
+    ``fragment_for`` path today."""
+    from rpython.jit.codewriter.codewriter import CodeWriter
+    from rpython.jit.codewriter.test.test_codewriter import FakeCPU
+
+    graph, translator = get_graph(interpret_one, [int, int, int, int])
+    extension = GeneratingExtension.from_step_function(
+        translator, interpret_one, [OP_DEC_JUMP], byte_pair_decoder)
+    assert extension.unsupported == {}
+    assert OP_HALT not in extension.templates
+
+    codewriter = CodeWriter(FakeCPU(translator.rtyper), [])
+    emitter = ProgramEmitter(codewriter, None, "opcode", ("pc",),
+                             ("pc", "oparg", "code"), ("value",))
+    emitter.precompile_fragments(extension.templates)
+    assert set(emitter._fragments) == set([(OP_DEC_JUMP, False)])
+
+
 def test_emitting_for_a_portal_requires_merge_point_arguments():
     """The invariant the PySOM path depends on.
 
