@@ -67,6 +67,25 @@ class PELinkedProgram(object):
             return 0
         return metadata.position_for_pc(boxes[index].getint())
 
+    def build_call_boxes(self, boxes):
+        """Map a caller's greens+reds onto this program's argument layout.
+
+        Mirrors what initialize_state_from_start builds for a trace root:
+        each source index >= 0 takes the box at that position from the
+        caller, each negative one is a folded-in constant taken from
+        argument_constants in order.  Both call sites -- trace roots and
+        inlined calls -- route through here so they cannot diverge.
+        """
+        call_boxes = []
+        constant_index = 0
+        for source in self.argument_sources:
+            if source >= 0:
+                call_boxes.append(boxes[source])
+            else:
+                call_boxes.append(ConstInt(self.argument_constants[constant_index]))
+                constant_index += 1
+        return call_boxes
+
     def matches(self, boxes):
         """Is the portal entering the code object this program was linked for?"""
         index = self.guard_pc_index

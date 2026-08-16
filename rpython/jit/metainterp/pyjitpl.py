@@ -1398,10 +1398,12 @@ class MIFrame(object):
                 # recursion, which would be equivalent to unrolling a while
                 # loop.
                 portal_code = targetjitdriver_sd.mainjitcode
+                metadata = portal_code.pe_metadata
                 count = 0
                 for f in self.metainterp.framestack:
                     if f.jitcode is not portal_code:
-                        continue
+                        if metadata is None or not metadata.is_linked_jitcode(f.jitcode):
+                            continue
                     gk = f.greenkey
                     if gk is None:
                         continue
@@ -1424,6 +1426,21 @@ class MIFrame(object):
                         debug_print("recursive function (not inlined):", loc)
                     warmrunnerstate.dont_trace_here(greenboxes)
                 else:
+                    program = None
+                    if metadata is not None:
+                        program = metadata.linked_program_for(allboxes)
+                    if program is not None:
+                        # Same argument layout as initialize_state_from_start,
+                        # built the same way so the two cannot diverge.
+                        call_boxes = program.build_call_boxes(allboxes)
+                        f = self.metainterp.newframe(program.jitcode,
+                                    greenkey=greenboxes)
+                        f.setup_call(call_boxes)
+                        # setup_call() defaults pc to 0, which is right for a
+                        # program entered at its own start; a program linked
+                        # for a later merge point needs its real entry pc.
+                        f.pc = program.start_position(allboxes)
+                        raise ChangeFrame
                     return self.metainterp.perform_call(portal_code, allboxes,
                                 greenkey=greenboxes)
             assembler_call = True
@@ -3338,15 +3355,7 @@ class MetaInterp(object):
             program = metadata.linked_program_for(original_boxes)
         if program is not None:
             jitcode = program.jitcode
-            call_boxes = []
-            constant_index = 0
-            for source in program.argument_sources:
-                if source >= 0:
-                    call_boxes.append(original_boxes[source])
-                else:
-                    call_boxes.append(ConstInt(
-                        program.argument_constants[constant_index]))
-                    constant_index += 1
+            call_boxes = program.build_call_boxes(original_boxes)
         f = self.newframe(jitcode)
         f.setup_call(call_boxes)
         if program is not None and program.guard_pc_index >= 0:
