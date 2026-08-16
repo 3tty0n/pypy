@@ -1410,11 +1410,23 @@ class MIFrame(object):
             program = None
             if metadata is not None:
                 program = metadata.linked_program_for(allboxes)
-            already_compiled = False
+            ptoken = None
             if program is not None:
                 ptoken = self.metainterp.get_procedure_token(
                     greenboxes, targetjitdriver_sd)
-                already_compiled = has_compiled_targets(ptoken)
+            # A loop-less (pure-recursion, no backward jump) callee compiles
+            # as an "entry bridge": ResumeFromInterpDescr.compile_and_attach
+            # (compile.py) attaches a real, callable procedure_token to the
+            # cell, but never sets its target_tokens -- that list is loop
+            # metadata for retracing/bridging into a LABEL, which an entry
+            # bridge doesn't have.  has_compiled_targets() (which checks
+            # target_tokens) is right for its other callers, who need an
+            # actual loop to jump back into, but wrong here: what matters
+            # for CALL_ASSEMBLER is only that a procedure_token exists --
+            # send_loop_to_backend() already ran and set its
+            # compiled_loop_token before attach_procedure_to_interp() made
+            # the cell reachable, for both loops and entry bridges alike.
+            already_compiled = ptoken is not None
             if already_compiled:
                 # the linked program already has compiled machine code:
                 # call it via CALL_ASSEMBLER instead of re-inlining/
@@ -1463,13 +1475,15 @@ class MIFrame(object):
                     return self.metainterp.perform_call(portal_code, allboxes,
                                 greenkey=greenboxes)
                 else:
-                    # program matched but has no compiled target yet:
-                    # inline its residual jitcode into this trace.
+                    # program matched but the cell has no procedure_token at
+                    # all yet (neither a loop nor an entry bridge has been
+                    # compiled for it): inline its residual jitcode into
+                    # this trace.
                     if have_debug_prints():
                         debug_start("jit-pe-asmcall")
                         loc = targetjitdriver_sd.warmstate.get_location_str(
                             greenboxes)
-                        debug_print("inline: no compiled target", loc)
+                        debug_print("inline: no token", loc)
                         debug_stop("jit-pe-asmcall")
                     # Same argument layout as initialize_state_from_start,
                     # built the same way so the two cannot diverge.

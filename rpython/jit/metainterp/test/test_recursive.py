@@ -651,6 +651,73 @@ class RecursiveTests:
         self.check_history(call_assembler_n=1, enter_portal_frame=0,
                            leave_portal_frame=0, debug_merge_point=2)
 
+    def test_pe_linked_loopless_callee_uses_assembler_when_compiled(self):
+        # Same idea as test_pe_linked_recursive_call_uses_assembler_when_
+        # compiled above, but for a callee with NO loop at all (no backward
+        # jump): compile.py's ResumeFromInterpDescr.compile_and_attach --
+        # the "entry bridge" path taken by a trace that FINISHes instead of
+        # jumping back to itself -- attaches a real, callable
+        # procedure_token to the cell (attach_procedure_to_interp) but
+        # never sets its target_tokens, which is loop-retrace metadata an
+        # entry bridge has no use for.  has_compiled_targets() (checking
+        # target_tokens) is therefore always False for such a callee, and
+        # _opimpl_recursive_call must not use it to decide "is there
+        # compiled code to call" -- ptoken is not None is the right check.
+        from rpython.jit.metainterp import pyjitpl
+        from rpython.jit.metainterp.history import ConstInt
+        driver = JitDriver(greens=['codeno'], reds=['n'],
+                           get_printable_location=lambda codeno: str(codeno))
+
+        def portal(codeno, n):
+            driver.jit_merge_point(codeno=codeno, n=n)
+            if codeno == 2:
+                portal(1, n)
+            return n
+
+        def main(n):
+            # Warm codeno=1 up on its own first (threshold is 3), so it is
+            # already compiled -- as a loop-less entry bridge, since it
+            # never jumps back to its own merge point -- before codeno=2
+            # is ever traced and recurses into it.
+            i = 0
+            while i < 5:
+                portal(1, i)
+                i += 1
+            i = 0
+            while i < 10:
+                portal(2, i)
+                i += 1
+            return 0
+
+        def install_pe_metadata(mainjitcode):
+            from rpython.jit.codewriter.jitcode import PEJitCodeMetadata
+            metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+            metadata.attach_linked_jitcode(mainjitcode, [0, 1], [])
+            mainjitcode.pe_metadata = metadata
+
+        self.meta_interp(main, [0], inline=True,
+                         pe_jitcode_setup=install_pe_metadata)
+
+        # (a) settle H1 vs H2: does the cell get a procedure_token at all
+        # for a loop-less callee, and does it have target_tokens?
+        jd = pyjitpl._warmrunnerdesc.jitdrivers_sd[0]
+        cell = jd.warmstate.JitCell.get_jit_cell_at_key([ConstInt(1)])
+        assert cell is not None
+        token = cell.get_procedure_token()
+        assert token is not None            # H1: a token IS attached ...
+        assert not token.target_tokens      # ... but never has target_tokens
+        assert token.compiled_loop_token is not None   # ... and is callable
+
+        # (b) the second trace (codeno=2 recursing into the by-then-
+        # compiled codeno=1) must call assembler, not inline codeno=1's
+        # body.  If the compiled-target check is bypassed or reverts to
+        # has_compiled_targets(), portal(1)'s own merge point gets entered
+        # and traced once before the (separate, pre-existing) nested-loop
+        # escape logic bails to assembler_call -- showing up here as
+        # enter_portal_frame=1 and an extra debug_merge_point for '1'.
+        self.check_history(call_assembler_i=1, enter_portal_frame=0,
+                           debug_merge_point=1)
+
     def test_recursion_cant_call_assembler_directly(self):
         driver = JitDriver(greens = ['codeno'], reds = ['i', 'j'],
                            get_printable_location = lambda codeno : str(codeno))
