@@ -1,5 +1,7 @@
 from __future__ import print_function
 
+import os
+
 from rpython.jit.metainterp.history import AbstractDescr, ConstInt, new_ref_dict
 from rpython.jit.metainterp.support import adr2int
 from rpython.rlib.debug import debug_start, debug_stop, debug_print
@@ -231,6 +233,11 @@ class PEJitCodeMetadata(object):
         # miss.  Set at runtime only (e.g. from an env var), never at
         # translation time, so this plain int field is safe to mutate.
         self.cogen_threshold = 0
+        # Env var name to read cogen_threshold from, lazily on the first miss.
+        # Read there, not at process start: startup code annotates before
+        # apply_jit builds this metadata, so an early read folds to a no-op.
+        self.threshold_env_var = None
+        self._threshold_env_read = False
         # runtime_cogen: f(gcref) -> program or None; called once per ref.
         self.runtime_cogen = None
         # Green-box index carrying the ref, used only before any program is
@@ -320,6 +327,15 @@ class PEJitCodeMetadata(object):
         included)?  threshold=0 makes this always True on the first miss,
         i.e. today's "generate immediately" behaviour.
         """
+        if not self._threshold_env_read:
+            self._threshold_env_read = True
+            if self.threshold_env_var is not None:
+                value = os.environ.get(self.threshold_env_var)
+                if value:
+                    try:
+                        self.cogen_threshold = int(value)
+                    except ValueError:
+                        pass
         counts = self._miss_counts
         if counts is None:
             counts = self._miss_counts = new_ref_dict()

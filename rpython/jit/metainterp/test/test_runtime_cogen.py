@@ -566,3 +566,39 @@ def test_cogen_real_decline_is_still_cached_once_threshold_reached():
 
     assert metadata.linked_program_for(boxes) is None
     assert calls[0] == 1
+
+
+def test_cogen_threshold_read_from_env_on_first_miss():
+    """threshold_env_var is read lazily on the first miss, at runtime."""
+    import os
+    from rpython.jit.codewriter.jitcode import (
+        JitCode, PEJitCodeMetadata, PELinkedProgram)
+    from rpython.jit.metainterp.history import ConstInt, ConstPtr
+
+    ref = _threshold_test_ref()
+    jitcode = JitCode("threshold-env-test")
+    jitcode.setup()
+    program = PELinkedProgram(jitcode, [], [])
+    program.guard_ref = ref
+
+    calls = [0]
+
+    def runtime_cogen(gcref):
+        calls[0] += 1
+        return program
+
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
+    metadata.guard_ref_index = 1
+    metadata.runtime_cogen = runtime_cogen
+    metadata.threshold_env_var = "TEST_RT_COGEN_THRESHOLD"
+
+    boxes = [ConstInt(0), ConstPtr(ref)]
+    os.environ["TEST_RT_COGEN_THRESHOLD"] = "2"
+    try:
+        assert metadata.linked_program_for(boxes) is None
+        assert metadata.cogen_threshold == 2
+        assert calls[0] == 0
+        assert metadata.linked_program_for(boxes) is program
+        assert calls[0] == 1
+    finally:
+        del os.environ["TEST_RT_COGEN_THRESHOLD"]
