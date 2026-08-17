@@ -252,10 +252,7 @@ def test_shared_fragment_reuses_calldescr_objects():
 
 
 def test_precompile_fragments_runs_the_codewriter_zero_additional_times():
-    """The eager fragment table (runtime cogen milestone 1): build every
-    opcode's fragment(s) once, before any program exists, so that generating
-    and emitting a program afterwards is pure concatenation -- no call to
-    ``FragmentCompiler.compile`` left over for ``fragment_for`` to make."""
+    """Eager fragment table: fragments built once; emit does no compiling."""
     from rpython.jit.codewriter.codewriter import CodeWriter
     from rpython.jit.codewriter.test.test_codewriter import FakeCPU
 
@@ -269,8 +266,6 @@ def test_precompile_fragments_runs_the_codewriter_zero_additional_times():
                              ("pc", "oparg", "code"), ("value",))
 
     emitter.precompile_fragments(extension.templates)
-    # No portal here, so fragment_for only ever asks for merge_point=False:
-    # one fragment per opcode, not per (opcode, merge_point) pair.
     assert len(emitter._fragments) == 2
 
     calls = []
@@ -289,9 +284,7 @@ def test_precompile_fragments_runs_the_codewriter_zero_additional_times():
 
 
 def test_precompile_fragments_skips_untemplated_opcodes():
-    """An opcode with no template is simply absent from the table -- a
-    program that never reaches it costs nothing, exactly like the lazy
-    ``fragment_for`` path today."""
+    """An untemplated opcode is simply absent from the fragment table."""
     from rpython.jit.codewriter.codewriter import CodeWriter
     from rpython.jit.codewriter.test.test_codewriter import FakeCPU
 
@@ -396,7 +389,7 @@ def test_the_interpreter_decides_what_is_worth_linking():
 
 
 def test_the_merge_point_binds_the_driver_to_its_function():
-    """The declaration reaches the evaluator from the call site, as JitDriver's does."""
+    """Declaration reaches the evaluator from the call site, like JitDriver."""
     from rpython.rlib.pe import PEDriver
 
     driver = PEDriver(static="opcode", split="pc", min_size=2)

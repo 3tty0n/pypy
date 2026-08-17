@@ -95,7 +95,7 @@ class Assembler(object):
         self.list_of_addr2name = []
         self._descr_dict = {}
         self._counters = _CounterState()
-        self._seen_raw_objects = {}    # dict-as-set; see indirectcalltargets above
+        self._seen_raw_objects = {}    # dict-as-set (no RPython set type)
         self.all_liveness = []
         self.all_liveness_positions = {}
 
@@ -278,10 +278,8 @@ class Assembler(object):
                     self.constants_dict_i[idkey] = val
         elif kind == 'ref':
             if not value:
-                # new_ref_dict's rd_hash asserts on a null ref -- see
-                # constants_dict_r's own note in setup() -- so a null
-                # constant is deduped through this index instead of ever
-                # becoming a dict key.
+                # rd_hash asserts on a null ref; dedup it via this index
+                # instead of ever making it a dict key.
                 if self._null_ref_const_index < 0:
                     self.constants_r.append(value)
                     self._null_ref_const_index = (
@@ -458,15 +456,9 @@ class Assembler(object):
             descr.attach(as_dict)
 
     def check_result(self):
-        # Limitation of the number of registers, from the single-byte
-        # encoding -- a real, not-astronomically-unlikely capacity limit a
-        # sufficiently large method can hit (see emit_resolved_const's own
-        # per-append check for the identical reason this is a catchable
-        # AssemblerError, not an assert: NativeAssembler inherits this
-        # method unchanged and reaches it for real at genuine program
-        # runtime, where an RPython assert failure is a fatal, uncatchable
-        # abort, not a Python-level exception a caller's `except Exception`
-        # can decline the method with).
+        # Register/constant cap from the single-byte encoding; a real limit
+        # a large method can hit. AssemblerError, not assert, so a caller
+        # can catch and decline instead of aborting.
         if self.count_regs['int'] + len(self.constants_i) > 256:
             raise AssemblerError("too many int registers/constants")
         if self.count_regs['ref'] + len(self.constants_r) > 256:

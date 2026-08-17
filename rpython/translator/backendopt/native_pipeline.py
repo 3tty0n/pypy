@@ -171,12 +171,8 @@ def _place_native(ssarepr, program, pc, fragments, scratch):
 
 
 def _exit_index(insn):
-    # insn is one of fragment.insns -- pre-localisation, straight out of
-    # fragment_to_native -- so the only way operands[0] can be an NIntConst
-    # here at all is via a genuine flowspace Constant (_const_operand_for);
-    # the runtime-synthesized NIntConsts (_patch_hole_native and friends)
-    # only ever appear post-localisation.  No "was this a real Constant"
-    # check needed, unlike the polymorphic NConst this replaced.
+    # insn is pre-localisation here, so an NIntConst can only be a real
+    # flowspace Constant, never a runtime-synthesized hole patch.
     if insn.opcode == "int_return" and len(insn.operands) == 1 and \
             isinstance(insn.operands[0], NIntConst):
         return insn.operands[0].ivalue
@@ -216,8 +212,7 @@ def _localise_operand(x, pc, bindings, is_marker):
             labels.append((x.keys[i], _fragment_label_id(pc, x.label_ids[i])))
         fresh._native_labels = labels
         return NDescr(fresh)
-    return x   # NReg, NIntConst, NRefConst, NFloatConst, NDescr: placement-
-               # invariant, copied verbatim
+    return x
 
 
 def _patch_hole_native(hole, pc, bindings, is_marker):
@@ -647,12 +642,8 @@ class NativeAssembler(Assembler):
                 self.code.append("temp 2")
             elif isinstance(x, NListOfKind):
                 lst = x.items
-                # Same reasoning as emit_resolved_const's per-kind cap
-                # (assembler.py): a catchable AssemblerError, not an assert
-                # -- this is a real capacity limit a big-but-legitimate
-                # method's own send-argument or liveness list can hit at
-                # genuine runtime, where an assert failure aborts instead
-                # of letting the caller decline the method.
+                # AssemblerError, not assert: a legitimate method can hit
+                # this cap at runtime; the caller must be able to decline.
                 if len(lst) > 255:
                     raise AssemblerError("list too long!")
                 self.code.append(chr(len(lst)))
@@ -665,8 +656,7 @@ class NativeAssembler(Assembler):
                         self.emit_resolved_const(item.ivalue, "int")
                     elif isinstance(item, NRefConst):
                         assert x.kind == "ref"
-                        # See the other emit_resolved_const(..., "ref")
-                        # call above: no explicit dedup_key needed either.
+                        # Same as above: no explicit dedup_key needed.
                         self.emit_resolved_const(item.value, "ref")
                     elif isinstance(item, NFloatConst):
                         assert x.kind == "float"
@@ -681,34 +671,17 @@ class NativeAssembler(Assembler):
             elif isinstance(x, NDescr):
                 d = x.descr
                 if isinstance(d, NativeSwitchDictDescr):
-                    # Genuinely fresh every placement (_localise_operand,
-                    # this module): its jump targets depend on *this*
-                    # program's own label layout, so it can never have been
-                    # stamped ahead of time the way an ordinary descr is
-                    # (see the ``elif self._readonly`` branch below) -- it
-                    # still grows the shared list by append, exactly as
-                    # before.  Not a decline case: no precompiled fragment
-                    # could ever have "already covered" an object that
-                    # doesn't exist until this call.
+                    # Fresh every placement: its labels depend on this
+                    # program's layout, so it can never be pre-stamped.
                     if d not in self._descr_dict:
                         self._descr_dict[d] = len(self.descrs)
                         self.descrs.append(d)
-                    # NativeSwitchDictDescr, not SwitchDictDescr: this
-                    # path's own switch descrs go to their own list,
-                    # resolved by fix_labels's own override below -- see
-                    # NativeSwitchDictDescr's docstring for why.
+                    # Own list, resolved by fix_labels's override below.
                     self.native_switchdictdescrs.append(d)
                     num = self._descr_dict[d]
                 elif self._readonly:
-                    # An ordinary (translation-time-prebuilt) descr: read
-                    # the index ProgramEmitter.native_table (jitcode_
-                    # emitter.py) already stamped on it, instead of
-                    # appending to the shared descrs list -- see
-                    # AbstractDescr.pe_descr_index's own note (history.py)
-                    # for why a stamp, not an object-keyed dict lookup, at
-                    # runtime.  -1 means this descr was never covered by any
-                    # precompiled fragment: decline the whole program, same
-                    # as an uncovered insn key (_insn_number below).
+                    # Read the index already stamped by native_table.
+                    # -1 means uncovered: decline the whole program.
                     num = d.pe_descr_index
                     if num < 0:
                         debug_print("runtime cogen: descr not covered by "
@@ -727,8 +700,7 @@ class NativeAssembler(Assembler):
                 for target in x.lst:
                     self.indirectcalltargets[target] = True
             elif isinstance(x, NHole):
-                # Not %r: see _patch_hole_native's own note above -- same
-                # reason, same fix (x.name is already a plain str).
+                # Not %r: see _patch_hole_native's note above.
                 raise AssertionError(
                     "unpatched hole %s reached the assembler" % (x.name,))
             else:
@@ -753,27 +725,18 @@ class NativeAssembler(Assembler):
         self.startpoints[startposition] = True
 
     def _insn_number(self, key):
-        """The opcode byte for 'key' (an "opname/argcodes" string).
+        """The opcode byte for 'key'.
 
-        Growth-allowed mode (the default): identical to Assembler.write_insn
-        -- hands out a fresh number one past the current end the first time
-        a key is seen.  Readonly mode (see __init__'s own docstring): a
-        genuine runtime_cogen caller's insns table is exactly what
-        precompile_fragments already built at translation time (shared by
-        reference, never copied -- __init__), so a lookup miss here means
-        this program needs an (opname, argcodes) combination no precompiled
-        fragment ever used -- decline the whole program (the exception
-        unwinds through NativeAssembler.assemble/emit_and_assemble_native to
-        generate_for_live_code's own ``except Exception: return None``)
-        rather than mint a new opcode number nothing may fold back into
-        MetaInterpStaticData.opcode_implementations/opcode_names any more.
+        Readonly mode: a lookup miss means this program needs an
+        (opname, argcodes) combo no precompiled fragment used -- raises
+        to decline the whole program, rather than minting a new opcode
+        number nothing can fold back into the shared table.
         """
         if self._readonly:
             num = self.insns.get(key, -1)
             if num < 0:
                 debug_print("runtime cogen: no precompiled insn for", key)
-                # Not %r: see _patch_hole_native's own note -- same reason,
-                # same fix (key is already a plain str).
+                # Not %r: see _patch_hole_native's note above.
                 raise AssemblerError("no precompiled insn for %s" % (key,))
             return num
         return self.insns.setdefault(key, len(self.insns))

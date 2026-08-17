@@ -32,17 +32,8 @@ class _Counter(object):
     def __init__(self):
         self.value = 0
 
-# One counter, shared by every NReg ever built: the ones fragment_to_native
-# bakes into prebuilt NativeFragments at translation time, and the ones
-# native_pipeline.py's runtime _register() synthesizes on the fly for
-# parallel-move/scratch writes.  Sharing it (instead of two independent
-# counters) is what guarantees a translation-time id and a runtime-conjured
-# id can never collide: the counter's value at the end of translation
-# becomes its frozen starting value inside the translated binary, and every
-# runtime call continues incrementing from there.  compute_liveness_native
-# depends on that -- it keys "alive" by this id instead of by object
-# identity, so two different NReg objects that happened to share an id
-# would wrongly compare equal (see native_pipeline.py's liveness note).
+# Shared counter: translation-time and runtime nid's must never collide,
+# since compute_liveness_native keys "alive" by nid, not object identity.
 _nreg_id_counter = _Counter()
 
 
@@ -58,7 +49,7 @@ class NReg(NOperand):
     at the runtime-read path, so compute_liveness_native uses nid instead.
     """
     def __init__(self, kind, index):
-        self.kind = kind          # 'int', 'ref' or 'float'
+        self.kind = kind
         self.index = index
         self.nid = _next_nreg_id()
 
@@ -88,27 +79,13 @@ class NIntConst(NOperand):
 
 
 class NRefConst(NOperand):
-    """A 'ref'-kind constant operand: a plain ``llmemory.GCREF``, resolved
-    once via the same ``lltype.cast_opaque_ptr`` ``Assembler.emit_const``
-    applies at write_insn time -- either at translation time (from a
-    genuine flowspace Constant, via ``_const_operand_for``) or at runtime,
-    with no upstream Constant, for the null "no boundary source" fallback
-    (``_emit_moves_native``/``_initialise_scratch_native``) -- both mean the
-    same thing on the wire, a null GCREF."""
     def __init__(self, value):
         self.value = value
 
 
 class NFloatConst(NOperand):
-    """A 'float'-kind constant operand: the already-computed float-storage
-    value (matching ``Assembler.emit_const_value``'s own 'float' branch --
-    ``lltype.Float`` storage, or a ``SignedLongLong``), resolved once at
-    translation time by ``_const_operand_for``.  Never runtime-synthesized:
-    a 'float'-kind boundary with no source gets an *int*-kind zero
-    ``NIntConst`` instead, reproducing a quirk of the original code
-    (``Assembler.emit_const_value`` buckets a constant by its own
-    concretetype, not by the surrounding opcode's kind) -- see
-    native_pipeline.py's fallback-construction comment."""
+    """A float boundary with no source falls back to an int-kind
+    NIntConst(0), not NFloatConst(0) -- mirrors a legacy quirk."""
     def __init__(self, value):
         self.value = value
 
@@ -214,12 +191,12 @@ class NSwitchDictOperand(NOperand):
 class NListOfKind(NOperand):
     def __init__(self, kind, items):
         self.kind = kind
-        self.items = items   # list of NReg/NIntConst/NRefConst/NFloatConst/NHole
+        self.items = items
 
 
 class NIndirectCallTargets(NOperand):
     def __init__(self, lst):
-        self.lst = lst        # list of JitCodes
+        self.lst = lst
 
 
 class NativeInsn(object):
@@ -247,16 +224,14 @@ class NativeFragmentExit(object):
 
 
 class NativeFragment(object):
-    """One template, ready to be placed in a program by ``emit_native``."""
-
     def __init__(self, insns, exits, num_regs, boundary_entry, prologue,
                  num_labels, merge_point):
-        self.insns = insns                      # list of NativeInsn
-        self.exits = exits                      # list of NativeFragmentExit
-        self.num_regs = num_regs                # dict kind -> int
-        self.boundary_entry = boundary_entry     # dict name -> (kind, index)
-        self.prologue = prologue                 # list of (kind, index, name)
-        self.num_labels = num_labels             # local label id space size
+        self.insns = insns
+        self.exits = exits
+        self.num_regs = num_regs
+        self.boundary_entry = boundary_entry
+        self.prologue = prologue
+        self.num_labels = num_labels
         self.merge_point = merge_point
 
 
@@ -269,10 +244,8 @@ class _Converter(object):
     def __init__(self, const_cache=None):
         self._label_ids = {}
         self._registers = {}
-        # Shared *across* fragments (passed in from build_native_table, one
-        # dict for the whole program), unlike _registers/_label_ids above --
-        # see convert_operand's own note on why constants need the opposite
-        # scope from registers.
+        # const_cache is shared program-wide; _registers/_label_ids are
+        # per-fragment -- constants dedup across fragments, registers don't.
         self._const_cache = const_cache
 
     def label_id(self, name):
@@ -367,19 +340,9 @@ def build_native_table(fragments):
 
 
 # ____________________________________________________________
-# Runtime boundary: everything above this line (_Counter/NReg/NIntConst/
-# NAddrIntConst/NRefConst/NFloatConst/NHole/NLabel/NTLabel/NDescr/
-# NSwitchDictOperand/NListOfKind/NIndirectCallTargets/NativeInsn/
-# NativeFragmentExit/NativeFragment as plain data classes, plus
-# native_fragment_for below) is read/constructed at *runtime* -- inside a
-# translated binary -- and must stay RPython-legal.  Everything above that
-# builds/converts a NativeFragment (_Converter, convert_insn/
-# convert_operand, _const_operand_for, fragment_to_native, build_native_table)
-# runs only once, at *translation* time, and is exempt: it may freely touch
-# flowspace.model.Constant, lltype casts, dynamic isinstance dispatch on
-# translation-time-only classes, and anything else ordinary Python code can
-# do, since none of it survives past producing the prebuilt NativeFragment
-# tables native_pipeline.py reads.
+# Runtime boundary: the data classes above (+ native_fragment_for below)
+# are read at runtime, so must stay RPython-legal; _Converter and the
+# conversion functions above run only at translation time and are exempt.
 
 def native_fragment_for(native_table, key, merge_point):
     no_merge, merge = native_table[key]

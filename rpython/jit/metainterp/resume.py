@@ -1016,10 +1016,8 @@ class AbstractResumeDataReader(object):
 
     def _prepare_next_section(self, info, jitcode):
         from rpython.jit.codewriter.jitcode import enumerate_vars
-        # A JitCode assembled after finish_setup() (register_late_jitcode,
-        # jitcode.py) carries its own private liveness chunk, with 'info'
-        # (an offset) relative to *it* instead of the frozen global string
-        # -- see JitCode.own_liveness_info's own docstring.
+        # If set, 'info' is relative to own_liveness_info, not the
+        # global liveness_info string.
         own_liveness_info = jitcode.own_liveness_info
         if own_liveness_info is not None:
             all_liveness = own_liveness_info
@@ -1047,13 +1045,8 @@ class AbstractResumeDataReader(object):
         self.write_a_float(register_index, value)
 
 def _jitcode_at_pos(jitcodes, pos):
-    """The JitCode at 'pos' in the "virtual" jitcodes catalogue: the frozen
-    global list metainterp_sd.jitcodes ++ every JitCode registered since
-    (register_late_jitcode, jitcode.py) -- a late one's own .index is a
-    global value assigned by a monotonic counter (jitcode.py's own module
-    comment), so a pos past the frozen list's end is looked up by that same
-    value, not by position, in the dict register_late_jitcode filled.
-    """
+    """pos may be a late jitcode's global .index (not a position past
+    the frozen jitcodes list); look those up via get_late_jitcode."""
     if pos < len(jitcodes):
         return jitcodes[pos]
     from rpython.jit.codewriter.jitcode import get_late_jitcode

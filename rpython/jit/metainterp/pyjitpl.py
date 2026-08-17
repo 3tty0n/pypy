@@ -202,10 +202,8 @@ class MIFrame(object):
         if not we_are_translated():
             assert pc in self.jitcode._startpoints
         offset = decode_offset(self.jitcode.code, pc + 1)
-        # A JitCode assembled after finish_setup() (register_late_jitcode,
-        # jitcode.py) carries its own private liveness chunk, with 'offset'
-        # relative to *it* instead of the frozen global string -- see
-        # JitCode.own_liveness_info's own docstring.
+        # If set, 'offset' is relative to own_liveness_info, not the
+        # global liveness_info string.
         own_liveness_info = self.jitcode.own_liveness_info
         if own_liveness_info is not None:
             all_liveness = own_liveness_info

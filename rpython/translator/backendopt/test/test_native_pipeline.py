@@ -209,9 +209,6 @@ def test_readonly_native_assembler_declines_uncovered_insn():
     program, emitter = _toy_setup(code)
     native_table = build_native_table(emitter._fragments)
 
-    # No share_with: an empty, private insns table -- nothing was ever
-    # precompiled into it -- so the very first instruction is already
-    # uncovered.
     assembler = NativeAssembler(readonly=True)
     py.test.raises(AssemblerError, emit_and_assemble_native,
                    native_table, program, "native-readonly",
@@ -219,19 +216,7 @@ def test_readonly_native_assembler_declines_uncovered_insn():
 
 
 def test_emit_native_declines_a_jitcode_too_large_for_resume_pc_encoding():
-    """Regression test: resumecode.py's Writer.append_int casts a guard's
-    in-jitcode pc to a *signed* 16-bit short -- 32767 is the largest value
-    that survives the round-trip -- so PortalLinker._emit_native must
-    decline (catchable AssemblerError, not the fatal assert that lives on
-    the resume-encoding side and is not ours to change) a jitcode whose own
-    assembled code is longer than that, before it is ever attached to the
-    portal. Confirmed in production: PySOM's CD benchmark has a method
-    whose runtime_cogen-concatenated jitcode exceeds this.
-
-    Faking the oversized ``.code`` after a real (tiny) assembly, rather
-    than actually assembling 32768+ bytes of toy instructions, is the
-    point -- the cap check itself is what this tests, not the assembler.
-    """
+    """Regression: oversized jitcode is declined, not crash resumecode.py."""
     from rpython.jit.codewriter.assembler import AssemblerError
     from rpython.translator.backendopt import native_pipeline
     from rpython.translator.backendopt.portal_linker import PortalLinker
@@ -260,21 +245,7 @@ def test_emit_native_declines_a_jitcode_too_large_for_resume_pc_encoding():
 
 
 def test_readonly_native_assembler_declines_constant_capacity_overflow():
-    """Regression test: a genuinely large method's constant pool exceeding
-    the single-byte-index 256-per-kind cap (Assembler.emit_resolved_const/
-    check_result) must raise a catchable AssemblerError on the readonly
-    native path, not fail an RPython ``assert`` -- an assert compiles to a
-    fatal, uncatchable abort in a translated binary (confirmed in
-    production: PySOM's CD benchmark, one of its own methods big enough to
-    already be a translation-time "too many constants" decline for
-    install_from_snapshots, crashed the whole process at genuine runtime
-    instead of declining and staying on the generic portal, because
-    generate_for_live_code's ``except Exception: return None`` (runtime_
-    cogen.py) never gets a chance to run once the process has already
-    aborted). Exercised directly against emit_resolved_const rather than
-    through a real 257-distinct-constant program: engineering one is not
-    the point here, the cap check itself is.
-    """
+    """Regression: constant-pool cap overflow raises, no fatal assert."""
     from rpython.jit.codewriter.assembler import AssemblerError
 
     assembler = NativeAssembler(readonly=True)
@@ -328,7 +299,6 @@ def test_repeated_helper_call_constants_dedup():
     assert len(original_jitcode.constants_i) == 2   # helper + oparg(1)
     assert len(native_jitcode.constants_i) == 2
 
-    # And, as everywhere else in this file, byte-identical besides.
     assert native_jitcode.code == original_jitcode.code
     assert native_jitcode.constants_i == original_jitcode.constants_i
     assert native_positions == original_positions
@@ -480,9 +450,7 @@ def test_register_late_jitcode_twice_via_readonly_native_assembler():
     code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_HALT) + chr(0)
     program, emitter = _toy_setup(code)
     native_table = build_native_table(emitter._fragments)
-    # Mirrors PySOM's stamp_after_make_jitcodes: must run once, after the
-    # ordinary jitcodes are assembled, before a readonly NativeAssembler can
-    # place anything (see register_native_insn_coverage's own docstring).
+    # Must run once, after ordinary jitcodes assemble, before readonly use.
     stamp_descr_indices(emitter.codewriter, native_table)
     register_native_insn_coverage(emitter.codewriter, native_table)
 
@@ -529,9 +497,6 @@ class _FakeSSARepr(object):
 
 
 def _expected_final(sources, destinations):
-    """What each destination *must* end up holding -- computed straight
-    from the mapping's own definition, independently of the algorithm under
-    test (so this cannot share its bugs)."""
     expected = {}
     for bname, dest in destinations.items():
         if dest is None:
@@ -546,10 +511,6 @@ def _expected_final(sources, destinations):
 
 
 def _simulate(sources, destinations, scratch, names):
-    """Run _emit_moves_native with a forced processing order, then replay
-    its emitted copy sequence against an abstract register file (every
-    register lazily seeded to its own distinct "original value" token) and
-    return what each register ends up holding."""
     ssarepr = _FakeSSARepr()
     _emit_moves_native(ssarepr, sources, destinations, scratch, _names=names)
 
@@ -575,8 +536,6 @@ def _simulate(sources, destinations, scratch, names):
     return regs
 
 
-# Six boundary names, deliberately not in a suggestive order, so a
-# canonical *sorted* run and a permuted run genuinely differ.
 _NAMES = ["b0", "b1", "b2", "b3", "b4", "b5"]
 
 _SHAPES = {

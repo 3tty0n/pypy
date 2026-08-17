@@ -214,9 +214,7 @@ class GeneratingExtension(object):
                 if isinstance(terminator, Finish):
                     block.has_finish = True
                     continue
-                # ``targets`` is already a plain list here (0/1/2 entries),
-                # not a bare value some of the time and a tuple others --
-                # see ResidualTemplate.resolve_targets's own docstring.
+                # targets is already a plain list (0-2 entries) here.
                 for target in targets:
                     if target not in block.successors:
                         block.successors.append(target)

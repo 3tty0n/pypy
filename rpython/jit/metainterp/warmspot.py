@@ -40,12 +40,6 @@ def apply_jit(translator, backend_name="auto", inline=False,
     pe_linked_setup = getattr(translator, "_pe_linked_setup", None)
     if pe_linked_setup is not None:
         kwds["pe_linked_setup"] = pe_linked_setup
-    # Same wiring as pe_linked_setup above: a pe_linked_setup caller (e.g.
-    # PySOM's install_runtime_cogen, offline.py) that needs a callback
-    # *after* codewriter.make_jitcodes() -- e.g. to stamp AbstractDescr.
-    # pe_descr_index once assembler.descrs is genuinely final, see
-    # jitcode_emitter.py's stamp_descr_indices -- sets this attribute
-    # itself, since it already has 'translator' in hand.
     pe_jitcode_setup = getattr(translator, "_pe_jitcode_setup", None)
     if pe_jitcode_setup is not None:
         kwds["pe_jitcode_setup"] = pe_jitcode_setup
@@ -328,12 +322,8 @@ class WarmRunnerDesc(object):
             jd.warmstate.pe_suppress_greenint_index = (
                 self._pe_suppress_greenint_index(jd))
         self.metainterp_sd.jitcodes = jitcodes
-        # Hand a runtime_cogen callback (PEJitCodeMetadata.runtime_cogen,
-        # jitcode.py) enough to compute a late-registered JitCode's index
-        # without ever touching metainterp_sd -- a plain int, not the
-        # static data instance itself (see jitcode.py's own module comment
-        # for why register_late_jitcode was redesigned around this instead
-        # of the old _late_metainterp_sd holder).
+        # Pass a plain int, not the metainterp_sd instance: see
+        # jitcode.py's module comment on the old _late_metainterp_sd holder.
         from rpython.jit.codewriter.jitcode import set_late_jitcode_base
         set_late_jitcode_base(len(jitcodes))
         self.rewrite_can_enter_jits()

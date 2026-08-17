@@ -1,6 +1,4 @@
-"""Offline partial-evaluation support for tla_refcache -- mirrors
-rpython/jit/tl/tla/offline.py exactly, retargeted at tla_refcache.Frame.
-"""
+"""Mirrors rpython/jit/tl/tla/offline.py, retargeted at tla_refcache.Frame."""
 
 from rpython.jit.tl.tla import tla_refcache as refcache
 from rpython.translator.backendopt.generating_extension import (
@@ -31,10 +29,7 @@ def build_generating_extension(translator):
     if extension.unsupported:
         raise ValueError(extension.report(refcache.OPNAMES.__getitem__))
 
-    # See tla/offline.py's identical fix: RETURN is unconditionally
-    # terminal in this bytecode format, but RPython's graph iteration can
-    # keep the syntactically-following "return pc, None, ..." as an extra
-    # residual exit.
+    # RPython graph iteration can add a spurious residual exit after RETURN.
     template = extension.templates[refcache.RETURN]
     extension.templates[refcache.RETURN] = ResidualTemplate(
         template.key, template.operations, template.holes,
