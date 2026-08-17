@@ -122,6 +122,50 @@ def test_shared_fragment_patches_each_instance_with_its_own_values():
     assert (2, 11) in sums
 
 
+def test_precompile_fragments_needs_every_decoder_binding_named():
+    """Regression: an undeclared decoder binding needs state_names."""
+    from rpython.flowspace.model import Constant
+
+    OP_X = 3
+    OP_HALT = 1
+
+    def step(opcode, oparg, pc, value):
+        if opcode == OP_X:
+            checksum = pc + oparg
+            return pc + 2, value + checksum
+        return -1, value
+
+    step._pe_static_args_ = ("opcode",)
+    step._pe_split_args_ = ("pc",)
+
+    from rpython.jit.codewriter.codewriter import CodeWriter
+    from rpython.jit.codewriter.test.test_codewriter import FakeCPU
+
+    code = chr(OP_X) + chr(7) + chr(OP_X) + chr(11) + chr(OP_HALT) + chr(0)
+    graph, translator = get_graph(step, [int, int, int, int])
+    extension = GeneratingExtension.from_step_function(
+        translator, step, [OP_X, OP_HALT], byte_pair_decoder)
+    program = extension.generate(code)
+
+    codewriter = CodeWriter(FakeCPU(translator.rtyper), [])
+    emitter = ProgramEmitter(codewriter, None, "opcode", ("pc",),
+                             ("pc", "code"), ("value",))
+    emitter.precompile_fragments(extension.templates, state_names=("oparg",))
+    jitcode, entry_positions = emitter.emit(program, "emitted-x-precompiled")
+
+    assert emitter.fragment_for(program.blocks[0]) is \
+        emitter.fragment_for(program.blocks[2])
+    assert str(HOLE_SENTINEL) not in jitcode.dump()
+
+    sums = []
+    for insn in emitter.last_ssarepr.insns:
+        if insn[0] == "int_add" and isinstance(insn[1], Constant) and \
+                isinstance(insn[2], Constant):
+            sums.append((insn[1].value, insn[2].value))
+    assert (0, 7) in sums
+    assert (2, 11) in sums
+
+
 def test_shared_fragment_survives_a_foldable_op_on_a_hole():
     """A hole reaching a foldable op (chr) must not be eagerly folded."""
     from rpython.flowspace.model import Constant
