@@ -116,7 +116,12 @@ class ExprTarget(TargetExpr):
     def __init__(self, opname, restype, args):
         self.opname = opname
         self.restype = restype
-        self.args = tuple(args)
+        # A list, not a tuple: RPython's rtyper only supports iterating a
+        # tuple when its length is statically 1, but a binary late-static
+        # op (most of them) has 2 args. ConstExpr already wraps every
+        # plain-constant arg, so every item here is uniformly a
+        # Resolvable, same as this file's other dynamic-count lists.
+        self.args = list(args)
 
     def __repr__(self):
         return "%s(%s)" % (self.opname,
@@ -202,8 +207,10 @@ def _apply_late_static_op(opname, restype, values):
             return llop.int_invert(restype, only)
         if opname == "int_is_true":
             return llop.int_is_true(restype, only)
+    # Not %r: RPython's string-formatting rtyper only implements %s/%d/...,
+    # not %r; opname is already a plain str, so %s loses nothing here.
     raise ValueError(
-        "no runtime-cogen dispatch for late-static op %r -- add it to "
+        "no runtime-cogen dispatch for late-static op %s -- add it to "
         "_apply_late_static_op (partialeval_template.py)" % (opname,))
 
 
@@ -221,6 +228,14 @@ class Terminator(object):
 
 class Continue(Terminator):
     """Continue execution at a late-static or concrete split value."""
+
+    # Class-level default: instances are all prebuilt, so the annotator
+    # would otherwise learn this object-typed attribute only from
+    # whichever instance it happens to discover first. None unifies with
+    # any instance type, so this works; a class-level () default for
+    # dynamic_values/state would not, since RPython tuples of different
+    # lengths (interpreters use both 0- and 1-element state) can't unify.
+    target = None
 
     def __init__(self, target, dynamic_values, state=()):
         self.target = target
@@ -240,6 +255,12 @@ class Finish(Terminator):
 
 class Branch(Terminator):
     """Keep a dynamic condition with two late-static bytecode targets."""
+
+    # See Continue's own note on class-level defaults for object-typed
+    # attributes.
+    condition = None
+    true_target = None
+    false_target = None
 
     def __init__(self, condition, true_target, false_target, dynamic_values,
                  state=()):
@@ -323,6 +344,12 @@ def _resolve_target(target, bindings):
     # TargetExpr, since a target can also be a bare TemplateHole.
     if isinstance(target, Resolvable):
         return target.resolve(bindings)
+    # A resolved target is always a pc int, but no real caller leaves a
+    # bare int flowing through this branch for the annotator to narrow
+    # it from the declared Resolvable type on its own; without this
+    # assert it unions this branch's SomeInstance against the 'if'
+    # branch's SomeInteger and rejects the mismatch.
+    assert isinstance(target, int)
     return target
 
 
@@ -354,11 +381,15 @@ class LinkedResidualProgram(object):
         # dynamic count of entries; RPython tuples need a fixed shape.
         self.backedges = []
         self.loop_headers = []
-        # Names of the extra late-static values carried through the CFG.
-        # Passed in, not reassigned after construction, since RPython
-        # would otherwise need to unify tuples of different lengths for
-        # this attribute across the whole build.
-        self.state_names = tuple(state_names)
+        # Names of the extra late-static values carried through the CFG,
+        # passed in rather than reassigned after construction: RPython
+        # tuples are fixed-shape, so different state-name counts across
+        # a build could never unify on one attribute otherwise (see
+        # GeneratingExtension.generate, the only caller).
+        # Not tuple(state_names): the tuple builtin has no RPython
+        # rtyper support. generate() always passes an already-built
+        # tuple (GeneratingExtension.__init__), so no conversion needed.
+        self.state_names = state_names
 
     def analyze_loops(self):
         dominators = _compute_dominators(self.entry_pc, self.blocks)

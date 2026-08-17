@@ -4,12 +4,16 @@ operating on the native_fragments.py IR instead of SSARepr/flowspace objects.
 Mirrors each original 1:1 on purpose: test_native_pipeline.py's equivalence
 gate requires byte-identical output, so keep behavior identical here, not
 just "cleaner".
+
+RPython-legal only, throughout: a real runtime_cogen callback reaches
+every function here, so each must translate, not just run untranslated.
 """
 
-from rpython.jit.codewriter.assembler import Assembler, USE_C_FORM
+from rpython.jit.codewriter.assembler import Assembler, AssemblerError, USE_C_FORM
 from rpython.jit.codewriter.flatten import KINDS
 from rpython.jit.codewriter.jitcode import JitCode, SwitchDictDescr
 from rpython.jit.metainterp.history import AbstractDescr
+from rpython.rlib.debug import debug_print
 from rpython.rtyper.lltypesystem import llmemory, lltype
 
 from rpython.translator.backendopt.native_fragments import (
@@ -203,9 +207,13 @@ def _localise_operand(x, pc, bindings, is_marker):
             for item in x.items])
     if isinstance(x, NSwitchDictOperand):
         fresh = NativeSwitchDictDescr()
-        fresh._native_labels = [
-            (key, _fragment_label_id(pc, label_id))
-            for key, label_id in zip(x.keys, x.label_ids)]
+        # Not zip(x.keys, x.label_ids): RPython's rtyper has no zip()
+        # typer. Both lists are always the same length (built together,
+        # native_fragments.py), so a manual indexed loop suffices.
+        labels = []
+        for i in range(len(x.keys)):
+            labels.append((x.keys[i], _fragment_label_id(pc, x.label_ids[i])))
+        fresh._native_labels = labels
         return NDescr(fresh)
     return x   # NReg, NIntConst, NRefConst, NFloatConst, NDescr: placement-
                # invariant, copied verbatim
@@ -217,8 +225,10 @@ def _patch_hole_native(hole, pc, bindings, is_marker):
     Every hole here is a plain int; asserted since silently truncating a
     ref/float hole would be a correctness bug, not just an RPython one.
     """
+    # Not %r: RPython's rtyper only implements %s/%d/... formatting
+    # (rstr.py's do_stringformat); hole.name is already a plain str.
     assert hole.kind == "int", (
-        "native_pipeline: non-int hole %r -- no interpreter this IR "
+        "native_pipeline: non-int hole %s -- no interpreter this IR "
         "currently serves has one" % (hole.name,))
     if is_marker and hole.name == "pc":
         return NIntConst(pc)
@@ -260,7 +270,12 @@ def _emit_moves_native(ssarepr, sources, destinations, scratch):
             # RPython-legal.
             blocked = False
             for other in pending:
-                if other is move:
+                # Not ``other is move``: RPython's rtyper has no identity
+                # comparison for tuples. Value equality is a safe
+                # substitute: 'pending' entries are one per boundary name,
+                # and two boundary names never share one (kind, index,
+                # source) triple, so equal means the same entry.
+                if other == move:
                     continue
                 if (isinstance(other[2], NReg) and
                         other[2].kind == kind and other[2].index == index):
@@ -418,7 +433,12 @@ def _remove_repeated_live_native(insns):
                     extra_tlabels.append(x)
         res.extend(labels)
         res.append(NativeInsn("-live-", liveset.values() + extra_tlabels))
-    insns[:] = res
+    # Not insns[:] = res: RPython's rlist has no unbounded full-replace
+    # slice assignment (rlist.py's rtype_setslice). pop()+extend() mutate
+    # 'insns' in place instead, on purpose, so the caller sees the result.
+    while insns:
+        insns.pop()
+    insns.extend(res)
 
 
 # ____________________________________________________________
@@ -445,14 +465,26 @@ class NativeAssembler(Assembler):
     counters) this instance adopts by reference, so every JitCode shares
     one global opcode table and liveness string. Not thread-safe: nothing
     guards concurrent mutation of the shared state.
+
+    ``readonly``, when True, is the mode a genuine runtime_cogen caller
+    uses (PortalLinker._emit_native, portal_linker.py): ``insns`` stays
+    shared (read-only lookups against what precompile_fragments already
+    built), but write_insn no longer grows it or ``descrs`` for an
+    ordinary (non-switch-dict) descr. ``all_liveness``/
+    ``all_liveness_positions``/``_counters`` are not shared in this mode:
+    this assembler keeps its own fresh copies, so a late JitCode's
+    ``-live-`` offsets land in its own liveness chunk (stored as
+    ``JitCode.own_liveness_info``) instead of the frozen global string,
+    which nothing may resync any more.
     """
 
-    def __init__(self, share_with=None):
+    def __init__(self, share_with=None, readonly=False):
         Assembler.__init__(self)
         # Per-JitCode, like switchdictdescrs; reset again in assemble()
         # since inherited setup() doesn't know about this list.
         self.native_switchdictdescrs = []
         self._share_with = share_with
+        self._readonly = readonly
         if share_with is not None:
             self.descrs = share_with.descrs
             self._descr_dict = share_with._descr_dict
@@ -460,9 +492,10 @@ class NativeAssembler(Assembler):
             self.indirectcalltargets = share_with.indirectcalltargets
             self.list_of_addr2name = share_with.list_of_addr2name
             self._seen_raw_objects = share_with._seen_raw_objects
-            self._counters = share_with._counters
-            self.all_liveness = share_with.all_liveness
-            self.all_liveness_positions = share_with.all_liveness_positions
+            if not readonly:
+                self._counters = share_with._counters
+                self.all_liveness = share_with.all_liveness
+                self.all_liveness_positions = share_with.all_liveness_positions
 
     def assemble(self, ssarepr, jitcode=None, num_regs=None):
         self.setup(ssarepr.name)
@@ -501,7 +534,7 @@ class NativeAssembler(Assembler):
             live_f = _get_liveness_info_native(insn.operands, "float")
             assert key not in self.liveness
             self.liveness[key] = live_i, live_r, live_f
-            num = self.insns.setdefault("live/", len(self.insns))
+            num = self._insn_number("live/")
             self.code.append(chr(num))
             self._encode_liveness(live_i, live_r, live_f)
             return
@@ -553,19 +586,55 @@ class NativeAssembler(Assembler):
                         assert x.kind == "float"
                         self.emit_resolved_const(item.value, "float")
                     else:
+                        # Not %r, and not embedding 'item' at all: an
+                        # arbitrary operand instance has no RPython-legal
+                        # string conversion.
                         raise NotImplementedError(
-                            "found in NListOfKind(): %r" % (item,))
+                            "found an operand of an unexpected type in "
+                            "NListOfKind()")
                 argcodes.append(x.kind[0].upper())
             elif isinstance(x, NDescr):
                 d = x.descr
-                if d not in self._descr_dict:
-                    self._descr_dict[d] = len(self.descrs)
-                    self.descrs.append(d)
-                # NativeSwitchDictDescr goes to its own list, resolved by
-                # fix_labels's override below.
                 if isinstance(d, NativeSwitchDictDescr):
+                    # Genuinely fresh every placement (_localise_operand,
+                    # this module): its jump targets depend on *this*
+                    # program's own label layout, so it can never have been
+                    # stamped ahead of time the way an ordinary descr is
+                    # (see the ``elif self._readonly`` branch below) -- it
+                    # still grows the shared list by append, exactly as
+                    # before.  Not a decline case: no precompiled fragment
+                    # could ever have "already covered" an object that
+                    # doesn't exist until this call.
+                    if d not in self._descr_dict:
+                        self._descr_dict[d] = len(self.descrs)
+                        self.descrs.append(d)
+                    # NativeSwitchDictDescr, not SwitchDictDescr: this
+                    # path's own switch descrs go to their own list,
+                    # resolved by fix_labels's own override below -- see
+                    # NativeSwitchDictDescr's docstring for why.
                     self.native_switchdictdescrs.append(d)
-                num = self._descr_dict[d]
+                    num = self._descr_dict[d]
+                elif self._readonly:
+                    # An ordinary (translation-time-prebuilt) descr: read
+                    # the index ProgramEmitter.native_table (jitcode_
+                    # emitter.py) already stamped on it, instead of
+                    # appending to the shared descrs list -- see
+                    # AbstractDescr.pe_descr_index's own note (history.py)
+                    # for why a stamp, not an object-keyed dict lookup, at
+                    # runtime.  -1 means this descr was never covered by any
+                    # precompiled fragment: decline the whole program, same
+                    # as an uncovered insn key (_insn_number below).
+                    num = d.pe_descr_index
+                    if num < 0:
+                        debug_print("runtime cogen: descr not covered by "
+                                   "precompiled fragments")
+                        raise AssemblerError(
+                            "descr not covered by precompiled fragments")
+                else:
+                    if d not in self._descr_dict:
+                        self._descr_dict[d] = len(self.descrs)
+                        self.descrs.append(d)
+                    num = self._descr_dict[d]
                 assert 0 <= num <= 0xFFFF, "too many AbstractDescrs!"
                 self.code.append(chr(num & 0xFF))
                 self.code.append(chr(num >> 8))
@@ -574,8 +643,10 @@ class NativeAssembler(Assembler):
                 for target in x.lst:
                     self.indirectcalltargets[target] = True
             elif isinstance(x, NHole):
+                # Not %r: see _patch_hole_native's own note above -- same
+                # reason, same fix (x.name is already a plain str).
                 raise AssertionError(
-                    "unpatched hole %r reached the assembler" % (x.name,))
+                    "unpatched hole %s reached the assembler" % (x.name,))
             else:
                 raise NotImplementedError(x)
 
@@ -589,9 +660,35 @@ class NativeAssembler(Assembler):
             assert argcodes.index(">") == len(argcodes) - 2
             self.resulttypes[len(self.code)] = argcodes[-1]
         key = opname + "/" + "".join(argcodes)
-        num = self.insns.setdefault(key, len(self.insns))
+        num = self._insn_number(key)
         self.code[startposition] = chr(num)
         self.startpoints[startposition] = True
+
+    def _insn_number(self, key):
+        """The opcode byte for 'key' (an "opname/argcodes" string).
+
+        Growth-allowed mode (the default): identical to Assembler.write_insn
+        -- hands out a fresh number one past the current end the first time
+        a key is seen.  Readonly mode (see __init__'s own docstring): a
+        genuine runtime_cogen caller's insns table is exactly what
+        precompile_fragments already built at translation time (shared by
+        reference, never copied -- __init__), so a lookup miss here means
+        this program needs an (opname, argcodes) combination no precompiled
+        fragment ever used -- decline the whole program (the exception
+        unwinds through NativeAssembler.assemble/emit_and_assemble_native to
+        generate_for_live_code's own ``except Exception: return None``)
+        rather than mint a new opcode number nothing may fold back into
+        MetaInterpStaticData.opcode_implementations/opcode_names any more.
+        """
+        if self._readonly:
+            num = self.insns.get(key, -1)
+            if num < 0:
+                debug_print("runtime cogen: no precompiled insn for", key)
+                # Not %r: see _patch_hole_native's own note -- same reason,
+                # same fix (key is already a plain str).
+                raise AssemblerError("no precompiled insn for %s" % (key,))
+            return num
+        return self.insns.setdefault(key, len(self.insns))
 
     def fix_labels(self):
         """Override: Assembler.fix_labels reads switchdictdescrs'

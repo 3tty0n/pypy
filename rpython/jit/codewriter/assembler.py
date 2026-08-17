@@ -18,6 +18,22 @@ class AssemblerError(Exception):
     pass
 
 
+def _fixed_size_copy(src, empty):
+    """A fresh copy of 'src', built by index-fill, not .append() -- see
+    Assembler.make_jitcode's own note for why. 'empty' is returned as-is
+    when 'src' is empty, matching JitCode.setup's own
+    ``constants_i or self._empty_i``.
+    """
+    n = len(src)
+    if n == 0:
+        return empty
+    dst = [src[0]] * n
+    for i in range(1, n):
+        dst[i] = src[i]
+    return dst
+_fixed_size_copy._annspecialcase_ = 'specialize:arglistitemtype(0)'
+
+
 def _sorted_chars(live):
     """Sorted list of the (already-unique) chars in live.
 
@@ -403,7 +419,10 @@ class Assembler(object):
             self.all_liveness.append(
                 chr(len(sorted_i)) + chr(len(sorted_r)) + chr(len(sorted_f)))
             self.all_liveness_length += 3
-            for live in sorted_i, sorted_r, sorted_f:
+            # A list, not a bare tuple literal: RPython's rtyper only
+            # supports iterating a tuple of static length 1; sorted_i/r/f
+            # are all list-of-str, so a list literal unifies fine.
+            for live in [sorted_i, sorted_r, sorted_f]:
                 liveness = encode_liveness(live)
                 if liveness:
                     self.all_liveness.append(liveness)
@@ -432,10 +451,20 @@ class Assembler(object):
         assert self.count_regs['float'] + len(self.constants_f) <= 256
 
     def make_jitcode(self, jitcode):
+        """Hand the assembled code and constant pools off to 'jitcode'.
+
+        constants_i/r/f are rebuilt as fresh, index-filled copies, never
+        the live self.constants_i/r/f lists built by .append(): RPython's
+        "ever resized" list flag is unified across every JitCode sharing
+        this attribute, so one append()-grown constants list would make
+        blackhole.py's make_sure_not_resized reject every JitCode, not
+        just this one. Mirrors BlackholeInterpreter.setposition's own
+        ``[default_i] * n`` idiom on the sibling 'registers' argument.
+        """
         jitcode.setup(''.join(self.code),
-                      self.constants_i,
-                      self.constants_r,
-                      self.constants_f,
+                      _fixed_size_copy(self.constants_i, JitCode._empty_i),
+                      _fixed_size_copy(self.constants_r, JitCode._empty_r),
+                      _fixed_size_copy(self.constants_f, JitCode._empty_f),
                       self.count_regs['int'],
                       self.count_regs['ref'],
                       self.count_regs['float'],

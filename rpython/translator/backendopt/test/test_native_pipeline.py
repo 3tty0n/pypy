@@ -1,5 +1,7 @@
 """Equivalence gate: native pipeline must byte-match the legacy one."""
 
+import py
+
 from rpython.translator.backendopt.jitcode_emitter import (
     HOLE_SENTINEL, ProgramEmitter, TemplateFragment)
 from rpython.translator.backendopt.generating_extension import (
@@ -107,6 +109,27 @@ def test_toy_program_with_shared_calldescr_byte_identical():
     assert native_jitcode.constants_i == original_jitcode.constants_i
     assert native_jitcode.constants_r == original_jitcode.constants_r
     assert native_positions == original_positions
+
+
+def test_readonly_native_assembler_declines_uncovered_insn():
+    """readonly=True NativeAssembler (the runtime_cogen path) never grows
+    the shared insns/descrs tables: an uncovered (opname, argcodes)
+    combination declines the whole program instead of minting a new
+    opcode number (see NativeAssembler._insn_number, native_pipeline.py).
+    """
+    from rpython.jit.codewriter.assembler import AssemblerError
+
+    code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_HALT) + chr(0)
+    program, emitter = _toy_setup(code)
+    native_table = build_native_table(emitter._fragments)
+
+    # No share_with: an empty, private insns table -- nothing was ever
+    # precompiled into it -- so the very first instruction is already
+    # uncovered.
+    assembler = NativeAssembler(readonly=True)
+    py.test.raises(AssemblerError, emit_and_assemble_native,
+                   native_table, program, "native-readonly",
+                   has_merge_points=False, assembler=assembler)
 
 
 def test_repeated_helper_call_constants_dedup():

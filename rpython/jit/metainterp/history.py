@@ -93,9 +93,16 @@ def repr_rpython(box, typechars):
 
 
 class AbstractDescr(AbstractValue):
-    _attrs_ = []
+    _attrs_ = ['pe_descr_index']
     __slots__ = ()
     llopaque = True
+
+    # Stamped at translation time (ProgramEmitter.native_table) with this
+    # descr's position in assembler.descrs, which opcode_descrs aliases
+    # by reference (setup_descrs, pyjitpl.py). Read back by
+    # NativeAssembler.write_insn instead of growing descrs at runtime.
+    # -1: never stamped (not seen by any precompiled fragment yet).
+    pe_descr_index = -1
 
     def get_descr_index(self):
         return -1

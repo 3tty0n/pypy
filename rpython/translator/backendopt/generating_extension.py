@@ -180,9 +180,12 @@ class GeneratingExtension(object):
                 # Not blocks[pc].state != state: RPython has no dict
                 # comparison at all (binaryop.py's ne raises).
                 if not _states_equal(blocks[pc].state, state):
+                    # Not %r on the dicts: RPython's rtyper has no string
+                    # conversion for a dict, so the message names the pc
+                    # only.
                     raise ValueError(
                         "pc %d is reachable with conflicting late-static "
-                        "state %r and %r" % (pc, blocks[pc].state, state))
+                        "state" % (pc,))
                 continue
 
             key, bindings = self.decoder(code, pc)

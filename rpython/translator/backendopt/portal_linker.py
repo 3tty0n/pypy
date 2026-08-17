@@ -194,11 +194,18 @@ class PortalLinker(object):
             LoweredResidualProgram)
 
         has_merge_points = bool(self.jit_merge_point_args)
-        # Shares insns/descrs with the codewriter's assembler so a native
-        # JitCode's opcode bytes/descr indices stay consistent build-wide.
-        assembler = NativeAssembler(share_with=codewriter.assembler)
+        # Shares insns/descrs-lookup state with the codewriter's own
+        # assembler so opcode bytes/descr indices stay build-wide
+        # consistent. readonly=True: this is the runtime_cogen path,
+        # which may run after metainterp_sd is frozen, so this assembler
+        # must decline rather than grow the shared tables, and must keep
+        # its own liveness chunk private instead of extending the frozen
+        # global one.
+        assembler = NativeAssembler(share_with=codewriter.assembler,
+                                    readonly=True)
         jitcode, entry_positions, assembler = emit_and_assemble_native(
             native_table, program, self.name,
             has_merge_points=has_merge_points, assembler=assembler)
+        jitcode.own_liveness_info = "".join(assembler.all_liveness)
         program.attach_to_jitcode(jitcode, entry_positions)
         return LoweredResidualProgram(None, jitcode, entry_positions)

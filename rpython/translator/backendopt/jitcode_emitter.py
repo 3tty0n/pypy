@@ -452,9 +452,19 @@ class ProgramEmitter(object):
                         template, bindings, merge_point)
 
     def native_table(self):
-        """{opcode_key: (native_no_merge, native_merge)}."""
+        """{opcode_key: (native_no_merge, native_merge)}.
+
+        Also stamps every descr minted so far with its position in
+        assembler.descrs (AbstractDescr.pe_descr_index, history.py), so
+        NativeAssembler.write_insn can read the stamp instead of growing
+        the shared list at runtime. Indices are stable (append-only), so
+        calling this more than once is harmless.
+        """
         from rpython.translator.backendopt.native_fragments import (
             build_native_table)
+        descrs = self.codewriter.assembler.descrs
+        for i in range(len(descrs)):
+            descrs[i].pe_descr_index = i
         return build_native_table(self._fragments)
 
     def emit(self, program, name="emitted-residual"):

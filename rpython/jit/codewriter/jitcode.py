@@ -11,22 +11,63 @@ def _never_matches(gcref):
     return False
 
 
-# A single-element list, not a plain module global: any attribute chain
-# to a WarmRunnerDesc (warmstate.warmrunnerdesc, pyjitpl._warmrunnerdesc)
-# is frozen (WarmRunnerDesc._freeze_, warmspot.py), and RPython freezes
-# by object identity, whole-program -- so anything reached that way stays
-# a frozen constant everywhere. List contents go through SomeList's item
-# generalization instead, so an item stored here reads back mutable. Set
-# by warmspot.py right after MetaInterpStaticData.finish_setup().
-_late_metainterp_sd = [None]
+# metainterp_sd is frozen (SomePBC) once finish_setup() runs, so no
+# setattr on it after that; these track late JitCode registration
+# instead, without mutating any frozen structure.
+# _late_jitcode_base[0]: len(metainterp_sd.jitcodes) at freeze time, set
+# once by warmspot.py's set_late_jitcode_base.
+# _late_jitcodes: JitCodes registered since, in order; a late JitCode's
+# .index is _late_jitcode_base[0] + its position here.
+_late_jitcode_base = [0]
+_late_jitcodes = []
 
 
-def set_late_metainterp_sd(metainterp_sd):
-    _late_metainterp_sd[0] = metainterp_sd
+def set_late_jitcode_base(count):
+    _late_jitcode_base[0] = count
 
 
-def get_late_metainterp_sd():
-    return _late_metainterp_sd[0]
+def get_late_jitcode(pos):
+    # A build that never wires up runtime_cogen never appends to
+    # _late_jitcodes, so the annotator sees no item type for it, though
+    # resume.py's reader is unconditional core JIT machinery.
+    # NonConstant(False) keeps this branch live for annotation (so the
+    # append below gives the list a real JitCode item type) while staying
+    # always-False, and so never actually executing, at runtime.
+    from rpython.rlib.nonconst import NonConstant
+    if NonConstant(False):
+        # fnaddr=llmemory.NULL, not None: JitCode.fnaddr's type is
+        # unified across every call site, and native_pipeline.py's own
+        # construction already establishes it as SomeAddress there.
+        _late_jitcodes.append(
+            JitCode("late-jitcode-type-hint", fnaddr=llmemory.NULL))
+    return _late_jitcodes[pos]
+
+
+def register_late_jitcode(jitcode, own_liveness_info):
+    """Give a JitCode built after finish_setup() an index and liveness
+    string, without touching the frozen metainterp_sd.
+
+    No other resync is needed: NativeAssembler.write_insn never grows
+    asm.insns/asm.descrs at runtime, declining instead when a program
+    needs an opcode/descr the translation-time precompile pass did not
+    already provide (native_pipeline.py); opcode_descrs already aliases
+    asm.descrs; and own_liveness_info -- this JitCode's own encoded
+    liveness chunk -- is what every liveness reader (pyjitpl.py,
+    resume.py) now prefers over the frozen shared liveness_info, once
+    set. indirectcalltargets/_addr2name are untouched since a runtime-
+    generated program only embeds constants a template already carried
+    at translation time.
+
+    own_liveness_info is only used if jitcode doesn't already carry one
+    (see MetaInterpStaticData.register_late_jitcode alias, pyjitpl.py,
+    for the non-native/test-only caller that has no assembler on hand).
+
+    Single-threaded: no locking here, matching the rest of finish_setup.
+    """
+    if jitcode.own_liveness_info is None:
+        jitcode.own_liveness_info = own_liveness_info
+    jitcode.index = _late_jitcode_base[0] + len(_late_jitcodes)
+    _late_jitcodes.append(jitcode)
 
 
 class PELinkedProgram(object):
@@ -301,6 +342,16 @@ class JitCode(AbstractDescr):
         self.pe_is_linked = False # set True by attach_linked_jitcode
         self._called_from = called_from   # debugging
         self._ssarepr     = None          # debugging
+        # None for every ordinary (translation-time-assembled) JitCode: its
+        # `-live-` offsets are relative to the shared, frozen
+        # metainterp_sd.liveness_info string, exactly as before. Set (by
+        # register_late_jitcode, this module) only for a JitCode assembled
+        # at true runtime, after that string was already frozen -- its own
+        # entire encoded liveness chunk, with every offset in its own
+        # `code` relative to *this* string instead.  Every liveness reader
+        # (pyjitpl.py's get_list_of_active_boxes, resume.py's
+        # _prepare_next_section) checks this first.
+        self.own_liveness_info = None
 
     def setup(self, code='', constants_i=[], constants_r=[], constants_f=[],
               num_regs_i=255, num_regs_r=255, num_regs_f=255,

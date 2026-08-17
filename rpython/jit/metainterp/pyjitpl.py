@@ -100,10 +100,8 @@ class MIFrame(object):
 
     @specialize.arg(4)
     def copy_constants(self, registers, constants, targetindex, ConstClass):
-        """Copy jitcode.constants[0] to registers[self.jitcode.num_regs_x() + 0],
-                jitcode.constants[1] to registers[self.jitcode.num_regs_x() + 1],
-                jitcode.constants[2] to registers[self.jitcode.num_regs_x() + 2],
-                etc."""
+        """Copy jitcode.constants[i] to
+        registers[self.jitcode.num_regs_x() + i], for each i."""
         if not we_are_translated():
             missing = MissingValue()
         else:
@@ -204,7 +202,15 @@ class MIFrame(object):
         if not we_are_translated():
             assert pc in self.jitcode._startpoints
         offset = decode_offset(self.jitcode.code, pc + 1)
-        all_liveness = self.metainterp.staticdata.liveness_info
+        # A JitCode assembled after finish_setup() (register_late_jitcode,
+        # jitcode.py) carries its own private liveness chunk, with 'offset'
+        # relative to *it* instead of the frozen global string -- see
+        # JitCode.own_liveness_info's own docstring.
+        own_liveness_info = self.jitcode.own_liveness_info
+        if own_liveness_info is not None:
+            all_liveness = own_liveness_info
+        else:
+            all_liveness = self.metainterp.staticdata.liveness_info
         length_i = ord(all_liveness[offset])
         length_r = ord(all_liveness[offset + 1])
         length_f = ord(all_liveness[offset + 2])
@@ -915,7 +921,7 @@ class MIFrame(object):
 
     @specialize.arg(1, 5)
     def _opimpl_getinteriorfield_gc_any(self, opnum, arraybox, indexbox, descr, typ):
-        # use the getarrayitem heapcache methods, they work also for interior fields
+        # getarrayitem heapcache methods work for interior fields too
         tobox = self.metainterp.heapcache.getarrayitem(
                 arraybox, indexbox, descr)
         if tobox:
@@ -995,7 +1001,8 @@ class MIFrame(object):
         # but the bug is that is_unescaped() can be True even after the
         # field cache is cleared --- see test_ajit:test_unescaped_write_zero
         #
-        # if tobox is not None or not self.metainterp.heapcache.is_unescaped(box) or not isinstance(valuebox, Const) or valuebox.nonnull():
+        # if tobox is not None or not self.metainterp.heapcache.is_unescaped(
+        #   box) or not isinstance(valuebox, Const) or valuebox.nonnull():
         #   self.execute_with_descr(rop.SETFIELD_GC, fielddescr, box, valuebox)
         # self.metainterp.heapcache.setfield(box, valuebox, fielddescr)
     opimpl_setfield_gc_i = _opimpl_setfield_gc_any
@@ -1309,7 +1316,7 @@ class MIFrame(object):
             (argcode == 'f' and next_op == self.metainterp.staticdata.op_float_return) or
             (argcode == 'v' and next_op == self.metainterp.staticdata.op_void_return)
         ):
-            # we have a return of the same type. check whether it's the result register
+            # same return type: check whether it's the result register
             if (target_index < 0 or
                     ord(self.bytecode[next_pc + 1]) == target_index):
                 debug_start("jit-tco")
@@ -2400,8 +2407,19 @@ class MetaInterpStaticData(object):
         self.globaldata = MetaInterpGlobalData(self)
 
     def register_late_jitcode(self, jitcode, codewriter):
-        """Untranslated-only: rebinds opcode tables via setattr on a
-        SomePBC, which real RPython annotation rejects."""
+        """Deprecated alias for untranslated in-process test callers only
+        (test_runtime_cogen.py's late-trigger tests, via metainterp_sd).
+
+        A real, translated runtime_cogen callback never reaches this --
+        it calls jitcode.py's own register_late_jitcode directly, which
+        touches no metainterp_sd. Never analysed by real annotation, so
+        the setattr-based resync below (illegal under real annotation,
+        see jitcode.py's module comment) is safe here, and genuinely
+        needed: the legacy SSARepr/non-native concatenation path
+        (jitcode_emitter.py) mints its own connective instructions after
+        precompile_fragments already ran, so it can still need an opcode
+        number the frozen tables don't have.
+        """
         asm = codewriter.assembler
         self.setup_insns(asm.insns)
         self.blackholeinterpbuilder.setup_insns(asm.insns)
@@ -2600,7 +2618,8 @@ class MetaInterp(object):
     def is_main_jitcode(self, jitcode):
         return (jitcode.jitdriver_sd is not None and
                 jitcode.jitdriver_sd.jitdriver.is_recursive)
-        #return self.jitdriver_sd is not None and jitcode is self.jitdriver_sd.mainjitcode
+        #return self.jitdriver_sd is not None and (
+        #   jitcode is self.jitdriver_sd.mainjitcode)
 
     def newframe(self, jitcode, greenkey=None):
         if jitcode.jitdriver_sd:
@@ -3496,8 +3515,8 @@ class MetaInterp(object):
 
     def initialize_state_from_guard_failure(self, resumedescr, deadframe):
         # guard failure: rebuild a complete MIFrame stack
-        # This is stack-critical code: it must not be interrupted by StackOverflow,
-        # otherwise the jit_virtual_refs are left in a dangling state.
+        # Stack-critical: must not be interrupted by StackOverflow, or
+        # the jit_virtual_refs are left in a dangling state.
         debug_start("jit-segment-decision")
         debug_print("trace start: from-guard-failure")
         debug_stop("jit-segment-decision")
