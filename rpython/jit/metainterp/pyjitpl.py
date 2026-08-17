@@ -2399,6 +2399,19 @@ class MetaInterpStaticData(object):
         #
         self.globaldata = MetaInterpGlobalData(self)
 
+    def register_late_jitcode(self, jitcode, codewriter):
+        """Untranslated-only: rebinds opcode tables via setattr on a
+        SomePBC, which real RPython annotation rejects."""
+        asm = codewriter.assembler
+        self.setup_insns(asm.insns)
+        self.blackholeinterpbuilder.setup_insns(asm.insns)
+        self.liveness_info = "".join(asm.all_liveness)
+        self.setup_descrs(asm.descrs)
+        self.setup_indirectcalltargets(asm.indirectcalltargets)
+        self.setup_list_of_addr2name(asm.list_of_addr2name)
+        jitcode.index = len(self.jitcodes)
+        self.jitcodes.append(jitcode)
+
     def finish_setup_descrs(self):
         from rpython.jit.codewriter import effectinfo
         self.all_descrs = self.cpu.setup_descrs()
