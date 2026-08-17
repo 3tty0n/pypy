@@ -111,6 +111,64 @@ def test_toy_program_with_shared_calldescr_byte_identical():
     assert native_positions == original_positions
 
 
+def test_stamp_descr_indices_covers_fragment_only_descrs_before_any_assemble():
+    """Regression: stamp descr indices before any jitcode is assembled."""
+    from rpython.jit.codewriter.codewriter import CodeWriter
+    from rpython.jit.codewriter.test.test_codewriter import (
+        FakeCPU, FakeJitDriverSD)
+    from rpython.translator.backendopt.jitcode_emitter import (
+        stamp_descr_indices)
+
+    OP_ADD = 2
+
+    def helper(x, y):
+        return x + y
+
+    def step(opcode, oparg, pc, value):
+        if opcode == OP_ADD:
+            return pc + 2, helper(value, oparg)
+        return -1, value
+
+    step._pe_static_args_ = ("opcode",)
+    step._pe_split_args_ = ("pc",)
+
+    class NoInlinePolicy(object):
+        def look_inside_graph(self, graph):
+            return False
+
+    code = chr(OP_ADD) + chr(5) + chr(OP_ADD) + chr(9) + chr(OP_HALT) + chr(0)
+    graph, translator = get_graph(step, [int, int, int, int])
+    extension = GeneratingExtension.from_step_function(
+        translator, step, [OP_ADD, OP_HALT], byte_pair_decoder)
+    program = extension.generate(code)
+    codewriter = CodeWriter(FakeCPU(translator.rtyper), [FakeJitDriverSD(graph)])
+    codewriter.find_all_graphs(NoInlinePolicy())
+    emitter = ProgramEmitter(codewriter, None, "opcode", ("pc",),
+                             ("pc", "oparg", "code"), ("value",))
+    emitter.precompile_fragments(extension.templates)
+
+    assert codewriter.assembler.descrs == []
+
+    native_table = build_native_table(emitter._fragments)
+    stamp_descr_indices(codewriter, native_table)
+
+    assert len(codewriter.assembler.descrs) == 1
+    assert codewriter.assembler.descrs[0].pe_descr_index == 0
+
+    from rpython.translator.backendopt.native_fragments import NDescr
+    found = 0
+    for pair in native_table.values():
+        for fragment in pair:
+            if fragment is None:
+                continue
+            for insn in fragment.insns:
+                for operand in insn.operands:
+                    if isinstance(operand, NDescr):
+                        assert operand.descr.pe_descr_index >= 0
+                        found += 1
+    assert found > 0   # the calldescr really was reached by this walk
+
+
 def test_readonly_native_assembler_declines_uncovered_insn():
     """readonly=True NativeAssembler (the runtime_cogen path) never grows
     the shared insns/descrs tables: an uncovered (opname, argcodes)

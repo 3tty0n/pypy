@@ -454,17 +454,12 @@ class ProgramEmitter(object):
     def native_table(self):
         """{opcode_key: (native_no_merge, native_merge)}.
 
-        Also stamps every descr minted so far with its position in
-        assembler.descrs (AbstractDescr.pe_descr_index, history.py), so
-        NativeAssembler.write_insn can read the stamp instead of growing
-        the shared list at runtime. Indices are stable (append-only), so
-        calling this more than once is harmless.
+        Does NOT stamp descr indices here: pe_linked_setup runs strictly
+        before codewriter.make_jitcodes(), so assembler.descrs is still
+        empty at this point -- see stamp_descr_indices below instead.
         """
         from rpython.translator.backendopt.native_fragments import (
             build_native_table)
-        descrs = self.codewriter.assembler.descrs
-        for i in range(len(descrs)):
-            descrs[i].pe_descr_index = i
         return build_native_table(self._fragments)
 
     def emit(self, program, name="emitted-residual"):
@@ -721,3 +716,45 @@ class ProgramEmitter(object):
         for kind, index, source in emitted:
             ssarepr.insns.append(
                 ("%s_copy" % kind, source, "->", self._register(kind, index)))
+
+
+def stamp_descr_indices(codewriter, native_table):
+    """Stamp pe_descr_index on every descr, once assembler.descrs is
+    final. Call only after codewriter.make_jitcodes() -- any earlier and
+    assembler.descrs is still (nearly) empty (see native_table's note).
+
+    Two passes: stamp what's already in assembler.descrs, then walk
+    native_table's own fragments for any NDescr a first pass missed
+    (calldescrof isn't guaranteed to cache) and append + stamp those too.
+    NativeSwitchDictDescr operands are skipped: never prebuilt, so never
+    stamped -- write_insn still grows the shared list for those.
+    """
+    from rpython.translator.backendopt.native_fragments import NDescr
+    from rpython.translator.backendopt.native_pipeline import (
+        NativeSwitchDictDescr)
+
+    descrs = codewriter.assembler.descrs
+    for i in range(len(descrs)):
+        descrs[i].pe_descr_index = i
+
+    found_only_in_fragments = 0
+    for pair in native_table.values():
+        for fragment in pair:
+            if fragment is None:
+                continue
+            for insn in fragment.insns:
+                for operand in insn.operands:
+                    if not isinstance(operand, NDescr):
+                        continue
+                    d = operand.descr
+                    if isinstance(d, NativeSwitchDictDescr):
+                        continue
+                    if d.pe_descr_index < 0:
+                        d.pe_descr_index = len(descrs)
+                        descrs.append(d)
+                        found_only_in_fragments += 1
+    if found_only_in_fragments:
+        # Plain print: this runs at translation-build time, never inside
+        # the translated binary's own graph, so debug_print doesn't apply.
+        print "[offline-pe] stamped %d descr(s) only a fragment " \
+              "referenced (no ordinary jitcode did)" % found_only_in_fragments

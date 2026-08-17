@@ -40,6 +40,15 @@ def apply_jit(translator, backend_name="auto", inline=False,
     pe_linked_setup = getattr(translator, "_pe_linked_setup", None)
     if pe_linked_setup is not None:
         kwds["pe_linked_setup"] = pe_linked_setup
+    # Same wiring as pe_linked_setup above: a pe_linked_setup caller (e.g.
+    # PySOM's install_runtime_cogen, offline.py) that needs a callback
+    # *after* codewriter.make_jitcodes() -- e.g. to stamp AbstractDescr.
+    # pe_descr_index once assembler.descrs is genuinely final, see
+    # jitcode_emitter.py's stamp_descr_indices -- sets this attribute
+    # itself, since it already has 'translator' in hand.
+    pe_jitcode_setup = getattr(translator, "_pe_jitcode_setup", None)
+    if pe_jitcode_setup is not None:
+        kwds["pe_jitcode_setup"] = pe_jitcode_setup
     if 'CPUClass' not in kwds:
         from rpython.jit.backend.detect_cpu import getcpuclass
         kwds['CPUClass'] = getcpuclass(backend_name)
