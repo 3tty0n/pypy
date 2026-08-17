@@ -111,6 +111,7 @@ class FragmentCompiler(object):
 
         graph = copygraph(template.residual_graph, shallowvars=True)
         named = dict(zip(graph.signature[0], graph.startblock.inputargs))
+        self._thread_boundary_values(graph, named)
         replace_uses(graph, self._placeholders(template, named, bindings))
         helper = LinkedResidualLowerer(
             self.boundary_names, (), (), self.jit_merge_point_args)
@@ -203,6 +204,32 @@ class FragmentCompiler(object):
             for kind in KINDS)
         return TemplateFragment(ssarepr.insns, exits, num_regs, entry,
                                 self._prologue(ordered, reds))
+
+    def _thread_boundary_values(self, graph, named):
+        """Without this, an unused-here boundary name has no live copy in a
+        later block, and falling back to the start-block variable lets the
+        register allocator silently reuse its color for something else.
+        """
+        terminal = (graph.returnblock, graph.exceptblock)
+        extra = {graph.startblock: named}
+        for name in self.boundary_names:
+            var = named.get(name)
+            if var is None:
+                continue
+            for block in graph.iterblocks():
+                if block is graph.startblock or block in terminal:
+                    continue
+                fresh = self._like(var)
+                block.inputargs = list(block.inputargs) + [fresh]
+                extra.setdefault(block, {})[name] = fresh
+            for block in graph.iterblocks():
+                source = extra.get(block, {}).get(name)
+                if source is None:
+                    continue
+                for link in block.exits:
+                    if link.target in terminal:
+                        continue
+                    link.args = list(link.args) + [source]
 
     def _state_names(self, terminators):
         """The late-static state the template carries, read off its exits."""
@@ -578,10 +605,18 @@ class ProgramEmitter(object):
 
     def _localise(self, insn, pc, bindings):
         """Copy one fragment insn in for this placement: relabel, and
-        patch each HoleConstant with this block's own bindings value."""
+        patch every HoleConstant -- including one hidden inside a
+        jit_merge_point/pe_bailout_point green/red ListOfKind, or it
+        survives unpatched as the raw sentinel.
+
+        A marker's own "pc" green means this block's leading pc, not
+        bindings["pc"] (a Continue exit's *next* pc) -- same hole name,
+        told apart only by whether it sits in a green/red box list.
+        """
         from rpython.flowspace.model import Constant
-        from rpython.jit.codewriter.flatten import Label, TLabel
+        from rpython.jit.codewriter.flatten import Label, TLabel, ListOfKind
         from rpython.jit.codewriter.jitcode import SwitchDictDescr
+        is_marker = insn and insn[0] in ("jit_merge_point", "pe_bailout_point")
         out = []
         for item in insn:
             if isinstance(item, Label):
@@ -590,6 +625,11 @@ class ProgramEmitter(object):
                 out.append(TLabel(("in", pc, item.name)))
             elif isinstance(item, HoleConstant):
                 out.append(Constant(bindings[item.hole_name], item.concretetype))
+            elif isinstance(item, ListOfKind):
+                out.append(ListOfKind(item.kind, [
+                    self._patch_hole(x, pc, bindings, is_marker)
+                    if isinstance(x, HoleConstant) else x
+                    for x in item.content]))
             elif isinstance(item, SwitchDictDescr):
                 # A switch keeps its targets inside the descriptor rather than
                 # in the instruction, and the descriptor is the fragment's --
@@ -602,6 +642,14 @@ class ProgramEmitter(object):
             else:
                 out.append(item)
         return tuple(out)
+
+    def _patch_hole(self, hole, pc, bindings, is_marker):
+        """Value for one HoleConstant inside a green/red box list -- see
+        _localise's docstring for the marker "pc" special case."""
+        from rpython.flowspace.model import Constant
+        if is_marker and hole.hole_name == "pc":
+            return Constant(pc, hole.concretetype)
+        return Constant(bindings[hole.hole_name], hole.concretetype)
 
     def _emit_moves(self, ssarepr, sources, destinations, scratch):
         """Place each boundary value in the register its successor reads.

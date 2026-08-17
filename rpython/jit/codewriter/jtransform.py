@@ -85,6 +85,14 @@ class Transformer(object):
                 return
             renamings[var] = var_or_const
             if isinstance(var_or_const, Constant):
+                # HoleConstant is a sentinel, not real data -- don't cast it,
+                # re-type it instead so it stays patchable later.
+                from rpython.translator.backendopt.jitcode_emitter import (
+                    HoleConstant)
+                if isinstance(var_or_const, HoleConstant):
+                    renamings_constants[var] = HoleConstant(
+                        var_or_const.hole_name, var.concretetype)
+                    return
                 value = var_or_const.value
                 try:
                     value = lltype._cast_whatever(var.concretetype, value)

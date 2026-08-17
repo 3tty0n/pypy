@@ -126,6 +126,36 @@ class TestGenerateForLiveCode(LLJitMixin):
             assert precompiled._covers(pc)
         assert precompiled.is_legit_entry_pc(0)
 
+    def test_generate_for_live_code_executes_and_matches_the_plain_interpreter(self):
+        """Runs meta_interp for real and checks the traced result against
+        a plain, non-generated interpretation of the same bytecode."""
+        from rpython.jit.metainterp.warmspot import get_stats
+        from rpython.rlib.nonconst import NonConstant
+
+        bytecode = _assemble(COUNTDOWN)
+
+        def interp_w(intvalue):
+            w_result = tla.run(NonConstant(bytecode), tla.W_IntObject(intvalue))
+            assert isinstance(w_result, tla.W_IntObject)
+            return w_result.intvalue
+
+        baseline = self.meta_interp(interp_w, [42], listops=True)
+        assert baseline == 0
+
+        def install(codewriter, jitdriver_sd, translator):
+            extension = tla_offline.build_generating_extension(translator)
+            linker = _tla_portal_linker(jitdriver_sd)
+            ref = _bytecode_ref(translator, bytecode)
+            program = generate_for_live_code(
+                extension, linker, codewriter, bytecode, GUARD, ref)
+            assert program is not None
+            return program
+
+        pe_result = self.meta_interp(
+            interp_w, [42], listops=True, pe_linked_setup=install)
+        assert pe_result == baseline
+        assert get_stats().pe_metadata_count > 0
+
 
 def test_generate_for_live_code_declines_missing_template():
     """An instruction with no template is declined by the scan alone,

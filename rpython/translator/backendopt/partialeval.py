@@ -44,6 +44,16 @@ def _resolve_constant_switch(block):
     switch = block.exitswitch
     if not isinstance(switch, Constant) or switch is c_last_exception:
         return
+    from rpython.translator.backendopt.jitcode_emitter import HoleConstant
+    assert not isinstance(switch, HoleConstant), (
+        "a HoleConstant reached a block's exitswitch: this pruned a branch "
+        "using the sentinel value instead of a real one. Stage A "
+        "(make_symbolic_template) is supposed to have already lifted any "
+        "branch whose shape depends on a late-static value into the "
+        "template's own terminators, so an ordinary graph operation should "
+        "never make control flow depend on a hole -- if it does, folding "
+        "here would silently pick the wrong branch for every real value "
+        "except (by chance) HOLE_SENTINEL itself.")
     if block.exits[-1].exitcase == "default":
         default, candidates = block.exits[-1], block.exits[:-1]
     else:

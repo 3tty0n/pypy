@@ -122,6 +122,48 @@ def test_shared_fragment_patches_each_instance_with_its_own_values():
     assert (2, 11) in sums
 
 
+def test_shared_fragment_survives_a_foldable_op_on_a_hole():
+    """A hole reaching a foldable op (chr) must not be eagerly folded."""
+    from rpython.flowspace.model import Constant
+
+    OP_CHR = 4
+    OP_HALT = 1
+
+    def step(opcode, oparg, pc, value):
+        if opcode == OP_CHR:
+            c = chr(oparg)
+            return pc + 2, value + ord(c)
+        return -1, value
+
+    step._pe_static_args_ = ("opcode",)
+    step._pe_split_args_ = ("pc",)
+
+    from rpython.jit.codewriter.codewriter import CodeWriter
+    from rpython.jit.codewriter.test.test_codewriter import FakeCPU
+
+    code = (chr(OP_CHR) + chr(65) + chr(OP_CHR) + chr(90) +
+            chr(OP_HALT) + chr(0))
+    graph, translator = get_graph(step, [int, int, int, int])
+    extension = GeneratingExtension.from_step_function(
+        translator, step, [OP_CHR, OP_HALT], byte_pair_decoder)
+    program = extension.generate(code)
+
+    codewriter = CodeWriter(FakeCPU(translator.rtyper), [])
+    emitter = ProgramEmitter(codewriter, None, "opcode", ("pc",),
+                             ("pc", "oparg", "code"), ("value",))
+    jitcode, entry_positions = emitter.emit(program, "emitted-chr")
+
+    assert emitter.fragment_for(program.blocks[0]) is \
+        emitter.fragment_for(program.blocks[2])
+    assert str(HOLE_SENTINEL) not in jitcode.dump()
+
+    added = [insn[2].value for insn in emitter.last_ssarepr.insns
+             if insn[0] == "int_add" and isinstance(insn[2], Constant)
+             and insn[2].value in (65, 90)]
+    assert 65 in added
+    assert 90 in added
+
+
 def test_shared_fragment_reuses_calldescr_objects():
     """A calldescr baked into a shared fragment is reused, not rebuilt."""
     from rpython.jit.codewriter.codewriter import CodeWriter
