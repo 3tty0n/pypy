@@ -149,6 +149,11 @@ class FragmentCompiler(object):
             Finish, LinkedResidualLowerer)
 
         graph = copygraph(template.residual_graph, shallowvars=True)
+        # Snapshot the argument order before _reorder_arguments (below)
+        # overwrites graph.signature with the portal's boundary-name
+        # order: _boundary_values needs the original order to zip
+        # against the exit tuple, which follows it, not the portal's.
+        original_order = list(graph.signature[0])
         named = dict(zip(graph.signature[0], graph.startblock.inputargs))
         self._thread_boundary_values(graph, named)
         replace_uses(graph, self._placeholders(template, named, bindings))
@@ -209,7 +214,8 @@ class FragmentCompiler(object):
 
         tails = []
         for index, transition in enumerate(transitions):
-            values = self._boundary_values(helper, graph, transition)
+            values = self._boundary_values(
+                helper, graph, transition, original_order)
             helper._remove_result_tuple(transition)
             if all(finishing):
                 tails.append(None)
@@ -348,7 +354,7 @@ class FragmentCompiler(object):
                 replacements[var] = HoleConstant(name, var.concretetype)
         return replacements
 
-    def _boundary_values(self, helper, graph, transition):
+    def _boundary_values(self, helper, graph, transition, original_order):
         """Which value carries each boundary name where this exit leaves off.
 
         The exit tuple can omit a boundary name whose value is unchanged
@@ -366,9 +372,27 @@ class FragmentCompiler(object):
         """
         carried = helper._available_carried_values(graph, transition.block)
         dynamic = helper._runtime_values(transition)
-        origins = _boundary_value_origins(graph)
         named = helper._named_start_arguments(graph)
 
+        # Origin-matching (below) places a name the exit tuple omits by
+        # value identity, which can't tell "name X unchanged" from "name
+        # Y now holding X's old value" -- exactly what a shift-register
+        # boundary does on every write (SOM's s0/s1/s2: incoming s0
+        # becomes the new s1 unmodified), so it mismatches names by one.
+        #
+        # Skip that guessing when nothing was elided: if every boundary
+        # name shows up in this exit's own tuple (true of SOM's
+        # _interp_step), a plain positional zip against the step
+        # function's *original* argument order is exact.
+        # original_order, not graph.signature[0]: _reorder_arguments has
+        # already overwritten the latter with the portal's own
+        # boundary-name order, which zips wrong.
+        ordered = [name for name in original_order if name in named
+                  and name in self.boundary_names]
+        if len(dynamic) == len(ordered):
+            return dict(zip(ordered, dynamic))
+
+        origins = _boundary_value_origins(graph)
         fresh = []
         unchanged_names = set()
         for item in dynamic:

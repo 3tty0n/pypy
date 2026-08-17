@@ -16,31 +16,35 @@ def _never_matches(gcref):
 # instead, without mutating any frozen structure.
 # _late_jitcode_base[0]: len(metainterp_sd.jitcodes) at freeze time, set
 # once by warmspot.py's set_late_jitcode_base.
-# _late_jitcodes: JitCodes registered since, in order; a late JitCode's
-# .index is _late_jitcode_base[0] + its position here.
+# _late_jitcode_next_index[0]: next .index to hand out; a monotonic
+# counter, independent of any list length.
+# _late_jitcodes_by_index: late JitCodes keyed by their own .index, so
+# lookup needs no position/index correspondence to hold.
 _late_jitcode_base = [0]
-_late_jitcodes = []
+_late_jitcode_next_index = [0]
+_late_jitcodes_by_index = {}
 
 
 def set_late_jitcode_base(count):
     _late_jitcode_base[0] = count
+    _late_jitcode_next_index[0] = count
 
 
-def get_late_jitcode(pos):
-    # A build that never wires up runtime_cogen never appends to
-    # _late_jitcodes, so the annotator sees no item type for it, though
-    # resume.py's reader is unconditional core JIT machinery.
+def get_late_jitcode(index):
+    # A build that never wires runtime_cogen up never sets
+    # _late_jitcodes_by_index, so the annotator has no known value type
+    # for it, though resume.py's reader is unconditional core JIT code.
     # NonConstant(False) keeps this branch live for annotation (so the
-    # append below gives the list a real JitCode item type) while staying
-    # always-False, and so never actually executing, at runtime.
+    # setitem below gives the dict a real JitCode value type) while
+    # staying always-False, and so never actually executing, at runtime.
     from rpython.rlib.nonconst import NonConstant
     if NonConstant(False):
         # fnaddr=llmemory.NULL, not None: JitCode.fnaddr's type is
         # unified across every call site, and native_pipeline.py's own
         # construction already establishes it as SomeAddress there.
-        _late_jitcodes.append(
-            JitCode("late-jitcode-type-hint", fnaddr=llmemory.NULL))
-    return _late_jitcodes[pos]
+        _late_jitcodes_by_index[-1] = JitCode(
+            "late-jitcode-type-hint", fnaddr=llmemory.NULL)
+    return _late_jitcodes_by_index[index]
 
 
 def register_late_jitcode(jitcode, own_liveness_info):
@@ -66,8 +70,15 @@ def register_late_jitcode(jitcode, own_liveness_info):
     """
     if jitcode.own_liveness_info is None:
         jitcode.own_liveness_info = own_liveness_info
-    jitcode.index = _late_jitcode_base[0] + len(_late_jitcodes)
-    _late_jitcodes.append(jitcode)
+    # A monotonic counter, not `_late_jitcode_base[0] + len(a_list)`: the
+    # latter needs a list length kept in lock step with the separately-
+    # assigned `.index`, but get_late_jitcode (above) is a second, real
+    # (if conditional) writer of that list. A counter this function alone
+    # increments needs no such correspondence; _late_jitcodes_by_index
+    # needs none either, since it is keyed by the index value itself.
+    jitcode.index = _late_jitcode_next_index[0]
+    _late_jitcode_next_index[0] += 1
+    _late_jitcodes_by_index[jitcode.index] = jitcode
 
 
 class PELinkedProgram(object):

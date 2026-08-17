@@ -1049,15 +1049,15 @@ class AbstractResumeDataReader(object):
 def _jitcode_at_pos(jitcodes, pos):
     """The JitCode at 'pos' in the "virtual" jitcodes catalogue: the frozen
     global list metainterp_sd.jitcodes ++ every JitCode registered since
-    (register_late_jitcode, jitcode.py) -- a late one's own .index is
-    exactly len(jitcodes) + its position in that second list at
-    registration time (jitcode.py's own module comment), so a pos past the
-    frozen list's end is found there instead.
+    (register_late_jitcode, jitcode.py) -- a late one's own .index is a
+    global value assigned by a monotonic counter (jitcode.py's own module
+    comment), so a pos past the frozen list's end is looked up by that same
+    value, not by position, in the dict register_late_jitcode filled.
     """
     if pos < len(jitcodes):
         return jitcodes[pos]
     from rpython.jit.codewriter.jitcode import get_late_jitcode
-    return get_late_jitcode(pos - len(jitcodes))
+    return get_late_jitcode(pos)
 
 
 # ---------- when resuming for pyjitpl.py, make boxes ----------

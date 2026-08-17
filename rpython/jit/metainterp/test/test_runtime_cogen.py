@@ -52,6 +52,46 @@ def _bytecode_ref(translator, bytecode):
     return lltype.cast_opaque_ptr(llmemory.GCREF, constant.value)
 
 
+def test_late_jitcode_index_roundtrip_matches_real_production_path():
+    """jitcode.py's own register_late_jitcode/get_late_jitcode -- what a
+    real (translated) runtime_cogen callback calls, distinct from the
+    MetaInterpStaticData alias the other tests below go through.
+
+    Registers two late JitCodes against a fixed frozen-list length and
+    round-trips their .index through resume.py's _jitcode_at_pos, as
+    guard resume does.
+    """
+    from rpython.jit.codewriter.jitcode import (
+        JitCode, register_late_jitcode, set_late_jitcode_base,
+        _late_jitcodes_by_index)
+    from rpython.jit.metainterp.resume import _jitcode_at_pos
+
+    _late_jitcodes_by_index.clear()
+    try:
+        frozen = [JitCode("frozen-%d" % i) for i in range(5)]
+        set_late_jitcode_base(len(frozen))
+
+        late1 = JitCode("late-1")
+        late1.setup()
+        register_late_jitcode(late1, "liveness-chunk-1")
+        assert late1.index == 5
+        assert _jitcode_at_pos(frozen, late1.index) is late1
+
+        late2 = JitCode("late-2")
+        late2.setup()
+        register_late_jitcode(late2, "liveness-chunk-2")
+        assert late2.index == 6
+        assert _jitcode_at_pos(frozen, late2.index) is late2
+        # The first late registration must still resolve after a second one.
+        assert _jitcode_at_pos(frozen, late1.index) is late1
+
+        # Ordinary (non-late) indices must still resolve into the frozen list.
+        assert _jitcode_at_pos(frozen, 0) is frozen[0]
+        assert _jitcode_at_pos(frozen, 4) is frozen[4]
+    finally:
+        _late_jitcodes_by_index.clear()
+
+
 class TestGenerateForLiveCode(LLJitMixin):
 
     def test_generate_for_live_code_installs_from_a_real_warmrunnerdesc(self):
@@ -222,21 +262,34 @@ class TestGenerateForLiveCode(LLJitMixin):
 
     def test_late_trigger_after_finish_setup_executes_and_matches_the_plain_interpreter(self):
         """First live trace triggers runtime_cogen after finish_setup
-        already froze liveness_info/.index; needs register_late_jitcode."""
+        already froze liveness_info/.index; needs register_late_jitcode.
+
+        Calls into the compiled loop several times after warmup so its
+        own back-edge guard actually fails and resumes through the late
+        JitCode's liveness, not just entry -- checked via a counting
+        instrumentation on the resume reader, not just result equality.
+        """
         from rpython.jit.metainterp.warmspot import get_stats
+        from rpython.jit.metainterp import resume
         from rpython.rlib.nonconst import NonConstant
 
         bytecode = _assemble(COUNTDOWN)
 
         def interp_w(intvalue):
-            w_result = tla.run(NonConstant(bytecode), tla.W_IntObject(intvalue))
-            assert isinstance(w_result, tla.W_IntObject)
-            return w_result.intvalue
+            total = 0
+            i = 2
+            while i <= intvalue:
+                w_result = tla.run(NonConstant(bytecode), tla.W_IntObject(i))
+                assert isinstance(w_result, tla.W_IntObject)
+                total += w_result.intvalue
+                i += 1
+            return total
 
-        baseline = self.meta_interp(interp_w, [42], listops=True)
+        baseline = self.meta_interp(interp_w, [12], listops=True)
         assert baseline == 0
 
         counter = [0]
+        late_jitcode_box = []
 
         def install(codewriter, jitdriver_sd, translator):
             extension = tla_offline.build_generating_extension(translator)
@@ -261,6 +314,7 @@ class TestGenerateForLiveCode(LLJitMixin):
                     # assembled after finish_setup already ran.
                     staticdata = jitdriver_sd.warmstate.warmrunnerdesc.metainterp_sd
                     staticdata.register_late_jitcode(program.jitcode, codewriter)
+                    late_jitcode_box.append(program.jitcode)
                 return program
 
             mainjitcode = linker.mainjitcode(codewriter)
@@ -270,28 +324,67 @@ class TestGenerateForLiveCode(LLJitMixin):
             mainjitcode.pe_metadata = metadata
             return None
 
-        pe_result = self.meta_interp(
-            interp_w, [42], listops=True, pe_linked_setup=install)
+        # Result equality alone can't prove resume decoded THIS late
+        # jitcode; count hits on it directly.
+        resume_hits = [0]
+        orig = resume.AbstractResumeDataReader._prepare_next_section
+
+        def counting_prepare_next_section(self, info, jitcode):
+            if late_jitcode_box and jitcode is late_jitcode_box[0]:
+                resume_hits[0] += 1
+            return orig(self, info, jitcode)
+
+        resume.AbstractResumeDataReader._prepare_next_section = (
+            counting_prepare_next_section)
+        try:
+            pe_result = self.meta_interp(
+                interp_w, [12], listops=True, pe_linked_setup=install)
+        finally:
+            resume.AbstractResumeDataReader._prepare_next_section = orig
         assert pe_result == baseline
         assert counter[0] >= 1
+        assert resume_hits[0] > 0, (
+            "resume never reached the late jitcode -- COUNTDOWN's loop-exit "
+            "guard should fail and resume through its liveness for real")
         assert get_stats().pe_metadata_count > 0
 
     def test_late_trigger_native_path_executes_and_matches_the_plain_interpreter(self):
-        """Late trigger via generate_for_live_code's native_table path."""
+        """Late trigger via generate_for_live_code's native_table path,
+        instead of the SSARepr-based emitter (test above).
+
+        Needs register_native_insn_coverage (jitcode_emitter.py) run from
+        pe_jitcode_setup, as PySOM's stamp_after_make_jitcodes does for a
+        real build: without it NativeAssembler declines silently when
+        concatenation needs a connective-tissue move some opcode's own
+        body doesn't already have, so a caller that skips this step never
+        gets a linked program, not even a failing one.
+        """
         from rpython.jit.metainterp.warmspot import get_stats
+        from rpython.jit.metainterp import resume
         from rpython.rlib.nonconst import NonConstant
 
         bytecode = _assemble(COUNTDOWN)
 
         def interp_w(intvalue):
-            w_result = tla.run(NonConstant(bytecode), tla.W_IntObject(intvalue))
-            assert isinstance(w_result, tla.W_IntObject)
-            return w_result.intvalue
+            # See the SSARepr-path sibling test's own comment: a single call
+            # never forces the compiled loop's *exit* guard to actually
+            # fail (nothing to fail out of yet); repeating the call over
+            # several distinct values, after warmup, does.
+            total = 0
+            i = 2
+            while i <= intvalue:
+                w_result = tla.run(NonConstant(bytecode), tla.W_IntObject(i))
+                assert isinstance(w_result, tla.W_IntObject)
+                total += w_result.intvalue
+                i += 1
+            return total
 
-        baseline = self.meta_interp(interp_w, [42], listops=True)
+        baseline = self.meta_interp(interp_w, [12], listops=True)
         assert baseline == 0
 
         counter = [0]
+        late_jitcode_box = []
+        coverage_state = []
 
         def install(codewriter, jitdriver_sd, translator):
             extension = tla_offline.build_generating_extension(translator)
@@ -306,6 +399,7 @@ class TestGenerateForLiveCode(LLJitMixin):
                 RUNTIME_NAMES, jit_merge_point_args=JIT_MERGE_POINT_ARGS)
             emitter.precompile_fragments(used)
             native_table = emitter.native_table()
+            coverage_state.append((codewriter, native_table))
 
             def runtime_cogen(gcref):
                 counter[0] += 1
@@ -313,8 +407,18 @@ class TestGenerateForLiveCode(LLJitMixin):
                     extension, linker, codewriter, bytecode, GUARD, gcref,
                     native_table=native_table)
                 if program is not None:
+                    # Real path: jitcode.py's module-level
+                    # register_late_jitcode, not the MetaInterpStaticData
+                    # alias the SSARepr-path sibling test above uses.
+                    assert program.jitcode.own_liveness_info is not None
+                    from rpython.jit.codewriter.jitcode import (
+                        register_late_jitcode, set_late_jitcode_base)
                     staticdata = jitdriver_sd.warmstate.warmrunnerdesc.metainterp_sd
-                    staticdata.register_late_jitcode(program.jitcode, codewriter)
+                    set_late_jitcode_base(len(staticdata.jitcodes))
+                    register_late_jitcode(
+                        program.jitcode, program.jitcode.own_liveness_info)
+                    assert program.jitcode not in staticdata.jitcodes
+                    late_jitcode_box.append(program.jitcode)
                 return program
 
             mainjitcode = linker.mainjitcode(codewriter)
@@ -324,11 +428,41 @@ class TestGenerateForLiveCode(LLJitMixin):
             mainjitcode.pe_metadata = metadata
             return None
 
-        pe_result = self.meta_interp(
-            interp_w, [42], listops=True, pe_linked_setup=install)
+        def jitcode_setup(mainjitcode):
+            # Mirrors PySOM's stamp_after_make_jitcodes: must run after
+            # make_jitcodes() and before finish_setup, the only window a
+            # dict growth on codewriter.assembler.insns is legal in.
+            if not coverage_state:
+                return
+            codewriter, native_table = coverage_state[0]
+            from rpython.translator.backendopt.jitcode_emitter import (
+                stamp_descr_indices, register_native_insn_coverage)
+            stamp_descr_indices(codewriter, native_table)
+            register_native_insn_coverage(codewriter, native_table)
+
+        resume_hits = [0]
+        orig = resume.AbstractResumeDataReader._prepare_next_section
+
+        def counting_prepare_next_section(self, info, jitcode):
+            if late_jitcode_box and jitcode is late_jitcode_box[0]:
+                resume_hits[0] += 1
+            return orig(self, info, jitcode)
+
+        resume.AbstractResumeDataReader._prepare_next_section = (
+            counting_prepare_next_section)
+        try:
+            pe_result = self.meta_interp(
+                interp_w, [12], listops=True, pe_linked_setup=install,
+                pe_jitcode_setup=jitcode_setup)
+        finally:
+            resume.AbstractResumeDataReader._prepare_next_section = orig
         assert pe_result == baseline
         assert counter[0] >= 1
         assert get_stats().pe_metadata_count > 0
+        assert resume_hits[0] > 0, (
+            "resume never reached the late jitcode -- COUNTDOWN's loop-exit "
+            "guard should fail and resume through its own_liveness_info "
+            "for real")
 
 
 def test_generate_for_live_code_declines_missing_template():
