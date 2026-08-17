@@ -207,6 +207,28 @@ class PortalLinker(object):
         jitcode, entry_positions, assembler = emit_and_assemble_native(
             native_table, program, self.name,
             has_merge_points=has_merge_points, assembler=assembler)
+        # resumecode.py's Writer.append_int (metainterp/resume.py's
+        # ResumeDataLoopMemo.number calls it with a guard's in-jitcode pc)
+        # casts to a *signed* 16-bit short: 32767 is the largest pc that
+        # survives the round-trip, so a jitcode whose own code is longer
+        # than that has pcs a guard inside it can never resume through.
+        # That is a core JIT encoding invariant, not ours to change --
+        # ours is to never hand it a jitcode this large in the first
+        # place. An ordinary (translation-time, one-fragment-per-opcode)
+        # jitcode never approaches this; only a runtime_cogen program,
+        # concatenating a whole method's worth of fragments into one
+        # jitcode, realistically can (confirmed: PySOM's CD benchmark).
+        # Declined the same way every other capacity overflow here is --
+        # see emit_resolved_const's own per-kind cap (assembler.py) for
+        # the identical reasoning on why this must raise, not assert: a
+        # translated binary's assert is a fatal abort, not a catchable
+        # exception this decline path could ever see.
+        from rpython.jit.codewriter.assembler import AssemblerError
+        from rpython.rlib.debug import debug_print
+        if len(jitcode.code) > 32767:
+            debug_print("runtime cogen: jitcode too large for resume pc "
+                       "encoding", len(jitcode.code))
+            raise AssemblerError("jitcode too large for resume pc encoding")
         jitcode.own_liveness_info = "".join(assembler.all_liveness)
         program.attach_to_jitcode(jitcode, entry_positions)
         return LoweredResidualProgram(None, jitcode, entry_positions)

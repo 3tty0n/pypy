@@ -261,7 +261,8 @@ class Assembler(object):
             except KeyError:
                 self.constants_i.append(value)
                 val = self.count_regs['int'] + len(self.constants_i) - 1
-                assert 0 <= val < 256, "too many constants"
+                if not 0 <= val < 256:
+                    raise AssemblerError("too many constants")
                 self.constants_dict_i[dedup_key] = val
             except TypeError:
                 # Unhashable dedup_key (e.g. a Symbolic): fall back to id().
@@ -272,7 +273,8 @@ class Assembler(object):
                 except KeyError:
                     self.constants_i.append(value)
                     val = self.count_regs['int'] + len(self.constants_i) - 1
-                    assert 0 <= val < 256, "too many constants"
+                    if not 0 <= val < 256:
+                        raise AssemblerError("too many constants")
                     self.constants_dict_i[idkey] = val
         elif kind == 'ref':
             if not value:
@@ -284,8 +286,8 @@ class Assembler(object):
                     self.constants_r.append(value)
                     self._null_ref_const_index = (
                         self.count_regs['ref'] + len(self.constants_r) - 1)
-                    assert 0 <= self._null_ref_const_index < 256, \
-                        "too many constants"
+                    if not 0 <= self._null_ref_const_index < 256:
+                        raise AssemblerError("too many constants")
                 val = self._null_ref_const_index
             else:
                 try:
@@ -293,7 +295,8 @@ class Assembler(object):
                 except KeyError:
                     self.constants_r.append(value)
                     val = self.count_regs['ref'] + len(self.constants_r) - 1
-                    assert 0 <= val < 256, "too many constants"
+                    if not 0 <= val < 256:
+                        raise AssemblerError("too many constants")
                     self.constants_dict_r[dedup_key] = val
         elif kind == 'float':
             # +0.0/-0.0 compare and hash equal but must not dedup together;
@@ -307,7 +310,8 @@ class Assembler(object):
             except KeyError:
                 self.constants_f.append(value)
                 val = self.count_regs['float'] + len(self.constants_f) - 1
-                assert 0 <= val < 256, "too many constants"
+                if not 0 <= val < 256:
+                    raise AssemblerError("too many constants")
                 self.constants_dict_f[key] = val
         else:
             raise AssemblerError('unimplemented resolved kind %r in %r' %
@@ -454,10 +458,21 @@ class Assembler(object):
             descr.attach(as_dict)
 
     def check_result(self):
-        # Limitation of the number of registers, from the single-byte encoding
-        assert self.count_regs['int'] + len(self.constants_i) <= 256
-        assert self.count_regs['ref'] + len(self.constants_r) <= 256
-        assert self.count_regs['float'] + len(self.constants_f) <= 256
+        # Limitation of the number of registers, from the single-byte
+        # encoding -- a real, not-astronomically-unlikely capacity limit a
+        # sufficiently large method can hit (see emit_resolved_const's own
+        # per-append check for the identical reason this is a catchable
+        # AssemblerError, not an assert: NativeAssembler inherits this
+        # method unchanged and reaches it for real at genuine program
+        # runtime, where an RPython assert failure is a fatal, uncatchable
+        # abort, not a Python-level exception a caller's `except Exception`
+        # can decline the method with).
+        if self.count_regs['int'] + len(self.constants_i) > 256:
+            raise AssemblerError("too many int registers/constants")
+        if self.count_regs['ref'] + len(self.constants_r) > 256:
+            raise AssemblerError("too many ref registers/constants")
+        if self.count_regs['float'] + len(self.constants_f) > 256:
+            raise AssemblerError("too many float registers/constants")
 
     def make_jitcode(self, jitcode):
         """Hand the assembled code and constant pools off to 'jitcode'.

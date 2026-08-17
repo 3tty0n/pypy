@@ -218,6 +218,72 @@ def test_readonly_native_assembler_declines_uncovered_insn():
                    has_merge_points=False, assembler=assembler)
 
 
+def test_emit_native_declines_a_jitcode_too_large_for_resume_pc_encoding():
+    """Regression test: resumecode.py's Writer.append_int casts a guard's
+    in-jitcode pc to a *signed* 16-bit short -- 32767 is the largest value
+    that survives the round-trip -- so PortalLinker._emit_native must
+    decline (catchable AssemblerError, not the fatal assert that lives on
+    the resume-encoding side and is not ours to change) a jitcode whose own
+    assembled code is longer than that, before it is ever attached to the
+    portal. Confirmed in production: PySOM's CD benchmark has a method
+    whose runtime_cogen-concatenated jitcode exceeds this.
+
+    Faking the oversized ``.code`` after a real (tiny) assembly, rather
+    than actually assembling 32768+ bytes of toy instructions, is the
+    point -- the cap check itself is what this tests, not the assembler.
+    """
+    from rpython.jit.codewriter.assembler import AssemblerError
+    from rpython.translator.backendopt import native_pipeline
+    from rpython.translator.backendopt.portal_linker import PortalLinker
+
+    code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_HALT) + chr(0)
+    program, emitter = _toy_setup(code)
+    native_table = build_native_table(emitter._fragments)
+
+    real_emit_and_assemble_native = native_pipeline.emit_and_assemble_native
+
+    def _oversized(*args, **kwargs):
+        jitcode, entry_positions, assembler = real_emit_and_assemble_native(
+            *args, **kwargs)
+        jitcode.code = "x" * 32768
+        return jitcode, entry_positions, assembler
+
+    native_pipeline.emit_and_assemble_native = _oversized
+    try:
+        linker = PortalLinker(None, (), (), static_name="opcode",
+                              name="linked-oversized")
+        py.test.raises(AssemblerError, linker._emit_native,
+                       emitter.codewriter, program, native_table)
+    finally:
+        native_pipeline.emit_and_assemble_native = \
+            real_emit_and_assemble_native
+
+
+def test_readonly_native_assembler_declines_constant_capacity_overflow():
+    """Regression test: a genuinely large method's constant pool exceeding
+    the single-byte-index 256-per-kind cap (Assembler.emit_resolved_const/
+    check_result) must raise a catchable AssemblerError on the readonly
+    native path, not fail an RPython ``assert`` -- an assert compiles to a
+    fatal, uncatchable abort in a translated binary (confirmed in
+    production: PySOM's CD benchmark, one of its own methods big enough to
+    already be a translation-time "too many constants" decline for
+    install_from_snapshots, crashed the whole process at genuine runtime
+    instead of declining and staying on the generic portal, because
+    generate_for_live_code's ``except Exception: return None`` (runtime_
+    cogen.py) never gets a chance to run once the process has already
+    aborted). Exercised directly against emit_resolved_const rather than
+    through a real 257-distinct-constant program: engineering one is not
+    the point here, the cap check itself is.
+    """
+    from rpython.jit.codewriter.assembler import AssemblerError
+
+    assembler = NativeAssembler(readonly=True)
+    assembler.setup("cap-test")
+    for value in range(256):
+        assembler.emit_resolved_const(value, "int")
+    py.test.raises(AssemblerError, assembler.emit_resolved_const, 256, "int")
+
+
 def test_repeated_helper_call_constants_dedup():
     """Regression: repeated helper-call constant must dedup, not balloon."""
     from rpython.jit.codewriter.codewriter import CodeWriter

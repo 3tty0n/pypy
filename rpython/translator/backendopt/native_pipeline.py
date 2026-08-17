@@ -647,7 +647,14 @@ class NativeAssembler(Assembler):
                 self.code.append("temp 2")
             elif isinstance(x, NListOfKind):
                 lst = x.items
-                assert len(lst) <= 255, "list too long!"
+                # Same reasoning as emit_resolved_const's per-kind cap
+                # (assembler.py): a catchable AssemblerError, not an assert
+                # -- this is a real capacity limit a big-but-legitimate
+                # method's own send-argument or liveness list can hit at
+                # genuine runtime, where an assert failure aborts instead
+                # of letting the caller decline the method.
+                if len(lst) > 255:
+                    raise AssemblerError("list too long!")
                 self.code.append(chr(len(lst)))
                 for item in lst:
                     if isinstance(item, NReg):
