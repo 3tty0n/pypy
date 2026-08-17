@@ -1,6 +1,6 @@
-"""Differential test: compute_liveness_native's new worklist algorithm
-must produce byte-relevant-identical output to the old "rerun full list
-until no label grows" algorithm it replaced.
+"""Differential test: compute_liveness_native's bitmap-backed algorithm
+must produce byte-relevant-identical output to the old dict-keyed "rerun
+full list until no label grows" algorithm it replaced.
 
 Keeps a self-contained copy of the OLD algorithm (not reusing anything
 from native_pipeline.py's fixpoint code) so a future edit to the new
@@ -379,25 +379,59 @@ def test_old_algorithm_passes_scale_with_chain_length():
     assert passes_by_k[80] >= passes_by_k[10] + (80 - 10) // 4
 
 
-def test_new_algorithm_visit_count_grows_linearly_not_quadratically():
-    """New algorithm's total segment-visit count (the worklist's real
-    inner-loop cost driver) should scale ~linearly with chain length --
-    each segment here is O(1)-sized, so linear visits means linear total
-    work, unlike the old algorithm's O(passes * N) = O(K^2) blowup."""
-    visits_by_k = {}
-    for k in (25, 100, 400):
+def test_new_and_old_round_counts_match():
+    """Field data showed pass count was never the bottleneck (~5 passes
+    on real programs) -- the redesign deliberately keeps the OLD control
+    flow (whole-list backward passes until no label grows) and only
+    swaps the per-pass representation (bitmaps instead of nid-keyed
+    dicts). Since both use the same growth-detection semantics over the
+    same nid-exact content, they must converge in the exact same number
+    of passes; this also guards against silently reintroducing a
+    representation that changes the fixpoint schedule.
+    """
+    for k in (5, 20, 60):
         segments = _make_chain_segments(k)
-        insns = build_program(segments)
-        label2alive = {}
-        visits = _converge_liveness_native(insns, label2alive)
-        visits_by_k[k] = visits
 
-    ratio_1 = float(visits_by_k[100]) / visits_by_k[25]
-    ratio_2 = float(visits_by_k[400]) / visits_by_k[100]
-    # chain length grows 4x each step; a linear-cost algorithm keeps the
-    # visit-count ratio near 4x, a quadratic one would land near 16x.
-    assert ratio_1 < 8.0, ratio_1
-    assert ratio_2 < 8.0, ratio_2
+        old_insns = build_program(segments)
+        old_passes = old_compute_liveness_native(old_insns)
+
+        new_insns = build_program(segments)
+        new_rounds = _converge_liveness_native(new_insns, {})
+
+        # old_compute_liveness_native counts the final zero-growth pass
+        # too (+1); _converge_liveness_native's 'rounds' -- like
+        # compute_liveness_native's dict-keyed branch -- counts only
+        # growth passes.
+        assert new_rounds == old_passes - 1
+
+
+def test_distinct_nids_sharing_kind_index_stay_byte_safe():
+    """Regression for the hazard the bitmap redesign had to avoid: two
+    DIFFERENT NReg objects (distinct nid) that happen to share (kind,
+    index) -- exactly what native_fragments.py's per-fragment register
+    numbering and emit_native's fresh-per-placement scratch/prologue
+    registers produce throughout a real program. The bitmap must key by
+    nid (keeping them distinct through the computation, like the dict
+    algorithm), but the assembled bytes only care about the resulting
+    (kind, index) *set*, so both objects appearing in one -live- set
+    must still compare byte-safe.
+    """
+    def build():
+        a = NReg("int", 0)   # distinct nid, same (kind, index) as b
+        b = NReg("int", 0)
+        return [
+            NativeInsn("---", []),
+            NativeInsn("@label", [NLabel(0)]),
+            NativeInsn("int_copy", [NIntConst(1)], a),   # kills a here
+            NativeInsn("-live-", [b]),                   # b forced alive
+            NativeInsn("int_push", [a]),                 # a alive below
+        ]
+
+    old_insns = build()
+    new_insns = build()
+    old_compute_liveness_native(old_insns)
+    compute_liveness_native(new_insns)
+    assert_liveness_equal(old_insns, new_insns)
 
 
 def test_chain_still_byte_identical_to_old():

@@ -389,7 +389,7 @@ def test_the_interpreter_decides_what_is_worth_linking():
 
 
 def test_the_merge_point_binds_the_driver_to_its_function():
-    """Declaration reaches the evaluator from the call site, like JitDriver."""
+    """The declaration reaches the evaluator from the call site, as JitDriver's does."""
     from rpython.rlib.pe import PEDriver
 
     driver = PEDriver(static="opcode", split="pc", min_size=2)

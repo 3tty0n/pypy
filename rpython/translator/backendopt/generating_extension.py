@@ -23,11 +23,7 @@ from rpython.translator.backendopt.partialeval_template import (
 
 
 def _states_equal(a, b):
-    """Are these two late-static-state dicts the same?
-
-    Not ``a != b``: RPython has no dict comparison at all
-    (binaryop.py's ``ne`` raises outright), so spelled out here.
-    """
+    """RPython has no dict comparison (binaryop.py's ne raises); by hand."""
     if len(a) != len(b):
         return False
     for key, value in a.items():
@@ -63,15 +59,12 @@ class GeneratingExtension(object):
                  unsupported=None, policy=None, state_names=()):
         self.templates = dict(templates)
         self.decoder = decoder
-        # Extra late-static names (beyond pc), fixed once at translation
-        # time from _pe_split_args_ (see from_step_function). An RPython
-        # tuple's length must be known at annotation time, so generate()
-        # copies this fixed tuple rather than rebuilding it from a
-        # runtime dict's key set.
+        # RPython tuple length is fixed at annotation time, so this can't be
+        # rebuilt from a dict's keys -- only copied from a fixed-shape tuple.
         self.state_names = tuple(state_names)
         # Consulted once a program has been generated, with the program and
-        # the code it came from; returning False declines it. Generating
-        # is cheap and installing is not -- every program is looked at on
+        # the code it came from; returning False declines it.  Generating is cheap and
+        # installing is not -- every installed program is looked at on every
         # trace start, and the JitCodes are carried in the binary -- so which
         # programs are worth that is a judgement about the interpreter, and
         # belongs to whoever wrote it.  None accepts everything.
@@ -84,8 +77,7 @@ class GeneratingExtension(object):
         # The (pc, key) that made the most recent generate() call return
         # None because that instruction has no template, so a caller can say
         # *why* nothing came out instead of only that nothing did.
-        # (-1, -1) means "nothing blocked", not None: RPython tuples have
-        # no null value to unify None against.
+        # (-1, -1) means "nothing blocked": RPython tuples have no null.
         self.last_blocked = (-1, -1)
         # Set instead of last_blocked when every reachable instruction did
         # specialize but the policy declined the resulting program anyway
@@ -108,9 +100,6 @@ class GeneratingExtension(object):
         graph = graphof(translator, step_function)
         if static_name is None:
             static_name = graph.func._pe_static_args_[0]
-        # Mirrors PartialEvaluator.make_symbolic_template's state_names
-        # computation (partialeval.py): split names beyond "pc" are the
-        # late-static state a generated program threads through its CFG.
         split_names = getattr(graph.func, "_pe_split_args_", ())
         state_names = tuple(name for name in split_names[1:])
         evaluator = PartialEvaluator(translator)
@@ -158,15 +147,11 @@ class GeneratingExtension(object):
         blocks = {}
         if entry_state is None:
             entry_state = {}
-        # Not ``entry_state or ()``: the "or" fallback arm would be a
-        # different type (tuple vs dict) at the same merge point, which
-        # the annotator rejects. Not derived from entry_state's keys
-        # either (a tuple's length must be fixed at annotation time) --
-        # copied from self.state_names instead, already fixed at
-        # translation time and matching entry_state's own keys.
+        # Not `x or {}`: mixing dict/tuple types at a merge point fails
+        # RPython annotation, even on just the falsy-empty-dict branch.
         state_names = self.state_names
-        # .copy(), not dict(entry_state): RPython's dict constructor
-        # doesn't accept an existing mapping argument.
+        # Not `dict(entry_state)`: RPython's dict has no mapping-arg
+        # constructor, only `.copy()`.
         pending = [(entry_pc, entry_state.copy())]
         # Reset both: a call that succeeds, or fails for the other reason,
         # must not leave a stale explanation from some earlier call lying
@@ -177,12 +162,10 @@ class GeneratingExtension(object):
         while pending:
             pc, state = pending.pop()
             if pc in blocks:
-                # Not blocks[pc].state != state: RPython has no dict
-                # comparison at all (binaryop.py's ne raises).
+                # RPython has no dict comparison (binaryop.py's ne raises).
                 if not _states_equal(blocks[pc].state, state):
-                    # Not %r on the dicts: RPython's rtyper has no string
-                    # conversion for a dict, so the message names the pc
-                    # only.
+                    # RPython's rtyper can't %r-format a dict either.
+                    # Message names the pc only.
                     raise ValueError(
                         "pc %d is reachable with conflicting late-static "
                         "state" % (pc,))
@@ -194,7 +177,7 @@ class GeneratingExtension(object):
                 return None
             template = self.templates[key]
 
-            # .copy(), not dict(bindings): see entry_state.copy() above.
+            # Not `dict(bindings)`: RPython dict has no mapping-arg ctor.
             bindings = bindings.copy()
             bindings[self.static_name] = key
             bindings.update(state)
@@ -203,7 +186,7 @@ class GeneratingExtension(object):
             # Publish before following successors so backedges hit the cache.
             blocks[pc] = block
 
-            # Not zip(a, b, c): RPython's zip() only takes two iterables.
+            # RPython's zip() only takes two iterables; index instead.
             terminators = template.terminators
             targets_by_index = template.resolve_targets(bindings)
             states_by_index = template.resolve_state(bindings)

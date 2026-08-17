@@ -304,9 +304,8 @@ class WarmRunnerDesc(object):
             lowered.jitcode.index = len(jitcodes)
             jitcodes.append(lowered.jitcode)
         if pe_jitcode_setup is not None:
-            # Must run before finish_setup: BlackholeInterpBuilder snapshots
-            # assembler.insns/descrs once, so growing them after is too
-            # late. Its absence here proves finish_setup hasn't run yet.
+            # Must run before finish_setup() snapshots this table into
+            # blackholeinterpbuilder; growing it after has nothing to fold.
             assert not hasattr(self.metainterp_sd, 'blackholeinterpbuilder')
             for jd in self.jitdrivers_sd:
                 pe_jitcode_setup(jd.mainjitcode)

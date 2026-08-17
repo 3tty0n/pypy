@@ -10,11 +10,11 @@ from rpython.rtyper.lltypesystem.lloperation import llop
 
 
 class Resolvable(object):
-    """Base for TemplateHole/TargetExpr: anything with resolve(bindings).
-
-    Checked via isinstance, not hasattr -- RPython's hasattr only works
-    on compile-time constants. A shared base is needed to unify these
-    otherwise-unrelated subclasses under one attribute type.
+    """Common base for anything with resolve(bindings) -> value: lets
+    _resolve_operand/_resolve_target use isinstance instead of hasattr
+    (RPython's hasattr only works on compile-time constants), and gives
+    the annotator one type to unify these otherwise-unrelated classes
+    under.
     """
 
 
@@ -62,9 +62,8 @@ class CodeConstHole(TemplateHole):
 
 
 class TargetExpr(Resolvable):
-    """Base of AbsoluteTarget/RelativeTarget/ExprTarget: a terminator's
-    target is either a plain int or one of these late-static
-    expressions."""
+    """Common base of AbsoluteTarget/RelativeTarget/ExprTarget -- see
+    Resolvable's docstring for why."""
 
 
 class AbsoluteTarget(TargetExpr):
@@ -90,10 +89,9 @@ class RelativeTarget(TargetExpr):
 
 
 class ConstExpr(Resolvable):
-    """A late-static leaf that's already a concrete value.
-
-    Wraps a bare constant so ExprTarget.args has one uniform Resolvable
-    item type instead of a mix of ints and instances.
+    """Wraps an already-concrete value so ExprTarget.args has one uniform
+    Resolvable item type; RPython cannot unify a bare int with an
+    instance in the same list.
     """
 
     def __init__(self, value):
@@ -106,21 +104,22 @@ class ConstExpr(Resolvable):
 class ExprTarget(TargetExpr):
     """A target computed from holes by a pure operation.
 
-    E.g. pc+oparg (relative), pc-oparg (backward), or a two-byte offset.
-    Every leaf is a hole or a constant, so the tree collapses to an int
-    once a concrete code object is linked. Evaluated via llop so the
-    resolved target matches the interpreter's own width/wraparound
-    behaviour.
+    SOM-style bytecodes reach their target as ``pc + oparg`` (relative),
+    ``pc - oparg`` (backward), or ``pc + (oparg + (oparg2 << 8))`` (two-byte
+    offset).  Those expressions are late-static: every leaf is either a hole or
+    a compile-time constant, so the whole tree collapses to an integer once a
+    concrete code object is linked.
+
+    The operation is evaluated with RPython's own ``llop`` implementation
+    rather than one written out here, so a resolved target has exactly the
+    width and wrap-around behaviour the interpreter itself would produce.
     """
 
     def __init__(self, opname, restype, args):
         self.opname = opname
         self.restype = restype
         # A list, not a tuple: RPython's rtyper only supports iterating a
-        # tuple when its length is statically 1, but a binary late-static
-        # op (most of them) has 2 args. ConstExpr already wraps every
-        # plain-constant arg, so every item here is uniformly a
-        # Resolvable, same as this file's other dynamic-count lists.
+        # tuple whose length is statically 1; most late-static ops have 2.
         self.args = list(args)
 
     def __repr__(self):
@@ -133,11 +132,12 @@ class ExprTarget(TargetExpr):
 
 
 def _is_late_static_operation(opname):
-    """Can this op be evaluated at link time from holes alone?
+    """Can this operation be evaluated at link time from holes alone?
 
-    ``canfold`` (RPython's purity flag) means pure and non-raising, the
-    condition for lifting it into a target expression. Anything that
-    reads memory or calls out stays dynamic.
+    ``canfold`` is RPython's own purity flag: a foldable operation is a pure
+    function of its arguments and cannot raise, which is precisely the
+    condition for lifting it out of the residual code into a target
+    expression.  Anything that reads memory or calls out stays dynamic.
     """
     try:
         return getattr(llop, opname).canfold
@@ -156,11 +156,9 @@ _UNARY_LATE_STATIC_OPS = ("int_neg", "int_invert", "int_is_true")
 def _apply_late_static_op(opname, restype, values):
     """Evaluate one late-static ExprTarget operation.
 
-    Not ``getattr(llop, opname)(restype, *values)``: RPython needs a
-    literal opname for llop attribute access, and splatting a runtime
-    values list into a call isn't RPython-legal either. Every op
-    ``_is_late_static_operation`` can admit is listed here by name
-    instead; add a new opname to the tables above and a branch below.
+    Not getattr(llop, opname)(restype, *values): RPython's annotator
+    needs a literal attribute name, and splat args aren't RPython-legal.
+    Add new opnames to the tables above and a branch below.
     """
     if opname in _BINARY_LATE_STATIC_OPS:
         left = values[0]
@@ -207,8 +205,7 @@ def _apply_late_static_op(opname, restype, values):
             return llop.int_invert(restype, only)
         if opname == "int_is_true":
             return llop.int_is_true(restype, only)
-    # Not %r: RPython's string-formatting rtyper only implements %s/%d/...,
-    # not %r; opname is already a plain str, so %s loses nothing here.
+    # Not %r: RPython's rtyper only implements %s/%d/... formatting.
     raise ValueError(
         "no runtime-cogen dispatch for late-static op %s -- add it to "
         "_apply_late_static_op (partialeval_template.py)" % (opname,))
@@ -222,26 +219,27 @@ def _resolve_operand(value, bindings):
 
 
 class Terminator(object):
-    """Base of Continue/Finish/Branch, so ResidualTemplate.terminators
-    can be one homogeneous list despite the three unrelated subclasses."""
+    """Common base of Continue/Finish/Branch: RPython unifies a list's
+    item type across classes only when they share a base.
+    """
 
 
 class Continue(Terminator):
     """Continue execution at a late-static or concrete split value."""
 
-    # Class-level default: instances are all prebuilt, so the annotator
-    # would otherwise learn this object-typed attribute only from
-    # whichever instance it happens to discover first. None unifies with
-    # any instance type, so this works; a class-level () default for
-    # dynamic_values/state would not, since RPython tuples of different
-    # lengths (interpreters use both 0- and 1-element state) can't unify.
+    # Class-level default: object-typed attrs need one so the annotator
+    # learns the type from the class itself, not from instance-discovery
+    # order. Only object-typed attrs get this -- tuple attrs (dynamic_
+    # values/state) can't: RPython tuples of different lengths never
+    # unify, and this project's interpreters use both 0- and 1-element
+    # state tuples.
     target = None
 
     def __init__(self, target, dynamic_values, state=()):
         self.target = target
         self.dynamic_values = tuple(dynamic_values)
-        # Late-static successor state as (name, expression) pairs, e.g.
-        # an operand-stack depth.
+        # Further late-static interpreter state for the successor, as
+        # (name, expression) pairs -- an operand-stack depth, for instance.
         self.state = tuple(state)
 
 
@@ -256,8 +254,7 @@ class Finish(Terminator):
 class Branch(Terminator):
     """Keep a dynamic condition with two late-static bytecode targets."""
 
-    # See Continue's own note on class-level defaults for object-typed
-    # attributes.
+    # Object-typed class defaults -- see Continue's own note above.
     condition = None
     true_target = None
     false_target = None
@@ -277,18 +274,20 @@ class ResidualTemplate(object):
         self.key = key
         self.operations = tuple(operations)
         self.holes = tuple(holes)
-        # A list, not a tuple: different opcodes have different numbers of
-        # terminators, which a fixed-shape RPython tuple can't represent.
+        # A list, not a tuple: different opcodes have different terminator
+        # counts, and an RPython tuple attribute has one fixed shape.
         self.terminators = list(terminators)
-        # Offline-only lowering source; runtime linking uses only the
-        # immutable template data above.
+        # Kept as an offline-only lowering source.  Runtime linking only uses
+        # the immutable template data above; translation-time lowering can use
+        # the graph to preserve arbitrary residual control flow and exception
+        # edges without reconstructing it from a flat operation list.
         self.residual_graph = residual_graph
 
     def resolve_state(self, bindings):
         """Resolve each terminator's late-static successor state.
 
-        Spelled out as loops, not a list-comp wrapping dict(genexpr):
-        that nesting would close over ``bindings``, not RPython-legal.
+        Plain loops, not a list-comp wrapping dict(genexpr): that would
+        close over bindings, which RPython does not allow.
         """
         result = []
         for terminator in self.terminators:
@@ -301,10 +300,8 @@ class ResidualTemplate(object):
     def resolve_targets(self, bindings):
         """Resolve only late-static control targets for a code instance.
 
-        One list per terminator: 0 targets for Finish, 1 for Continue, 2
-        for Branch -- a fixed 2-tuple can't represent that mix in
-        RPython. See flatten_resolved_targets for turning this into one
-        target per fragment exit slot.
+        One list per terminator (0/1/2 targets): RPython needs a uniform
+        item type, so no bare value for some and a tuple for others.
         """
         targets = []
         for terminator in self.terminators:
@@ -321,11 +318,8 @@ class ResidualTemplate(object):
 
 
 def flatten_resolved_targets(targets_by_terminator, num_exits):
-    """One target int per fragment exit slot.
-
-    A single-terminator template can compile to more exit slots than it
-    has targets (e.g. an internal split reaching the same successor), so
-    the lone target is repeated to fill every slot.
+    """One target int per fragment exit slot: a single-terminator
+    template's lone target is repeated to fill every exit slot.
     """
     flat = []
     for target_list in targets_by_terminator:
@@ -340,15 +334,13 @@ def flatten_resolved_targets(targets_by_terminator, num_exits):
 
 
 def _resolve_target(target, bindings):
-    # Not hasattr: see Resolvable's docstring. Resolvable, not
-    # TargetExpr, since a target can also be a bare TemplateHole.
+    # Not hasattr(target, "resolve"): see Resolvable's own docstring.
+    # Resolvable, not TargetExpr: target can also be a bare TemplateHole.
     if isinstance(target, Resolvable):
         return target.resolve(bindings)
-    # A resolved target is always a pc int, but no real caller leaves a
-    # bare int flowing through this branch for the annotator to narrow
-    # it from the declared Resolvable type on its own; without this
-    # assert it unions this branch's SomeInstance against the 'if'
-    # branch's SomeInteger and rejects the mismatch.
+    # Assert pins the type: without it, the annotator unions this
+    # branch's SomeInstance return with the 'if' branch's SomeInteger
+    # and raises UnionError.
     assert isinstance(target, int)
     return target
 
@@ -356,9 +348,11 @@ def _resolve_target(target, bindings):
 class LinkedTemplateBlock(object):
     """One instruction of a program, and the template generated for it.
 
-    ``bindings`` holds every late-static name the template left as a
-    hole, including the static key, so the lowerer can substitute
-    constants without knowing which name means what.
+    ``bindings`` is the complete specialization environment for this block:
+    every late-static name the template left as a hole, *including* the static
+    key under the name the step function declared for it.  Keeping it complete
+    is what lets the lowerer substitute constants without knowing which name
+    means what.
     """
 
     def __init__(self, pc, key, template, bindings):
@@ -377,18 +371,15 @@ class LinkedResidualProgram(object):
     def __init__(self, entry_pc, blocks, state_names=()):
         self.entry_pc = entry_pc
         self.blocks = blocks
-        # Lists, not tuples: analyze_loops() fills these with a runtime-
-        # dynamic count of entries; RPython tuples need a fixed shape.
+        # Lists, not tuples: filled in later with a dynamic number of
+        # entries; an RPython tuple's length must be fixed at annotation.
         self.backedges = []
         self.loop_headers = []
-        # Names of the extra late-static values carried through the CFG,
-        # passed in rather than reassigned after construction: RPython
-        # tuples are fixed-shape, so different state-name counts across
-        # a build could never unify on one attribute otherwise (see
-        # GeneratingExtension.generate, the only caller).
-        # Not tuple(state_names): the tuple builtin has no RPython
-        # rtyper support. generate() always passes an already-built
-        # tuple (GeneratingExtension.__init__), so no conversion needed.
+        # Passed in, not reassigned after construction: RPython would
+        # need to unify a 0-length and a 1-length tuple on this attribute
+        # across the whole build, which it cannot do.
+        # Not tuple(state_names): the tuple() builtin has no rtyper
+        # support; every real caller already passes a tuple.
         self.state_names = state_names
 
     def analyze_loops(self):
@@ -398,12 +389,12 @@ class LinkedResidualProgram(object):
             for target in block.successors:
                 if target in dominators[source]:
                     backedges.append((source, target))
-        # Not .sort(): RPython lists of tuples have no comparison to sort
-        # by, so the pair's lexicographic order is spelled out by hand.
+        # Not .sort(): RPython lists of tuples have no comparison to
+        # sort by.
         _sort_pairs(backedges)
 
-        # Not sorted(set(genexpr)): none of those are RPython-legal here;
-        # dict-as-set stands in for set().
+        # Not sorted(set(genexpr)): none of sorted()/genexpr/set() are
+        # RPython-legal. Dict-as-set stands in for set().
         seen = {}
         loop_headers = []
         for _source, target in backedges:
@@ -434,8 +425,8 @@ class LinkedResidualProgram(object):
         from rpython.jit.codewriter.jitcode import PEJitCodeMetadata
         if entry_positions is None:
             entry_positions = {}
-        # Plain loops, not tuple(sorted(...)): PEJitCodeMetadata already
-        # copies whatever it's handed into its own lists.
+        # Plain loops, not tuple(sorted(...))/tuple(genexpr): neither is
+        # RPython-legal here, and there is nothing to gain from a tuple.
         entry_pcs = []
         for pc in entry_positions:
             entry_pcs.append(pc)
@@ -462,10 +453,13 @@ class LinkedResidualProgram(object):
               jit_merge_point_args=()):
         """Build the residual graph and assemble it into one JitCode.
 
-        Graph-building is pure flow-graph work; assembling needs the
-        codewriter and the whole-program view only translation has --
-        the stage a runtime linker would have to replace, by assembling
-        each template once, offline, and patching the result.
+        Two stages with quite different dependencies, kept separate on the
+        lowerer below: building the graph is pure flow-graph work, while
+        assembling needs the codewriter, and through it the whole-program view
+        that turns a call into either a JitCode or a residual call.  Only the
+        second stage is inherently translation-time, so it is the one a runtime
+        linker would have to replace -- by assembling each *template* once,
+        offline, and patching the result.
         """
         lowerer = LinkedResidualLowerer(runtime_names, null_names,
                                         self.state_names, jit_merge_point_args)
@@ -480,28 +474,32 @@ class LoweredResidualProgram(object):
 
 
 class LinkedResidualLowerer(object):
-    """Turn a linked template CFG into a graph, and into a JitCode.
+    """Turn a linked template CFG into a graph, and that graph into a JitCode.
 
-    The codewriter is an argument of ``assemble`` alone, not held here,
-    so ``build_graph`` stays ordinary flow-graph work a runtime linker
-    could do; only what follows needs a translation-time compiler.
+    The codewriter is deliberately not held here: it is an argument of
+    ``assemble`` alone, so that ``build_graph`` cannot come to depend on it by
+    accident.  That boundary is the interesting one -- everything on the graph
+    side is ordinary flow-graph manipulation that a runtime linker could do,
+    and everything past it needs a compiler that only exists while translating.
     """
 
     def __init__(self, runtime_names=("self", "bytecode"),
                  null_names=("bytecode",), state_names=(),
                  jit_merge_point_args=()):
-        # Result-tuple items after the return value that are late-static
-        # state rather than values carried to the successor at runtime.
+        # Result-tuple items after the return value that are late-static state
+        # rather than values carried to the successor at runtime.
         self.state_names = tuple(state_names)
         self.state_count = len(self.state_names)
-        # Step-function args holding the jitdriver's greens then reds.
-        # When given, each loop header gets a real jit_merge_point, so
-        # the meta-interpreter can close a loop inside the program.
+        # Step-function arguments holding the jitdriver's greens then reds, in
+        # that order.  When given, each loop header of the linked program gets
+        # a real jit_merge_point, which is what lets the meta-interpreter close
+        # a loop *inside* the program rather than only at its entry.
         self.jit_merge_point_args = tuple(jit_merge_point_args)
-        # Residual params the portal supplies at trace start, in order.
+        # Residual parameters the portal supplies at trace start, in the order
+        # the entry wrapper expects them.
         self.runtime_names = tuple(runtime_names)
-        # Residual pointer params dead in the linked CFG; may be null on
-        # a successor edge.
+        # Residual pointer parameters that are dead in the linked CFG and may
+        # be passed as null on a successor edge.
         self.null_names = tuple(null_names)
 
     def lower(self, codewriter, program, name="offline-residual",
@@ -515,8 +513,8 @@ class LinkedResidualLowerer(object):
     def build_graph(self, program, name, portal_jd=None):
         """The residual FunctionGraph for a generated program.
 
-        No codewriter, no JitCode: instantiating templates, substituting
-        late-static bindings and wiring edges is flow-graph work only.
+        No codewriter, no JitCode: instantiating templates, substituting the
+        late-static bindings and wiring the edges is flow-graph work only.
         """
         self.portal_jd = portal_jd
         from rpython.flowspace.model import (checkgraph, Constant,
@@ -569,8 +567,9 @@ class LinkedResidualLowerer(object):
             graph, transitions, terminators = instances[pc]
             self._merge_exception_block(graph, final_except)
             bindings = linked_block.bindings
-            # resolve_targets returns one list per terminator (0/1/2); do
-            # not change that contract, _place/_place_native depend on it.
+            # resolve_targets returns one list per terminator (see its
+            # own docstring); unwrap it here rather than change the
+            # contract other callers depend on.
             targets_by_terminator = linked_block.template.resolve_targets(
                 bindings)
             if len(targets_by_terminator) == 1 and len(terminators) > 1:
@@ -643,10 +642,11 @@ class LinkedResidualLowerer(object):
                         instances, program, linked_block):
         """Bypass a return-tuple phi for a late-static dynamic branch.
 
-        Flow graphs join condition ? jump_pc : next_pc in a block that
-        allocates the result tuple; both pc alternatives are known at
-        link time, so redirect each incoming link to its specialized
-        block, keeping the residual condition that selects it.
+        Flow graphs commonly represent ``condition ? jump_pc : next_pc`` by
+        branching first and joining both values in the block which allocates
+        the result tuple.  At template-link time both pc alternatives are
+        known.  Redirect each incoming link to the corresponding specialized
+        block while retaining the residual condition which selects the link.
         """
         from rpython.flowspace.model import Constant
 
@@ -789,9 +789,10 @@ class LinkedResidualLowerer(object):
     def _remove_runtime_loop_markers(self, graph):
         """Drop the interpreter's own loop markers from a linked block.
 
-        With merge points inserted, can_enter_jit becomes the
-        loop_header that arms the meta-interpreter; without them the
-        CFG carries its loop structure offline instead.
+        With merge points inserted, ``can_enter_jit`` is kept: it becomes the
+        ``loop_header`` that arms the meta-interpreter, and the merge point at
+        the target block is what actually closes the loop.  Without them the
+        linked CFG carries its loop structure offline instead.
         """
         from rpython.flowspace.model import Constant
         dropped = ("loop_header",) if self.jit_merge_point_args else (
@@ -810,23 +811,29 @@ class LinkedResidualLowerer(object):
     def _insert_merge_point(self, graph):
         """Put a jit_merge_point at the top of a linked loop header.
 
-        Greens/reds come from the block's own input arguments, so the
-        meta-interpreter sees values as they are here, letting it close
-        a loop nested inside the linked program.
+        The greens and reds are taken from the block's own input arguments, so
+        the meta-interpreter sees the values as they are *here*, not as they
+        were when the trace started.  That is what lets it close a loop nested
+        inside the linked program; with only the entry marked, such a loop has
+        nothing to close it and tracing unrolls it until memory runs out.
         """
         self._insert_marker(graph, "jit_merge_point")
 
     def _insert_bailout_point(self, graph):
         """Put a pe_bailout_point at the top of a linked (non-header) block.
 
-        Lets the blackhole interpreter bail out of a residual jitcode at
-        every block boundary instead of running to the next real
+        Same greens and reds, read off the block's own input arguments, as
+        ``_insert_merge_point`` would use -- jtransform just turns the
+        "pe_bailout_point" marker into a no-op while tracing instead of a
+        real merge point.  What it buys is a cheap place for the *blackhole*
+        interpreter to bail out of a residual jitcode at every block
+        boundary, rather than running all the way to the next real
         jit_merge_point.
         """
         self._insert_marker(graph, "pe_bailout_point")
 
     def _insert_marker(self, graph, key):
-        """Shared operand construction for both marker inserters."""
+        """Shared operand construction for _insert_merge_point/_insert_bailout_point."""
         from rpython.flowspace.model import Constant, SpaceOperation, Variable
         from rpython.rtyper.lltypesystem import lltype
 
@@ -916,9 +923,9 @@ class LinkedResidualLowerer(object):
     def assemble(self, codewriter, graph, entry_blocks, name, portal_jd=None):
         """Compile the residual graph into a JitCode.
 
-        The translation-time half: transform_graph resolves each call
-        into a JitCode or a residual call, needing the whole-program
-        view a translated binary no longer has.
+        This is the translation-time half.  ``transform_graph`` resolves each
+        call into either a JitCode to enter or a residual call to record, which
+        needs the whole-program view a translated binary no longer has.
         """
         self.codewriter = codewriter
         from rpython.flowspace.model import copygraph
@@ -929,9 +936,9 @@ class LinkedResidualLowerer(object):
         from rpython.jit.codewriter.regalloc import perform_register_allocation
         from rpython.rtyper.lltypesystem import llmemory
 
-        # Codewriter transformation mutates exitswitches/operations; keep
-        # the linked graph valid for inspection/differential tests and
-        # lower a structural copy instead.
+        # Codewriter transformation mutates exitswitches and operations.  Keep
+        # the linked FunctionGraph valid for inspection and LLInterpreter
+        # differential tests, and lower a structural copy instead.
         original_blocks = list(graph.iterblocks())
         lowered_graph = copygraph(graph, shallowvars=True)
         lowered_blocks = list(lowered_graph.iterblocks())
@@ -961,9 +968,10 @@ class LinkedResidualLowerer(object):
             (kind, max(regallocs[kind]._coloring.values()) + 1
              if regallocs[kind]._coloring else 0)
             for kind in KINDS)
-        # Entered by the meta-interpreter, not an inline residual call.
-        # Still needs a typed null address: plain None would widen
-        # JitCode.fnaddr and break native translation.
+        # This JitCode is entered by the meta-interpreter, not by an inline
+        # residual call.  Give it a typed null address nevertheless: leaving
+        # fnaddr as Python None would widen JitCode.fnaddr to Address|None
+        # during annotator helper completion and make native translation fail.
         jitcode = JitCode(name, fnaddr=llmemory.NULL)
         self.codewriter.assembler.assemble(ssarepr, jitcode, num_regs)
         entry_positions = dict(
@@ -975,8 +983,8 @@ class LinkedResidualLowerer(object):
 def sort_ints(items):
     """In-place insertion sort of a list of ints.
 
-    RPython lists have no ``.sort()`` method.
-    ponytail: O(n^2), fine for the tens of blocks a program has.
+    Not items.sort(): RPython lists have no .sort() method at all.
+    ponytail: O(n^2), fine for the tens of items this ever sees.
     """
     index = 1
     while index < len(items):
@@ -992,9 +1000,8 @@ def sort_ints(items):
 def sort_strings(items):
     """In-place insertion sort of a list of strings.
 
-    RPython lists have no ``.sort()`` method. Used by native_pipeline.py's
-    ``_emit_moves_native`` for a translation-independent boundary-name order.
-    ponytail: O(n^2), fine for a boundary-value count in the tens.
+    Not items.sort(): RPython lists have no .sort() method at all.
+    ponytail: O(n^2), fine for the tens of items this ever sees.
     """
     index = 1
     while index < len(items):
@@ -1016,8 +1023,8 @@ def _pair_less(a, b):
 def _sort_pairs(pairs):
     """In-place lexicographic sort of a list of (int, int) tuples.
 
-    RPython lists of tuples have no ``<`` to sort by.
-    ponytail: O(n^2) insertion sort, fine for a program's backedge list.
+    Not pairs.sort(): RPython lists of tuples have no < to sort by.
+    ponytail: O(n^2), fine for a program's small backedge list.
     """
     index = 1
     while index < len(pairs):
@@ -1043,8 +1050,7 @@ def _dictset_equal(a, b):
 def _compute_dominators(entry_pc, blocks):
     """Textbook iterative dominator computation.
 
-    Dict-as-set throughout: RPython has no native set type, and this
-    runs for real at runtime, not only at translation time.
+    Dict-as-set throughout: RPython has no native set type.
     """
     predecessors = {}
     for pc in blocks:
@@ -1132,8 +1138,8 @@ class ResidualTemplateGenerator(object):
         pc = PcHole()
         oparg = OpargHole()
         holes = [pc, oparg]
-        # Multi-byte operands (SOM's two-byte jumps) get their own
-        # late-static hole per extra operand.
+        # Interpreters with multi-byte operands (SOM's two-byte jumps) decode
+        # more than one operand; each extra one is its own late-static hole.
         extra_holes = []
         for name in extra_oparg_names:
             var = inputs.get(name)
@@ -1142,8 +1148,9 @@ class ResidualTemplateGenerator(object):
             hole = TemplateHole("oparg", name)
             extra_holes.append((var, hole))
             holes.append(hole)
-        # Further late-static state (e.g. an operand-stack depth) gets
-        # its own hole too, lifted from the step function's result.
+        # Further late-static state (an operand-stack depth, say) behaves just
+        # like the pc: its own hole, and its successor value lifted from the
+        # step function's result rather than carried at runtime.
         state_holes = []
         for name in state_names:
             var = inputs.get(name)
@@ -1271,9 +1278,10 @@ def _variable_origins(graph):
 def _phi_sources(graph):
     """For each block input, the values its predecessors pass in.
 
-    A negative-index list access makes RPython emit a branch, so even an
-    unmerged value reaches its use as a two-predecessor phi; recording
-    every source lets such a degenerate merge be seen through.
+    Indexing a list with a possibly-negative index makes RPython emit a branch
+    (``if i < 0: i += len(l)``), so even a value the interpreter never merges
+    reaches its use as a two-predecessor phi.  Recording every source lets such
+    a degenerate merge be seen through.
     """
     sources = {}
     for block in graph.iterblocks():
@@ -1307,8 +1315,9 @@ class _LiftContext(object):
     def follow(self, value, seen=None):
         """See through merges whose incoming values are all the same.
 
-        Stops at a genuine merge and returns it unchanged, treated as
-        dynamic by the caller.
+        Stops at a genuine merge -- one whose predecessors really do supply
+        different values -- and returns it unchanged, so the caller treats it
+        as dynamic.
         """
         if seen is None:
             seen = ()
@@ -1354,9 +1363,9 @@ def _lift_target(value, ctx):
             return NextPcHole(ctx.pc, right.value)
         if right_origin is ctx.pc_var and isinstance(left, Constant):
             return NextPcHole(ctx.pc, left.value)
-    # General case: any integer expression over holes/constants -- how
-    # relative/backward/two-byte jumps compute a target, and how a
-    # bytecode updates the operand-stack depth.
+    # General case: any integer expression over holes and constants, which is
+    # how relative, backward and two-byte-offset jumps compute their target,
+    # and how a bytecode's stack effect updates the operand-stack depth.
     lifted = _lift_operand(value, ctx)
     if lifted is not None:
         return lifted
@@ -1375,8 +1384,7 @@ def _lift_operand(value, ctx):
         if origin is var:
             return hole
     if isinstance(value, Constant):
-        # ConstExpr, not the bare value: see its own docstring -- args
-        # mixes holes/nested ExprTargets, needing one uniform item type.
+        # ConstExpr, not the bare value: see its own docstring.
         return ConstExpr(value.value)
 
     op = ctx.defining_op(value)

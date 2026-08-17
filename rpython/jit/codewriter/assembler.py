@@ -19,11 +19,6 @@ class AssemblerError(Exception):
 
 
 def int_fits_short(value, allow_short):
-    """Would emit_resolved_const's 'int' branch pick the short 1-byte
-    encoding for 'value'? Pulled out so native_pipeline.py's insn-key
-    computation can answer the same question for a not-yet-placed
-    operand, without an assembler instance or emitting anything.
-    """
     if not allow_short:
         return False
     try:
@@ -33,11 +28,7 @@ def int_fits_short(value, allow_short):
 
 
 def _fixed_size_copy(src, empty):
-    """A fresh copy of 'src', built by index-fill, not .append() -- see
-    Assembler.make_jitcode's own note for why. 'empty' is returned as-is
-    when 'src' is empty, matching JitCode.setup's own
-    ``constants_i or self._empty_i``.
-    """
+    """Index-filled copy (not .append()); avoids RPython's list-resize trap."""
     n = len(src)
     if n == 0:
         return empty
@@ -51,11 +42,7 @@ _fixed_size_copy._annspecialcase_ = 'specialize:call_location'
 
 
 def _sorted_chars(live):
-    """Sorted list of the (already-unique) chars in live.
-
-    sorted(live) isn't RPython-legal here (see indirectcalltargets note
-    below). ponytail: O(n^2) insertion sort, fine under 256 entries.
-    """
+    # sorted() isn't RPython-legal here; O(n^2) insertion sort instead.
     chars = []
     for char in live:
         chars.append(char)
@@ -90,9 +77,7 @@ class Assembler(object):
     def __init__(self):
         self.insns = {}
         self.descrs = []
-        # Dict-as-set (value always True): RPython has no native set type.
-        # NativeAssembler shares this field and pyjitpl.py's
-        # register_late_jitcode reads it too.
+        # Dict-as-set (RPython has no native set type); value unused.
         self.indirectcalltargets = {}    # set of JitCodes
         self.list_of_addr2name = []
         self._descr_dict = {}
@@ -156,9 +141,9 @@ class Assembler(object):
         # Split by kind: one dict keyed by mixed int/ref/float isn't
         # RPython-legal (no uniform key type across kinds).
         self.constants_dict_i = {}    # int value -> index
-        # GCREF value -> index. Plain dict can't key on a GCREF (no
-        # __hash__); new_ref_dict (history.py) is the RPython way. Its
-        # rd_hash asserts on a null ref, so null is tracked separately.
+        # new_ref_dict, not a plain dict: raw GCREF pointers have no
+        # __hash__ under RPython. Its rd_hash asserts on a null ref, so a
+        # null constant is tracked separately (_null_ref_const_index) below.
         self.constants_dict_r = new_ref_dict()
         self._null_ref_const_index = -1
         self.constants_dict_f = {}    # (float/longlong value, negzero) -> index
@@ -169,13 +154,13 @@ class Assembler(object):
         self.tlabel_positions = []
         self.switchdictdescrs = []
         # Not dict.fromkeys(KINDS, 0): RPython can't annotate a mutable
-        # module-level list as a constant call argument this way.
+        # list (KINDS) as a constant call argument this way.
         count_regs = {}
         for kind in KINDS:
             count_regs[kind] = 0
         self.count_regs = count_regs
         self.liveness = {}
-        # Dict-as-set: see indirectcalltargets note in __init__ above.
+        # Dict-as-set (no RPython set type), like indirectcalltargets above.
         self.startpoints = {}
         self.alllabels = {}
         self.resulttypes = {}
@@ -194,18 +179,8 @@ class Assembler(object):
                                      allow_short=allow_short)
 
     def emit_const_value(self, value, concretetype, kind, allow_short=False):
-        """Constant-free core of emit_const, keyed off (value, concretetype)
-        instead of a flowspace Constant, producing the kind-appropriate
-        resolved form emit_resolved_const dedups/emits.
-
-        dedup_key stays the pre-cast value (except the 'ref' branch, which
-        reassigns it post-cast): a cast like adr2int builds a fresh
-        AddressAsInt wrapper each call, so keying dedup on the cast result
-        would miss repeats of "the same" raw-pointer constant, while the
-        pre-cast value is the same shared object across every placement of
-        one template fragment (see jitcode_emitter.py's _localise) -- see
-        test_repeated_helper_call_constants_dedup in test_native_pipeline.py.
-        """
+        # dedup_key must stay the pre-cast value: a cast like adr2int builds
+        # a fresh wrapper each call, so post-cast dedup misses real repeats.
         dedup_key = value
         if kind == 'int':
             TYPE = concretetype
@@ -225,8 +200,8 @@ class Assembler(object):
                     value = int(value)
         elif kind == 'ref':
             value = lltype.cast_opaque_ptr(llmemory.GCREF, value)
-            # Not value._obj.container: constants_dict_r is keyed via
-            # new_ref_dict's rd_eq/rd_hash on the ref itself now.
+            # ref uses post-cast dedup_key: constants_dict_r (new_ref_dict)
+            # keys by the ref itself, unlike the int/float pre-cast case.
             dedup_key = value
         elif kind == 'float':
             if concretetype == lltype.Float:
@@ -243,14 +218,7 @@ class Assembler(object):
     @specialize.arg(2)
     def emit_resolved_const(self, value, kind, allow_short=False,
                             dedup_key=_NO_DEDUP_KEY):
-        """Dedup/emit core given an already-resolved (cast) value; see
-        emit_const_value's docstring for why dedup_key is pre-cast for
-        'int'/'float' (post-cast for 'ref').  Defaults to value itself for
-        NativeAssembler.write_insn (native_pipeline.py), whose native IR
-        resolves constants once at translation time and reuses the same
-        already-resolved operand object across every placement -- see
-        native_fragments.py's NIntConst/NRefConst/NFloatConst docstrings.
-        """
+        """dedup_key defaults to value; only value is cast here."""
         if dedup_key is _NO_DEDUP_KEY:
             dedup_key = value
         if kind == 'int':
@@ -299,9 +267,8 @@ class Assembler(object):
                         raise AssemblerError("too many constants")
                     self.constants_dict_r[dedup_key] = val
         elif kind == 'float':
-            # +0.0/-0.0 compare and hash equal but must not dedup together;
-            # folded into dedup_key (not value), which is what gets looked
-            # up.
+            # +0.0 and -0.0 hash equal but must not dedup together (needed
+            # for cmath). Folded into dedup_key, since that's what's looked up.
             negzero = isinstance(dedup_key, float) and dedup_key == 0.0 and \
                 math.copysign(1.0, dedup_key) < 0.0
             key = (dedup_key, negzero)
@@ -418,9 +385,8 @@ class Assembler(object):
 
     def _encode_liveness(self, live_i, live_r, live_f):
         from rpython.jit.codewriter.liveness import encode_offset, encode_liveness
-        # Not frozenset() (same RPython-legality reason as set(), see
-        # indirectcalltargets note in __init__): a sorted, deduplicated
-        # char list joined into a string is an equally good dedup key.
+        # frozenset() isn't RPython-legal either; a sorted char list joined
+        # into a string is an equally good, RPython-legal dedup key.
         sorted_i = _sorted_chars(live_i)
         sorted_r = _sorted_chars(live_r)
         sorted_f = _sorted_chars(live_f)
@@ -432,9 +398,8 @@ class Assembler(object):
             self.all_liveness.append(
                 chr(len(sorted_i)) + chr(len(sorted_r)) + chr(len(sorted_f)))
             self.all_liveness_length += 3
-            # A list, not a bare tuple literal: RPython's rtyper only
-            # supports iterating a tuple of static length 1; sorted_i/r/f
-            # are all list-of-str, so a list literal unifies fine.
+            # List, not a tuple literal: RPython's rtyper can only iterate
+            # a tuple whose length is statically 1; this one has 3 elements.
             for live in [sorted_i, sorted_r, sorted_f]:
                 liveness = encode_liveness(live)
                 if liveness:
@@ -469,16 +434,10 @@ class Assembler(object):
             raise AssemblerError("too many float registers/constants")
 
     def make_jitcode(self, jitcode):
-        """Hand the assembled code and constant pools off to 'jitcode'.
-
-        constants_i/r/f are rebuilt as fresh, index-filled copies, never
-        the live self.constants_i/r/f lists built by .append(): RPython's
-        "ever resized" list flag is unified across every JitCode sharing
-        this attribute, so one append()-grown constants list would make
-        blackhole.py's make_sure_not_resized reject every JitCode, not
-        just this one. Mirrors BlackholeInterpreter.setposition's own
-        ``[default_i] * n`` idiom on the sibling 'registers' argument.
-        """
+        # Index-fill copy (_fixed_size_copy), not the live .append()-built
+        # list: JitCode.constants_i/r/f's ListItem is shared across every
+        # JitCode, so one genuinely-resized list taints make_sure_not_resized
+        # for all of them.
         jitcode.setup(''.join(self.code),
                       _fixed_size_copy(self.constants_i, JitCode._empty_i),
                       _fixed_size_copy(self.constants_r, JitCode._empty_r),
@@ -520,10 +479,8 @@ class Assembler(object):
 # expode, growing past 256.  So we list here only the most common
 # instructions where the 'c' variant might be useful.
 #
-# Not a real set(): RPython's annotator has no representation for a set,
-# even a module-level prebuilt one, once an 'in' test on it gets annotated
-# (here, and in NativeAssembler.write_insn). dict.fromkeys still runs as
-# plain Python at module import time; only the resulting type differs.
+# dict.fromkeys, not set(): RPython's annotator has no representation for
+# a module-level prebuilt set once something reads it (the 'in' test below).
 USE_C_FORM = dict.fromkeys([
     'copystrcontent',
     'getarrayitem_gc_pure_i',

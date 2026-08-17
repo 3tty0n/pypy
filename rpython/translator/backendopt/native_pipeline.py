@@ -4,9 +4,6 @@ operating on the native_fragments.py IR instead of SSARepr/flowspace objects.
 Mirrors each original 1:1 on purpose: test_native_pipeline.py's equivalence
 gate requires byte-identical output, so keep behavior identical here, not
 just "cleaner".
-
-RPython-legal only, throughout: a real runtime_cogen callback reaches
-every function here, so each must translate, not just run untranslated.
 """
 
 import os
@@ -17,6 +14,7 @@ from rpython.jit.codewriter.flatten import KINDS
 from rpython.jit.codewriter.jitcode import JitCode, SwitchDictDescr
 from rpython.jit.metainterp.history import AbstractDescr
 from rpython.rlib.debug import debug_print
+from rpython.rlib.rarithmetic import r_uint
 from rpython.rtyper.lltypesystem import llmemory, lltype
 
 from rpython.translator.backendopt.native_fragments import (
@@ -45,16 +43,12 @@ def _fragment_label_id(pc, local_label_id):
 
 
 class NativeSwitchDictDescr(SwitchDictDescr):
-    """SwitchDictDescr resolved by NativeAssembler's own fix_labels, not
-    Assembler's shared one.
+    """Must stay a SwitchDictDescr subclass: pyjitpl.py/blackhole.py
+    assert isinstance(switchdict, SwitchDictDescr) before reading it.
 
-    Must stay a real SwitchDictDescr: pyjitpl.py/blackhole.py assert
-    isinstance(switchdict, SwitchDictDescr) before reading
-    .dict/.const_keys_in_order (set by .attach(), inherited unchanged).
-    ._labels differs by backend though -- SSARepr fills it with TLabel
-    instances (.name is a flowspace Link), this path only has plain ints
-    (global label ids), which can't unify with an instance. Storing this
-    path's data as ._native_labels instead keeps it out of that domain.
+    Uses ._native_labels, not ._labels: ._labels holds real TLabel
+    instances elsewhere, and a plain int label id cannot unify with an
+    instance under RPython's type system.
     """
 
 
@@ -77,8 +71,7 @@ def emit_native(native_table, program, name="emitted-residual-native",
     Returns (NativeSSARepr, counts), counts being the per-kind register
     count to pass to NativeAssembler.assemble.
     """
-    # Dict-as-set, plain loops: set()/dict(genexpr)/sorted() aren't
-    # RPython-legal (see generating_extension.py, partialeval_template.py).
+    # Not set()/dict(genexpr)/sorted(): none are RPython-legal here.
     headers = {}
     if has_merge_points:
         for pc in program.loop_headers:
@@ -130,8 +123,8 @@ def _initialise_scratch_native(ssarepr, fragments, counts):
     for fragment in fragments.values():
         for kind, index in fragment.boundary_entry.values():
             entry[kind] = max(entry.get(kind, 0), index + 1)
-    # KINDS is already int/ref/float order, so iterating it directly
-    # matches sorted(counts) (not RPython-legal) byte-for-byte.
+    # Not sorted(counts) (not RPython-legal): KINDS is already in the
+    # right order, so iterating it directly matches sorted(counts).
     for kind in KINDS:
         if kind not in counts:
             continue
@@ -159,8 +152,7 @@ def _place_native(ssarepr, program, pc, fragments, scratch):
 
     for insn in fragment.insns:
         exit_index = _exit_index(insn)
-        # -1 not None: RPython ints have no null value (see
-        # generating_extension.py's last_blocked). Real index is >= 0.
+        # -1, not None: RPython ints have no null representation.
         if exit_index < 0:
             ssarepr.insns.append(_localise_native(insn, pc, block.bindings))
             continue
@@ -206,9 +198,8 @@ def _localise_operand(x, pc, bindings, is_marker):
             for item in x.items])
     if isinstance(x, NSwitchDictOperand):
         fresh = NativeSwitchDictDescr()
-        # Not zip(x.keys, x.label_ids): RPython's rtyper has no zip()
-        # typer. Both lists are always the same length (built together,
-        # native_fragments.py), so a manual indexed loop suffices.
+        # Not zip(): RPython's rtyper has no typer for zip(). Both lists
+        # are always the same length, so an indexed loop works instead.
         labels = []
         for i in range(len(x.keys)):
             labels.append((x.keys[i], _fragment_label_id(pc, x.label_ids[i])))
@@ -219,12 +210,12 @@ def _localise_operand(x, pc, bindings, is_marker):
 
 def _patch_hole_native(hole, pc, bindings, is_marker):
     """A marker's own 'pc' hole identifies this block; every other hole
-    (including a Continue exit's own next-pc) takes the bound value.
-    Every hole here is a plain int; asserted since silently truncating a
-    ref/float hole would be a correctness bug, not just an RPython one.
+    takes the block's bound value.
+
+    Asserts int-only: silently truncating a ref/float hole into an int
+    would be a real, hard-to-notice correctness bug.
     """
-    # Not %r: RPython's rtyper only implements %s/%d/... formatting
-    # (rstr.py's do_stringformat); hole.name is already a plain str.
+    # Not %r: RPython's rtyper only implements %s/%d/... formatting.
     assert hole.kind == "int", (
         "native_pipeline: non-int hole %s -- no interpreter this IR "
         "currently serves has one" % (hole.name,))
@@ -236,12 +227,11 @@ def _patch_hole_native(hole, pc, bindings, is_marker):
 def _emit_moves_native(ssarepr, sources, destinations, scratch, _names=None):
     """Port of ProgramEmitter._emit_moves.
 
-    Processes boundary names in sorted order: a real runtime_cogen call
-    runs translated, where dict order need not match CPython's, and a
-    fixed order keeps output byte-reproducible. The cycle-breaking loop
-    is itself order-independent (test_emit_moves_native_order_independent).
+    Processes boundary names in sorted order, not raw dict iteration:
+    this runs translated, where RPython's dict order need not match
+    CPython's, so a fixed order keeps output byte-reproducible.
 
-    ``_names`` overrides the sorted order; test-only hook.
+    ``_names``, when given, overrides the sorted order (test-only hook).
     """
     if _names is None:
         _names = destinations.keys()
@@ -252,9 +242,8 @@ def _emit_moves_native(ssarepr, sources, destinations, scratch, _names=None):
         if destination is None:
             continue
         kind, index = destination
-        # Membership-checked, not .get(bname): tuple values have no null
-        # to unify with a missing-key None (see last_blocked in
-        # generating_extension.py).
+        # Not sources.get(bname): dict values can be tuples, which have
+        # no null representation to unify against a missing-key None.
         if bname in sources:
             source = sources[bname]
             if isinstance(source, tuple):
@@ -276,15 +265,12 @@ def _emit_moves_native(ssarepr, sources, destinations, scratch, _names=None):
         progressed = False
         for move in list(pending):
             kind, index, source = move
-            # Loop, not any(genexpr): closing over move/kind/index isn't
-            # RPython-legal.
+            # Not any(genexpr): that would close over loop vars, and
+            # RPython functions cannot create closures.
             blocked = False
             for other in pending:
-                # Not ``other is move``: RPython's rtyper has no identity
-                # comparison for tuples. Value equality is a safe
-                # substitute: 'pending' entries are one per boundary name,
-                # and two boundary names never share one (kind, index,
-                # source) triple, so equal means the same entry.
+                # Not ``other is move``: RPython has no identity compare
+                # for tuples. Equality is safe here: entries never collide.
                 if other == move:
                     continue
                 if (isinstance(other[2], NReg) and
@@ -338,69 +324,151 @@ def compute_liveness_native(insns):
         _liveness_algo.checked = True
         value = os.environ.get("PE_RT_LIVENESS")
         _liveness_algo.use_old = value == "old"
-    label2alive = {}
     if _liveness_algo.use_old:
+        label2alive_old = {}   # nid -> NReg dicts: own dictdef, not
+                                # unified with the bitmap dict below --
+                                # RPython would otherwise try to merge
+                                # the two incompatible value types.
         rounds = 0
-        while _compute_liveness_native_pass(insns, label2alive):
+        while _compute_liveness_native_pass(insns, label2alive_old):
             rounds += 1
     else:
-        rounds = _converge_liveness_native(insns, label2alive)
-        # Fixpoint already converged: this single pass only rewrites -live-;
-        # see _converge_liveness_native's docstring for why that's safe.
-        _compute_liveness_native_pass(insns, label2alive)
+        # Same whole-list-until-fixpoint control flow as the dict-keyed
+        # path above -- field data showed pass count (~5 on real
+        # programs) was never the bottleneck. _converge_liveness_native
+        # only swaps the per-pass representation (bitmaps, see its
+        # docstring), not this control flow.
+        label2alive_bits = {}   # label_id -> list[r_uint] bitmap
+        rounds = _converge_liveness_native(insns, label2alive_bits)
     if have_debug_prints():
         nlabels = 0
         for insn in insns:
             if insn.opcode == "@label":
                 nlabels += 1
-        debug_print("pe-rt-live stats insns=%d labels=%d segs=%d rounds=%d" % (
-            len(insns), nlabels, len(_segment_bounds_native(insns)) - 1,
-            rounds))
+        debug_print("pe-rt-live stats insns=%d labels=%d rounds=%d" % (
+            len(insns), nlabels, rounds))
     _remove_repeated_live_native(insns)
 
 
-def _segment_bounds_native(insns):
-    """Segment = maximal run starting at a '---' (or at index 0). alive
-    always starts empty at a segment's bottom (see _converge_liveness_native
-    docstring), so segments can be fixpointed independently of each other.
+# ____________________________________________________________
+# Bitmap liveness: same backward-pass-until-fixpoint control flow as
+# _compute_liveness_native_pass above, but "alive"/label2alive values are
+# bitmaps over a dense per-run compact index of NID, not nid-keyed dicts.
+# An @label merge becomes a handful of word ORs with a cheap word-array
+# "did it change" check, instead of an O(alive-set-size) dict-store loop;
+# no per-'-live-' insn list allocation happens until the single final pass.
+#
+# Deliberately keyed by NID, not (kind, index): (kind, index) values are
+# NOT globally unique in this IR -- every distinct fragment key gets its
+# own register numbering starting at 0 (see native_fragments.py's
+# _Converter, "one NReg per (kind, index) per-fragment, not program-
+# wide"), and emit_native/_emit_moves_native mint a *fresh* NReg (fresh
+# nid, same (kind, index)) for every scratch-shuffle and prologue copy at
+# every block placement. A single program-wide bitmap keyed by (kind,
+# index) would therefore conflate unrelated registers that only
+# coincidentally share a slot number -- exactly the hazard nid-keying
+# exists to avoid (see the comment above _compute_liveness_native_pass).
+# Indexing by a dense compact remap of NID instead is a pure bijective
+# encoding of the same nid-keyed dict this replaces, so it carries none
+# of that risk while still giving O(1) bit ops instead of dict ops.
+
+_WORD_BITS = 64   # r_uint word width for the compact liveness bitmaps
+
+
+def _scan_nid_registry_native(insns):
+    """One pre-pass: assign every distinct nid appearing anywhere in
+    insns (operands, NListOfKind items, results) a dense compact index
+    0..K-1, and remember its NReg for materializing '-live-' rewrites.
+    Compact indices size the bitmap, not raw nid (a program-wide, hence
+    unbounded-per-run, counter).
     """
-    n = len(insns)
-    bounds = [0]
-    for i in range(1, n):
-        if insns[i].opcode == "---":
-            bounds.append(i)
-    bounds.append(n)
-    return bounds
+    nid_to_compact = {}     # nid -> compact index
+    registry = []           # compact index -> representative NReg
+    for insn in insns:
+        if insn.result is not None:
+            _register_nid_native(insn.result, nid_to_compact, registry)
+        for x in insn.operands:
+            if isinstance(x, NReg):
+                _register_nid_native(x, nid_to_compact, registry)
+            elif isinstance(x, NListOfKind):
+                for item in x.items:
+                    if isinstance(item, NReg):
+                        _register_nid_native(item, nid_to_compact, registry)
+    words = len(registry) // _WORD_BITS + 1
+    return nid_to_compact, registry, words
 
 
-def _collect_labels_native(x, label_readers, seg_idx):
-    """Structural (label2alive-independent) pass: which segment indices
-    ever follow label 'x'. Mirrors the label-following cases of
-    _mark_native, minus the register-marking ones."""
-    if isinstance(x, NTLabel):
-        _add_reader_native(label_readers, x.label_id, seg_idx)
+def _register_nid_native(reg, nid_to_compact, registry):
+    if reg.nid not in nid_to_compact:
+        nid_to_compact[reg.nid] = len(registry)
+        registry.append(reg)
+
+
+def _new_bits_native(words):
+    bits = []
+    for _ in range(words):
+        bits.append(r_uint(0))
+    return bits
+
+
+def _bits_set_native(bits, idx):
+    bits[idx // _WORD_BITS] |= (r_uint(1) << (idx % _WORD_BITS))
+
+
+def _bits_clear_native(bits, idx):
+    bits[idx // _WORD_BITS] &= ~(r_uint(1) << (idx % _WORD_BITS))
+
+
+def _bits_clear_all_native(bits):
+    for i in range(len(bits)):
+        bits[i] = r_uint(0)
+
+
+def _bits_or_into_native(dst, src):
+    """OR src into dst in place; both are always the same length (both
+    sized from the one program-wide 'words'). Returns True if dst grew."""
+    grew = False
+    for i in range(len(dst)):
+        old = dst[i]
+        new = old | src[i]
+        if new != old:
+            dst[i] = new
+            grew = True
+    return grew
+
+
+def _follow_label_bits_native(label_id, label2alive, alive):
+    alive_at_point = label2alive.get(label_id)
+    if alive_at_point is not None:
+        _bits_or_into_native(alive, alive_at_point)
+
+
+def _mark_bits_native(x, nid_to_compact, label2alive, alive):
+    if isinstance(x, NReg):
+        _bits_set_native(alive, nid_to_compact[x.nid])
+    elif isinstance(x, NListOfKind):
+        for item in x.items:
+            if isinstance(item, NReg):
+                _bits_set_native(alive, nid_to_compact[item.nid])
+    elif isinstance(x, NTLabel):
+        _follow_label_bits_native(x.label_id, label2alive, alive)
     elif isinstance(x, NDescr):
         descr = x.descr
         if isinstance(descr, NativeSwitchDictDescr):
             for _key, label in descr._native_labels:
-                _add_reader_native(label_readers, label, seg_idx)
+                _follow_label_bits_native(label, label2alive, alive)
 
 
-def _add_reader_native(label_readers, label_id, seg_idx):
-    readers = label_readers.get(label_id)
-    if readers is None:
-        readers = {}
-        label_readers[label_id] = readers
-    readers[seg_idx] = True
+def _compute_liveness_native_pass_bits(insns, label2alive, alive,
+                                       nid_to_compact, words):
+    """Bitmap twin of _compute_liveness_native_pass -- no -live- rewrite
+    here (that only happens once, in _rewrite_live_insns_bits, after
+    convergence; same final-only-rewrite argument as before applies
+    unchanged since this is still nid-exact, not a lossy collapse)."""
+    _bits_clear_all_native(alive)
+    must_continue = False
 
-
-def _process_segment_native(insns, start, end, label2alive):
-    """One local backward scan over insns[start:end) -- no -live- rewrite
-    (worklist phase only, see _converge_liveness_native). Returns the
-    label_ids whose label2alive set grew because of this segment."""
-    alive = {}
-    grown = []
-    for i in range(end - 1, start - 1, -1):
+    for i in range(len(insns) - 1, -1, -1):
         insn = insns[i]
         opcode = insn.opcode
 
@@ -408,92 +476,110 @@ def _process_segment_native(insns, start, end, label2alive):
             label_id = insn.operands[0].label_id
             alive_at_point = label2alive.get(label_id)
             if alive_at_point is None:
-                alive_at_point = {}
+                alive_at_point = _new_bits_native(words)
                 label2alive[label_id] = alive_at_point
-            prevlength = len(alive_at_point)
-            for nid, reg in alive.items():
-                alive_at_point[nid] = reg
-            if prevlength != len(alive_at_point):
-                grown.append(label_id)
+            if _bits_or_into_native(alive_at_point, alive):
+                must_continue = True
             continue
 
         if opcode == "-live-":
             for x in insn.operands:
                 if isinstance(x, NReg):
-                    alive[x.nid] = x
+                    _bits_set_native(alive, nid_to_compact[x.nid])
                 elif isinstance(x, NTLabel):
-                    _follow_label_native(x.label_id, label2alive, alive)
+                    _follow_label_bits_native(x.label_id, label2alive, alive)
             continue
 
         if opcode == "---":
-            continue   # only possible at i == start; nothing follows
+            _bits_clear_all_native(alive)
+            continue
 
-        if insn.result is not None and insn.result.nid in alive:
-            del alive[insn.result.nid]
+        if insn.result is not None:
+            _bits_clear_native(alive, nid_to_compact[insn.result.nid])
         for x in insn.operands:
-            _mark_native(x, label2alive, alive)
+            _mark_bits_native(x, nid_to_compact, label2alive, alive)
 
-    return grown
+    return must_continue
+
+
+def _materialize_bits_native(alive, registry, words):
+    regs = []
+    for word_idx in range(words):
+        word = alive[word_idx]
+        if word == r_uint(0):
+            continue
+        base = word_idx * _WORD_BITS
+        for bit in range(_WORD_BITS):
+            if (word >> bit) & r_uint(1) != r_uint(0):
+                compact_idx = base + bit
+                if compact_idx < len(registry):
+                    regs.append(registry[compact_idx])
+    return regs
+
+
+def _rewrite_live_insns_bits(insns, label2alive, alive, registry,
+                             nid_to_compact, words):
+    """Single final backward pass, run once label2alive is converged:
+    rewrites every '-live-' insn from the bitmap, in nid-exact fidelity
+    (registry[compact_idx] is the one-and-only NReg for that nid)."""
+    _bits_clear_all_native(alive)
+
+    for i in range(len(insns) - 1, -1, -1):
+        insn = insns[i]
+        opcode = insn.opcode
+
+        if opcode == "@label":
+            label_id = insn.operands[0].label_id
+            alive_at_point = label2alive.get(label_id)
+            if alive_at_point is None:
+                alive_at_point = _new_bits_native(words)
+                label2alive[label_id] = alive_at_point
+            _bits_or_into_native(alive_at_point, alive)
+            continue
+
+        if opcode == "-live-":
+            labels = []
+            for x in insn.operands:
+                if isinstance(x, NReg):
+                    _bits_set_native(alive, nid_to_compact[x.nid])
+                elif isinstance(x, NTLabel):
+                    _follow_label_bits_native(x.label_id, label2alive, alive)
+                    labels.append(x)
+            regs = _materialize_bits_native(alive, registry, words)
+            insns[i] = NativeInsn("-live-", regs + labels)
+            continue
+
+        if opcode == "---":
+            _bits_clear_all_native(alive)
+            continue
+
+        if insn.result is not None:
+            _bits_clear_native(alive, nid_to_compact[insn.result.nid])
+        for x in insn.operands:
+            _mark_bits_native(x, nid_to_compact, label2alive, alive)
 
 
 def _converge_liveness_native(insns, label2alive):
-    """Worklist replacement for repeated _compute_liveness_native_pass
-    sweeps: label2alive is the only thing that crosses a '---' boundary
-    (alive itself always resets to {} there), so each segment can be
-    fixpointed on its own and only needs revisiting when a label it
-    follows grows -- no need to rescan the whole insn list every time
-    one label somewhere gains a register.
-
-    -live- insns are deliberately left unrewritten here. Rewriting them
-    per pass (as the legacy/port algorithm does) only ever feeds back a
-    subset of what the next pass's own backward accumulation would
-    already re-derive from a monotonically-grown label2alive, so it
-    changes no fixpoint -- confirmed by differential testing against the
-    old algorithm (test_native_pipeline_liveness_differential.py).
-    Returns the number of segment (re)visits, for scaling assertions.
+    """Bitmap-backed replacement for repeated _compute_liveness_native_pass
+    sweeps -- see the module comment above _WORD_BITS for why this stays
+    keyed by nid, not (kind, index). Returns the number of growth passes
+    (same counting convention as compute_liveness_native's dict-keyed
+    branch), for the debug_print stat.
     """
-    n = len(insns)
-    if n == 0:
-        return 0
-    bounds = _segment_bounds_native(insns)
-    num_segs = len(bounds) - 1
-
-    label_readers = {}
-    seg_idx = 0
-    for i in range(n):
-        if seg_idx + 1 < num_segs and i == bounds[seg_idx + 1]:
-            seg_idx += 1
-        for x in insns[i].operands:
-            _collect_labels_native(x, label_readers, seg_idx)
-
-    queued = []
-    queue = []
-    for s in range(num_segs):
-        queued.append(True)
-        queue.append(s)
-
-    qhead = 0
-    while qhead < len(queue):
-        s = queue[qhead]
-        qhead += 1
-        queued[s] = False
-        grown = _process_segment_native(
-            insns, bounds[s], bounds[s + 1], label2alive)
-        for label_id in grown:
-            readers = label_readers.get(label_id)
-            if readers is None:
-                continue
-            for seg2 in readers.keys():
-                if not queued[seg2]:
-                    queued[seg2] = True
-                    queue.append(seg2)
-
-    return len(queue)
+    nid_to_compact, registry, words = _scan_nid_registry_native(insns)
+    alive = _new_bits_native(words)
+    rounds = 0
+    while _compute_liveness_native_pass_bits(
+            insns, label2alive, alive, nid_to_compact, words):
+        rounds += 1
+    _rewrite_live_insns_bits(
+        insns, label2alive, alive, registry, nid_to_compact, words)
+    return rounds
 
 
 def _follow_label_native(label_id, label2alive, alive):
-    """Module-level, not a nested closure (RPython disallows closures);
-    takes alive/label2alive explicitly instead."""
+    """Module-level, not a nested closure: RPython functions cannot
+    create closures."""
     alive_at_point = label2alive.get(label_id)
     if alive_at_point is not None:
         for nid, reg in alive_at_point.items():
@@ -501,7 +587,7 @@ def _follow_label_native(label_id, label2alive, alive):
 
 
 def _mark_native(x, label2alive, alive):
-    """Plain function, not a nested closure -- see _follow_label_native."""
+    """Plain function, not a closure -- see _follow_label_native."""
     if isinstance(x, NReg):
         alive[x.nid] = x
     elif isinstance(x, NListOfKind):
@@ -511,17 +597,15 @@ def _mark_native(x, label2alive, alive):
     elif isinstance(x, NTLabel):
         _follow_label_native(x.label_id, label2alive, alive)
     elif isinstance(x, NDescr):
-        # Local var first: RPython's isinstance-narrowing tracks a plain
-        # variable, not a re-evaluated x.descr attribute access.
+        # Local var, not isinstance(x.descr, ...) inline: RPython's
+        # isinstance-narrowing doesn't track attribute expressions.
         descr = x.descr
         if isinstance(descr, NativeSwitchDictDescr):
-            # label is already the int label id (see NativeSwitchDictDescr).
+            # label is already the plain int label id here, no .name.
             for _key, label in descr._native_labels:
                 _follow_label_native(label, label2alive, alive)
-        # A real (non-native) SwitchDictDescr can also reach here, carried
-        # unchanged from an already-compiled template fragment -- its
-        # targets got liveness during that earlier compile, so this pass
-        # has nothing sound to add for it.
+        # A real SwitchDictDescr can reach here too, already resolved at
+        # its own fragment's compile time -- no branch needed for it.
 
 
 def _compute_liveness_native_pass(insns, label2alive):
@@ -605,9 +689,8 @@ def _remove_repeated_live_native(insns):
                     extra_tlabels.append(x)
         res.extend(labels)
         res.append(NativeInsn("-live-", liveset.values() + extra_tlabels))
-    # Not insns[:] = res: RPython's rlist has no unbounded full-replace
-    # slice assignment (rlist.py's rtype_setslice). pop()+extend() mutate
-    # 'insns' in place instead, on purpose, so the caller sees the result.
+    # Not insns[:] = res: RPython's rlist doesn't support unbounded slice
+    # assignment. pop() + extend() is the RPython-legal equivalent.
     while insns:
         insns.pop()
     insns.extend(res)
@@ -617,8 +700,7 @@ def _remove_repeated_live_native(insns):
 # NativeAssembler: port of codewriter/assembler.py's Assembler.
 
 def _get_liveness_info_native(operands, kind):
-    # Dict-as-set: RPython has no native set type (see
-    # generating_extension.py, partialeval_template.py).
+    # Dict-as-set, not set(): RPython has no native set type.
     lives = {}
     for x in operands:
         if isinstance(x, NReg) and x.kind == kind:
@@ -627,15 +709,12 @@ def _get_liveness_info_native(operands, kind):
 
 
 def _operand_argcode_options(x, allow_short):
-    """Every argcode letter operand 'x' could contribute to an insn key --
-    normally exactly one, two for an unplaced int-kind hole (its real
-    value isn't known until placement, so both 'c' and 'i' are possible).
-    None means "contributes nothing" (NIndirectCallTargets).
+    """Argcode letter(s) operand 'x' could contribute to an insn key --
+    two only for an unplaced int-kind hole ('c' or 'i'); None means it
+    contributes nothing (NIndirectCallTargets).
 
-    Shared by write_insn's operand loop (below, always exactly one
-    option there -- every operand it sees is already resolved) and
-    native_insn_key_options (below), so the two can never disagree
-    about what letter an operand shape means.
+    Shared by write_insn and native_insn_key_options so the two can
+    never disagree about what letter one operand shape means.
     """
     if isinstance(x, NReg):
         return [x.kind[0]]
@@ -648,9 +727,8 @@ def _operand_argcode_options(x, allow_short):
         return ["r"]
     if isinstance(x, NFloatConst):
         return ["f"]
-    # Not isinstance(x, (NTLabel, NLabel))/(NDescr, NSwitchDictOperand):
-    # RPython's annotator rejects a multi-class isinstance tuple here --
-    # two separate checks are the RPython-legal equivalent.
+    # Not a multi-class isinstance tuple: RPython's annotator chokes on
+    # those (AttributeError deep inside classdesc.py's is_primitive_type).
     if isinstance(x, NTLabel):
         return ["L"]
     if isinstance(x, NLabel):
@@ -667,14 +745,12 @@ def _operand_argcode_options(x, allow_short):
 
 
 def native_insn_key_options(insn):
-    """Every 'opname/argcodes' key 'insn' could resolve to once assembled
-    for real -- more than one only for an unresolved int-kind hole
-    feeding a short-constant-capable opcode.
+    """Every 'opname/argcodes' key 'insn' could assemble to -- more than
+    one only for an unresolved int-kind hole allowing short-constant form.
 
-    ``'---'``/``'@label'`` aren't insns at all -- ``None``. ``'-live-'``
-    is fixed (``'live/'``); it never appears in a fragment's own insns
-    (inserted only after emit_native concatenates a whole program), but
-    is handled here so write_insn's reuse of this function stays total.
+    '---'/'@label' return None (not real insns); '-live-' returns a fixed
+    key even though it never appears here, kept only so write_insn's
+    reuse of this function stays total.
     """
     if insn.opcode in ("---", "@label"):
         return None
@@ -706,22 +782,16 @@ class NativeAssembler(Assembler):
     one global opcode table and liveness string. Not thread-safe: nothing
     guards concurrent mutation of the shared state.
 
-    ``readonly``, when True, is the mode a genuine runtime_cogen caller
-    uses (PortalLinker._emit_native, portal_linker.py): ``insns`` stays
-    shared (read-only lookups against what precompile_fragments already
-    built), but write_insn no longer grows it or ``descrs`` for an
-    ordinary (non-switch-dict) descr. ``all_liveness``/
-    ``all_liveness_positions``/``_counters`` are not shared in this mode:
-    this assembler keeps its own fresh copies, so a late JitCode's
-    ``-live-`` offsets land in its own liveness chunk (stored as
-    ``JitCode.own_liveness_info``) instead of the frozen global string,
-    which nothing may resync any more.
+    ``readonly``, when True (the runtime cogen path, PortalLinker.
+    _emit_native): insns stays shared read-only, but all_liveness and
+    counters stay private, so a late JitCode's own liveness lands in its
+    own chunk instead of extending the frozen global string.
     """
 
     def __init__(self, share_with=None, readonly=False):
         Assembler.__init__(self)
-        # Per-JitCode, like switchdictdescrs; reset again in assemble()
-        # since inherited setup() doesn't know about this list.
+        # Reset again in assemble(): inherited setup() doesn't know
+        # about this list.
         self.native_switchdictdescrs = []
         self._share_with = share_with
         self._readonly = readonly
@@ -750,12 +820,11 @@ class NativeAssembler(Assembler):
         self.check_result()
         if jitcode is None:
             jitcode = JitCode(ssarepr.name)
-        # jitcode._ssarepr left unset: it's debug-only (JitCode.dump,
-        # skipped below since format_assembler can't read native operands).
+        # Not jitcode._ssarepr = ssarepr: leaving it unset avoids the
+        # RPython annotator unifying it with a real SSARepr elsewhere.
         self.make_jitcode(jitcode)
-        # ponytail: no jitcode._dump -- format_assembler expects real
-        # SSARepr tuples and would crash on native operands; a full port
-        # would teach it to read NativeInsn too.
+        # ponytail: no jitcode._dump -- format_assembler assumes real
+        # SSARepr tuples and would crash on native operands.
         self._count_jitcodes += 1
         return jitcode
 
@@ -784,18 +853,16 @@ class NativeAssembler(Assembler):
         argcodes = []
         allow_short = (insn.opcode in USE_C_FORM)
         for x in insn.operands:
-            # Byte emission stays per-branch; only the argcode letter is
-            # shared via _operand_argcode_options, which always returns
-            # exactly one option here since every operand is resolved.
+            # Only the argcode letter comes from _operand_argcode_options,
+            # so this stays in sync with the translation-time coverage pass.
             if isinstance(x, NReg):
                 self.emit_reg(x)
             elif isinstance(x, NIntConst):
                 self.emit_resolved_const(x.ivalue, "int",
                                          allow_short=allow_short)
             elif isinstance(x, NRefConst):
-                # No dedup_key: default (=value) is right now that
-                # constants_dict_r is keyed via new_ref_dict's rd_eq/
-                # rd_hash (assembler.py).
+                # No explicit dedup_key: the default (dedup_key=value) is
+                # correct now that constants_dict_r keys via rd_eq/rd_hash.
                 self.emit_resolved_const(x.value, "ref")
             elif isinstance(x, NFloatConst):
                 self.emit_resolved_const(x.value, "float")
@@ -826,9 +893,8 @@ class NativeAssembler(Assembler):
                         assert x.kind == "float"
                         self.emit_resolved_const(item.value, "float")
                     else:
-                        # Not %r, and not embedding 'item' at all: an
-                        # arbitrary operand instance has no RPython-legal
-                        # string conversion.
+                        # Not %r: an arbitrary operand has no RPython-
+                        # legal string conversion.
                         raise NotImplementedError(
                             "found an operand of an unexpected type in "
                             "NListOfKind()")
@@ -906,10 +972,9 @@ class NativeAssembler(Assembler):
         return self.insns.setdefault(key, len(self.insns))
 
     def fix_labels(self):
-        """Override: Assembler.fix_labels reads switchdictdescrs'
-        label.name, never populated here (see NativeSwitchDictDescr).
-        Resolves tlabel_positions the same way, plus
-        native_switchdictdescrs instead of switchdictdescrs.
+        """Override, not inherit: the base resolves switchdictdescrs via
+        label.name, never populated by this path. Resolves
+        native_switchdictdescrs instead.
         """
         for name, pos in self.tlabel_positions:
             assert self.code[pos] == "temp 1"
@@ -928,8 +993,7 @@ class NativeAssembler(Assembler):
 def emit_and_assemble_native(native_table, program, name,
                              has_merge_points=False, assembler=None):
     """Full native pipeline: emit_native -> compute_liveness_native ->
-    NativeAssembler.assemble, in that order (place everything, then
-    compute liveness once over the flat stream, then assemble).
+    NativeAssembler.assemble, mirroring ProgramEmitter.emit's own order.
 
     Returns (jitcode, entry_positions, assembler).
     """
@@ -946,8 +1010,8 @@ def emit_and_assemble_native(native_table, program, name,
     debug_start("pe-rt-asm")
     assembler.assemble(ssarepr, jitcode, counts)
     debug_stop("pe-rt-asm")
-    # Loop, not dict(genexpr): unlike emit_native's genexprs (RPython
-    # inlines those), this one closes over assembler, which isn't legal.
+    # Not dict(genexpr): this one needs a closure over ``assembler``,
+    # which is not RPython-legal, so it's a loop instead.
     entry_positions = {}
     for pc in program.blocks:
         entry_positions[pc] = assembler.label_positions[_block_label_id(pc)]

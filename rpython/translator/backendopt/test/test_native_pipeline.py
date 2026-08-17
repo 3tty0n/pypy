@@ -112,9 +112,7 @@ def test_toy_program_with_shared_calldescr_byte_identical():
 
 
 def test_stamp_descr_indices_covers_fragment_only_descrs_before_any_assemble():
-    """Regression: stamp descr indices and insn coverage before any
-    jitcode is assembled, then assemble readonly to prove full coverage.
-    """
+    """Regression: stamp descr indices before any jitcode is assembled."""
     from rpython.jit.codewriter.codewriter import CodeWriter
     from rpython.jit.codewriter.test.test_codewriter import (
         FakeCPU, FakeJitDriverSD)
@@ -131,9 +129,7 @@ def test_stamp_descr_indices_covers_fragment_only_descrs_before_any_assemble():
         if opcode == OP_ADD:
             return pc + 2, helper(value, oparg)
         if opcode == OP_SUB:
-            # Both operands are late-static (a hole, a compile-time
-            # literal); oparg's real value isn't known until link time,
-            # so this can't fold -- the int_sub/cc>i shape.
+            # Both operands are late-static; RPython cannot fold this away.
             return pc + 2, oparg - 5
         return -1, value
 
@@ -151,8 +147,8 @@ def test_stamp_descr_indices_covers_fragment_only_descrs_before_any_assemble():
         translator, step, [OP_ADD, OP_SUB, OP_HALT], byte_pair_decoder)
     program = extension.generate(code)
     jitdriver_sd = FakeJitDriverSD(graph)
-    # pe_bailout_point's jtransform needs a real (jitdriver, jitdriver_sd)
-    # pair; fake just the few attrs it actually reads.
+    # handle_jit_marker__pe_bailout_point needs jitdriver.active/.greens
+    # and jitdriver_sd.index.
     class _FakeJitDriver(object):
         active = True
         greens = []
@@ -161,8 +157,6 @@ def test_stamp_descr_indices_covers_fragment_only_descrs_before_any_assemble():
     jitdriver_sd.index = 0
     codewriter = CodeWriter(FakeCPU(translator.rtyper), [jitdriver_sd])
     codewriter.find_all_graphs(NoInlinePolicy())
-    # Non-empty jit_merge_point_args makes precompile_fragments build the
-    # merge-point variant and insert a pe_bailout_point marker.
     emitter = ProgramEmitter(codewriter, jitdriver_sd, "opcode", ("pc",),
                              ("pc", "oparg", "code"), ("value",),
                              jit_merge_point_args=("oparg", "pc", "value"))
@@ -175,21 +169,13 @@ def test_stamp_descr_indices_covers_fragment_only_descrs_before_any_assemble():
     stamp_descr_indices(codewriter, native_table)
     register_native_insn_coverage(codewriter, native_table)
 
-    # 'helper' calldescrs were only ever seen by fragment compilation, so
-    # the fallback pass, not "already in assembler.descrs", stamped them.
-    # Two: OP_ADD compiles once per merge-point variant, and FakeCPU's
-    # calldescrof mints a fresh descr each time.
     assert len(codewriter.assembler.descrs) == 2
     for d in codewriter.assembler.descrs:
         assert d.pe_descr_index >= 0
 
-    # Both fragment-only shapes (a hole-keyed marker, a constant-constant
-    # op) must be registered, not just "something".
     assert "pe_bailout_point/cIRFIRF" in codewriter.assembler.insns
     assert "int_sub/cc>i" in codewriter.assembler.insns
 
-    # Regression guard: before both fixes this raised AssemblerError
-    # ("descr not covered"/"no precompiled insn for ...").
     assembler = NativeAssembler(share_with=codewriter.assembler, readonly=True)
     native_jitcode, _positions, _asm = emit_and_assemble_native(
         native_table, program, "native-full", has_merge_points=True,
@@ -198,11 +184,7 @@ def test_stamp_descr_indices_covers_fragment_only_descrs_before_any_assemble():
 
 
 def test_readonly_native_assembler_declines_uncovered_insn():
-    """readonly=True NativeAssembler (the runtime_cogen path) never grows
-    the shared insns/descrs tables: an uncovered (opname, argcodes)
-    combination declines the whole program instead of minting a new
-    opcode number (see NativeAssembler._insn_number, native_pipeline.py).
-    """
+    """readonly NativeAssembler declines an uncovered (opname, argcodes)."""
     from rpython.jit.codewriter.assembler import AssemblerError
 
     code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_HALT) + chr(0)
@@ -296,7 +278,7 @@ def test_repeated_helper_call_constants_dedup():
     native_jitcode, native_positions, _asm = emit_and_assemble_native(
         native_table, program, "native-add-N", has_merge_points=False)
 
-    assert len(original_jitcode.constants_i) == 2   # helper + oparg(1)
+    assert len(original_jitcode.constants_i) == 2
     assert len(native_jitcode.constants_i) == 2
 
     assert native_jitcode.code == original_jitcode.code
@@ -422,12 +404,6 @@ def test_switch_byte_identical():
     assert native_jitcode.constants_r == original_jitcode.constants_r
     assert native_jitcode.num_regs_i() == original_jitcode.num_regs_i()
     assert native_positions == original_positions
-    # Both paths really resolve the switch's targets, not just produce
-    # matching bytes by coincidence: fix_labels' SwitchDictDescr.attach()
-    # fills a real dict on the *clone* each side builds (never on the
-    # shared ``switchdict`` template -- see NSwitchDictOperand). The
-    # native side resolves via its own native_switchdictdescrs/
-    # NativeSwitchDictDescr/fix_labels override instead.
     [orig_descr] = emitter.codewriter.assembler.switchdictdescrs
     [native_descr] = _asm.native_switchdictdescrs
     assert set(orig_descr.dict) == set(native_descr.dict) == set([1, 2])
@@ -435,10 +411,7 @@ def test_switch_byte_identical():
     assert not hasattr(switchdict, "dict")
 
 
-# ____________________________________________________________
-# Two readonly NativeAssemblers (each with its own private counters)
-# registered late must still get distinct .index values and each
-# resolve back to its own JitCode via get_late_jitcode.
+# late_jitcode .index uniqueness comes from a module-global counter.
 
 def test_register_late_jitcode_twice_via_readonly_native_assembler():
     from rpython.jit.codewriter.jitcode import (
@@ -478,11 +451,7 @@ def test_register_late_jitcode_twice_via_readonly_native_assembler():
         _late_jitcodes_by_index.clear()
 
 
-# ____________________________________________________________
-# _emit_moves_native's cycle-breaking algorithm must be correct for any
-# processing order of the boundary names, not just the canonical sorted
-# one -- checked exhaustively over every permutation for several
-# SOM-shaped move sets (cycles, chains, fan-out, self/missing moves).
+# RPython dict iteration order differs from CPython; order must not matter.
 
 import itertools
 

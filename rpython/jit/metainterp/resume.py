@@ -1328,8 +1328,8 @@ class ResumeDataBoxReader(AbstractResumeDataReader):
 def blackhole_from_resumedata(blackholeinterpbuilder, jitcodes,
                               jitdriver_sd, storage,
                               deadframe, all_virtuals=None):
-    # Stack-critical init: must not be interrupted by StackOverflow, or
-    # the jit_virtual_refs are left in a dangling state.
+    # The initialization is stack-critical code: it must not be interrupted by
+    # StackOverflow, otherwise the jit_virtual_refs are left in a dangling state.
     metainterp_sd = blackholeinterpbuilder.metainterp_sd
     rstack._stack_criticalcode_start()
     try:

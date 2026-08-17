@@ -81,9 +81,9 @@ class PortalLinker(object):
         # every later one registers itself in.
         if mainjitcode.pe_metadata is None:
             program.attach_to_jitcode(mainjitcode, lowered.entry_positions)
-        # A list, not a tuple: attach_linked_jitcode's argument_sources
-        # sees different tuple lengths at this method's two call sites
-        # below, and an RPython tuple parameter can't vary in shape.
+        # Lists, not tuples: attach_linked_jitcode's argument_sources
+        # parameter sees different lengths across this method's two call
+        # sites, and an RPython tuple parameter can't vary in shape.
         linked_program = mainjitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, list(self.portal_sources), [])
         if guard is not None:
@@ -92,8 +92,8 @@ class PortalLinker(object):
             # goes hot at any block the residual program already covers still
             # matches this program instead of falling back to a generic
             # portal trace for a region that duplicates it.
-            # Not sorted()/set()/.sort(): none are RPython-legal. Dict-as-
-            # set stands in for the union; sort_ints for .sort().
+            # Not sorted()/set()/|/.sort(): none are RPython-legal.
+            # Dict-as-set stands in for the union; sort_ints for the sort.
             from rpython.translator.backendopt.partialeval_template import (
                 sort_ints)
             entries = []
@@ -131,9 +131,10 @@ class PortalLinker(object):
         """Write the JitCode listing where PE_DUMP_JITCODE asks for it.
 
         Debug tooling only, not RPython-legal as written (os, sorted(),
-        file I/O). we_are_translated() guards it: register_flow_sc
-        (objectmodel.py) folds that call to True at flow-graph-build
-        time, so everything below is never built as a graph there.
+        file I/O). The we_are_translated() guard keeps this out of real
+        annotation: register_flow_sc substitutes that call with the
+        constant True at flow-graph-build time, so nothing below it is
+        ever built as a graph.
         """
         from rpython.rlib.objectmodel import we_are_translated
         if we_are_translated():
@@ -195,13 +196,11 @@ class PortalLinker(object):
             LoweredResidualProgram)
 
         has_merge_points = bool(self.jit_merge_point_args)
-        # Shares insns/descrs-lookup state with the codewriter's own
-        # assembler so opcode bytes/descr indices stay build-wide
-        # consistent. readonly=True: this is the runtime_cogen path,
-        # which may run after metainterp_sd is frozen, so this assembler
-        # must decline rather than grow the shared tables, and must keep
-        # its own liveness chunk private instead of extending the frozen
-        # global one.
+        # Shares insns/descrs with the codewriter's assembler so a native
+        # JitCode's opcode bytes/descr indices stay consistent build-wide.
+        # readonly=True: this may run after metainterp_sd already froze,
+        # so it must never grow the shared tables -- an uncovered program
+        # is declined, not grown -- and it keeps its own liveness private.
         assembler = NativeAssembler(share_with=codewriter.assembler,
                                     readonly=True)
         jitcode, entry_positions, assembler = emit_and_assemble_native(

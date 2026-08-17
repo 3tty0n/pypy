@@ -72,7 +72,7 @@ def _boundary_value_origins(graph):
 
 
 class HoleConstant(Constant):
-    """A Constant standing in for a late-static value until supplied.
+    """A Constant standing in for a late-static value until a program supplies it.
 
     It behaves as an ordinary Constant through transformation, register
     allocation and flattening, so the hole survives into the instruction list
@@ -149,10 +149,8 @@ class FragmentCompiler(object):
             Finish, LinkedResidualLowerer)
 
         graph = copygraph(template.residual_graph, shallowvars=True)
-        # Snapshot the argument order before _reorder_arguments (below)
-        # overwrites graph.signature with the portal's boundary-name
-        # order: _boundary_values needs the original order to zip
-        # against the exit tuple, which follows it, not the portal's.
+        # Snapshot before _reorder_arguments overwrites graph.signature with
+        # the portal order; _boundary_values needs the step function's own.
         original_order = list(graph.signature[0])
         named = dict(zip(graph.signature[0], graph.startblock.inputargs))
         self._thread_boundary_values(graph, named)
@@ -362,31 +360,19 @@ class FragmentCompiler(object):
         naive positional zip against boundary_names silently misassigns
         every later name once an earlier one turns out to be omitted.
         Fix: match each tuple item's origin against a boundary name's own
-        start value; an unmatched item is genuinely fresh, consumed in
-        order against whichever names had no match.
-
-        Plain _variable_origins isn't enough here: it only follows block
-        links, but RPython's simplifier can turn a template's exit tuple
-        into a same-block "unpack, then repack" round trip;
-        _boundary_value_origins extends origin-tracking through that too.
+        start value; an unmatched item is genuinely fresh and consumed,
+        in order, against whichever names had no match.
         """
         carried = helper._available_carried_values(graph, transition.block)
         dynamic = helper._runtime_values(transition)
         named = helper._named_start_arguments(graph)
 
-        # Origin-matching (below) places a name the exit tuple omits by
-        # value identity, which can't tell "name X unchanged" from "name
-        # Y now holding X's old value" -- exactly what a shift-register
-        # boundary does on every write (SOM's s0/s1/s2: incoming s0
-        # becomes the new s1 unmodified), so it mismatches names by one.
-        #
-        # Skip that guessing when nothing was elided: if every boundary
-        # name shows up in this exit's own tuple (true of SOM's
-        # _interp_step), a plain positional zip against the step
-        # function's *original* argument order is exact.
-        # original_order, not graph.signature[0]: _reorder_arguments has
-        # already overwritten the latter with the portal's own
-        # boundary-name order, which zips wrong.
+        # Origin-matching by identity misreads a shift-register boundary
+        # (e.g. SOM's s0->s1->s2 stack cache): an old-s0-now-s1 item's
+        # origin is s0's, so it is wrongly matched as "s0, unchanged".
+        # When nothing is elided, skip the guessing: zip dynamic straight
+        # against original_order (graph.signature[0] is already
+        # overwritten by _reorder_arguments by the time this runs).
         ordered = [name for name in original_order if name in named
                   and name in self.boundary_names]
         if len(dynamic) == len(ordered):
@@ -879,15 +865,17 @@ _EMIT_NATIVE_CONNECTIVE_TISSUE = [
 
 
 def register_native_insn_coverage(codewriter, native_table):
-    """Register every (opname, argcodes) combo a readonly NativeAssembler
-    could need, into ``codewriter.assembler.insns``. Must run before
-    ``MetaInterpStaticData.finish_setup`` snapshots this table (same
-    constraint as ``stamp_descr_indices`` above).
+    """Register every (opname, argcodes) a runtime_cogen program's
+    readonly NativeAssembler could need, in codewriter.assembler.insns.
 
-    Without this, generated-program-only insns get declined:
-    ``pe_bailout_point``/``jit_merge_point`` markers, and hole-patched
-    constant-constant arithmetic that ordinary jitcodes never produce
-    (RPython's own optimizer folds those away before rtyping).
+    Must run after make_jitcodes(), before MetaInterpStaticData.
+    finish_setup: BlackholeInterpBuilder/opcode_implementations both take
+    a one-time snapshot of this table the moment finish_setup runs.
+
+    Without this, write_insn's readonly _insn_number declines any
+    combination unique to a generated program: marker insns, and
+    hole-patched constant-constant arithmetic RPython would otherwise
+    fold away before an ordinary jitcode ever sees it.
     """
     from rpython.jit.codewriter.assembler import USE_C_FORM
     from rpython.translator.backendopt.native_pipeline import (
@@ -904,9 +892,6 @@ def register_native_insn_coverage(codewriter, native_table):
                     continue
                 for key in keys:
                     insns.setdefault(key, len(insns))
-            # fragment.prologue entries are always an NIntConst operand
-            # regardless of 'kind' (_place_native); this adapts to
-            # whichever kinds a fragment's prologue actually uses.
             for kind, _index, _name in fragment.prologue:
                 copy_name = "%s_copy" % kind
                 allow_short = copy_name in USE_C_FORM

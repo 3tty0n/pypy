@@ -166,7 +166,7 @@ class PELinkedProgram(object):
         return call_boxes
 
     def matches(self, boxes):
-        """Is the portal entering the code object this program links?"""
+        """Is the portal entering the code object this program was linked for?"""
         index = self.guard_pc_index
         if index >= 0 and not self._covers(boxes[index].getint()):
             return False

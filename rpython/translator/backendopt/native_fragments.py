@@ -1,19 +1,5 @@
 """fragment_to_native converts a translation-time TemplateFragment into a
 NativeFragment/NativeInsn IR that is RPython-typed and runtime-legal.
-
-TemplateFragment's insns are SSARepr tuples over translation-time-only
-classes (flowspace Constant, codewriter Register/Label/TLabel,
-SwitchDictDescr); this converts each one, once, into a flat list of
-NativeInsn holding operands drawn from a small, closed set of tagged
-classes (NReg/NIntConst/NRefConst/NFloatConst/NHole/NLabel/NTLabel/
-NDescr/NListOfKind/NSwitchDictOperand).  native_pipeline.py's
-emit_native/compute_liveness_native/NativeAssembler read only this
-representation, never the original SSARepr/flowspace objects.
-
-A fragment's own Label/TLabel operands name flow-graph Block objects
-(identity-keyed, translation-time-only); only their identity *within one
-fragment* matters, so each distinct name gets a small sequential int
-(label_id), assigned per-fragment and discarded once conversion finishes.
 """
 
 from rpython.jit.codewriter.flatten import (
@@ -58,21 +44,8 @@ class NReg(NOperand):
 
 
 class NIntConst(NOperand):
-    """An 'int'-kind constant operand: a plain RPython ``int`` -- or,
-    for a raw external-symbol/function pointer (e.g. a residual call's own
-    callee address) or a ``ComputedIntSymbolic``, the ``Symbolic``
-    (``llmemory.AddressAsInt`` / ``ComputedIntSymbolic``) the final backend
-    link resolves.  A Symbolic is RPython-legal wherever a plain Signed int
-    is, by design (its ``annotation()`` is ``SomeInteger()``), which is
-    exactly why the rest of the JIT already stores such values in
-    otherwise-int slots, e.g. ``jitcode.constants_i`` itself.
-
-    Resolved once -- either at translation time by _const_operand_for from
-    a flowspace Constant, or synthesized at runtime (holes, boundary
-    fallbacks) with no source Constant at all.  Reused verbatim across
-    every placement of one shared fragment rather than re-cast per
-    placement: required to match the legacy Assembler.emit_resolved_const
-    dedup behavior (see test_repeated_helper_call_constants_dedup).
+    """int, or a Symbolic (AddressAsInt/ComputedIntSymbolic; RPython-legal
+    as SomeInteger()).  Resolved once; reuse verbatim to keep dedup working.
     """
     def __init__(self, ivalue):
         self.ivalue = ivalue
@@ -237,9 +210,9 @@ class NativeFragment(object):
 
 class _Converter(object):
     """Cache one NReg per (kind, index) per-fragment, not program-wide:
-    liveness keys "alive" by object identity (see native_pipeline.py's
-    liveness note), so the caching scope must be exact -- too narrow
-    never cancels a register, too wide cancels it too eagerly."""
+    liveness keys "alive" by identity, so the caching scope must be exact
+    -- too narrow never cancels a register, too wide cancels it too eagerly.
+    """
 
     def __init__(self, const_cache=None):
         self._label_ids = {}
@@ -303,9 +276,8 @@ class _Converter(object):
             return NDescr(x)
         if isinstance(x, IndirectCallTargets):
             return NIndirectCallTargets(x.lst)
-        # Resolve to a monomorphic NIntConst/NRefConst/NFloatConst here, at
-        # translation time -- see _const_operand_for.  Constant checked
-        # last: HoleConstant is itself a Constant subclass, checked above.
+        # Constant checked last: HoleConstant is itself a Constant
+        # subclass, so it must be (and already is, above) checked first.
         from rpython.flowspace.model import Constant
         if isinstance(x, Constant):
             return _const_operand_for(x, self._const_cache)

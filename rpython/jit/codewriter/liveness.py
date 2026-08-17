@@ -145,8 +145,7 @@ def decode_offset(jitcode, pc):
 # | bytes for live_i | bytes for live_r | bytes for live_f
 
 def encode_liveness(live):
-    # live arrives pre-sorted (Assembler._sorted_chars, assembler.py):
-    # sorted() isn't RPython-legal, so the one caller sorts it instead.
+    # live must be pre-sorted already; sorted() isn't RPython-legal here.
     liveness = []
     offset = 0
     char = 0
