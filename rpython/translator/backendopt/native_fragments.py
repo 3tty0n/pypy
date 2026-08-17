@@ -1,6 +1,15 @@
 """fragment_to_native converts a translation-time TemplateFragment into a
 NativeFragment/NativeInsn IR that is RPython-typed and runtime-legal.
 
+TemplateFragment's insns are SSARepr tuples over translation-time-only
+classes (flowspace Constant, codewriter Register/Label/TLabel,
+SwitchDictDescr); this converts each one, once, into a flat list of
+NativeInsn holding operands drawn from a small, closed set of tagged
+classes (NReg/NIntConst/NRefConst/NFloatConst/NHole/NLabel/NTLabel/
+NDescr/NListOfKind/NSwitchDictOperand).  native_pipeline.py's
+emit_native/compute_liveness_native/NativeAssembler read only this
+representation, never the original SSARepr/flowspace objects.
+
 A fragment's own Label/TLabel operands name flow-graph Block objects
 (identity-keyed, translation-time-only); only their identity *within one
 fragment* matters, so each distinct name gets a small sequential int
@@ -19,35 +28,156 @@ class NOperand(object):
     codewriter translation-time classes at the runtime-read path."""
 
 
+class _Counter(object):
+    def __init__(self):
+        self.value = 0
+
+# One counter, shared by every NReg ever built: the ones fragment_to_native
+# bakes into prebuilt NativeFragments at translation time, and the ones
+# native_pipeline.py's runtime _register() synthesizes on the fly for
+# parallel-move/scratch writes.  Sharing it (instead of two independent
+# counters) is what guarantees a translation-time id and a runtime-conjured
+# id can never collide: the counter's value at the end of translation
+# becomes its frozen starting value inside the translated binary, and every
+# runtime call continues incrementing from there.  compute_liveness_native
+# depends on that -- it keys "alive" by this id instead of by object
+# identity, so two different NReg objects that happened to share an id
+# would wrongly compare equal (see native_pipeline.py's liveness note).
+_nreg_id_counter = _Counter()
+
+
+def _next_nreg_id():
+    nid = _nreg_id_counter.value
+    _nreg_id_counter.value = nid + 1
+    return nid
+
+
 class NReg(NOperand):
     """Duck-types Register (kind, index) so Assembler.emit_reg/count_reg
-    work unmodified."""
+    work unmodified.  nid: RPython can't key a set/dict by object identity
+    at the runtime-read path, so compute_liveness_native uses nid instead.
+    """
     def __init__(self, kind, index):
         self.kind = kind          # 'int', 'ref' or 'float'
         self.index = index
+        self.nid = _next_nreg_id()
 
     def __repr__(self):
         return "%%%s%d" % (self.kind[0], self.index)
 
 
-class NConst(NOperand):
-    """A constant operand.
+class NIntConst(NOperand):
+    """An 'int'-kind constant operand: a plain RPython ``int`` -- or,
+    for a raw external-symbol/function pointer (e.g. a residual call's own
+    callee address) or a ``ComputedIntSymbolic``, the ``Symbolic``
+    (``llmemory.AddressAsInt`` / ``ComputedIntSymbolic``) the final backend
+    link resolves.  A Symbolic is RPython-legal wherever a plain Signed int
+    is, by design (its ``annotation()`` is ``SomeInteger()``), which is
+    exactly why the rest of the JIT already stores such values in
+    otherwise-int slots, e.g. ``jitcode.constants_i`` itself.
 
-    ``constant``, when set, is the original translation-time-built
-    flowspace Constant.  It is None for values only ever synthesized
-    during placement -- a hole's bound int, or the zero/null fallback
-    used to fill an unset boundary register -- in which case ``ivalue``
-    carries the plain int directly (meaningless for kind == 'ref').
+    Resolved once -- either at translation time by _const_operand_for from
+    a flowspace Constant, or synthesized at runtime (holes, boundary
+    fallbacks) with no source Constant at all.  Reused verbatim across
+    every placement of one shared fragment rather than re-cast per
+    placement: required to match the legacy Assembler.emit_resolved_const
+    dedup behavior (see test_repeated_helper_call_constants_dedup).
     """
-    def __init__(self, kind, constant=None, ivalue=0):
-        self.kind = kind
-        self.constant = constant
+    def __init__(self, ivalue):
         self.ivalue = ivalue
+
+
+class NRefConst(NOperand):
+    """A 'ref'-kind constant operand: a plain ``llmemory.GCREF``, resolved
+    once via the same ``lltype.cast_opaque_ptr`` ``Assembler.emit_const``
+    applies at write_insn time -- either at translation time (from a
+    genuine flowspace Constant, via ``_const_operand_for``) or at runtime,
+    with no upstream Constant, for the null "no boundary source" fallback
+    (``_emit_moves_native``/``_initialise_scratch_native``) -- both mean the
+    same thing on the wire, a null GCREF."""
+    def __init__(self, value):
+        self.value = value
+
+
+class NFloatConst(NOperand):
+    """A 'float'-kind constant operand: the already-computed float-storage
+    value (matching ``Assembler.emit_const_value``'s own 'float' branch --
+    ``lltype.Float`` storage, or a ``SignedLongLong``), resolved once at
+    translation time by ``_const_operand_for``.  Never runtime-synthesized:
+    a 'float'-kind boundary with no source gets an *int*-kind zero
+    ``NIntConst`` instead, reproducing a quirk of the original code
+    (``Assembler.emit_const_value`` buckets a constant by its own
+    concretetype, not by the surrounding opcode's kind) -- see
+    native_pipeline.py's fallback-construction comment."""
+    def __init__(self, value):
+        self.value = value
+
+
+def _const_operand_for(x):
+    """Resolve one translation-time-only flowspace ``Constant`` into a
+    monomorphic, runtime-legal ``NIntConst``/``NRefConst``/``NFloatConst``
+    -- see their docstrings.  Runs at translation time only (this is
+    ``fragment_to_native``'s own contract -- see the module docstring), so
+    freely reading ``Constant``/``concretetype``/lltype here is fine; the
+    whole point is that nothing downstream (native_pipeline.py) ever needs
+    to again -- including ``adr2int`` for a raw pointer constant, resolved
+    here once rather than per placement; see NIntConst's docstring for why
+    that is correct, not merely convenient.
+    """
+    from rpython.rtyper.lltypesystem import lltype, llmemory, rffi
+    from rpython.jit.codewriter import longlong
+    from rpython.jit.metainterp.support import adr2int
+    from rpython.rlib.objectmodel import ComputedIntSymbolic
+    from rpython.rlib.rarithmetic import r_int
+
+    kind = getkind(x.concretetype)
+    if kind == "ref":
+        return NRefConst(lltype.cast_opaque_ptr(llmemory.GCREF, x.value))
+    if kind == "float":
+        if x.concretetype == lltype.Float:
+            value = longlong.getfloatstorage(x.value)
+        else:
+            assert longlong.is_longlong(x.concretetype)
+            value = rffi.cast(lltype.SignedLongLong, x.value)
+        return NFloatConst(value)
+    if kind == "int":
+        value = x.value
+        TYPE = x.concretetype
+        if isinstance(TYPE, lltype.Ptr):
+            # A raw function/external-symbol pointer, e.g. a residual
+            # call's own callee address.  self.see_raw_object(value)'s
+            # debug-dump-only side effect (list_of_addr2name,
+            # untranslated-simulation-only ._obj/._name introspection
+            # besides) is the one piece of Assembler.emit_const_value's
+            # 'int' branch not reproduced here.
+            assert TYPE.TO._gckind == 'raw'
+            value = llmemory.cast_ptr_to_adr(value)
+            TYPE = llmemory.Address
+        if TYPE == llmemory.Address:
+            value = adr2int(value)
+        if TYPE is lltype.SingleFloat:
+            value = longlong.singlefloat2int(value)
+        if not isinstance(value, (llmemory.AddressAsInt, ComputedIntSymbolic)):
+            value = lltype.cast_primitive(lltype.Signed, value)
+            if type(value) is r_int:
+                value = int(value)
+        # else: value stays a Symbolic (its .annotation() is SomeInteger(),
+        # so it is RPython-legal wherever a plain Signed int is -- the
+        # standard way a still-unresolved-until-the-final-backend-link
+        # value flows through otherwise-int-typed RPython code; see e.g.
+        # AbstractDescr's own prebuilt-table precedent in this module's
+        # docstring).  Resolved once, here, and reused verbatim by every
+        # placement of this fragment (see NIntConst's docstring) -- unlike
+        # calling adr2int/etc. lazily per placement, which would silently
+        # stop deduping repeated occurrences of "the same" constant.
+        return NIntConst(value)
+    raise NotImplementedError(
+        "native_fragments: unhandled constant kind %r for %r" % (kind, x))
 
 
 class NHole(NOperand):
     """Unresolved late-static value; emit_native replaces it with an
-    NConst before liveness/assembly ever run."""
+    NIntConst before liveness/assembly ever run."""
     def __init__(self, name, concretetype):
         self.name = name
         self.concretetype = concretetype
@@ -85,7 +215,7 @@ class NSwitchDictOperand(NOperand):
 class NListOfKind(NOperand):
     def __init__(self, kind, items):
         self.kind = kind
-        self.items = items   # list of NReg/NConst/NHole
+        self.items = items   # list of NReg/NIntConst/NRefConst/NFloatConst/NHole
 
 
 class NIndirectCallTargets(NOperand):
@@ -196,11 +326,12 @@ class _Converter(object):
             return NDescr(x)
         if isinstance(x, IndirectCallTargets):
             return NIndirectCallTargets(x.lst)
-        # Constant checked last: HoleConstant is itself a Constant
-        # subclass, so it must be (and already is, above) checked first.
+        # Resolve to a monomorphic NIntConst/NRefConst/NFloatConst here, at
+        # translation time -- see _const_operand_for.  Constant checked
+        # last: HoleConstant is itself a Constant subclass, checked above.
         from rpython.flowspace.model import Constant
         if isinstance(x, Constant):
-            return NConst(getkind(x.concretetype), constant=x)
+            return _const_operand_for(x)
         raise NotImplementedError(
             "native_fragments: unhandled operand %r" % (x,))
 
@@ -229,6 +360,21 @@ def build_native_table(fragments):
         table[key] = (no_merge, merge)
     return table
 
+
+# ____________________________________________________________
+# Runtime boundary: everything above this line (_Counter/NReg/NIntConst/
+# NAddrIntConst/NRefConst/NFloatConst/NHole/NLabel/NTLabel/NDescr/
+# NSwitchDictOperand/NListOfKind/NIndirectCallTargets/NativeInsn/
+# NativeFragmentExit/NativeFragment as plain data classes, plus
+# native_fragment_for below) is read/constructed at *runtime* -- inside a
+# translated binary -- and must stay RPython-legal.  Everything above that
+# builds/converts a NativeFragment (_Converter, convert_insn/
+# convert_operand, _const_operand_for, fragment_to_native, build_native_table)
+# runs only once, at *translation* time, and is exempt: it may freely touch
+# flowspace.model.Constant, lltype casts, dynamic isinstance dispatch on
+# translation-time-only classes, and anything else ordinary Python code can
+# do, since none of it survives past producing the prebuilt NativeFragment
+# tables native_pipeline.py reads.
 
 def native_fragment_for(native_table, key, merge_point):
     no_merge, merge = native_table[key]

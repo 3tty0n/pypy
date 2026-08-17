@@ -1,7 +1,7 @@
 """Equivalence gate: native pipeline must byte-match the legacy one."""
 
 from rpython.translator.backendopt.jitcode_emitter import (
-    HOLE_SENTINEL, ProgramEmitter)
+    HOLE_SENTINEL, ProgramEmitter, TemplateFragment)
 from rpython.translator.backendopt.generating_extension import (
     GeneratingExtension)
 from rpython.translator.backendopt.native_fragments import build_native_table
@@ -109,6 +109,56 @@ def test_toy_program_with_shared_calldescr_byte_identical():
     assert native_positions == original_positions
 
 
+def test_repeated_helper_call_constants_dedup():
+    """Regression: repeated helper-call constant must dedup, not balloon."""
+    from rpython.jit.codewriter.codewriter import CodeWriter
+    from rpython.jit.codewriter.test.test_codewriter import (
+        FakeCPU, FakeJitDriverSD)
+
+    OP_ADD = 2
+    N = 60
+
+    def helper(x, y):
+        return x + y
+
+    def step(opcode, oparg, pc, value):
+        if opcode == OP_ADD:
+            return pc + 2, helper(value, oparg)
+        return -1, value
+
+    step._pe_static_args_ = ("opcode",)
+    step._pe_split_args_ = ("pc",)
+
+    class NoInlinePolicy(object):
+        def look_inside_graph(self, graph):
+            return False
+
+    code = (chr(OP_ADD) + chr(1)) * N + chr(OP_HALT) + chr(0)
+    graph, translator = get_graph(step, [int, int, int, int])
+    extension = GeneratingExtension.from_step_function(
+        translator, step, [OP_ADD, OP_HALT], byte_pair_decoder)
+    program = extension.generate(code)
+    codewriter = CodeWriter(FakeCPU(translator.rtyper), [FakeJitDriverSD(graph)])
+    codewriter.find_all_graphs(NoInlinePolicy())
+    emitter = ProgramEmitter(codewriter, None, "opcode", ("pc",),
+                             ("pc", "oparg", "code"), ("value",))
+    emitter.precompile_fragments(extension.templates)
+
+    original_jitcode, original_positions = emitter.emit(program, "orig-add-N")
+
+    native_table = build_native_table(emitter._fragments)
+    native_jitcode, native_positions, _asm = emit_and_assemble_native(
+        native_table, program, "native-add-N", has_merge_points=False)
+
+    assert len(original_jitcode.constants_i) == 2   # helper + oparg(1)
+    assert len(native_jitcode.constants_i) == 2
+
+    # And, as everywhere else in this file, byte-identical besides.
+    assert native_jitcode.code == original_jitcode.code
+    assert native_jitcode.constants_i == original_jitcode.constants_i
+    assert native_positions == original_positions
+
+
 def test_tla_countdown_byte_identical():
     """Compares both pipelines via a real WarmRunnerDesc/portal setup."""
     from rpython.jit.metainterp.test.support import LLJitMixin
@@ -175,3 +225,60 @@ def test_tla_countdown_byte_identical():
     assert native_jitcode.num_regs_r() == original_jitcode.num_regs_r()
     assert native_jitcode.num_regs_f() == original_jitcode.num_regs_f()
     assert captured["native_positions"] == captured["original_positions"]
+
+
+class _FakeSwitchTemplate(object):
+    def resolve_targets(self, bindings):
+        return []
+
+
+class _FakeSwitchBlock(object):
+    key = "switchop"
+    bindings = {}
+    template = _FakeSwitchTemplate()
+
+
+class _FakeSwitchProgram(object):
+    entry_pc = 0
+    blocks = {0: _FakeSwitchBlock()}
+
+
+def test_switch_byte_identical():
+    """SwitchDictDescr coverage: hand-built, since none occurs naturally."""
+    from rpython.jit.codewriter.codewriter import CodeWriter
+    from rpython.jit.codewriter.flatten import Register, Label, TLabel
+    from rpython.jit.codewriter.jitcode import SwitchDictDescr
+
+    switchdict = SwitchDictDescr()
+    switchdict._labels = [(1, TLabel("case1")), (2, TLabel("case2"))]
+    insns = [
+        ("switch", Register("int", 0), switchdict),
+        ("int_return", Register("int", 1)),
+        (Label("case1"),),
+        ("int_return", Register("int", 1)),
+        (Label("case2"),),
+        ("int_return", Register("int", 1)),
+    ]
+    fragment = TemplateFragment(insns, [], {"int": 2}, {})
+
+    codewriter = CodeWriter()
+    emitter = ProgramEmitter(codewriter, None, "opcode", (), (), ())
+    emitter._fragments[("switchop", False)] = fragment
+
+    program = _FakeSwitchProgram()
+    original_jitcode, original_positions = emitter.emit(program, "orig-switch")
+
+    native_table = build_native_table(emitter._fragments)
+    native_jitcode, native_positions, _asm = emit_and_assemble_native(
+        native_table, program, "native-switch", has_merge_points=False)
+
+    assert native_jitcode.code == original_jitcode.code
+    assert native_jitcode.constants_i == original_jitcode.constants_i
+    assert native_jitcode.constants_r == original_jitcode.constants_r
+    assert native_jitcode.num_regs_i() == original_jitcode.num_regs_i()
+    assert native_positions == original_positions
+    [orig_descr] = emitter.codewriter.assembler.switchdictdescrs
+    [native_descr] = _asm.switchdictdescrs
+    assert set(orig_descr.dict) == set(native_descr.dict) == set([1, 2])
+    assert orig_descr.dict == native_descr.dict
+    assert not hasattr(switchdict, "dict")

@@ -3,10 +3,7 @@ operating on the native_fragments.py IR instead of SSARepr/flowspace objects.
 
 Mirrors each original 1:1 on purpose: test_native_pipeline.py's equivalence
 gate requires byte-identical output, so keep behavior identical here, not
-just "cleaner". NativeAssembler subclasses Assembler so everything not tied
-to the insn shape (emit_const, register emission, liveness byte-packing,
-fix_labels, check_result) is inherited unchanged; only write_insn and
-assemble are overridden.
+just "cleaner".
 """
 
 from rpython.jit.codewriter.assembler import Assembler, USE_C_FORM
@@ -16,8 +13,9 @@ from rpython.jit.metainterp.history import AbstractDescr
 from rpython.rtyper.lltypesystem import llmemory, lltype
 
 from rpython.translator.backendopt.native_fragments import (
-    NReg, NConst, NHole, NLabel, NTLabel, NDescr, NListOfKind,
-    NIndirectCallTargets, NativeInsn, native_fragment_for)
+    NReg, NIntConst, NRefConst, NFloatConst, NHole, NLabel,
+    NTLabel, NDescr, NListOfKind, NIndirectCallTargets, NSwitchDictOperand,
+    NativeInsn, native_fragment_for)
 
 
 # ____________________________________________________________
@@ -100,9 +98,9 @@ def _initialise_scratch_native(ssarepr, fragments, counts):
             entry[kind] = max(entry.get(kind, 0), index + 1)
     for kind in sorted(counts):
         if kind == "ref":
-            const = NConst("ref")   # constant=None, ivalue=0 -> null GCREF
+            const = NRefConst(lltype.nullptr(llmemory.GCREF.TO))
         elif kind == "int":
-            const = NConst("int", ivalue=0)
+            const = NIntConst(0)
         else:
             continue
         for index in range(entry.get(kind, 0), counts[kind]):
@@ -115,7 +113,7 @@ def _place_native(ssarepr, program, pc, fragments, scratch):
     fragment = fragments[pc]
     block = program.blocks[pc]
     for kind, index, bname in fragment.prologue:
-        const = NConst("int", ivalue=block.bindings[bname])
+        const = NIntConst(block.bindings[bname])
         ssarepr.insns.append(
             NativeInsn("%s_copy" % kind, [const], _register(kind, index)))
     targets = block.template.resolve_targets(block.bindings)
@@ -136,10 +134,15 @@ def _place_native(ssarepr, program, pc, fragments, scratch):
 
 
 def _exit_index(insn):
+    # insn is one of fragment.insns -- pre-localisation, straight out of
+    # fragment_to_native -- so the only way operands[0] can be an NIntConst
+    # here at all is via a genuine flowspace Constant (_const_operand_for);
+    # the runtime-synthesized NIntConsts (_patch_hole_native and friends)
+    # only ever appear post-localisation.  No "was this a real Constant"
+    # check needed, unlike the polymorphic NConst this replaced.
     if insn.opcode == "int_return" and len(insn.operands) == 1 and \
-            isinstance(insn.operands[0], NConst) and \
-            insn.operands[0].constant is not None:
-        return insn.operands[0].constant.value
+            isinstance(insn.operands[0], NIntConst):
+        return insn.operands[0].ivalue
     return None
 
 
@@ -166,22 +169,28 @@ def _localise_operand(x, pc, bindings, is_marker):
         return NListOfKind(x.kind, [
             _localise_operand(item, pc, bindings, is_marker)
             for item in x.items])
-    from rpython.translator.backendopt.native_fragments import NSwitchDictOperand
     if isinstance(x, NSwitchDictOperand):
         fresh = SwitchDictDescr()
         fresh._labels = [
             (key, _NameHolder(_fragment_label_id(pc, label_id)))
             for key, label_id in zip(x.keys, x.label_ids)]
         return NDescr(fresh)
-    return x   # NReg, NConst, NDescr: placement-invariant, copied verbatim
+    return x   # NReg, NIntConst, NRefConst, NFloatConst, NDescr: placement-
+               # invariant, copied verbatim
 
 
 def _patch_hole_native(hole, pc, bindings, is_marker):
     """A marker's own 'pc' hole identifies this block; every other hole
-    (including a Continue exit's own next-pc) takes the bound value."""
+    (including a Continue exit's own next-pc) takes the bound value.
+    Every hole here is a plain int; asserted since silently truncating a
+    ref/float hole would be a correctness bug, not just an RPython one.
+    """
+    assert hole.kind == "int", (
+        "native_pipeline: non-int hole %r -- no interpreter this IR "
+        "currently serves has one" % (hole.name,))
     if is_marker and hole.name == "pc":
-        return NConst(hole.kind, ivalue=pc)
-    return NConst(hole.kind, ivalue=bindings[hole.name])
+        return NIntConst(pc)
+    return NIntConst(bindings[hole.name])
 
 
 def _emit_moves_native(ssarepr, sources, destinations, scratch):
@@ -194,11 +203,11 @@ def _emit_moves_native(ssarepr, sources, destinations, scratch):
         source = sources.get(bname)
         if source is None:
             if kind == "ref":
-                source = NConst("ref")
+                source = NRefConst(lltype.nullptr(llmemory.GCREF.TO))
             else:
                 # Mirrors the original's quirk: a float-kind destination
                 # with no source still gets an int-kind zero constant.
-                source = NConst("int", ivalue=0)
+                source = NIntConst(0)
         elif isinstance(source, tuple):
             if source == destination:
                 continue
@@ -234,13 +243,17 @@ def _emit_moves_native(ssarepr, sources, destinations, scratch):
 # ____________________________________________________________
 # compute_liveness_native: port of codewriter/liveness.py.
 #
-# ``alive`` is keyed by NReg object identity, not (kind, index) value,
-# mirroring the original's identity-keyed set() of Register objects: each
-# fragment gets its own NReg objects (see native_fragments.py), so two
-# fragments' "ref register 2" are distinct and must not cancel each
-# other's liveness. A value-keyed set would be more precise but would
-# change the liveness-chunk dedup and hence the assembled byte offsets --
-# byte identity with the original is the deliverable here.
+# ``alive`` is keyed by NReg.nid (identity), not by (kind, index) value:
+# each fragment gets its own Register objects, so two fragments' "ref
+# register 2" are distinct and must not cancel each other's liveness.
+# A value-keyed dict would be more precise but would change the
+# liveness-chunk dedup and hence the assembled byte offsets -- byte
+# identity with the original is the deliverable here.
+#
+# nid is a plain int (see native_fragments.py): a dict of int keys is
+# RPython-legal where a dict/set of arbitrary objects is not, and every
+# NReg gets a distinct nid at construction, so keying by nid reproduces
+# object-identity semantics exactly.
 
 def compute_liveness_native(insns):
     label2alive = {}
@@ -250,21 +263,22 @@ def compute_liveness_native(insns):
 
 
 def _compute_liveness_native_pass(insns, label2alive):
-    alive = set()
+    alive = {}     # nid -> NReg
     must_continue = [False]
 
     def follow_label(label_id):
         alive_at_point = label2alive.get(label_id)
         if alive_at_point is not None:
-            alive.update(alive_at_point)
+            for nid, reg in alive_at_point.items():
+                alive[nid] = reg
 
     def mark(x):
         if isinstance(x, NReg):
-            alive.add(x)
+            alive[x.nid] = x
         elif isinstance(x, NListOfKind):
             for item in x.items:
                 if isinstance(item, NReg):
-                    alive.add(item)
+                    alive[item.nid] = item
         elif isinstance(x, NTLabel):
             follow_label(x.label_id)
         elif isinstance(x, NDescr) and isinstance(x.descr, SwitchDictDescr):
@@ -276,9 +290,13 @@ def _compute_liveness_native_pass(insns, label2alive):
 
         if insn.opcode == "@label":
             label_id = insn.operands[0].label_id
-            alive_at_point = label2alive.setdefault(label_id, set())
+            alive_at_point = label2alive.get(label_id)
+            if alive_at_point is None:
+                alive_at_point = {}
+                label2alive[label_id] = alive_at_point
             prevlength = len(alive_at_point)
-            alive_at_point.update(alive)
+            for nid, reg in alive.items():
+                alive_at_point[nid] = reg
             if prevlength != len(alive_at_point):
                 must_continue[0] = True
             continue
@@ -287,19 +305,19 @@ def _compute_liveness_native_pass(insns, label2alive):
             labels = []
             for x in insn.operands:
                 if isinstance(x, NReg):
-                    alive.add(x)
+                    alive[x.nid] = x
                 elif isinstance(x, NTLabel):
                     follow_label(x.label_id)
                     labels.append(x)
-            insns[i] = NativeInsn("-live-", list(alive) + labels)
+            insns[i] = NativeInsn("-live-", alive.values() + labels)
             continue
 
         if insn.opcode == "---":
-            alive = set()
+            alive = {}
             continue
 
-        if insn.result is not None:
-            alive.discard(insn.result)
+        if insn.result is not None and insn.result.nid in alive:
+            del alive[insn.result.nid]
         for x in insn.operands:
             mark(x)
 
@@ -307,10 +325,8 @@ def _compute_liveness_native_pass(insns, label2alive):
 
 
 def _remove_repeated_live_native(insns):
-    """Port of liveness.remove_repeated_live.  Register order within a
-    merged '-live-' insn doesn't affect the assembled bytes (write_insn
-    buckets by (kind, index) into a fresh set regardless), so this need
-    only match the final live set, not the original's sorted() order."""
+    """Register order within a merged '-live-' insn doesn't affect the
+    assembled bytes; only the final live set (deduped by nid) matters."""
     res = []
     i = 0
     while i < len(insns):
@@ -336,21 +352,36 @@ def _remove_repeated_live_native(insns):
             res.extend(labels)
             res.append(lives[0])
             continue
-        liveset = set()
+        liveset = {}     # nid -> NReg
         extra_tlabels = []
         for live in lives:
             for x in live.operands:
                 if isinstance(x, NReg):
-                    liveset.add(x)
+                    liveset[x.nid] = x
                 elif isinstance(x, NTLabel):
                     extra_tlabels.append(x)
         res.extend(labels)
-        res.append(NativeInsn("-live-", list(liveset) + extra_tlabels))
+        res.append(NativeInsn("-live-", liveset.values() + extra_tlabels))
     insns[:] = res
 
 
 # ____________________________________________________________
 # NativeAssembler: port of codewriter/assembler.py's Assembler.
+
+def _ref_dedup_key(value):
+    """The dedup key for one 'ref'-kind resolved value, mirroring
+    ``Assembler.emit_const_value``'s own 'ref' branch exactly (``None`` for
+    a null GCREF, its container object otherwise -- a GCREF pointer itself
+    disables ``__hash__``, see ``emit_resolved_const``'s own 'ref' comment,
+    so it cannot be the dedup key directly).  ``._obj``/``.container`` are
+    untranslated-lltype-simulation-only, like the identical computation in
+    ``emit_const_value`` -- see that method's docstring; kept here, not
+    reused from there, only because NRefConst's ``.value`` already carries
+    the post-cast GCREF, needing no separate pre-cast step to reproduce."""
+    if not value:
+        return None
+    return value._obj.container
+
 
 def _get_liveness_info_native(operands, kind):
     lives = set()
@@ -361,18 +392,16 @@ def _get_liveness_info_native(operands, kind):
 
 
 class NativeAssembler(Assembler):
-    """Subclasses Assembler: everything not tied to the SSARepr insn shape
-    (emit_const, emit_reg/count_reg, liveness byte-packing, fix_labels,
-    check_result, make_jitcode, ...) is inherited unchanged. Only
-    write_insn (dispatch over native operand tags) and assemble (to skip
-    format_assembler, which assumes real SSARepr tuples) are overridden.
+    """Subclasses Assembler: everything not tied to insn shape (dedup,
+    emit_reg, liveness byte-packing, fix_labels, check_result,
+    make_jitcode) is inherited unchanged. Only write_insn and assemble
+    are overridden.
 
     ``share_with``, when given, is a real Assembler whose cross-JitCode
-    session state (descrs, the opcode table, liveness buffers, etc.) this
-    instance adopts by reference so every JitCode shares one global list/
-    table.  Lists/dicts alias naturally; plain-int counters don't, so
-    ``sync_back`` must be called after ``assemble()`` to propagate those
-    back onto ``share_with``.
+    session state (descrs, the insns opcode table, all_liveness,
+    counters) this instance adopts by reference, so every JitCode shares
+    one global opcode table and liveness string. Not thread-safe: nothing
+    guards concurrent mutation of the shared state.
     """
 
     def __init__(self, share_with=None):
@@ -385,21 +414,9 @@ class NativeAssembler(Assembler):
             self.indirectcalltargets = share_with.indirectcalltargets
             self.list_of_addr2name = share_with.list_of_addr2name
             self._seen_raw_objects = share_with._seen_raw_objects
-            self._count_jitcodes = share_with._count_jitcodes
+            self._counters = share_with._counters
             self.all_liveness = share_with.all_liveness
-            self.all_liveness_length = share_with.all_liveness_length
             self.all_liveness_positions = share_with.all_liveness_positions
-            self.num_liveness_ops = share_with.num_liveness_ops
-
-    def sync_back(self):
-        """Propagate the plain-int session counters back onto
-        ``share_with`` after ``assemble()`` -- see the class docstring."""
-        share_with = self._share_with
-        if share_with is None:
-            return
-        share_with._count_jitcodes = self._count_jitcodes
-        share_with.all_liveness_length = self.all_liveness_length
-        share_with.num_liveness_ops = self.num_liveness_ops
 
     def assemble(self, ssarepr, jitcode=None, num_regs=None):
         self.setup(ssarepr.name)
@@ -450,10 +467,17 @@ class NativeAssembler(Assembler):
             if isinstance(x, NReg):
                 self.emit_reg(x)
                 argcodes.append(x.kind[0])
-            elif isinstance(x, NConst):
-                const = self._const_for(x)
-                is_short = self.emit_const(const, x.kind, allow_short=allow_short)
-                argcodes.append("c" if is_short else x.kind[0])
+            elif isinstance(x, NIntConst):
+                is_short = self.emit_resolved_const(x.ivalue, "int",
+                                                     allow_short=allow_short)
+                argcodes.append("c" if is_short else "i")
+            elif isinstance(x, NRefConst):
+                self.emit_resolved_const(x.value, "ref",
+                                         dedup_key=_ref_dedup_key(x.value))
+                argcodes.append("r")
+            elif isinstance(x, NFloatConst):
+                self.emit_resolved_const(x.value, "float")
+                argcodes.append("f")
             elif isinstance(x, NTLabel):
                 self.alllabels.add(len(self.code))
                 self.tlabel_positions.append((x.label_id, len(self.code)))
@@ -468,9 +492,17 @@ class NativeAssembler(Assembler):
                     if isinstance(item, NReg):
                         assert x.kind == item.kind
                         self.emit_reg(item)
-                    elif isinstance(item, NConst):
-                        assert x.kind == item.kind
-                        self.emit_const(self._const_for(item), item.kind)
+                    elif isinstance(item, NIntConst):
+                        assert x.kind == "int"
+                        self.emit_resolved_const(item.ivalue, "int")
+                    elif isinstance(item, NRefConst):
+                        assert x.kind == "ref"
+                        self.emit_resolved_const(
+                            item.value, "ref",
+                            dedup_key=_ref_dedup_key(item.value))
+                    elif isinstance(item, NFloatConst):
+                        assert x.kind == "float"
+                        self.emit_resolved_const(item.value, "float")
                     else:
                         raise NotImplementedError(
                             "found in NListOfKind(): %r" % (item,))
@@ -509,23 +541,6 @@ class NativeAssembler(Assembler):
         self.code[startposition] = chr(num)
         self.startpoints.add(startposition)
 
-    def _const_for(self, x):
-        """An NConst's underlying flowspace Constant, for reuse of the
-        inherited emit_const.
-
-        ponytail: for a hole-resolved/fallback NConst (constant is None),
-        materializes a throwaway Constant to reuse emit_const's cast/dedup
-        logic unmodified, rather than duplicating its lltype-cast rules.
-        Upgrade to a Constant-free normalize+dedup entry point once this
-        path is actually translated.
-        """
-        if x.constant is not None:
-            return x.constant
-        from rpython.flowspace.model import Constant
-        if x.kind == "ref":
-            return Constant(lltype.nullptr(llmemory.GCREF.TO), llmemory.GCREF)
-        return Constant(x.ivalue, lltype.Signed)
-
 
 def emit_and_assemble_native(native_table, program, name,
                              has_merge_points=False, assembler=None):
@@ -541,7 +556,6 @@ def emit_and_assemble_native(native_table, program, name,
         assembler = NativeAssembler()
     jitcode = JitCode(name, fnaddr=llmemory.NULL)
     assembler.assemble(ssarepr, jitcode, counts)
-    assembler.sync_back()
     entry_positions = dict(
         (pc, assembler.label_positions[_block_label_id(pc)])
         for pc in program.blocks)

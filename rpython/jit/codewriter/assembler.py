@@ -1,3 +1,5 @@
+import math
+
 from rpython.jit.metainterp.history import AbstractDescr, getkind
 from rpython.jit.metainterp.support import adr2int, int2adr
 from rpython.jit.codewriter.flatten import Register, Label, TLabel, KINDS
@@ -16,6 +18,20 @@ class AssemblerError(Exception):
     pass
 
 
+class _NoDedupKeyGiven(object):
+    """Distinct from None: None is itself a legit dedup key (null GCREF)."""
+_NO_DEDUP_KEY = _NoDedupKeyGiven()
+
+
+class _CounterState(object):
+    # Holder for int counters: unlike list/dict, ints don't alias by
+    # reference, so sharing this object is what lets share_with() work.
+    def __init__(self):
+        self.count_jitcodes = 0
+        self.all_liveness_length = 0
+        self.num_liveness_ops = 0
+
+
 class Assembler(object):
 
     def __init__(self):
@@ -24,12 +40,38 @@ class Assembler(object):
         self.indirectcalltargets = set()    # set of JitCodes
         self.list_of_addr2name = []
         self._descr_dict = {}
-        self._count_jitcodes = 0
+        self._counters = _CounterState()
         self._seen_raw_objects = set()
         self.all_liveness = []
-        self.all_liveness_length = 0
         self.all_liveness_positions = {}
-        self.num_liveness_ops = 0
+
+    # Properties over self._counters, not plain attrs: lets other methods
+    # read/write them unchanged while sharing state via self._counters.
+
+    def _get_count_jitcodes(self):
+        return self._counters.count_jitcodes
+
+    def _set_count_jitcodes(self, value):
+        self._counters.count_jitcodes = value
+
+    _count_jitcodes = property(_get_count_jitcodes, _set_count_jitcodes)
+
+    def _get_all_liveness_length(self):
+        return self._counters.all_liveness_length
+
+    def _set_all_liveness_length(self, value):
+        self._counters.all_liveness_length = value
+
+    all_liveness_length = property(_get_all_liveness_length,
+                                   _set_all_liveness_length)
+
+    def _get_num_liveness_ops(self):
+        return self._counters.num_liveness_ops
+
+    def _set_num_liveness_ops(self, value):
+        self._counters.num_liveness_ops = value
+
+    num_liveness_ops = property(_get_num_liveness_ops, _set_num_liveness_ops)
 
     def assemble(self, ssarepr, jitcode=None, num_regs=None):
         """Take the 'ssarepr' representation of the code and assemble
@@ -55,7 +97,11 @@ class Assembler(object):
 
     def setup(self, name):
         self.code = []
-        self.constants_dict = {}
+        # Split by kind: one dict keyed by mixed int/ref/float isn't
+        # RPython-legal (no uniform key type across kinds).
+        self.constants_dict_i = {}    # int value -> index
+        self.constants_dict_r = {}    # GCREF value -> index (None: null)
+        self.constants_dict_f = {}    # (float/longlong value, negzero) -> index
         self.constants_i = []
         self.constants_r = []
         self.constants_f = []
@@ -78,10 +124,25 @@ class Assembler(object):
             self.count_regs[reg.kind] = reg.index + 1
 
     def emit_const(self, const, kind, allow_short=False):
-        value = const.value
-        value_key = value
+        return self.emit_const_value(const.value, const.concretetype, kind,
+                                     allow_short=allow_short)
+
+    def emit_const_value(self, value, concretetype, kind, allow_short=False):
+        """Constant-free core of emit_const, keyed off (value, concretetype)
+        instead of a flowspace Constant, producing the kind-appropriate
+        resolved form emit_resolved_const dedups/emits.
+
+        dedup_key stays the pre-cast value (except the 'ref' branch, which
+        reassigns it post-cast): a cast like adr2int builds a fresh
+        AddressAsInt wrapper each call, so keying dedup on the cast result
+        would miss repeats of "the same" raw-pointer constant, while the
+        pre-cast value is the same shared object across every placement of
+        one template fragment (see jitcode_emitter.py's _localise) -- see
+        test_repeated_helper_call_constants_dedup in test_native_pipeline.py.
+        """
+        dedup_key = value
         if kind == 'int':
-            TYPE = const.concretetype
+            TYPE = concretetype
             if isinstance(TYPE, lltype.Ptr):
                 assert TYPE.TO._gckind == 'raw'
                 self.see_raw_object(value)
@@ -96,42 +157,86 @@ class Assembler(object):
                 value = lltype.cast_primitive(lltype.Signed, value)
                 if type(value) is r_int:
                     value = int(value)
-                if allow_short:
-                    try:
-                        short_num = -128 <= value <= 127
-                    except TypeError:    # "Symbolics cannot be compared!"
-                        short_num = False
-                    if short_num:
-                        # emit the constant as a small integer
-                        self.code.append(chr(value & 0xFF))
-                        return True
-            constants = self.constants_i
         elif kind == 'ref':
             value = lltype.cast_opaque_ptr(llmemory.GCREF, value)
-            constants = self.constants_r
-            if not value:
-                # nullptr
-                value_key = None
-            else:
-                value_key = value._obj.container
+            dedup_key = value._obj.container if value else None
         elif kind == 'float':
-            if const.concretetype == lltype.Float:
+            if concretetype == lltype.Float:
                 value = longlong.getfloatstorage(value)
             else:
-                assert longlong.is_longlong(const.concretetype)
+                assert longlong.is_longlong(concretetype)
                 value = rffi.cast(lltype.SignedLongLong, value)
-            constants = self.constants_f
         else:
-            raise AssemblerError('unimplemented %r in %r' %
-                                 (const, self.ssareprname))
-        key = (kind, Constant(value_key))
-        try:
-            val = self.constants_dict[key]
-        except KeyError:
-            constants.append(value)
-            val = self.count_regs[kind] + len(constants) - 1
-            assert 0 <= val < 256, "too many constants"
-            self.constants_dict[key] = val
+            raise AssemblerError('unimplemented %r/%r in %r' %
+                                 (value, concretetype, self.ssareprname))
+        return self.emit_resolved_const(value, kind, allow_short=allow_short,
+                                        dedup_key=dedup_key)
+
+    def emit_resolved_const(self, value, kind, allow_short=False,
+                            dedup_key=_NO_DEDUP_KEY):
+        """Dedup/emit core given an already-resolved (cast) value; see
+        emit_const_value's docstring for why dedup_key is pre-cast for
+        'int'/'float' (post-cast for 'ref').  Defaults to value itself for
+        NativeAssembler.write_insn (native_pipeline.py), whose native IR
+        resolves constants once at translation time and reuses the same
+        already-resolved operand object across every placement -- see
+        native_fragments.py's NIntConst/NRefConst/NFloatConst docstrings.
+        """
+        if dedup_key is _NO_DEDUP_KEY:
+            dedup_key = value
+        if kind == 'int':
+            if allow_short:
+                try:
+                    short_num = -128 <= value <= 127
+                except TypeError:    # "Symbolics cannot be compared!"
+                    short_num = False
+                if short_num:
+                    # emit the constant as a small integer
+                    self.code.append(chr(value & 0xFF))
+                    return True
+            try:
+                val = self.constants_dict_i[dedup_key]
+            except KeyError:
+                self.constants_i.append(value)
+                val = self.count_regs['int'] + len(self.constants_i) - 1
+                assert 0 <= val < 256, "too many constants"
+                self.constants_dict_i[dedup_key] = val
+            except TypeError:
+                # Unhashable dedup_key (e.g. a Symbolic): fall back to id().
+                # id() isn't RPython-legal for a Symbolic; unexercised gap.
+                idkey = id(dedup_key)
+                try:
+                    val = self.constants_dict_i[idkey]
+                except KeyError:
+                    self.constants_i.append(value)
+                    val = self.count_regs['int'] + len(self.constants_i) - 1
+                    assert 0 <= val < 256, "too many constants"
+                    self.constants_dict_i[idkey] = val
+        elif kind == 'ref':
+            try:
+                val = self.constants_dict_r[dedup_key]
+            except KeyError:
+                self.constants_r.append(value)
+                val = self.count_regs['ref'] + len(self.constants_r) - 1
+                assert 0 <= val < 256, "too many constants"
+                self.constants_dict_r[dedup_key] = val
+        elif kind == 'float':
+            # +0.0/-0.0 compare and hash equal but must not dedup together;
+            # folded into dedup_key (not value), which is what gets looked
+            # up.
+            negzero = isinstance(dedup_key, float) and dedup_key == 0.0 and \
+                math.copysign(1.0, dedup_key) < 0.0
+            key = (dedup_key, negzero)
+            try:
+                val = self.constants_dict_f[key]
+            except KeyError:
+                self.constants_f.append(value)
+                val = self.count_regs['float'] + len(self.constants_f) - 1
+                assert 0 <= val < 256, "too many constants"
+                self.constants_dict_f[key] = val
+        else:
+            raise AssemblerError('unimplemented resolved kind %r in %r' %
+                                 (kind, self.ssareprname))
         # emit the constant normally, as one byte that is an index in the
         # list of constants
         self.code.append(chr(val))
