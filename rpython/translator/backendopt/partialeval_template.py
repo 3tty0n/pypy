@@ -989,6 +989,24 @@ def sort_ints(items):
         index += 1
 
 
+def sort_strings(items):
+    """In-place insertion sort of a list of strings.
+
+    RPython lists have no ``.sort()`` method. Used by native_pipeline.py's
+    ``_emit_moves_native`` for a translation-independent boundary-name order.
+    ponytail: O(n^2), fine for a boundary-value count in the tens.
+    """
+    index = 1
+    while index < len(items):
+        key = items[index]
+        gap = index - 1
+        while gap >= 0 and items[gap] > key:
+            items[gap + 1] = items[gap]
+            gap -= 1
+        items[gap + 1] = key
+        index += 1
+
+
 def _pair_less(a, b):
     if a[0] != b[0]:
         return a[0] < b[0]

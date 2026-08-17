@@ -397,3 +397,165 @@ def test_switch_byte_identical():
     assert set(orig_descr.dict) == set(native_descr.dict) == set([1, 2])
     assert orig_descr.dict == native_descr.dict
     assert not hasattr(switchdict, "dict")
+
+
+# ____________________________________________________________
+# Two readonly NativeAssemblers (each with its own private counters)
+# registered late must still get distinct .index values and each
+# resolve back to its own JitCode via get_late_jitcode.
+
+def test_register_late_jitcode_twice_via_readonly_native_assembler():
+    from rpython.jit.codewriter.jitcode import (
+        register_late_jitcode, get_late_jitcode, set_late_jitcode_base,
+        _late_jitcodes_by_index)
+    from rpython.translator.backendopt.jitcode_emitter import (
+        stamp_descr_indices, register_native_insn_coverage)
+
+    code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_HALT) + chr(0)
+    program, emitter = _toy_setup(code)
+    native_table = build_native_table(emitter._fragments)
+    # Mirrors PySOM's stamp_after_make_jitcodes: must run once, after the
+    # ordinary jitcodes are assembled, before a readonly NativeAssembler can
+    # place anything (see register_native_insn_coverage's own docstring).
+    stamp_descr_indices(emitter.codewriter, native_table)
+    register_native_insn_coverage(emitter.codewriter, native_table)
+
+    _late_jitcodes_by_index.clear()
+    try:
+        set_late_jitcode_base(5)
+
+        def assemble_and_register(name):
+            assembler = NativeAssembler(
+                share_with=emitter.codewriter.assembler, readonly=True)
+            jitcode, _, assembler = emit_and_assemble_native(
+                native_table, program, name, has_merge_points=False,
+                assembler=assembler)
+            jitcode.own_liveness_info = "".join(assembler.all_liveness)
+            register_late_jitcode(jitcode, jitcode.own_liveness_info)
+            return jitcode
+
+        late1 = assemble_and_register("late-1")
+        late2 = assemble_and_register("late-2")
+
+        assert late1.index != late2.index
+        assert get_late_jitcode(late1.index) is late1
+        assert get_late_jitcode(late2.index) is late2
+    finally:
+        _late_jitcodes_by_index.clear()
+
+
+# ____________________________________________________________
+# _emit_moves_native's cycle-breaking algorithm must be correct for any
+# processing order of the boundary names, not just the canonical sorted
+# one -- checked exhaustively over every permutation for several
+# SOM-shaped move sets (cycles, chains, fan-out, self/missing moves).
+
+import itertools
+
+from rpython.translator.backendopt.native_fragments import (
+    NReg, NIntConst, NRefConst)
+from rpython.translator.backendopt.native_pipeline import _emit_moves_native
+
+
+class _FakeSSARepr(object):
+    def __init__(self):
+        self.insns = []
+
+
+def _expected_final(sources, destinations):
+    """What each destination *must* end up holding -- computed straight
+    from the mapping's own definition, independently of the algorithm under
+    test (so this cannot share its bugs)."""
+    expected = {}
+    for bname, dest in destinations.items():
+        if dest is None:
+            continue
+        if bname in sources:
+            expected[dest] = ("orig", sources[bname])
+        elif dest[0] == "ref":
+            expected[dest] = ("const-null",)
+        else:
+            expected[dest] = ("const-int", 0)
+    return expected
+
+
+def _simulate(sources, destinations, scratch, names):
+    """Run _emit_moves_native with a forced processing order, then replay
+    its emitted copy sequence against an abstract register file (every
+    register lazily seeded to its own distinct "original value" token) and
+    return what each register ends up holding."""
+    ssarepr = _FakeSSARepr()
+    _emit_moves_native(ssarepr, sources, destinations, scratch, _names=names)
+
+    regs = {}
+
+    def read(reg):
+        if reg not in regs:
+            regs[reg] = ("orig", reg)
+        return regs[reg]
+
+    for insn in ssarepr.insns:
+        [source] = insn.operands
+        dest_reg = (insn.result.kind, insn.result.index)
+        if isinstance(source, NReg):
+            value = read((source.kind, source.index))
+        elif isinstance(source, NRefConst):
+            value = ("const-null",)
+        elif isinstance(source, NIntConst):
+            value = ("const-int", source.ivalue)
+        else:
+            raise AssertionError("unexpected operand %r" % (source,))
+        regs[dest_reg] = value
+    return regs
+
+
+# Six boundary names, deliberately not in a suggestive order, so a
+# canonical *sorted* run and a permuted run genuinely differ.
+_NAMES = ["b0", "b1", "b2", "b3", "b4", "b5"]
+
+_SHAPES = {
+    "3-cycle + identities": (
+        {"b0": ("int", 1), "b1": ("int", 2), "b2": ("int", 0),
+         "b3": ("int", 3), "b4": ("int", 4), "b5": ("int", 5)},
+        {"b0": ("int", 0), "b1": ("int", 1), "b2": ("int", 2),
+         "b3": ("int", 3), "b4": ("int", 4), "b5": ("int", 5)},
+    ),
+    "3-cycle + chain": (
+        {"b0": ("int", 1), "b1": ("int", 2), "b2": ("int", 0),
+         "b3": ("int", 4), "b4": ("int", 5)},
+        {"b0": ("int", 0), "b1": ("int", 1), "b2": ("int", 2),
+         "b3": ("int", 3), "b4": ("int", 4), "b5": ("int", 5)},
+    ),
+    "two independent chains": (
+        {"b0": ("int", 1), "b1": ("int", 2),
+         "b3": ("int", 4), "b4": ("int", 5)},
+        {"b0": ("int", 0), "b1": ("int", 1), "b2": ("int", 2),
+         "b3": ("int", 3), "b4": ("int", 4), "b5": ("int", 5)},
+    ),
+    "fan-out + 2-cycle": (
+        {"b0": ("int", 5), "b1": ("int", 5), "b2": ("int", 5),
+         "b3": ("int", 4), "b4": ("int", 3), "b5": ("int", 0)},
+        {"b0": ("int", 0), "b1": ("int", 1), "b2": ("int", 2),
+         "b3": ("int", 3), "b4": ("int", 4), "b5": ("int", 5)},
+    ),
+    "self-moves + missing sources": (
+        {"b0": ("int", 0), "b3": ("int", 3),
+         "b4": ("int", 5), "b5": ("int", 4)},
+        {"b0": ("int", 0), "b1": None, "b2": ("int", 2),
+         "b3": ("int", 3), "b4": ("int", 4), "b5": ("int", 5)},
+    ),
+}
+
+
+def test_emit_moves_native_order_independent():
+    scratch = {"int": 6, "ref": 0}
+    for shape_name, (sources, destinations) in _SHAPES.items():
+        expected = _expected_final(sources, destinations)
+        for order in itertools.permutations(_NAMES):
+            names = [n for n in order if n in destinations]
+            regs = _simulate(sources, destinations, scratch, names)
+            for dest, want in expected.items():
+                got = regs.get(dest, ("orig", dest))
+                assert got == want, (
+                    "%s: order %r produced dest %r = %r, want %r" %
+                    (shape_name, names, dest, got, want))

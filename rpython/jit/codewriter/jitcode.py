@@ -14,20 +14,27 @@ def _never_matches(gcref):
 # metainterp_sd is frozen (SomePBC) once finish_setup() runs, so no
 # setattr on it after that; these track late JitCode registration
 # instead, without mutating any frozen structure.
-# _late_jitcode_base[0]: len(metainterp_sd.jitcodes) at freeze time, set
-# once by warmspot.py's set_late_jitcode_base.
-# _late_jitcode_next_index[0]: next .index to hand out; a monotonic
-# counter, independent of any list length.
-# _late_jitcodes_by_index: late JitCodes keyed by their own .index, so
-# lookup needs no position/index correspondence to hold.
-_late_jitcode_base = [0]
-_late_jitcode_next_index = [0]
+#
+# A holder class instance, not a single-element list: a prebuilt
+# single-element list seeded once before annotation (as
+# set_late_jitcode_base is, from warmspot.py) gets its element
+# constant-folded at every read site by the annotator/rtyper, so a
+# second registration would read back the same stale value instead of
+# the incremented one. An ordinary mutable field on a holder instance
+# does not fold this way. Deliberately NOT ``_immutable_``.
+class _LateJitcodeCounter(object):
+    def __init__(self):
+        self.base = 0
+        self.next_index = 0
+
+
+_late_jitcode_counter = _LateJitcodeCounter()
 _late_jitcodes_by_index = {}
 
 
 def set_late_jitcode_base(count):
-    _late_jitcode_base[0] = count
-    _late_jitcode_next_index[0] = count
+    _late_jitcode_counter.base = count
+    _late_jitcode_counter.next_index = count
 
 
 def get_late_jitcode(index):
@@ -70,14 +77,24 @@ def register_late_jitcode(jitcode, own_liveness_info):
     """
     if jitcode.own_liveness_info is None:
         jitcode.own_liveness_info = own_liveness_info
-    # A monotonic counter, not `_late_jitcode_base[0] + len(a_list)`: the
-    # latter needs a list length kept in lock step with the separately-
-    # assigned `.index`, but get_late_jitcode (above) is a second, real
-    # (if conditional) writer of that list. A counter this function alone
-    # increments needs no such correspondence; _late_jitcodes_by_index
-    # needs none either, since it is keyed by the index value itself.
-    jitcode.index = _late_jitcode_next_index[0]
-    _late_jitcode_next_index[0] += 1
+    # `_late_jitcode_counter.next_index` is the only place `.index` is
+    # decided for a late JitCode; no assembler counter feeds it (each
+    # NativeAssembler's own counters are per-call and private, see
+    # PortalLinker._emit_native), so this must be the sole global,
+    # monotonic source of truth for `.index`.
+    #
+    # A collision means something upstream (a caching bug in
+    # PEJitCodeMetadata._cogen_ref/linked_program_for, or a duplicate
+    # registration) handed two different JitCodes the same identity --
+    # get_late_jitcode resolves purely by this index, so a silent
+    # overwrite would replay an old guard's resume data against a
+    # different program.  Loud failure instead.
+    jitcode.index = _late_jitcode_counter.next_index
+    assert jitcode.index not in _late_jitcodes_by_index, (
+        "register_late_jitcode: _late_jitcode_counter produced an "
+        "index already in use -- the monotonic counter did not advance "
+        "between two registrations")
+    _late_jitcode_counter.next_index += 1
     _late_jitcodes_by_index[jitcode.index] = jitcode
 
 

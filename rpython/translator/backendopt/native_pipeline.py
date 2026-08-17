@@ -22,7 +22,7 @@ from rpython.translator.backendopt.native_fragments import (
     NTLabel, NDescr, NListOfKind, NIndirectCallTargets, NSwitchDictOperand,
     NativeInsn, native_fragment_for)
 from rpython.translator.backendopt.partialeval_template import (
-    flatten_resolved_targets, sort_ints)
+    flatten_resolved_targets, sort_ints, sort_strings)
 
 
 # ____________________________________________________________
@@ -236,10 +236,22 @@ def _patch_hole_native(hole, pc, bindings, is_marker):
     return NIntConst(bindings[hole.name])
 
 
-def _emit_moves_native(ssarepr, sources, destinations, scratch):
-    """Port of ProgramEmitter._emit_moves."""
+def _emit_moves_native(ssarepr, sources, destinations, scratch, _names=None):
+    """Port of ProgramEmitter._emit_moves.
+
+    Processes boundary names in sorted order: a real runtime_cogen call
+    runs translated, where dict order need not match CPython's, and a
+    fixed order keeps output byte-reproducible. The cycle-breaking loop
+    is itself order-independent (test_emit_moves_native_order_independent).
+
+    ``_names`` overrides the sorted order; test-only hook.
+    """
+    if _names is None:
+        _names = destinations.keys()
+        sort_strings(_names)
     moves = []
-    for bname, destination in destinations.items():
+    for bname in _names:
+        destination = destinations[bname]
         if destination is None:
             continue
         kind, index = destination
