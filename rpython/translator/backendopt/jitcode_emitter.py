@@ -451,6 +451,12 @@ class ProgramEmitter(object):
                     self._fragments[cache_key] = self.compiler.compile(
                         template, bindings, merge_point)
 
+    def native_table(self):
+        """{opcode_key: (native_no_merge, native_merge)}."""
+        from rpython.translator.backendopt.native_fragments import (
+            build_native_table)
+        return build_native_table(self._fragments)
+
     def emit(self, program, name="emitted-residual"):
         from rpython.jit.codewriter.assembler import JitCode
         from rpython.jit.codewriter.flatten import Label, SSARepr, TLabel

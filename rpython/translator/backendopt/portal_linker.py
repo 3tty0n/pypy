@@ -41,7 +41,7 @@ class PortalLinker(object):
         self.name = name
 
     def install(self, codewriter, program, whole_graph=False, guard=None,
-               emitter=None):
+               emitter=None, native_table=None):
         """Compile ``program`` and register it on the portal.
 
         The default back end assembles each residual template once and
@@ -58,6 +58,12 @@ class PortalLinker(object):
         ``ProgramEmitter`` whose fragments were already built by
         ``precompile_fragments`` -- passing one runs no codewriter at all.
         None builds a fresh, empty-cached ``ProgramEmitter`` as before.
+
+        ``native_table``, when given (and ``whole_graph`` is False), takes
+        priority over ``emitter``: selects the native pipeline
+        (native_pipeline.py) instead of the SSARepr ``ProgramEmitter.emit``,
+        producing byte-identical output without touching translation-
+        time-only flowspace/codewriter objects.
         """
         mainjitcode = self.mainjitcode(codewriter)
         if whole_graph:
@@ -65,6 +71,8 @@ class PortalLinker(object):
                 codewriter, self.name, portal_jd=self.jitdriver_sd,
                 runtime_names=self.runtime_names, null_names=self.null_names,
                 jit_merge_point_args=self.jit_merge_point_args)
+        elif native_table is not None:
+            lowered = self._emit_native(codewriter, program, native_table)
         else:
             lowered = self._emit(codewriter, program, emitter=emitter)
         lowered.jitcode.jitdriver_sd = self.jitdriver_sd
@@ -153,3 +161,19 @@ class PortalLinker(object):
         lowered = LoweredResidualProgram(None, jitcode, entry_positions)
         lowered.emitter = emitter
         return lowered
+
+    def _emit_native(self, codewriter, program, native_table):
+        from rpython.translator.backendopt.native_pipeline import (
+            emit_and_assemble_native, NativeAssembler)
+        from rpython.translator.backendopt.partialeval_template import (
+            LoweredResidualProgram)
+
+        has_merge_points = bool(self.jit_merge_point_args)
+        # Shares insns/descrs with the codewriter's assembler so a native
+        # JitCode's opcode bytes/descr indices stay consistent build-wide.
+        assembler = NativeAssembler(share_with=codewriter.assembler)
+        jitcode, entry_positions, assembler = emit_and_assemble_native(
+            native_table, program, self.name,
+            has_merge_points=has_merge_points, assembler=assembler)
+        program.attach_to_jitcode(jitcode, entry_positions)
+        return LoweredResidualProgram(None, jitcode, entry_positions)

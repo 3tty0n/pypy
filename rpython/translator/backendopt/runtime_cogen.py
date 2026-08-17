@@ -8,7 +8,8 @@ and delegates the rest to ``PortalLinker.install``.
 
 
 def generate_for_live_code(extension, linker, codewriter, code, guard, ref,
-                           entry_pc=0, entry_state=None, emitter=None):
+                           entry_pc=0, entry_state=None, emitter=None,
+                           native_table=None):
     """Generate and install a residual program for ``code``, guarded on
     ``ref``.
 
@@ -19,6 +20,12 @@ def generate_for_live_code(extension, linker, codewriter, code, guard, ref,
     fragments were already built by ``precompile_fragments`` -- this call
     then runs no codewriter at all. None falls back to a fresh per-call
     ``ProgramEmitter``.
+
+    ``native_table``, when given, takes priority over ``emitter`` and
+    routes generation through the native pipeline (native_pipeline.py)
+    instead of SSARepr-based ``ProgramEmitter.emit`` -- the path that
+    does not read translation-time-only flowspace/codewriter objects, so
+    a caller running from inside a translated binary can use it.
 
     Returns the installed ``PELinkedProgram``, or None when ``code`` is
     declined: an instruction with no template, or the assembled program
@@ -34,7 +41,7 @@ def generate_for_live_code(extension, linker, codewriter, code, guard, ref,
         return None
     try:
         lowered = linker.install(codewriter, program, guard=guard,
-                                 emitter=emitter)
+                                 emitter=emitter, native_table=native_table)
     except Exception:
         # Catch-all: the usual cause is capacity overflow (a JitCode
         # indexes constants with one byte per kind), but any cause here
