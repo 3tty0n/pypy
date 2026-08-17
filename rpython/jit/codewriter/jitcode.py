@@ -329,8 +329,10 @@ class PEJitCodeMetadata(object):
         """
         if not self._threshold_env_read:
             self._threshold_env_read = True
-            if self.threshold_env_var is not None:
-                value = os.environ.get(self.threshold_env_var)
+            # Local binding: attribute re-reads don't flow-narrow away None.
+            env_var = self.threshold_env_var
+            if env_var is not None:
+                value = os.environ.get(env_var)
                 if value:
                     try:
                         self.cogen_threshold = int(value)
