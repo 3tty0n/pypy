@@ -113,16 +113,10 @@ class NFloatConst(NOperand):
         self.value = value
 
 
-def _const_operand_for(x):
-    """Resolve one translation-time-only flowspace ``Constant`` into a
-    monomorphic, runtime-legal ``NIntConst``/``NRefConst``/``NFloatConst``
-    -- see their docstrings.  Runs at translation time only (this is
-    ``fragment_to_native``'s own contract -- see the module docstring), so
-    freely reading ``Constant``/``concretetype``/lltype here is fine; the
-    whole point is that nothing downstream (native_pipeline.py) ever needs
-    to again -- including ``adr2int`` for a raw pointer constant, resolved
-    here once rather than per placement; see NIntConst's docstring for why
-    that is correct, not merely convenient.
+def _const_operand_for(x, const_cache=None):
+    """const_cache must be program-wide, not per-fragment: a resolved
+    AddressAsInt isn't hashable, so id()-based dedup needs the *same*
+    cached object, not merely an equal one (mirrors emit_resolved_const).
     """
     from rpython.rtyper.lltypesystem import lltype, llmemory, rffi
     from rpython.jit.codewriter import longlong
@@ -130,26 +124,34 @@ def _const_operand_for(x):
     from rpython.rlib.objectmodel import ComputedIntSymbolic
     from rpython.rlib.rarithmetic import r_int
 
+    cache_key = None
+    if const_cache is not None:
+        # lltype pointer objects raise TypeError on hash(); fall back to
+        # id() -- sound since the rtyper interns one object per pointer.
+        try:
+            hash(x.value)
+            cache_key = (x.value, x.concretetype)
+        except TypeError:
+            cache_key = (id(x.value), x.concretetype)
+        try:
+            return const_cache[cache_key]
+        except KeyError:
+            pass
+
     kind = getkind(x.concretetype)
     if kind == "ref":
-        return NRefConst(lltype.cast_opaque_ptr(llmemory.GCREF, x.value))
-    if kind == "float":
+        result = NRefConst(lltype.cast_opaque_ptr(llmemory.GCREF, x.value))
+    elif kind == "float":
         if x.concretetype == lltype.Float:
             value = longlong.getfloatstorage(x.value)
         else:
             assert longlong.is_longlong(x.concretetype)
             value = rffi.cast(lltype.SignedLongLong, x.value)
-        return NFloatConst(value)
-    if kind == "int":
+        result = NFloatConst(value)
+    elif kind == "int":
         value = x.value
         TYPE = x.concretetype
         if isinstance(TYPE, lltype.Ptr):
-            # A raw function/external-symbol pointer, e.g. a residual
-            # call's own callee address.  self.see_raw_object(value)'s
-            # debug-dump-only side effect (list_of_addr2name,
-            # untranslated-simulation-only ._obj/._name introspection
-            # besides) is the one piece of Assembler.emit_const_value's
-            # 'int' branch not reproduced here.
             assert TYPE.TO._gckind == 'raw'
             value = llmemory.cast_ptr_to_adr(value)
             TYPE = llmemory.Address
@@ -161,18 +163,15 @@ def _const_operand_for(x):
             value = lltype.cast_primitive(lltype.Signed, value)
             if type(value) is r_int:
                 value = int(value)
-        # else: value stays a Symbolic (its .annotation() is SomeInteger(),
-        # so it is RPython-legal wherever a plain Signed int is -- the
-        # standard way a still-unresolved-until-the-final-backend-link
-        # value flows through otherwise-int-typed RPython code; see e.g.
-        # AbstractDescr's own prebuilt-table precedent in this module's
-        # docstring).  Resolved once, here, and reused verbatim by every
-        # placement of this fragment (see NIntConst's docstring) -- unlike
-        # calling adr2int/etc. lazily per placement, which would silently
-        # stop deduping repeated occurrences of "the same" constant.
-        return NIntConst(value)
-    raise NotImplementedError(
-        "native_fragments: unhandled constant kind %r for %r" % (kind, x))
+        # else: Symbolic stays as-is -- legal wherever Signed int is.
+        result = NIntConst(value)
+    else:
+        raise NotImplementedError(
+            "native_fragments: unhandled constant kind %r for %r" % (kind, x))
+
+    if cache_key is not None:
+        const_cache[cache_key] = result
+    return result
 
 
 class NHole(NOperand):
@@ -267,9 +266,14 @@ class _Converter(object):
     liveness note), so the caching scope must be exact -- too narrow
     never cancels a register, too wide cancels it too eagerly."""
 
-    def __init__(self):
+    def __init__(self, const_cache=None):
         self._label_ids = {}
         self._registers = {}
+        # Shared *across* fragments (passed in from build_native_table, one
+        # dict for the whole program), unlike _registers/_label_ids above --
+        # see convert_operand's own note on why constants need the opposite
+        # scope from registers.
+        self._const_cache = const_cache
 
     def label_id(self, name):
         label_id = self._label_ids.get(id(name))
@@ -331,13 +335,13 @@ class _Converter(object):
         # last: HoleConstant is itself a Constant subclass, checked above.
         from rpython.flowspace.model import Constant
         if isinstance(x, Constant):
-            return _const_operand_for(x)
+            return _const_operand_for(x, self._const_cache)
         raise NotImplementedError(
             "native_fragments: unhandled operand %r" % (x,))
 
 
-def fragment_to_native(fragment, merge_point=False):
-    converter = _Converter()
+def fragment_to_native(fragment, merge_point=False, const_cache=None):
+    converter = _Converter(const_cache)
     insns = [converter.convert_insn(insn) for insn in fragment.insns]
     exits = [NativeFragmentExit(e.index, dict(e.operands), e.terminator)
              for e in fragment.exits]
@@ -350,9 +354,10 @@ def build_native_table(fragments):
     """table[key] = (no_merge, merge); either slot is None when that
     merge-point variant was never compiled (see native_fragment_for)."""
     table = {}
+    const_cache = {}
     for (key, merge_point), fragment in fragments.items():
         no_merge, merge = table.get(key, (None, None))
-        native = fragment_to_native(fragment, merge_point)
+        native = fragment_to_native(fragment, merge_point, const_cache)
         if merge_point:
             merge = native
         else:
