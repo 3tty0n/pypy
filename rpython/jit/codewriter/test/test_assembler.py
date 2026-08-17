@@ -202,7 +202,9 @@ def test_assemble_indirect_call():
                      ('foobar', IndirectCallTargets(lst2))]
     assembler = Assembler()
     assembler.assemble(ssarepr, num_regs={})
-    assert assembler.indirectcalltargets == set(lst1).union(lst2)
+    # Dict-as-set (RPython has no native set type -- see Assembler.__init__'s
+    # own note), not a real set: compare key sets instead of the container.
+    assert set(assembler.indirectcalltargets) == set(lst1).union(lst2)
 
 def test_num_regs():
     assembler = Assembler()

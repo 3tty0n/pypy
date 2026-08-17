@@ -322,6 +322,13 @@ class WarmRunnerDesc(object):
         self.rewrite_force_quasi_immutable()
         self.add_finish()
         self.metainterp_sd.finish_setup(self.codewriter)
+        # Hand metainterp_sd to any runtime_cogen callback that needs it
+        # (PEJitCodeMetadata.runtime_cogen, jitcode.py) via
+        # jitcode.set_late_metainterp_sd's list holder -- see that
+        # module's docstring for why a plain attribute can't carry it
+        # (this instance is frozen: WarmRunnerDesc._freeze_ below).
+        from rpython.jit.codewriter.jitcode import set_late_metainterp_sd
+        set_late_metainterp_sd(self.metainterp_sd)
 
     def finish(self):
         vinfos = set([jd.virtualizable_info for jd in self.jitdrivers_sd])

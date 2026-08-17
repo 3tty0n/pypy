@@ -36,7 +36,7 @@ HOLE_SENTINEL = 0x5E7717E1
 
 
 class HoleConstant(Constant):
-    """A Constant standing in for a late-static value until a program supplies it.
+    """A Constant standing in for a late-static value until supplied.
 
     It behaves as an ordinary Constant through transformation, register
     allocation and flattening, so the hole survives into the instruction list
@@ -582,9 +582,10 @@ class ProgramEmitter(object):
             ssarepr.insns.append(
                 ("%s_copy" % kind, Constant(block.bindings[name], lltype.Signed),
                  "->", self._register(kind, index)))
-        targets = block.template.resolve_targets(block.bindings)
-        if len(targets) == 1 and len(fragment.exits) > 1:
-            targets = targets * len(fragment.exits)
+        from rpython.translator.backendopt.partialeval_template import (
+            flatten_resolved_targets)
+        targets = flatten_resolved_targets(
+            block.template.resolve_targets(block.bindings), len(fragment.exits))
 
         for insn in fragment.insns:
             exit_index = self._exit_index(insn)

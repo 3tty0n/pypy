@@ -81,27 +81,43 @@ class PortalLinker(object):
         # every later one registers itself in.
         if mainjitcode.pe_metadata is None:
             program.attach_to_jitcode(mainjitcode, lowered.entry_positions)
+        # A list, not a tuple: attach_linked_jitcode's argument_sources
+        # sees different tuple lengths at this method's two call sites
+        # below, and an RPython tuple parameter can't vary in shape.
         linked_program = mainjitcode.pe_metadata.attach_linked_jitcode(
-            lowered.jitcode, self.portal_sources, ())
+            lowered.jitcode, list(self.portal_sources), [])
         if guard is not None:
             # Every block boundary the emitted code has an entry position for
             # -- not just loop headers and the entry -- so a greenkey that
             # goes hot at any block the residual program already covers still
             # matches this program instead of falling back to a generic
             # portal trace for a region that duplicates it.
-            entries = sorted(lowered.entry_positions)
+            # Not sorted()/set()/.sort(): none are RPython-legal. Dict-as-
+            # set stands in for the union; sort_ints for .sort().
+            from rpython.translator.backendopt.partialeval_template import (
+                sort_ints)
+            entries = []
+            for pc in lowered.entry_positions:
+                entries.append(pc)
+            sort_ints(entries)
             # The loop headers and the entry: exactly the pcs where a trace
             # may legitimately start without duplicating a loop this program
             # already provides.  A stricter subset of `entries` above, used
             # by pe_tick_suppressed (warmstate.py) to tell a genuine loop
             # start apart from a mid-block pc some other trace's tail landed
             # on inside this program's coverage.
-            legit_entries = sorted(set(program.loop_headers) |
-                                   set([program.entry_pc]))
+            legit_set = {}
+            for pc in program.loop_headers:
+                legit_set[pc] = True
+            legit_set[program.entry_pc] = True
+            legit_entries = []
+            for pc in legit_set:
+                legit_entries.append(pc)
+            sort_ints(legit_entries)
             linked_program.set_guard(guard[0], entries, guard[1],
                                      legit_entries)
         lowered.jitcode.pe_metadata.attach_linked_jitcode(
-            lowered.jitcode, (), ())
+            lowered.jitcode, [], [])
         # Either back end plants jit_merge_points when the interpreter named
         # its merge point arguments; without them the metainterp falls back to
         # recognising a jump to the entry position as the loop header.
@@ -112,7 +128,16 @@ class PortalLinker(object):
         return lowered
 
     def _dump(self, lowered):
-        """Write the JitCode listing where PE_DUMP_JITCODE asks for it."""
+        """Write the JitCode listing where PE_DUMP_JITCODE asks for it.
+
+        Debug tooling only, not RPython-legal as written (os, sorted(),
+        file I/O). we_are_translated() guards it: register_flow_sc
+        (objectmodel.py) folds that call to True at flow-graph-build
+        time, so everything below is never built as a graph there.
+        """
+        from rpython.rlib.objectmodel import we_are_translated
+        if we_are_translated():
+            return
         import os
         where = os.environ.get("PE_DUMP_JITCODE")
         if not where:

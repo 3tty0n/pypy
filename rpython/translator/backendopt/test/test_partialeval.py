@@ -414,16 +414,16 @@ def test_symbolic_template_targets_resolve_without_concrete_code():
         "RETURN_VALUE", ("pop",), ("result",))
 
     assert isinstance(fallthrough.terminators[0].target, NextPcHole)
-    assert fallthrough.resolve_targets({"pc": 10}) == [13]
+    assert fallthrough.resolve_targets({"pc": 10}) == [[13]]
     assert isinstance(absolute.terminators[0].target, AbsoluteTarget)
-    assert absolute.resolve_targets({"oparg": 24}) == [24]
+    assert absolute.resolve_targets({"oparg": 24}) == [[24]]
     assert isinstance(relative.terminators[0].target, RelativeTarget)
-    assert relative.resolve_targets({"pc": 10, "oparg": 7}) == [20]
+    assert relative.resolve_targets({"pc": 10, "oparg": 7}) == [[20]]
     assert isinstance(branch.terminators[0], Branch)
     assert branch.terminators[0].condition == "condition"
-    assert branch.resolve_targets({"pc": 10, "oparg": 24}) == [(13, 24)]
+    assert branch.resolve_targets({"pc": 10, "oparg": 24}) == [[13, 24]]
     assert isinstance(finish.terminators[0], Finish)
-    assert finish.resolve_targets({}) == [None]
+    assert finish.resolve_targets({}) == [[]]
 
 
 def test_offline_pe_of_small_symbolic_interpreter():
@@ -466,8 +466,8 @@ def test_offline_pe_of_small_symbolic_interpreter():
     # genuinely dynamic ADD operation remains in the residual template.
     assert not any(op.opname == "int_eq" for op in add.operations)
     assert [op.opname for op in add.operations] == ["int_add"]
-    assert add.resolve_targets({"pc": 10, "oparg": 7}) == [11]
-    assert jump.resolve_targets({"pc": 10, "oparg": 7}) == [7]
+    assert add.resolve_targets({"pc": 10, "oparg": 7}) == [[11]]
+    assert jump.resolve_targets({"pc": 10, "oparg": 7}) == [[7]]
     assert isinstance(halt.terminators[0], Finish)
 
 
@@ -513,8 +513,8 @@ def test_link_small_interpreter_dispatch_loop_without_tracing():
     assert set(linked.blocks[0].successors) == set([0, 2])
     assert 0 in linked.blocks[0].successors       # cached self-backedge
     assert linked.blocks[2].has_finish
-    assert linked.loop_headers == (0,)
-    assert linked.backedges == ((0, 0),)
+    assert linked.loop_headers == [0]
+    assert linked.backedges == [(0, 0)]
     assert linked.blocks[0].is_loop_header
 
     # Opcode selection happened offline/in the linker.  No dispatch comparison
@@ -618,7 +618,7 @@ def test_meta_traces_small_interpreter_with_offline_metadata():
 
     code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_HALT) + chr(0)
     linked = extension.generate(code)
-    assert linked.loop_headers == (0,)
+    assert linked.loop_headers == [0]
 
     driver = JitDriver(greens=["pc"], reds=["value"])
 

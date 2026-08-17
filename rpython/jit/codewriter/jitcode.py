@@ -11,6 +11,24 @@ def _never_matches(gcref):
     return False
 
 
+# A single-element list, not a plain module global: any attribute chain
+# to a WarmRunnerDesc (warmstate.warmrunnerdesc, pyjitpl._warmrunnerdesc)
+# is frozen (WarmRunnerDesc._freeze_, warmspot.py), and RPython freezes
+# by object identity, whole-program -- so anything reached that way stays
+# a frozen constant everywhere. List contents go through SomeList's item
+# generalization instead, so an item stored here reads back mutable. Set
+# by warmspot.py right after MetaInterpStaticData.finish_setup().
+_late_metainterp_sd = [None]
+
+
+def set_late_metainterp_sd(metainterp_sd):
+    _late_metainterp_sd[0] = metainterp_sd
+
+
+def get_late_metainterp_sd():
+    return _late_metainterp_sd[0]
+
+
 class PELinkedProgram(object):
     """One offline-linked JitCode, and the portal entry it stands for.
 
@@ -108,7 +126,7 @@ class PELinkedProgram(object):
         return call_boxes
 
     def matches(self, boxes):
-        """Is the portal entering the code object this program was linked for?"""
+        """Is the portal entering the code object this program links?"""
         index = self.guard_pc_index
         if index >= 0 and not self._covers(boxes[index].getint()):
             return False
@@ -411,7 +429,25 @@ class SwitchDictDescr(AbstractDescr):
 
     def attach(self, as_dict):
         self.dict = as_dict
-        self.const_keys_in_order = map(ConstInt, sorted(as_dict.keys()))
+        # Not map(ConstInt, sorted(as_dict.keys())): neither map() nor
+        # sorted() is RPython-legal. Plain loops and a manual insertion
+        # sort instead. ponytail: O(n^2), fine for one switch's key count.
+        keys = []
+        for key in as_dict:
+            keys.append(key)
+        index = 1
+        while index < len(keys):
+            key = keys[index]
+            gap = index - 1
+            while gap >= 0 and keys[gap] > key:
+                keys[gap + 1] = keys[gap]
+                gap -= 1
+            keys[gap + 1] = key
+            index += 1
+        const_keys = []
+        for key in keys:
+            const_keys.append(ConstInt(key))
+        self.const_keys_in_order = const_keys
 
     def __repr__(self):
         dict = getattr(self, 'dict', '?')

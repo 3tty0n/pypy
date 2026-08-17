@@ -22,6 +22,20 @@ from rpython.translator.backendopt.partialeval_template import (
     Finish, LinkedResidualProgram, LinkedTemplateBlock)
 
 
+def _states_equal(a, b):
+    """Are these two late-static-state dicts the same?
+
+    Not ``a != b``: RPython has no dict comparison at all
+    (binaryop.py's ``ne`` raises outright), so spelled out here.
+    """
+    if len(a) != len(b):
+        return False
+    for key, value in a.items():
+        if key not in b or b[key] != value:
+            return False
+    return True
+
+
 class GeneratingExtension(object):
     """Residual templates for one interpreter, plus the decoder for its code.
 
@@ -46,12 +60,18 @@ class GeneratingExtension(object):
     """
 
     def __init__(self, templates, decoder, static_name,
-                 unsupported=None, policy=None):
+                 unsupported=None, policy=None, state_names=()):
         self.templates = dict(templates)
         self.decoder = decoder
+        # Extra late-static names (beyond pc), fixed once at translation
+        # time from _pe_split_args_ (see from_step_function). An RPython
+        # tuple's length must be known at annotation time, so generate()
+        # copies this fixed tuple rather than rebuilding it from a
+        # runtime dict's key set.
+        self.state_names = tuple(state_names)
         # Consulted once a program has been generated, with the program and
-        # the code it came from; returning False declines it.  Generating is cheap and
-        # installing is not -- every installed program is looked at on every
+        # the code it came from; returning False declines it. Generating
+        # is cheap and installing is not -- every program is looked at on
         # trace start, and the JitCodes are carried in the binary -- so which
         # programs are worth that is a judgement about the interpreter, and
         # belongs to whoever wrote it.  None accepts everything.
@@ -63,10 +83,10 @@ class GeneratingExtension(object):
         self.unsupported = dict(unsupported or {})
         # The (pc, key) that made the most recent generate() call return
         # None because that instruction has no template, so a caller can say
-        # *why* nothing came out instead of only that nothing did.  Plain
-        # Python state: this only runs at translation time, never inside the
-        # generated program.
-        self.last_blocked = None
+        # *why* nothing came out instead of only that nothing did.
+        # (-1, -1) means "nothing blocked", not None: RPython tuples have
+        # no null value to unify None against.
+        self.last_blocked = (-1, -1)
         # Set instead of last_blocked when every reachable instruction did
         # specialize but the policy declined the resulting program anyway
         # (the usual case: too small to be worth a JitCode and a guard).
@@ -88,6 +108,11 @@ class GeneratingExtension(object):
         graph = graphof(translator, step_function)
         if static_name is None:
             static_name = graph.func._pe_static_args_[0]
+        # Mirrors PartialEvaluator.make_symbolic_template's state_names
+        # computation (partialeval.py): split names beyond "pc" are the
+        # late-static state a generated program threads through its CFG.
+        split_names = getattr(graph.func, "_pe_split_args_", ())
+        state_names = tuple(name for name in split_names[1:])
         evaluator = PartialEvaluator(translator)
 
         # Keys the interpreter declared off limits: recorded exactly like one
@@ -112,7 +137,7 @@ class GeneratingExtension(object):
                 error.pe_traceback = traceback.format_exc()
                 unsupported[key] = error
         return cls(templates, decoder, static_name, unsupported,
-                   policy=policy)
+                   policy=policy, state_names=state_names)
 
     def handles(self, key):
         return key in self.templates
@@ -131,18 +156,30 @@ class GeneratingExtension(object):
         is an error rather than something to paper over.
         """
         blocks = {}
-        state_names = tuple(sorted(entry_state or ()))
-        pending = [(entry_pc, dict(entry_state or {}))]
+        if entry_state is None:
+            entry_state = {}
+        # Not ``entry_state or ()``: the "or" fallback arm would be a
+        # different type (tuple vs dict) at the same merge point, which
+        # the annotator rejects. Not derived from entry_state's keys
+        # either (a tuple's length must be fixed at annotation time) --
+        # copied from self.state_names instead, already fixed at
+        # translation time and matching entry_state's own keys.
+        state_names = self.state_names
+        # .copy(), not dict(entry_state): RPython's dict constructor
+        # doesn't accept an existing mapping argument.
+        pending = [(entry_pc, entry_state.copy())]
         # Reset both: a call that succeeds, or fails for the other reason,
         # must not leave a stale explanation from some earlier call lying
         # around.
-        self.last_blocked = None
+        self.last_blocked = (-1, -1)
         self.decline_reason = None
 
         while pending:
             pc, state = pending.pop()
             if pc in blocks:
-                if blocks[pc].state != state:
+                # Not blocks[pc].state != state: RPython has no dict
+                # comparison at all (binaryop.py's ne raises).
+                if not _states_equal(blocks[pc].state, state):
                     raise ValueError(
                         "pc %d is reachable with conflicting late-static "
                         "state %r and %r" % (pc, blocks[pc].state, state))
@@ -154,7 +191,8 @@ class GeneratingExtension(object):
                 return None
             template = self.templates[key]
 
-            bindings = dict(bindings)
+            # .copy(), not dict(bindings): see entry_state.copy() above.
+            bindings = bindings.copy()
             bindings[self.static_name] = key
             bindings.update(state)
             block = LinkedTemplateBlock(pc, key, template, bindings)
@@ -162,23 +200,27 @@ class GeneratingExtension(object):
             # Publish before following successors so backedges hit the cache.
             blocks[pc] = block
 
-            for terminator, targets, next_state in zip(
-                    template.terminators,
-                    template.resolve_targets(bindings),
-                    template.resolve_state(bindings)):
+            # Not zip(a, b, c): RPython's zip() only takes two iterables.
+            terminators = template.terminators
+            targets_by_index = template.resolve_targets(bindings)
+            states_by_index = template.resolve_state(bindings)
+            for index in range(len(terminators)):
+                terminator = terminators[index]
+                targets = targets_by_index[index]
+                next_state = states_by_index[index]
                 if isinstance(terminator, Finish):
                     block.has_finish = True
                     continue
-                if not isinstance(targets, tuple):
-                    targets = (targets,)
+                # ``targets`` is already a plain list here (0/1/2 entries),
+                # not a bare value some of the time and a tuple others --
+                # see ResidualTemplate.resolve_targets's own docstring.
                 for target in targets:
                     if target not in block.successors:
                         block.successors.append(target)
                     if target not in blocks:
                         pending.append((target, next_state))
 
-        program = LinkedResidualProgram(entry_pc, blocks)
-        program.state_names = state_names
+        program = LinkedResidualProgram(entry_pc, blocks, state_names)
         program = program.analyze_loops()
         # After the loop analysis, so a policy can ask about loop headers --
         # the usual reason to decline is that there is nothing here the

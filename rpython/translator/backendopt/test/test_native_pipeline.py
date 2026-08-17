@@ -277,8 +277,14 @@ def test_switch_byte_identical():
     assert native_jitcode.constants_r == original_jitcode.constants_r
     assert native_jitcode.num_regs_i() == original_jitcode.num_regs_i()
     assert native_positions == original_positions
+    # Both paths really resolve the switch's targets, not just produce
+    # matching bytes by coincidence: fix_labels' SwitchDictDescr.attach()
+    # fills a real dict on the *clone* each side builds (never on the
+    # shared ``switchdict`` template -- see NSwitchDictOperand). The
+    # native side resolves via its own native_switchdictdescrs/
+    # NativeSwitchDictDescr/fix_labels override instead.
     [orig_descr] = emitter.codewriter.assembler.switchdictdescrs
-    [native_descr] = _asm.switchdictdescrs
+    [native_descr] = _asm.native_switchdictdescrs
     assert set(orig_descr.dict) == set(native_descr.dict) == set([1, 2])
     assert orig_descr.dict == native_descr.dict
     assert not hasattr(switchdict, "dict")
