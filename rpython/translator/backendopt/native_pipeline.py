@@ -9,7 +9,8 @@ RPython-legal only, throughout: a real runtime_cogen callback reaches
 every function here, so each must translate, not just run untranslated.
 """
 
-from rpython.jit.codewriter.assembler import Assembler, AssemblerError, USE_C_FORM
+from rpython.jit.codewriter.assembler import (
+    Assembler, AssemblerError, USE_C_FORM, int_fits_short)
 from rpython.jit.codewriter.flatten import KINDS
 from rpython.jit.codewriter.jitcode import JitCode, SwitchDictDescr
 from rpython.jit.metainterp.history import AbstractDescr
@@ -454,6 +455,74 @@ def _get_liveness_info_native(operands, kind):
     return lives
 
 
+def _operand_argcode_options(x, allow_short):
+    """Every argcode letter operand 'x' could contribute to an insn key --
+    normally exactly one, two for an unplaced int-kind hole (its real
+    value isn't known until placement, so both 'c' and 'i' are possible).
+    None means "contributes nothing" (NIndirectCallTargets).
+
+    Shared by write_insn's operand loop (below, always exactly one
+    option there -- every operand it sees is already resolved) and
+    native_insn_key_options (below), so the two can never disagree
+    about what letter an operand shape means.
+    """
+    if isinstance(x, NReg):
+        return [x.kind[0]]
+    if isinstance(x, NIntConst):
+        return ["c" if int_fits_short(x.ivalue, allow_short) else "i"]
+    if isinstance(x, NHole):
+        assert x.kind == "int"
+        return ["c", "i"] if allow_short else ["i"]
+    if isinstance(x, NRefConst):
+        return ["r"]
+    if isinstance(x, NFloatConst):
+        return ["f"]
+    # Not isinstance(x, (NTLabel, NLabel))/(NDescr, NSwitchDictOperand):
+    # RPython's annotator rejects a multi-class isinstance tuple here --
+    # two separate checks are the RPython-legal equivalent.
+    if isinstance(x, NTLabel):
+        return ["L"]
+    if isinstance(x, NLabel):
+        return ["L"]
+    if isinstance(x, NListOfKind):
+        return [x.kind[0].upper()]
+    if isinstance(x, NDescr):
+        return ["d"]
+    if isinstance(x, NSwitchDictOperand):
+        return ["d"]
+    if isinstance(x, NIndirectCallTargets):
+        return None
+    raise NotImplementedError(x)
+
+
+def native_insn_key_options(insn):
+    """Every 'opname/argcodes' key 'insn' could resolve to once assembled
+    for real -- more than one only for an unresolved int-kind hole
+    feeding a short-constant-capable opcode.
+
+    ``'---'``/``'@label'`` aren't insns at all -- ``None``. ``'-live-'``
+    is fixed (``'live/'``); it never appears in a fragment's own insns
+    (inserted only after emit_native concatenates a whole program), but
+    is handled here so write_insn's reuse of this function stays total.
+    """
+    if insn.opcode in ("---", "@label"):
+        return None
+    if insn.opcode == "-live-":
+        return ["live/"]
+    allow_short = insn.opcode in USE_C_FORM
+    argcode_options = [""]
+    for x in insn.operands:
+        letters = _operand_argcode_options(x, allow_short)
+        if letters is None:
+            continue
+        argcode_options = [prefix + letter for prefix in argcode_options
+                           for letter in letters]
+    if insn.result is not None:
+        argcode_options = [a + ">" + insn.result.kind[0]
+                           for a in argcode_options]
+    return [insn.opcode + "/" + a for a in argcode_options]
+
+
 class NativeAssembler(Assembler):
     """Subclasses Assembler: everything not tied to insn shape (dedup,
     emit_reg, liveness byte-packing, fix_labels, check_result,
@@ -544,28 +613,26 @@ class NativeAssembler(Assembler):
         argcodes = []
         allow_short = (insn.opcode in USE_C_FORM)
         for x in insn.operands:
+            # Byte emission stays per-branch; only the argcode letter is
+            # shared via _operand_argcode_options, which always returns
+            # exactly one option here since every operand is resolved.
             if isinstance(x, NReg):
                 self.emit_reg(x)
-                argcodes.append(x.kind[0])
             elif isinstance(x, NIntConst):
-                is_short = self.emit_resolved_const(x.ivalue, "int",
-                                                     allow_short=allow_short)
-                argcodes.append("c" if is_short else "i")
+                self.emit_resolved_const(x.ivalue, "int",
+                                         allow_short=allow_short)
             elif isinstance(x, NRefConst):
                 # No dedup_key: default (=value) is right now that
                 # constants_dict_r is keyed via new_ref_dict's rd_eq/
                 # rd_hash (assembler.py).
                 self.emit_resolved_const(x.value, "ref")
-                argcodes.append("r")
             elif isinstance(x, NFloatConst):
                 self.emit_resolved_const(x.value, "float")
-                argcodes.append("f")
             elif isinstance(x, NTLabel):
                 self.alllabels[len(self.code)] = True
                 self.tlabel_positions.append((x.label_id, len(self.code)))
                 self.code.append("temp 1")
                 self.code.append("temp 2")
-                argcodes.append("L")
             elif isinstance(x, NListOfKind):
                 lst = x.items
                 assert len(lst) <= 255, "list too long!"
@@ -592,7 +659,6 @@ class NativeAssembler(Assembler):
                         raise NotImplementedError(
                             "found an operand of an unexpected type in "
                             "NListOfKind()")
-                argcodes.append(x.kind[0].upper())
             elif isinstance(x, NDescr):
                 d = x.descr
                 if isinstance(d, NativeSwitchDictDescr):
@@ -638,7 +704,6 @@ class NativeAssembler(Assembler):
                 assert 0 <= num <= 0xFFFF, "too many AbstractDescrs!"
                 self.code.append(chr(num & 0xFF))
                 self.code.append(chr(num >> 8))
-                argcodes.append("d")
             elif isinstance(x, NIndirectCallTargets):
                 for target in x.lst:
                     self.indirectcalltargets[target] = True
@@ -649,6 +714,10 @@ class NativeAssembler(Assembler):
                     "unpatched hole %s reached the assembler" % (x.name,))
             else:
                 raise NotImplementedError(x)
+            letters = _operand_argcode_options(x, allow_short)
+            if letters is not None:
+                assert len(letters) == 1
+                argcodes.append(letters[0])
 
         if insn.result is not None:
             argcodes.append(">")

@@ -758,3 +758,69 @@ def stamp_descr_indices(codewriter, native_table):
         # the translated binary's own graph, so debug_print doesn't apply.
         print "[offline-pe] stamped %d descr(s) only a fragment " \
               "referenced (no ordinary jitcode did)" % found_only_in_fragments
+
+
+# Insns emit_native can produce outside any fragment's own insns (never
+# discoverable by walking native_table), from _place_native/
+# _emit_moves_native/_initialise_scratch_native:
+# * goto/L -- unconditional exit jump.
+# * int_copy/i>i, ref_copy/r>r, float_copy/f>f -- register-to-register
+#   boundary moves; source/dest always share one kind.
+# * int_copy/c>i -- no-source int fallback (NIntConst(0)), always fits
+#   the short form.
+# * ref_copy/r>r -- also covers the no-source ref fallback (a ref
+#   constant is always argcode "r").
+# * float_copy/i>f -- no-source float fallback also uses NIntConst(0),
+#   but float_copy isn't in USE_C_FORM, so always "i".
+_EMIT_NATIVE_CONNECTIVE_TISSUE = [
+    "goto/L",
+    "int_copy/i>i", "int_copy/c>i",
+    "ref_copy/r>r",
+    "float_copy/f>f", "float_copy/i>f",
+]
+
+
+def register_native_insn_coverage(codewriter, native_table):
+    """Register every (opname, argcodes) combo a readonly NativeAssembler
+    could need, into ``codewriter.assembler.insns``. Must run before
+    ``MetaInterpStaticData.finish_setup`` snapshots this table (same
+    constraint as ``stamp_descr_indices`` above).
+
+    Without this, generated-program-only insns get declined:
+    ``pe_bailout_point``/``jit_merge_point`` markers, and hole-patched
+    constant-constant arithmetic like ``int_sub/cc>i`` (RPython's own
+    optimizer folds those away in ordinary jitcodes, so the combination
+    only ever arises via a runtime-linked bytecode value).
+
+    Two sources: every fragment's insns via ``native_insn_key_options``
+    (the same function ``NativeAssembler.write_insn`` uses, so coverage
+    matches exactly what it could produce), plus
+    ``_EMIT_NATIVE_CONNECTIVE_TISSUE`` for insns ``emit_native`` inserts
+    outside any fragment (goto, boundary/prologue ``*_copy`` moves).
+    """
+    from rpython.jit.codewriter.assembler import USE_C_FORM
+    from rpython.translator.backendopt.native_pipeline import (
+        native_insn_key_options)
+
+    insns = codewriter.assembler.insns
+    for pair in native_table.values():
+        for fragment in pair:
+            if fragment is None:
+                continue
+            for insn in fragment.insns:
+                keys = native_insn_key_options(insn)
+                if keys is None:
+                    continue
+                for key in keys:
+                    insns.setdefault(key, len(insns))
+            # fragment.prologue entries are always an NIntConst operand
+            # regardless of 'kind' (_place_native); this adapts to
+            # whichever kinds a fragment's prologue actually uses.
+            for kind, _index, _name in fragment.prologue:
+                copy_name = "%s_copy" % kind
+                allow_short = copy_name in USE_C_FORM
+                for letter in (["c", "i"] if allow_short else ["i"]):
+                    insns.setdefault(
+                        "%s/%s>%s" % (copy_name, letter, kind[0]), len(insns))
+    for key in _EMIT_NATIVE_CONNECTIVE_TISSUE:
+        insns.setdefault(key, len(insns))

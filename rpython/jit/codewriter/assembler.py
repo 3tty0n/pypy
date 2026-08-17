@@ -18,6 +18,20 @@ class AssemblerError(Exception):
     pass
 
 
+def int_fits_short(value, allow_short):
+    """Would emit_resolved_const's 'int' branch pick the short 1-byte
+    encoding for 'value'? Pulled out so native_pipeline.py's insn-key
+    computation can answer the same question for a not-yet-placed
+    operand, without an assembler instance or emitting anything.
+    """
+    if not allow_short:
+        return False
+    try:
+        return -128 <= value <= 127
+    except TypeError:    # "Symbolics cannot be compared!"
+        return False
+
+
 def _fixed_size_copy(src, empty):
     """A fresh copy of 'src', built by index-fill, not .append() -- see
     Assembler.make_jitcode's own note for why. 'empty' is returned as-is
@@ -238,15 +252,10 @@ class Assembler(object):
         if dedup_key is _NO_DEDUP_KEY:
             dedup_key = value
         if kind == 'int':
-            if allow_short:
-                try:
-                    short_num = -128 <= value <= 127
-                except TypeError:    # "Symbolics cannot be compared!"
-                    short_num = False
-                if short_num:
-                    # emit the constant as a small integer
-                    self.code.append(chr(value & 0xFF))
-                    return True
+            if int_fits_short(value, allow_short):
+                # emit the constant as a small integer
+                self.code.append(chr(value & 0xFF))
+                return True
             try:
                 val = self.constants_dict_i[dedup_key]
             except KeyError:

@@ -112,14 +112,17 @@ def test_toy_program_with_shared_calldescr_byte_identical():
 
 
 def test_stamp_descr_indices_covers_fragment_only_descrs_before_any_assemble():
-    """Regression: stamp descr indices before any jitcode is assembled."""
+    """Regression: stamp descr indices and insn coverage before any
+    jitcode is assembled, then assemble readonly to prove full coverage.
+    """
     from rpython.jit.codewriter.codewriter import CodeWriter
     from rpython.jit.codewriter.test.test_codewriter import (
         FakeCPU, FakeJitDriverSD)
     from rpython.translator.backendopt.jitcode_emitter import (
-        stamp_descr_indices)
+        stamp_descr_indices, register_native_insn_coverage)
 
     OP_ADD = 2
+    OP_SUB = 3
 
     def helper(x, y):
         return x + y
@@ -127,6 +130,11 @@ def test_stamp_descr_indices_covers_fragment_only_descrs_before_any_assemble():
     def step(opcode, oparg, pc, value):
         if opcode == OP_ADD:
             return pc + 2, helper(value, oparg)
+        if opcode == OP_SUB:
+            # Both operands are late-static (a hole, a compile-time
+            # literal); oparg's real value isn't known until link time,
+            # so this can't fold -- the int_sub/cc>i shape.
+            return pc + 2, oparg - 5
         return -1, value
 
     step._pe_static_args_ = ("opcode",)
@@ -136,37 +144,57 @@ def test_stamp_descr_indices_covers_fragment_only_descrs_before_any_assemble():
         def look_inside_graph(self, graph):
             return False
 
-    code = chr(OP_ADD) + chr(5) + chr(OP_ADD) + chr(9) + chr(OP_HALT) + chr(0)
+    code = (chr(OP_ADD) + chr(5) + chr(OP_ADD) + chr(9) +
+            chr(OP_SUB) + chr(9) + chr(OP_HALT) + chr(0))
     graph, translator = get_graph(step, [int, int, int, int])
     extension = GeneratingExtension.from_step_function(
-        translator, step, [OP_ADD, OP_HALT], byte_pair_decoder)
+        translator, step, [OP_ADD, OP_SUB, OP_HALT], byte_pair_decoder)
     program = extension.generate(code)
-    codewriter = CodeWriter(FakeCPU(translator.rtyper), [FakeJitDriverSD(graph)])
+    jitdriver_sd = FakeJitDriverSD(graph)
+    # pe_bailout_point's jtransform needs a real (jitdriver, jitdriver_sd)
+    # pair; fake just the few attrs it actually reads.
+    class _FakeJitDriver(object):
+        active = True
+        greens = []
+        numreds = 3
+    jitdriver_sd.jitdriver = _FakeJitDriver()
+    jitdriver_sd.index = 0
+    codewriter = CodeWriter(FakeCPU(translator.rtyper), [jitdriver_sd])
     codewriter.find_all_graphs(NoInlinePolicy())
-    emitter = ProgramEmitter(codewriter, None, "opcode", ("pc",),
-                             ("pc", "oparg", "code"), ("value",))
+    # Non-empty jit_merge_point_args makes precompile_fragments build the
+    # merge-point variant and insert a pe_bailout_point marker.
+    emitter = ProgramEmitter(codewriter, jitdriver_sd, "opcode", ("pc",),
+                             ("pc", "oparg", "code"), ("value",),
+                             jit_merge_point_args=("oparg", "pc", "value"))
     emitter.precompile_fragments(extension.templates)
 
     assert codewriter.assembler.descrs == []
+    assert codewriter.assembler.insns == {}
 
     native_table = build_native_table(emitter._fragments)
     stamp_descr_indices(codewriter, native_table)
+    register_native_insn_coverage(codewriter, native_table)
 
-    assert len(codewriter.assembler.descrs) == 1
-    assert codewriter.assembler.descrs[0].pe_descr_index == 0
+    # 'helper' calldescrs were only ever seen by fragment compilation, so
+    # the fallback pass, not "already in assembler.descrs", stamped them.
+    # Two: OP_ADD compiles once per merge-point variant, and FakeCPU's
+    # calldescrof mints a fresh descr each time.
+    assert len(codewriter.assembler.descrs) == 2
+    for d in codewriter.assembler.descrs:
+        assert d.pe_descr_index >= 0
 
-    from rpython.translator.backendopt.native_fragments import NDescr
-    found = 0
-    for pair in native_table.values():
-        for fragment in pair:
-            if fragment is None:
-                continue
-            for insn in fragment.insns:
-                for operand in insn.operands:
-                    if isinstance(operand, NDescr):
-                        assert operand.descr.pe_descr_index >= 0
-                        found += 1
-    assert found > 0   # the calldescr really was reached by this walk
+    # Both fragment-only shapes (a hole-keyed marker, a constant-constant
+    # op) must be registered, not just "something".
+    assert "pe_bailout_point/cIRFIRF" in codewriter.assembler.insns
+    assert "int_sub/cc>i" in codewriter.assembler.insns
+
+    # Regression guard: before both fixes this raised AssemblerError
+    # ("descr not covered"/"no precompiled insn for ...").
+    assembler = NativeAssembler(share_with=codewriter.assembler, readonly=True)
+    native_jitcode, _positions, _asm = emit_and_assemble_native(
+        native_table, program, "native-full", has_merge_points=True,
+        assembler=assembler)
+    assert len(native_jitcode.code) > 0
 
 
 def test_readonly_native_assembler_declines_uncovered_insn():
