@@ -110,6 +110,103 @@ def test_linked_program_for_non_matching_ref_caches_none():
     assert len(program.guard_match.calls) == 1
 
 
+def _counting_runtime_cogen(program_for_ref):
+    calls = []
+    def runtime_cogen(ref):
+        calls.append(ref)
+        return program_for_ref(ref)
+    runtime_cogen.calls = calls
+    return runtime_cogen
+
+
+def test_runtime_cogen_not_invoked_when_ref_resolved_by_existing_program():
+    ref_a = _new_ref()
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+    program = _make_program(ref_index=0)
+    program.guard_match = _counting_matcher(ref_a)
+    metadata.linked_programs = [program]
+    metadata.runtime_cogen = _counting_runtime_cogen(lambda ref: None)
+
+    boxes = [ConstPtr(ref_a)]
+    assert metadata.linked_program_for(boxes) is program
+    assert metadata.runtime_cogen.calls == []
+
+
+def test_runtime_cogen_invoked_once_and_decline_is_cached():
+    ref_a = _new_ref()
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+    decoy = _make_program(ref_index=0)
+    decoy.guard_match = _counting_matcher(lltype.nullptr(llmemory.GCREF.TO))
+    metadata.linked_programs = [decoy]
+    metadata.runtime_cogen = _counting_runtime_cogen(lambda ref: None)
+
+    boxes = [ConstPtr(ref_a)]
+    assert metadata.linked_program_for(boxes) is None
+    assert len(metadata.runtime_cogen.calls) == 1
+
+    assert metadata.linked_program_for(boxes) is None
+    assert len(metadata.runtime_cogen.calls) == 1
+
+
+def test_runtime_cogen_success_is_cached_and_returned():
+    ref_a = _new_ref()
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+    metadata.linked_programs = []
+    metadata.guard_ref_index = 0
+    generated = _make_program(ref_index=0)
+    generated.guard_ref = ref_a
+
+    def program_for_ref(ref):
+        metadata.linked_programs = [generated]
+        return generated
+    metadata.runtime_cogen = _counting_runtime_cogen(program_for_ref)
+
+    boxes = [ConstPtr(ref_a)]
+    assert metadata.linked_program_for(boxes) is generated
+    assert len(metadata.runtime_cogen.calls) == 1
+
+    assert metadata.linked_program_for(boxes) is generated
+    assert len(metadata.runtime_cogen.calls) == 1
+
+
+def test_runtime_cogen_pc_only_miss_after_generation_still_caches_program():
+    ref_a = _new_ref()
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+    metadata.linked_programs = []
+    metadata.guard_ref_index = 0
+    generated = _make_program(ref_index=0, pc_index=1, pcs=[10])
+    generated.guard_ref = ref_a
+
+    def program_for_ref(ref):
+        metadata.linked_programs = [generated]
+        return generated
+    metadata.runtime_cogen = _counting_runtime_cogen(program_for_ref)
+
+    boxes_uncovered = [ConstPtr(ref_a), ConstInt(999)]
+    assert metadata.linked_program_for(boxes_uncovered) is None
+    assert len(metadata.runtime_cogen.calls) == 1
+
+    boxes_covered = [ConstPtr(ref_a), ConstInt(10)]
+    assert metadata.linked_program_for(boxes_covered) is generated
+    assert len(metadata.runtime_cogen.calls) == 1
+
+
+def test_runtime_cogen_returning_wrong_ref_is_treated_as_decline():
+    ref_a = _new_ref()
+    ref_b = _new_ref()
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+    metadata.linked_programs = []
+    metadata.guard_ref_index = 0
+    generated = _make_program(ref_index=0)
+    generated.guard_ref = ref_b
+
+    metadata.runtime_cogen = _counting_runtime_cogen(lambda ref: generated)
+
+    boxes = [ConstPtr(ref_a)]
+    assert metadata.linked_program_for(boxes) is None
+    assert len(metadata.runtime_cogen.calls) == 1
+
+
 def test_is_linked_jitcode_uses_flag_set_by_attach():
     metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
     linked = JitCode("linked")

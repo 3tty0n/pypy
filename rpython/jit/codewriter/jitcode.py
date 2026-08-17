@@ -165,6 +165,11 @@ class PEJitCodeMetadata(object):
         # than a couple of programs, where the linear walk is cheap enough
         # that a cache would just be overhead.
         self._program_cache = None
+        # runtime_cogen: f(gcref) -> program or None; called once per ref.
+        self.runtime_cogen = None
+        # Green-box index carrying the ref, used only before any program is
+        # installed; a runtime_cogen setter must also set this.
+        self.guard_ref_index = -1
 
     def attach_linked_jitcode(self, jitcode, argument_sources,
                               argument_constants):
@@ -198,8 +203,13 @@ class PEJitCodeMetadata(object):
         the plain linear walk.
         """
         programs = self.linked_programs
+        ref_index = -1
         if programs and programs[0].guard_ref_index >= 0:
-            ref = boxes[programs[0].guard_ref_index].getref_base()
+            ref_index = programs[0].guard_ref_index
+        elif not programs and self.runtime_cogen is not None:
+            ref_index = self.guard_ref_index
+        if ref_index >= 0:
+            ref = boxes[ref_index].getref_base()
             if ref:
                 cache = self._program_cache
                 if cache is None:
@@ -208,6 +218,8 @@ class PEJitCodeMetadata(object):
                     program = cache[ref]
                 else:
                     program = self._resolve_ref(ref)
+                    if program is None and self.runtime_cogen is not None:
+                        program = self._cogen_ref(ref)
                     cache[ref] = program
                 if program is None:
                     return None
@@ -232,6 +244,13 @@ class PEJitCodeMetadata(object):
             if program.matches_ref(ref):
                 return program
         return None
+
+    def _cogen_ref(self, ref):
+        """Invoked once per ref; linked_program_for caches the result."""
+        program = self.runtime_cogen(ref)
+        if program is None or program.guard_ref != ref:
+            return None
+        return program
 
     def is_linked_jitcode(self, jitcode):
         return jitcode.pe_is_linked

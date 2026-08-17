@@ -2,6 +2,7 @@
 the TLA toy interpreter (rpython/jit/tl/tla) as a PEDriver-style example.
 """
 
+from rpython.jit.codewriter.jitcode import PEJitCodeMetadata
 from rpython.jit.metainterp.test.support import LLJitMixin
 from rpython.jit.tl.tla import tla
 from rpython.jit.tl.tla import offline as tla_offline
@@ -154,6 +155,69 @@ class TestGenerateForLiveCode(LLJitMixin):
         pe_result = self.meta_interp(
             interp_w, [42], listops=True, pe_linked_setup=install)
         assert pe_result == baseline
+        assert get_stats().pe_metadata_count > 0
+
+    def test_lookup_miss_triggers_runtime_cogen_with_no_program_preinstalled(self):
+        """Lookup miss on an empty PEJitCodeMetadata triggers runtime_cogen
+        and re-lookup after that hits the cache instead."""
+        from rpython.jit.metainterp.history import ConstInt, ConstPtr
+        from rpython.jit.metainterp.warmspot import get_stats
+        from rpython.rlib.nonconst import NonConstant
+
+        bytecode = _assemble(COUNTDOWN)
+
+        def interp_w(intvalue):
+            w_result = tla.run(NonConstant(bytecode), tla.W_IntObject(intvalue))
+            assert isinstance(w_result, tla.W_IntObject)
+            return w_result.intvalue
+
+        baseline = self.meta_interp(interp_w, [42], listops=True)
+        assert baseline == 0
+
+        counter = [0]
+
+        def install(codewriter, jitdriver_sd, translator):
+            extension = tla_offline.build_generating_extension(translator)
+            linker = _tla_portal_linker(jitdriver_sd)
+            ref = _bytecode_ref(translator, bytecode)
+
+            used = dict((key, extension.templates[key]) for key in
+                       (tla.CONST_INT, tla.SUB, tla.DUP, tla.JUMP_IF,
+                        tla.RETURN))
+            emitter = ProgramEmitter(
+                codewriter, jitdriver_sd, "opcode", ("pc",), ("oparg",),
+                RUNTIME_NAMES, jit_merge_point_args=JIT_MERGE_POINT_ARGS)
+            emitter.precompile_fragments(used)
+
+            def runtime_cogen(gcref):
+                counter[0] += 1
+                return generate_for_live_code(
+                    extension, linker, codewriter, bytecode, GUARD, gcref,
+                    emitter=emitter)
+
+            mainjitcode = linker.mainjitcode(codewriter)
+            metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
+            metadata.guard_ref_index = GUARD[1]
+            metadata.runtime_cogen = runtime_cogen
+            mainjitcode.pe_metadata = metadata
+
+            boxes = [ConstInt(0), ConstPtr(ref)]
+            program = metadata.linked_program_for(boxes)
+            assert program is not None
+            assert counter[0] == 1
+
+            assert metadata.linked_program_for(boxes) is program
+            assert counter[0] == 1
+
+            from rpython.translator.backendopt.partialeval_template import (
+                LoweredResidualProgram)
+            return LoweredResidualProgram(None, program.jitcode, {})
+
+        pe_result = self.meta_interp(
+            interp_w, [42], listops=True, pe_linked_setup=install)
+        assert pe_result == baseline
+        assert counter[0] == 1
+        assert get_stats().pe_metadata_count > 0
         assert get_stats().pe_metadata_count > 0
 
 
