@@ -322,9 +322,143 @@ def _emit_moves_native(ssarepr, sources, destinations, scratch, _names=None):
 
 def compute_liveness_native(insns):
     label2alive = {}
-    while _compute_liveness_native_pass(insns, label2alive):
-        pass
+    _converge_liveness_native(insns, label2alive)
+    # Fixpoint already converged: this single pass only rewrites -live-;
+    # see _converge_liveness_native's docstring for why that's safe.
+    _compute_liveness_native_pass(insns, label2alive)
     _remove_repeated_live_native(insns)
+
+
+def _segment_bounds_native(insns):
+    """Segment = maximal run starting at a '---' (or at index 0). alive
+    always starts empty at a segment's bottom (see _converge_liveness_native
+    docstring), so segments can be fixpointed independently of each other.
+    """
+    n = len(insns)
+    bounds = [0]
+    for i in range(1, n):
+        if insns[i].opcode == "---":
+            bounds.append(i)
+    bounds.append(n)
+    return bounds
+
+
+def _collect_labels_native(x, label_readers, seg_idx):
+    """Structural (label2alive-independent) pass: which segment indices
+    ever follow label 'x'. Mirrors the label-following cases of
+    _mark_native, minus the register-marking ones."""
+    if isinstance(x, NTLabel):
+        _add_reader_native(label_readers, x.label_id, seg_idx)
+    elif isinstance(x, NDescr):
+        descr = x.descr
+        if isinstance(descr, NativeSwitchDictDescr):
+            for _key, label in descr._native_labels:
+                _add_reader_native(label_readers, label, seg_idx)
+
+
+def _add_reader_native(label_readers, label_id, seg_idx):
+    readers = label_readers.get(label_id)
+    if readers is None:
+        readers = {}
+        label_readers[label_id] = readers
+    readers[seg_idx] = True
+
+
+def _process_segment_native(insns, start, end, label2alive):
+    """One local backward scan over insns[start:end) -- no -live- rewrite
+    (worklist phase only, see _converge_liveness_native). Returns the
+    label_ids whose label2alive set grew because of this segment."""
+    alive = {}
+    grown = []
+    for i in range(end - 1, start - 1, -1):
+        insn = insns[i]
+        opcode = insn.opcode
+
+        if opcode == "@label":
+            label_id = insn.operands[0].label_id
+            alive_at_point = label2alive.get(label_id)
+            if alive_at_point is None:
+                alive_at_point = {}
+                label2alive[label_id] = alive_at_point
+            prevlength = len(alive_at_point)
+            for nid, reg in alive.items():
+                alive_at_point[nid] = reg
+            if prevlength != len(alive_at_point):
+                grown.append(label_id)
+            continue
+
+        if opcode == "-live-":
+            for x in insn.operands:
+                if isinstance(x, NReg):
+                    alive[x.nid] = x
+                elif isinstance(x, NTLabel):
+                    _follow_label_native(x.label_id, label2alive, alive)
+            continue
+
+        if opcode == "---":
+            continue   # only possible at i == start; nothing follows
+
+        if insn.result is not None and insn.result.nid in alive:
+            del alive[insn.result.nid]
+        for x in insn.operands:
+            _mark_native(x, label2alive, alive)
+
+    return grown
+
+
+def _converge_liveness_native(insns, label2alive):
+    """Worklist replacement for repeated _compute_liveness_native_pass
+    sweeps: label2alive is the only thing that crosses a '---' boundary
+    (alive itself always resets to {} there), so each segment can be
+    fixpointed on its own and only needs revisiting when a label it
+    follows grows -- no need to rescan the whole insn list every time
+    one label somewhere gains a register.
+
+    -live- insns are deliberately left unrewritten here. Rewriting them
+    per pass (as the legacy/port algorithm does) only ever feeds back a
+    subset of what the next pass's own backward accumulation would
+    already re-derive from a monotonically-grown label2alive, so it
+    changes no fixpoint -- confirmed by differential testing against the
+    old algorithm (test_native_pipeline_liveness_differential.py).
+    Returns the number of segment (re)visits, for scaling assertions.
+    """
+    n = len(insns)
+    if n == 0:
+        return 0
+    bounds = _segment_bounds_native(insns)
+    num_segs = len(bounds) - 1
+
+    label_readers = {}
+    seg_idx = 0
+    for i in range(n):
+        if seg_idx + 1 < num_segs and i == bounds[seg_idx + 1]:
+            seg_idx += 1
+        for x in insns[i].operands:
+            _collect_labels_native(x, label_readers, seg_idx)
+
+    queued = []
+    queue = []
+    for s in range(num_segs):
+        queued.append(True)
+        queue.append(s)
+
+    qhead = 0
+    while qhead < len(queue):
+        s = queue[qhead]
+        qhead += 1
+        queued[s] = False
+        grown = _process_segment_native(
+            insns, bounds[s], bounds[s + 1], label2alive)
+        for label_id in grown:
+            readers = label_readers.get(label_id)
+            if readers is None:
+                continue
+            for seg2 in readers.keys():
+                if not queued[seg2]:
+                    queued[seg2] = True
+                    queue.append(seg2)
+
+    return len(queue)
 
 
 def _follow_label_native(label_id, label2alive, alive):
