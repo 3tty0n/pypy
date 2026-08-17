@@ -53,14 +53,8 @@ def _bytecode_ref(translator, bytecode):
 
 
 def test_late_jitcode_index_roundtrip_matches_real_production_path():
-    """jitcode.py's own register_late_jitcode/get_late_jitcode -- what a
-    real (translated) runtime_cogen callback calls, distinct from the
-    MetaInterpStaticData alias the other tests below go through.
-
-    Registers two late JitCodes against a fixed frozen-list length and
-    round-trips their .index through resume.py's _jitcode_at_pos, as
-    guard resume does.
-    """
+    """Round-trips the real register_late_jitcode/get_late_jitcode (not
+    the deprecated MetaInterpStaticData alias) through _jitcode_at_pos."""
     from rpython.jit.codewriter.jitcode import (
         JitCode, register_late_jitcode, set_late_jitcode_base,
         _late_jitcodes_by_index)
@@ -82,10 +76,8 @@ def test_late_jitcode_index_roundtrip_matches_real_production_path():
         register_late_jitcode(late2, "liveness-chunk-2")
         assert late2.index == 6
         assert _jitcode_at_pos(frozen, late2.index) is late2
-        # The first late registration must still resolve after a second one.
         assert _jitcode_at_pos(frozen, late1.index) is late1
 
-        # Ordinary (non-late) indices must still resolve into the frozen list.
         assert _jitcode_at_pos(frozen, 0) is frozen[0]
         assert _jitcode_at_pos(frozen, 4) is frozen[4]
     finally:
@@ -262,13 +254,7 @@ class TestGenerateForLiveCode(LLJitMixin):
 
     def test_late_trigger_after_finish_setup_executes_and_matches_the_plain_interpreter(self):
         """First live trace triggers runtime_cogen after finish_setup
-        already froze liveness_info/.index; needs register_late_jitcode.
-
-        Calls into the compiled loop several times after warmup so its
-        own back-edge guard actually fails and resumes through the late
-        JitCode's liveness, not just entry -- checked via a counting
-        instrumentation on the resume reader, not just result equality.
-        """
+        already froze liveness_info/.index; needs register_late_jitcode."""
         from rpython.jit.metainterp.warmspot import get_stats
         from rpython.jit.metainterp import resume
         from rpython.rlib.nonconst import NonConstant
@@ -324,8 +310,6 @@ class TestGenerateForLiveCode(LLJitMixin):
             mainjitcode.pe_metadata = metadata
             return None
 
-        # Result equality alone can't prove resume decoded THIS late
-        # jitcode; count hits on it directly.
         resume_hits = [0]
         orig = resume.AbstractResumeDataReader._prepare_next_section
 
@@ -349,16 +333,9 @@ class TestGenerateForLiveCode(LLJitMixin):
         assert get_stats().pe_metadata_count > 0
 
     def test_late_trigger_native_path_executes_and_matches_the_plain_interpreter(self):
-        """Late trigger via generate_for_live_code's native_table path,
-        instead of the SSARepr-based emitter (test above).
-
-        Needs register_native_insn_coverage (jitcode_emitter.py) run from
-        pe_jitcode_setup, as PySOM's stamp_after_make_jitcodes does for a
-        real build: without it NativeAssembler declines silently when
-        concatenation needs a connective-tissue move some opcode's own
-        body doesn't already have, so a caller that skips this step never
-        gets a linked program, not even a failing one.
-        """
+        """Late trigger via generate_for_live_code's native_table path.
+        Needs register_native_insn_coverage run first, or NativeAssembler
+        silently declines and no linked program is ever produced."""
         from rpython.jit.metainterp.warmspot import get_stats
         from rpython.jit.metainterp import resume
         from rpython.rlib.nonconst import NonConstant
@@ -366,10 +343,6 @@ class TestGenerateForLiveCode(LLJitMixin):
         bytecode = _assemble(COUNTDOWN)
 
         def interp_w(intvalue):
-            # See the SSARepr-path sibling test's own comment: a single call
-            # never forces the compiled loop's *exit* guard to actually
-            # fail (nothing to fail out of yet); repeating the call over
-            # several distinct values, after warmup, does.
             total = 0
             i = 2
             while i <= intvalue:
@@ -407,9 +380,6 @@ class TestGenerateForLiveCode(LLJitMixin):
                     extension, linker, codewriter, bytecode, GUARD, gcref,
                     native_table=native_table)
                 if program is not None:
-                    # Real path: jitcode.py's module-level
-                    # register_late_jitcode, not the MetaInterpStaticData
-                    # alias the SSARepr-path sibling test above uses.
                     assert program.jitcode.own_liveness_info is not None
                     from rpython.jit.codewriter.jitcode import (
                         register_late_jitcode, set_late_jitcode_base)
@@ -429,9 +399,8 @@ class TestGenerateForLiveCode(LLJitMixin):
             return None
 
         def jitcode_setup(mainjitcode):
-            # Mirrors PySOM's stamp_after_make_jitcodes: must run after
-            # make_jitcodes() and before finish_setup, the only window a
-            # dict growth on codewriter.assembler.insns is legal in.
+            # Must run after make_jitcodes() and before finish_setup: the
+            # only window a dict growth on assembler.insns is legal in.
             if not coverage_state:
                 return
             codewriter, native_table = coverage_state[0]
@@ -498,3 +467,102 @@ def test_generate_for_live_code_declines_missing_template():
     assert metadata._program_cache is None
     assert metadata.linked_program_for([]) is None
     assert metadata._program_cache is None
+
+
+def _threshold_test_ref():
+    from rpython.rtyper.lltypesystem import lltype, llmemory
+
+    return lltype.cast_opaque_ptr(
+        llmemory.GCREF, lltype.malloc(lltype.GcStruct('S')))
+
+
+def test_cogen_threshold_defers_generation_and_caching():
+    """Below cogen_threshold, nothing may be cached under the ref: a
+    cached None there would be a permanent decline, disabling cogen."""
+    from rpython.jit.codewriter.jitcode import (
+        JitCode, PEJitCodeMetadata, PELinkedProgram)
+    from rpython.jit.metainterp.history import ConstInt, ConstPtr
+
+    ref = _threshold_test_ref()
+    jitcode = JitCode("threshold-test")
+    jitcode.setup()
+    program = PELinkedProgram(jitcode, [], [])
+    program.guard_ref = ref
+
+    calls = [0]
+
+    def runtime_cogen(gcref):
+        calls[0] += 1
+        return program
+
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
+    metadata.guard_ref_index = 1
+    metadata.runtime_cogen = runtime_cogen
+    metadata.cogen_threshold = 2
+
+    boxes = [ConstInt(0), ConstPtr(ref)]
+
+    assert metadata.linked_program_for(boxes) is None
+    assert calls[0] == 0
+    assert ref not in metadata._program_cache
+
+    assert metadata.linked_program_for(boxes) is program
+    assert calls[0] == 1
+    assert metadata._program_cache[ref] is program
+
+    assert metadata.linked_program_for(boxes) is program
+    assert calls[0] == 1
+
+
+def test_cogen_threshold_zero_generates_on_first_miss():
+    """cogen_threshold=0 (the default): callback runs on the first miss."""
+    from rpython.jit.codewriter.jitcode import (
+        JitCode, PEJitCodeMetadata, PELinkedProgram)
+    from rpython.jit.metainterp.history import ConstInt, ConstPtr
+
+    ref = _threshold_test_ref()
+    jitcode = JitCode("threshold-zero-test")
+    jitcode.setup()
+    program = PELinkedProgram(jitcode, [], [])
+    program.guard_ref = ref
+
+    calls = [0]
+
+    def runtime_cogen(gcref):
+        calls[0] += 1
+        return program
+
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
+    metadata.guard_ref_index = 1
+    metadata.runtime_cogen = runtime_cogen
+    assert metadata.cogen_threshold == 0
+
+    boxes = [ConstInt(0), ConstPtr(ref)]
+    assert metadata.linked_program_for(boxes) is program
+    assert calls[0] == 1
+
+
+def test_cogen_real_decline_is_still_cached_once_threshold_reached():
+    """A real decline (None) is cached once the threshold lets it run."""
+    from rpython.jit.codewriter.jitcode import PEJitCodeMetadata
+    from rpython.jit.metainterp.history import ConstInt, ConstPtr
+
+    ref = _threshold_test_ref()
+    calls = [0]
+
+    def runtime_cogen(gcref):
+        calls[0] += 1
+        return None
+
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
+    metadata.guard_ref_index = 1
+    metadata.runtime_cogen = runtime_cogen
+    metadata.cogen_threshold = 1
+
+    boxes = [ConstInt(0), ConstPtr(ref)]
+    assert metadata.linked_program_for(boxes) is None
+    assert calls[0] == 1
+    assert metadata._program_cache[ref] is None
+
+    assert metadata.linked_program_for(boxes) is None
+    assert calls[0] == 1

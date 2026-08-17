@@ -2,6 +2,7 @@ from __future__ import print_function
 
 from rpython.jit.metainterp.history import AbstractDescr, ConstInt, new_ref_dict
 from rpython.jit.metainterp.support import adr2int
+from rpython.rlib.debug import debug_start, debug_stop, debug_print
 from rpython.rlib.objectmodel import we_are_translated, specialize
 from rpython.rlib.rarithmetic import base_int
 from rpython.rtyper.lltypesystem import llmemory, lltype
@@ -11,17 +12,8 @@ def _never_matches(gcref):
     return False
 
 
-# metainterp_sd is frozen (SomePBC) once finish_setup() runs, so no
-# setattr on it after that; these track late JitCode registration
-# instead, without mutating any frozen structure.
-#
-# A holder class instance, not a single-element list: a prebuilt
-# single-element list seeded once before annotation (as
-# set_late_jitcode_base is, from warmspot.py) gets its element
-# constant-folded at every read site by the annotator/rtyper, so a
-# second registration would read back the same stale value instead of
-# the incremented one. An ordinary mutable field on a holder instance
-# does not fold this way. Deliberately NOT ``_immutable_``.
+# Holder class, not a single-element list: RPython folds a prebuilt
+# list's element into a literal at each read site; a holder avoids it.
 class _LateJitcodeCounter(object):
     def __init__(self):
         self.base = 0
@@ -32,63 +24,40 @@ _late_jitcode_counter = _LateJitcodeCounter()
 _late_jitcodes_by_index = {}
 
 
+# Running totals for PEJitCodeMetadata._cogen_ref (below), read out via
+# debug_print on every call.  A holder class instance, not a module-level
+# [0]-list: see _LateJitcodeCounter's own docstring above for why a list
+# seeded before annotation gets its reads constant-folded.
+class _CogenCounters(object):
+    def __init__(self):
+        self.generated = 0
+        self.declined = 0
+
+
+_cogen_counters = _CogenCounters()
+
+
 def set_late_jitcode_base(count):
     _late_jitcode_counter.base = count
     _late_jitcode_counter.next_index = count
 
 
 def get_late_jitcode(index):
-    # A build that never wires runtime_cogen up never sets
-    # _late_jitcodes_by_index, so the annotator has no known value type
-    # for it, though resume.py's reader is unconditional core JIT code.
-    # NonConstant(False) keeps this branch live for annotation (so the
-    # setitem below gives the dict a real JitCode value type) while
-    # staying always-False, and so never actually executing, at runtime.
+    # NonConstant(False) keeps this branch live for annotation (not pruned),
+    # so _late_jitcodes_by_index gets a known JitCode value type; never runs.
     from rpython.rlib.nonconst import NonConstant
     if NonConstant(False):
-        # fnaddr=llmemory.NULL, not None: JitCode.fnaddr's type is
-        # unified across every call site, and native_pipeline.py's own
-        # construction already establishes it as SomeAddress there.
+        # fnaddr=llmemory.NULL, not None: JitCode.fnaddr's type is unified
+        # across call sites; None here conflicts (SomeAddress vs None).
         _late_jitcodes_by_index[-1] = JitCode(
             "late-jitcode-type-hint", fnaddr=llmemory.NULL)
     return _late_jitcodes_by_index[index]
 
 
 def register_late_jitcode(jitcode, own_liveness_info):
-    """Give a JitCode built after finish_setup() an index and liveness
-    string, without touching the frozen metainterp_sd.
-
-    No other resync is needed: NativeAssembler.write_insn never grows
-    asm.insns/asm.descrs at runtime, declining instead when a program
-    needs an opcode/descr the translation-time precompile pass did not
-    already provide (native_pipeline.py); opcode_descrs already aliases
-    asm.descrs; and own_liveness_info -- this JitCode's own encoded
-    liveness chunk -- is what every liveness reader (pyjitpl.py,
-    resume.py) now prefers over the frozen shared liveness_info, once
-    set. indirectcalltargets/_addr2name are untouched since a runtime-
-    generated program only embeds constants a template already carried
-    at translation time.
-
-    own_liveness_info is only used if jitcode doesn't already carry one
-    (see MetaInterpStaticData.register_late_jitcode alias, pyjitpl.py,
-    for the non-native/test-only caller that has no assembler on hand).
-
-    Single-threaded: no locking here, matching the rest of finish_setup.
-    """
+    """Single-threaded: no locking, matching the rest of this setup pipeline."""
     if jitcode.own_liveness_info is None:
         jitcode.own_liveness_info = own_liveness_info
-    # `_late_jitcode_counter.next_index` is the only place `.index` is
-    # decided for a late JitCode; no assembler counter feeds it (each
-    # NativeAssembler's own counters are per-call and private, see
-    # PortalLinker._emit_native), so this must be the sole global,
-    # monotonic source of truth for `.index`.
-    #
-    # A collision means something upstream (a caching bug in
-    # PEJitCodeMetadata._cogen_ref/linked_program_for, or a duplicate
-    # registration) handed two different JitCodes the same identity --
-    # get_late_jitcode resolves purely by this index, so a silent
-    # overwrite would replay an old guard's resume data against a
-    # different program.  Loud failure instead.
     jitcode.index = _late_jitcode_counter.next_index
     assert jitcode.index not in _late_jitcodes_by_index, (
         "register_late_jitcode: _late_jitcode_counter produced an "
@@ -252,6 +221,16 @@ class PEJitCodeMetadata(object):
         # than a couple of programs, where the linear walk is cheap enough
         # that a cache would just be overhead.
         self._program_cache = None
+        # ref -> miss count, consulted only while below cogen_threshold (see
+        # linked_program_for/_miss_count_reached below); same lazy-new_ref_dict
+        # idiom as _program_cache, kept separate since it is written on every
+        # miss, not only on a ref's first one.
+        self._miss_counts = None
+        # Misses required for a ref before runtime_cogen is invoked for it;
+        # 0 (default) keeps today's behaviour of generating on the first
+        # miss.  Set at runtime only (e.g. from an env var), never at
+        # translation time, so this plain int field is safe to mutate.
+        self.cogen_threshold = 0
         # runtime_cogen: f(gcref) -> program or None; called once per ref.
         self.runtime_cogen = None
         # Green-box index carrying the ref, used only before any program is
@@ -306,6 +285,10 @@ class PEJitCodeMetadata(object):
                 else:
                     program = self._resolve_ref(ref)
                     if program is None and self.runtime_cogen is not None:
+                        if not self._miss_count_reached(ref):
+                            # Below threshold: neither generate nor cache --
+                            # a cached None here is a permanent decline.
+                            return None
                         program = self._cogen_ref(ref)
                     cache[ref] = program
                 if program is None:
@@ -332,11 +315,46 @@ class PEJitCodeMetadata(object):
                 return program
         return None
 
+    def _miss_count_reached(self, ref):
+        """Has 'ref' missed at least cogen_threshold times (this one
+        included)?  threshold=0 makes this always True on the first miss,
+        i.e. today's "generate immediately" behaviour.
+        """
+        counts = self._miss_counts
+        if counts is None:
+            counts = self._miss_counts = new_ref_dict()
+        if ref in counts:
+            count = counts[ref] + 1
+        else:
+            count = 1
+        counts[ref] = count
+        return count >= self.cogen_threshold
+
     def _cogen_ref(self, ref):
-        """Invoked once per ref; linked_program_for caches the result."""
-        program = self.runtime_cogen(ref)
-        if program is None or program.guard_ref != ref:
-            return None
+        """Invoked once per ref; linked_program_for caches the result.
+
+        The sole choke point every runtime generation routes through
+        (both PySOM's production callback and every in-process test one) --
+        wrapped in a PYPYLOG section (PYPYLOG=pe-rt-cogen:...) so generation
+        cost shows up as wall time for free, with running totals alongside.
+        """
+        debug_start("pe-rt-cogen")
+        try:
+            program = self.runtime_cogen(ref)
+            if program is None or program.guard_ref != ref:
+                program = None
+            if program is None:
+                generated = 0
+                _cogen_counters.declined += 1
+            else:
+                generated = 1
+                _cogen_counters.generated += 1
+            debug_print("pe-rt-cogen ref=%d generated=%d "
+                        "totals-generated=%d totals-declined=%d" % (
+                lltype.cast_ptr_to_int(ref), generated,
+                _cogen_counters.generated, _cogen_counters.declined))
+        finally:
+            debug_stop("pe-rt-cogen")
         return program
 
     def is_linked_jitcode(self, jitcode):
@@ -370,15 +388,8 @@ class JitCode(AbstractDescr):
         self.pe_is_linked = False # set True by attach_linked_jitcode
         self._called_from = called_from   # debugging
         self._ssarepr     = None          # debugging
-        # None for every ordinary (translation-time-assembled) JitCode: its
-        # `-live-` offsets are relative to the shared, frozen
-        # metainterp_sd.liveness_info string, exactly as before. Set (by
-        # register_late_jitcode, this module) only for a JitCode assembled
-        # at true runtime, after that string was already frozen -- its own
-        # entire encoded liveness chunk, with every offset in its own
-        # `code` relative to *this* string instead.  Every liveness reader
-        # (pyjitpl.py's get_list_of_active_boxes, resume.py's
-        # _prepare_next_section) checks this first.
+        # None: offsets relative to global liveness_info. Set (runtime
+        # JitCodes only): own private liveness chunk; offsets relative to it.
         self.own_liveness_info = None
 
     def setup(self, code='', constants_i=[], constants_r=[], constants_f=[],
@@ -508,9 +519,7 @@ class SwitchDictDescr(AbstractDescr):
 
     def attach(self, as_dict):
         self.dict = as_dict
-        # Not map(ConstInt, sorted(as_dict.keys())): neither map() nor
-        # sorted() is RPython-legal. Plain loops and a manual insertion
-        # sort instead. ponytail: O(n^2), fine for one switch's key count.
+        # map()/sorted() aren't RPython-legal; loops + O(n^2) insertion sort.
         keys = []
         for key in as_dict:
             keys.append(key)
