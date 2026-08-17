@@ -9,6 +9,8 @@ RPython-legal only, throughout: a real runtime_cogen callback reaches
 every function here, so each must translate, not just run untranslated.
 """
 
+import os
+
 from rpython.jit.codewriter.assembler import (
     Assembler, AssemblerError, USE_C_FORM, int_fits_short)
 from rpython.jit.codewriter.flatten import KINDS
@@ -320,12 +322,40 @@ def _emit_moves_native(ssarepr, sources, destinations, scratch, _names=None):
 # NReg gets a distinct nid at construction, so keying by nid reproduces
 # object-identity semantics exactly.
 
+# Runtime A/B switch (PE_RT_LIVENESS=old) plus one-shot env caching.
+class _LivenessAlgo(object):
+    def __init__(self):
+        self.checked = False
+        self.use_old = False
+
+
+_liveness_algo = _LivenessAlgo()
+
+
 def compute_liveness_native(insns):
+    from rpython.rlib.debug import debug_print, have_debug_prints
+    if not _liveness_algo.checked:
+        _liveness_algo.checked = True
+        value = os.environ.get("PE_RT_LIVENESS")
+        _liveness_algo.use_old = value == "old"
     label2alive = {}
-    _converge_liveness_native(insns, label2alive)
-    # Fixpoint already converged: this single pass only rewrites -live-;
-    # see _converge_liveness_native's docstring for why that's safe.
-    _compute_liveness_native_pass(insns, label2alive)
+    if _liveness_algo.use_old:
+        rounds = 0
+        while _compute_liveness_native_pass(insns, label2alive):
+            rounds += 1
+    else:
+        rounds = _converge_liveness_native(insns, label2alive)
+        # Fixpoint already converged: this single pass only rewrites -live-;
+        # see _converge_liveness_native's docstring for why that's safe.
+        _compute_liveness_native_pass(insns, label2alive)
+    if have_debug_prints():
+        nlabels = 0
+        for insn in insns:
+            if insn.opcode == "@label":
+                nlabels += 1
+        debug_print("pe-rt-live stats insns=%d labels=%d segs=%d rounds=%d" % (
+            len(insns), nlabels, len(_segment_bounds_native(insns)) - 1,
+            rounds))
     _remove_repeated_live_native(insns)
 
 
