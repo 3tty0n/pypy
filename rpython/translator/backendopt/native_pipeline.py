@@ -769,12 +769,19 @@ def emit_and_assemble_native(native_table, program, name,
 
     Returns (jitcode, entry_positions, assembler).
     """
+    from rpython.rlib.debug import debug_start, debug_stop
+    debug_start("pe-rt-emit")
     ssarepr, counts = emit_native(native_table, program, name, has_merge_points)
+    debug_stop("pe-rt-emit")
+    debug_start("pe-rt-live")
     compute_liveness_native(ssarepr.insns)
+    debug_stop("pe-rt-live")
     if assembler is None:
         assembler = NativeAssembler()
     jitcode = JitCode(name, fnaddr=llmemory.NULL)
+    debug_start("pe-rt-asm")
     assembler.assemble(ssarepr, jitcode, counts)
+    debug_stop("pe-rt-asm")
     # Loop, not dict(genexpr): unlike emit_native's genexprs (RPython
     # inlines those), this one closes over assembler, which isn't legal.
     entry_positions = {}

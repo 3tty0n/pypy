@@ -36,9 +36,13 @@ def generate_for_live_code(extension, linker, codewriter, code, guard, ref,
     decline, so a caller on a lookup-miss path must keep its own
     ref-keyed record, or every miss re-runs generation from scratch.
     """
+    from rpython.rlib.debug import debug_start, debug_stop
+    debug_start("pe-rt-scan")
     program = extension.generate(code, entry_pc, entry_state)
+    debug_stop("pe-rt-scan")
     if program is None:
         return None
+    debug_start("pe-rt-install")
     try:
         lowered = linker.install(codewriter, program, guard=guard,
                                  emitter=emitter, native_table=native_table)
@@ -47,5 +51,7 @@ def generate_for_live_code(extension, linker, codewriter, code, guard, ref,
         # indexes constants with one byte per kind), but any cause here
         # must decline, not crash -- one bad method must stay unlinked.
         return None
+    finally:
+        debug_stop("pe-rt-install")
     lowered.linked_program.guard_ref = ref
     return lowered.linked_program
