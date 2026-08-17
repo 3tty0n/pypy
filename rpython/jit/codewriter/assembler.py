@@ -45,7 +45,9 @@ def _fixed_size_copy(src, empty):
     for i in range(1, n):
         dst[i] = src[i]
     return dst
-_fixed_size_copy._annspecialcase_ = 'specialize:arglistitemtype(0)'
+# call_location, not arglistitemtype(0): item type may still annotate as
+# Impossible when first reached, collapsing int/ref/float into one graph.
+_fixed_size_copy._annspecialcase_ = 'specialize:call_location'
 
 
 def _sorted_chars(live):
