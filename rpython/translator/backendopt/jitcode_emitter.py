@@ -35,6 +35,42 @@ from rpython.flowspace.model import Constant
 HOLE_SENTINEL = 0x5E7717E1
 
 
+def _boundary_value_origins(graph):
+    """Like partialeval_template's _variable_origins, but also sees through
+    a same-block setfield/getfield round trip (RPython's graph simplifier
+    can merge two tail blocks into an unpack-then-repack of one tuple) and
+    through cast_pointer/same_as, which don't change what a value denotes.
+    """
+    identity_ops = ("cast_pointer", "same_as")
+    origins = dict((var, var) for var in graph.startblock.inputargs)
+    changed = True
+    while changed:
+        changed = False
+        for block in graph.iterblocks():
+            stored = {}
+            for op in block.operations:
+                if op.opname == "setfield" and isinstance(op.args[1], Constant):
+                    stored[(op.args[0], op.args[1].value)] = op.args[2]
+                elif op.opname == "getfield" and isinstance(op.args[1], Constant):
+                    key = (op.args[0], op.args[1].value)
+                    if key in stored and op.result not in origins:
+                        source = stored[key]
+                        origins[op.result] = origins.get(source, source)
+                        changed = True
+                elif (op.opname in identity_ops and len(op.args) == 1
+                      and op.result not in origins):
+                    source = op.args[0]
+                    origins[op.result] = origins.get(source, source)
+                    changed = True
+            for link in block.exits:
+                for value, target_var in zip(link.args, link.target.inputargs):
+                    origin = origins.get(value)
+                    if origin is not None and target_var not in origins:
+                        origins[target_var] = origin
+                        changed = True
+    return origins
+
+
 class HoleConstant(Constant):
     """A Constant standing in for a late-static value until supplied.
 
@@ -90,13 +126,16 @@ class FragmentCompiler(object):
     """
 
     def __init__(self, codewriter, portal_jd, static_name, hole_names,
-                 boundary_names, jit_merge_point_args=()):
+                 boundary_names, jit_merge_point_args=(), null_names=()):
         self.codewriter = codewriter
         self.portal_jd = portal_jd
         self.static_name = static_name
         self.hole_names = tuple(hole_names)
         self.boundary_names = tuple(boundary_names)
         self.jit_merge_point_args = tuple(jit_merge_point_args)
+        # Names declared invariant for the whole portal (never freshly
+        # returned by any opcode) -- can't be inferred from one template.
+        self.null_names = tuple(null_names)
 
     def compile(self, template, bindings={}, merge_point=False):
         from rpython.flowspace.model import Block, Link, Variable, copygraph
@@ -312,18 +351,52 @@ class FragmentCompiler(object):
     def _boundary_values(self, helper, graph, transition):
         """Which value carries each boundary name where this exit leaves off.
 
-        Dynamic values are consumed in the step function's own argument order,
-        the same order the whole-program lowerer feeds a successor, so the two
-        paths cannot disagree about which value is which.
+        The exit tuple can omit a boundary name whose value is unchanged
+        (see _thread_boundary_values), with no marker saying so -- so a
+        naive positional zip against boundary_names silently misassigns
+        every later name once an earlier one turns out to be omitted.
+        Fix: match each tuple item's origin against a boundary name's own
+        start value; an unmatched item is genuinely fresh, consumed in
+        order against whichever names had no match.
+
+        Plain _variable_origins isn't enough here: it only follows block
+        links, but RPython's simplifier can turn a template's exit tuple
+        into a same-block "unpack, then repack" round trip;
+        _boundary_value_origins extends origin-tracking through that too.
         """
         carried = helper._available_carried_values(graph, transition.block)
-        dynamic = iter(helper._runtime_values(transition))
+        dynamic = helper._runtime_values(transition)
+        origins = _boundary_value_origins(graph)
+        named = helper._named_start_arguments(graph)
+
+        fresh = []
+        unchanged_names = set()
+        for item in dynamic:
+            item_origin = origins.get(item, item)
+            matched = None
+            for name in self.boundary_names:
+                if name not in named or name in unchanged_names:
+                    continue
+                start_var = named[name]
+                if origins.get(start_var, start_var) is item_origin:
+                    matched = name
+                    break
+            if matched is not None:
+                unchanged_names.add(matched)
+            else:
+                fresh.append(item)
+
+        fresh = iter(fresh)
         values = {}
-        for name in graph.signature[0]:
-            if name not in self.boundary_names:
+        for name in self.boundary_names:
+            if name not in named:
+                continue
+            # null_names never take a fresh slot, even one going begging.
+            if name in unchanged_names or name in self.null_names:
+                values[name] = carried.get(name)
                 continue
             try:
-                values[name] = next(dynamic)
+                values[name] = next(fresh)
             except StopIteration:
                 values[name] = carried.get(name)
         return values
@@ -367,6 +440,8 @@ class FragmentCompiler(object):
 
         Returns the (name, variable) pairs in their new order.
         """
+        from rpython.flowspace.argument import Signature
+
         ordered = [(name, named[name]) for name in self.boundary_names
                    if name in named]
         ordered += [(name, named[name]) for name in self.jit_merge_point_args
@@ -376,6 +451,14 @@ class FragmentCompiler(object):
                        zip(graph.signature[0], graph.startblock.inputargs)
                        if name not in taken)
         graph.startblock.inputargs = [var for _name, var in ordered]
+        # graph.signature[0] must stay positionally matched to inputargs
+        # (_named_start_arguments zips them). A fresh Signature, not an
+        # in-place edit: copygraph(shallowvars=True) aliases the same
+        # Signature object across every compile() call for one template,
+        # so mutating it would corrupt every other fragment sharing it.
+        graph.signature = Signature(
+            [name for name, _var in ordered],
+            graph.signature.varargname, graph.signature.kwargname)
         return ordered
 
     def _entry_registers(self, ordered):
@@ -411,10 +494,11 @@ class ProgramEmitter(object):
     """
 
     def __init__(self, codewriter, portal_jd, static_name, split_names,
-                 hole_names, boundary_names, jit_merge_point_args=()):
+                 hole_names, boundary_names, jit_merge_point_args=(),
+                 null_names=()):
         self.compiler = FragmentCompiler(
             codewriter, portal_jd, static_name, hole_names, boundary_names,
-            jit_merge_point_args)
+            jit_merge_point_args, null_names)
         self.codewriter = codewriter
         self.split_names = tuple(split_names)
         self.boundary_names = tuple(boundary_names)
@@ -581,9 +665,8 @@ class ProgramEmitter(object):
         block = program.blocks[pc]
         for kind, index, name in fragment.prologue:
             # A late-static value the merge point takes as a red: it has to be
-            # in a register by the time the merge point reads it.  The
-            # fragment only fixed *which* register; the value is this block's
-            # own, from resolving the shared fragment's hole by name.
+            # in a register by the time the merge point reads it.
+            # The fragment fixed only the register; value comes from name.
             ssarepr.insns.append(
                 ("%s_copy" % kind, Constant(block.bindings[name], lltype.Signed),
                  "->", self._register(kind, index)))
@@ -760,18 +843,9 @@ def stamp_descr_indices(codewriter, native_table):
               "referenced (no ordinary jitcode did)" % found_only_in_fragments
 
 
-# Insns emit_native can produce outside any fragment's own insns (never
-# discoverable by walking native_table), from _place_native/
-# _emit_moves_native/_initialise_scratch_native:
-# * goto/L -- unconditional exit jump.
-# * int_copy/i>i, ref_copy/r>r, float_copy/f>f -- register-to-register
-#   boundary moves; source/dest always share one kind.
-# * int_copy/c>i -- no-source int fallback (NIntConst(0)), always fits
-#   the short form.
-# * ref_copy/r>r -- also covers the no-source ref fallback (a ref
-#   constant is always argcode "r").
-# * float_copy/i>f -- no-source float fallback also uses NIntConst(0),
-#   but float_copy isn't in USE_C_FORM, so always "i".
+# Insns emit_native can produce outside any fragment's own insns, so not
+# discoverable by walking native_table. Must track _place_native/
+# _emit_moves_native/_initialise_scratch_native if those change.
 _EMIT_NATIVE_CONNECTIVE_TISSUE = [
     "goto/L",
     "int_copy/i>i", "int_copy/c>i",
@@ -788,15 +862,8 @@ def register_native_insn_coverage(codewriter, native_table):
 
     Without this, generated-program-only insns get declined:
     ``pe_bailout_point``/``jit_merge_point`` markers, and hole-patched
-    constant-constant arithmetic like ``int_sub/cc>i`` (RPython's own
-    optimizer folds those away in ordinary jitcodes, so the combination
-    only ever arises via a runtime-linked bytecode value).
-
-    Two sources: every fragment's insns via ``native_insn_key_options``
-    (the same function ``NativeAssembler.write_insn`` uses, so coverage
-    matches exactly what it could produce), plus
-    ``_EMIT_NATIVE_CONNECTIVE_TISSUE`` for insns ``emit_native`` inserts
-    outside any fragment (goto, boundary/prologue ``*_copy`` moves).
+    constant-constant arithmetic that ordinary jitcodes never produce
+    (RPython's own optimizer folds those away before rtyping).
     """
     from rpython.jit.codewriter.assembler import USE_C_FORM
     from rpython.translator.backendopt.native_pipeline import (

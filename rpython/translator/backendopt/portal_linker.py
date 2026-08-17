@@ -178,7 +178,8 @@ class PortalLinker(object):
                 codewriter, self.jitdriver_sd, self.static_name,
                 split_names=self.split_names, hole_names=self.hole_names,
                 boundary_names=self.runtime_names,
-                jit_merge_point_args=self.jit_merge_point_args)
+                jit_merge_point_args=self.jit_merge_point_args,
+                null_names=self.null_names)
         jitcode, entry_positions = emitter.emit(program, self.name)
         # Leave the same state ``lower`` does: the block map lives on the
         # JitCode, and the metainterp reads it from there.
