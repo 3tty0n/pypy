@@ -308,7 +308,7 @@ def _emit_moves_native(ssarepr, sources, destinations, scratch, _names=None):
 # NReg gets a distinct nid at construction, so keying by nid reproduces
 # object-identity semantics exactly.
 
-# Runtime A/B switch (PE_RT_LIVENESS=old) plus one-shot env caching.
+# Runtime A/B switch (PE_COGEN_LIVENESS=old) plus one-shot env caching.
 class _LivenessAlgo(object):
     def __init__(self):
         self.checked = False
@@ -322,7 +322,7 @@ def compute_liveness_native(insns):
     from rpython.rlib.debug import debug_print, have_debug_prints
     if not _liveness_algo.checked:
         _liveness_algo.checked = True
-        value = os.environ.get("PE_RT_LIVENESS")
+        value = os.environ.get("PE_COGEN_LIVENESS")
         _liveness_algo.use_old = value == "old"
     if _liveness_algo.use_old:
         label2alive_old = {}   # nid -> NReg dicts: own dictdef, not
@@ -345,7 +345,7 @@ def compute_liveness_native(insns):
         for insn in insns:
             if insn.opcode == "@label":
                 nlabels += 1
-        debug_print("pe-rt-live stats insns=%d labels=%d rounds=%d" % (
+        debug_print("pe-cogen-live stats insns=%d labels=%d rounds=%d" % (
             len(insns), nlabels, rounds))
     _remove_repeated_live_native(insns)
 
@@ -998,18 +998,18 @@ def emit_and_assemble_native(native_table, program, name,
     Returns (jitcode, entry_positions, assembler).
     """
     from rpython.rlib.debug import debug_start, debug_stop
-    debug_start("pe-rt-emit")
+    debug_start("pe-cogen-emit")
     ssarepr, counts = emit_native(native_table, program, name, has_merge_points)
-    debug_stop("pe-rt-emit")
-    debug_start("pe-rt-live")
+    debug_stop("pe-cogen-emit")
+    debug_start("pe-cogen-live")
     compute_liveness_native(ssarepr.insns)
-    debug_stop("pe-rt-live")
+    debug_stop("pe-cogen-live")
     if assembler is None:
         assembler = NativeAssembler()
     jitcode = JitCode(name, fnaddr=llmemory.NULL)
-    debug_start("pe-rt-asm")
+    debug_start("pe-cogen-asm")
     assembler.assemble(ssarepr, jitcode, counts)
-    debug_stop("pe-rt-asm")
+    debug_stop("pe-cogen-asm")
     # Not dict(genexpr): this one needs a closure over ``assembler``,
     # which is not RPython-legal, so it's a loop instead.
     entry_positions = {}

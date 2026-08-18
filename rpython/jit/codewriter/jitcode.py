@@ -353,10 +353,10 @@ class PEJitCodeMetadata(object):
 
         The sole choke point every runtime generation routes through
         (both PySOM's production callback and every in-process test one) --
-        wrapped in a PYPYLOG section (PYPYLOG=pe-rt-cogen:...) so generation
+        wrapped in a PYPYLOG section (PYPYLOG=pe-cogen:...) so generation
         cost shows up as wall time for free, with running totals alongside.
         """
-        debug_start("pe-rt-cogen")
+        debug_start("pe-cogen")
         try:
             program = self.runtime_cogen(ref)
             if program is None or program.guard_ref != ref:
@@ -367,12 +367,12 @@ class PEJitCodeMetadata(object):
             else:
                 generated = 1
                 _cogen_counters.generated += 1
-            debug_print("pe-rt-cogen ref=%d generated=%d "
+            debug_print("pe-cogen ref=%d generated=%d "
                         "totals-generated=%d totals-declined=%d" % (
                 lltype.cast_ptr_to_int(ref), generated,
                 _cogen_counters.generated, _cogen_counters.declined))
         finally:
-            debug_stop("pe-rt-cogen")
+            debug_stop("pe-cogen")
         return program
 
     def is_linked_jitcode(self, jitcode):
