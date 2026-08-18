@@ -605,13 +605,10 @@ PARAMETERS = {'threshold': 1039, # just above 1024, prime
               'vec': 0,
               'vec_all': 0,
               'vec_cost': 0,
-              # Measured on the SOM suite.  16000 is the no-regression point:
-              # every benchmark ties or wins (CD -79%, QuickSort -44%).  4000
-              # buys larger peaks (Towers -89%, List -91%) but costs the
-              # benchmarks whose 4-16KB programs need inlining (Havlak +32%,
-              # GraphSearch +19%); it remains available at runtime via
-              # set_user_param for implementations that prefer that trade.
-              'pe_call_threshold': 16000,
+              # Must stay in (17675, 18618]: below misclassifies hot small
+              # callees as portal calls; above forces recursion-tree callees
+              # to inline instead of CALL_ASSEMBLER.
+              'pe_call_threshold': 18000,
               }
 unroll_parameters = unrolling_iterable(PARAMETERS.items())
 
