@@ -2599,8 +2599,11 @@ class MetaInterp(object):
         if jitcode.jitdriver_sd:
             self.portal_call_depth += 1
             self.call_ids.append(self.current_call_id)
-            unique_id = -1
-            if greenkey is not None:
+            # A linked jitcode's frame is inlined code for the same SOM
+            # activation the interpreter's own portal frame already
+            # tracks; skip the debug-only ENTER_PORTAL_FRAME to avoid
+            # double frame bookkeeping.
+            if greenkey is not None and not jitcode.pe_is_linked:
                 unique_id = jitcode.jitdriver_sd.warmstate.get_unique_id(
                     greenkey)
                 jd_no = jitcode.jitdriver_sd.index
@@ -2630,7 +2633,9 @@ class MetaInterp(object):
         jitcode = frame.jitcode
         if jitcode.jitdriver_sd:
             self.portal_call_depth -= 1
-            if leave_portal_frame:
+            # Mirrors the newframe() skip above: don't emit the matching
+            # LEAVE_PORTAL_FRAME for a residual/linked jitcode's frame.
+            if leave_portal_frame and not jitcode.pe_is_linked:
                 self.leave_portal_frame(jitcode.jitdriver_sd.index)
             self.call_ids.pop()
         if frame.greenkey is not None and self.is_main_jitcode(jitcode):

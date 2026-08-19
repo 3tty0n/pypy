@@ -767,7 +767,9 @@ class RecursiveTests:
         # residual jitcode is nowhere near 999999999 bytes, so this must
         # take the inline-then-escape route: portal(1)'s own merge point
         # gets entered once, unlike the threshold=0 test above.
-        self.check_history(call_assembler_i=1, enter_portal_frame=1,
+        # enter_portal_frame=0: newframe() skips it for a linked jitcode's
+        # frame (inlined code for the portal's own activation).
+        self.check_history(call_assembler_i=1, enter_portal_frame=0,
                            debug_merge_point=2)
 
     def test_recursion_cant_call_assembler_directly(self):
