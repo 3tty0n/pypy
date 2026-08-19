@@ -1397,20 +1397,11 @@ class MIFrame(object):
         warmrunnerstate = targetjitdriver_sd.warmstate
         assembler_call = False
         if warmrunnerstate.inlining:
-            # Look up a linked program for this callee, and whether it is
-            # already compiled, *before* consulting can_inline_callable().
-            # can_inline_callable() turns permanently False for a greenkey
-            # once dont_trace_here() below has fired for it once (typically
-            # after one over-deep or trace-too-long recursive trace) -- and
-            # that is exactly the population of hot recursive functions this
-            # check exists for.  Gating the compiled-target check on
-            # can_inline_callable() first would make it unreachable for
-            # precisely the callees it is meant to help, for the rest of the
-            # run: they would fall straight through to the generic
-            # assembler_call path below without ever being tried here again.
-            # A compiled target is always cheaper than either inlining or
-            # the recursion-count/dont_trace_here machinery, so it takes
-            # priority regardless of those.
+            # can_inline_callable(), not a size threshold, decides call
+            # vs. inline: always-inline and always-call callees interleave
+            # in size, so no single cutoff separates them. It goes
+            # permanently False for a greenkey once dont_trace_here() has
+            # fired for it (mark_linked_callees_dont_trace(), on abort).
             portal_code = targetjitdriver_sd.mainjitcode
             metadata = portal_code.pe_metadata
             program = None
@@ -1432,15 +1423,11 @@ class MIFrame(object):
             # send_loop_to_backend() already ran and set its
             # compiled_loop_token before attach_procedure_to_interp() made
             # the cell reachable, for both loops and entry bridges alike.
-            # Small residual bodies are cheaper inlined (share optimizer
-            # context with the caller, no call/guard overhead); large ones
-            # are cheaper called (four sibling traces each re-inlining the
-            # same big recursion tree was the regression this all started
-            # from).  pe_call_threshold (rlib/jit.py PARAMETERS) is the
-            # tunable byte-size cutoff between the two, read the same way
-            # warmstate.trace_limit is read in blackhole_if_trace_too_long.
-            already_compiled = (ptoken is not None and
-                program.code_size >= warmrunnerstate.pe_call_threshold)
+            # pe_call_threshold is a coarse cap on top of the
+            # abort-history decision above; default is effectively off.
+            already_compiled = ptoken is not None and (
+                program.code_size >= warmrunnerstate.pe_call_threshold or
+                not warmrunnerstate.can_inline_callable(greenboxes))
             if already_compiled:
                 # the linked program already has compiled machine code:
                 # call it via CALL_ASSEMBLER instead of re-inlining/
@@ -2964,11 +2951,27 @@ class MetaInterp(object):
                 self.aborted_tracing_greenkey = None
         self.staticdata.stats.aborted()
 
+    def mark_linked_callees_dont_trace(self):
+        """Mark linked-program callee frames on the stack so they call
+        instead of re-inline; find_biggest_function() only sees portal
+        frames, not these inlined/linked ones."""
+        jitdrivers_sd = self.staticdata.jitdrivers_sd
+        for f in self.framestack:
+            jitcode = f.jitcode
+            if not jitcode.pe_is_linked or f.greenkey is None:
+                continue
+            for jd_sd in jitdrivers_sd:
+                metadata = jd_sd.mainjitcode.pe_metadata
+                if metadata is not None and metadata.is_linked_jitcode(jitcode):
+                    jd_sd.warmstate.dont_trace_here(f.greenkey)
+                    break
+
     def blackhole_if_trace_too_long(self):
         warmrunnerstate = self.jitdriver_sd.warmstate
         length = self.history.length()
         if (length > warmrunnerstate.trace_limit or
                 self.history.trace_tag_overflow()):
+            self.mark_linked_callees_dont_trace()
             debug_start("jit-segment-decision")
             num_merge_points = len(self.current_merge_points)
             from_start = isinstance(self.resumekey,

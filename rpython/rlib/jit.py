@@ -582,10 +582,11 @@ PARAMETER_DOCS = {
     'vec_cost': 'threshold for which traces to bail. Unpacking increases the counter,'\
                 ' vector operation decrease the cost',
     'vec_all': 'try to vectorize trace loops that occur outside of the numpypy library',
-    'pe_call_threshold': 'minimum size in bytes of a linked callee\'s residual '
-                         'jitcode before a compiled call to it is emitted as '
-                         'CALL_ASSEMBLER instead of being inlined; 0 = always '
-                         'call, a very large value = never call',
+    'pe_call_threshold': 'size in bytes of a linked callee\'s residual '
+                         'jitcode above which it is called via '
+                         'CALL_ASSEMBLER instead of inlined, as a coarse '
+                         'cap on top of the abort-history-driven '
+                         'call/inline decision',
 }
 
 PARAMETERS = {'threshold': 1039, # just above 1024, prime
@@ -605,10 +606,9 @@ PARAMETERS = {'threshold': 1039, # just above 1024, prime
               'vec': 0,
               'vec_all': 0,
               'vec_cost': 0,
-              # Must stay in (17675, 18618]: below misclassifies hot small
-              # callees as portal calls; above forces recursion-tree callees
-              # to inline instead of CALL_ASSEMBLER.
-              'pe_call_threshold': 18000,
+              # Coarse cap, not the decision itself (see
+              # can_inline_callable() in pyjitpl.py); default is off.
+              'pe_call_threshold': 1000000,
               }
 unroll_parameters = unrolling_iterable(PARAMETERS.items())
 
