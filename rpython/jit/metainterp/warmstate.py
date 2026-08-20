@@ -188,6 +188,8 @@ class BaseJitCell(object):
     wref_procedure_token = None
     next = None
 
+    pe_abort_count = 0
+
     def get_procedure_token(self):
         if self.wref_procedure_token is not None:
             token = self.wref_procedure_token()
@@ -789,6 +791,15 @@ class WarmEnterState(object):
             cell = JitCell.ensure_jit_cell_at_key(greenkey)
             cell.flags |= JC_DONT_TRACE_HERE
         self.dont_trace_here = dont_trace_here
+
+        def bump_pe_abort_count(greenkey):
+            # Count aborts where this greenkey was the biggest linked
+            # callee; only repeat offenders get dont_trace_here()'d, not
+            # a single one-off deep-recursion trace.
+            cell = JitCell.ensure_jit_cell_at_key(greenkey)
+            cell.pe_abort_count += 1
+            return cell.pe_abort_count
+        self.bump_pe_abort_count = bump_pe_abort_count
 
         def mark_as_being_traced(greenkey):
             cell = JitCell.ensure_jit_cell_at_key(greenkey)

@@ -70,6 +70,7 @@ class MIFrame(object):
         self.registers_i = None
         self.registers_r = None
         self.registers_f = None
+        self.pe_trace_start_pos = -1
 
     def setup(self, jitcode, greenkey=None):
         # if not translated, fill the registers with MissingValue()
@@ -2617,6 +2618,10 @@ class MetaInterp(object):
         else:
             f = MIFrame(self)
         f.setup(jitcode, greenkey)
+        if greenkey is not None and jitcode.pe_is_linked:
+            f.pe_trace_start_pos = self.history.get_trace_position()[0]
+        else:
+            f.pe_trace_start_pos = -1
         self.framestack.append(f)
         return f
 
@@ -2957,19 +2962,37 @@ class MetaInterp(object):
         self.staticdata.stats.aborted()
 
     def mark_linked_callees_dont_trace(self):
-        """Mark linked-program callee frames on the stack so they call
-        instead of re-inline; find_biggest_function() only sees portal
-        frames, not these inlined/linked ones."""
         jitdrivers_sd = self.staticdata.jitdrivers_sd
+        current_pos = self.history.get_trace_position()[0]
+        max_size = 0
+        max_frame = None
         for f in self.framestack:
             jitcode = f.jitcode
             if not jitcode.pe_is_linked or f.greenkey is None:
                 continue
-            for jd_sd in jitdrivers_sd:
-                metadata = jd_sd.mainjitcode.pe_metadata
-                if metadata is not None and metadata.is_linked_jitcode(jitcode):
-                    jd_sd.warmstate.dont_trace_here(f.greenkey)
-                    break
+            start_pos = f.pe_trace_start_pos
+            if start_pos < 0:
+                continue
+            size = current_pos - start_pos
+            if size >= max_size:
+                max_size = size
+                max_frame = f
+        if max_frame is None:
+            return
+        jitcode = max_frame.jitcode
+        for jd_sd in jitdrivers_sd:
+            metadata = jd_sd.mainjitcode.pe_metadata
+            if metadata is not None and metadata.is_linked_jitcode(jitcode):
+                count = jd_sd.warmstate.bump_pe_abort_count(max_frame.greenkey)
+                if have_debug_prints():
+                    debug_start("jit-pe-mark-callee")
+                    loc = jd_sd.warmstate.get_location_str(max_frame.greenkey)
+                    debug_print("biggest linked callee at abort", loc,
+                                max_size, "abort_count", count)
+                    debug_stop("jit-pe-mark-callee")
+                if count >= 2:
+                    jd_sd.warmstate.dont_trace_here(max_frame.greenkey)
+                break
 
     def blackhole_if_trace_too_long(self):
         warmrunnerstate = self.jitdriver_sd.warmstate
