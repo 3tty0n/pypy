@@ -9,6 +9,8 @@ run time by ``compile``, ``exec`` and import, so the set of code objects to
 specialize cannot be enumerated when the binary is built.
 """
 
+import sys
+
 from pypy.interpreter.pycode import BytecodeCorruption
 from pypy.tool.stdlib_opcode import bytecode_spec
 from rpython.translator.backendopt.generating_extension import (
@@ -92,3 +94,118 @@ def report_unsupported(extension, out=None):
         for line in lines:
             print >> out, line
     return lines
+
+
+# The portal's arguments: greens then reds in jitdriver order, paired with the
+# name each carries in interp_step.  Everything below derives from this table,
+# so the orders cannot drift apart.
+PORTAL_ARGUMENTS = (
+    ("next_instr", "next_instr"),                # green
+    ("is_being_profiled", "is_being_profiled"),  # green
+    ("pycode", "pycode"),                        # green
+    ("frame", "self"),                           # reds from here on
+    ("ec", "ec"),
+)
+# Bound as constants by the generating extension, so the portal never supplies
+# them.
+LATE_STATIC_ARGUMENTS = ("next_instr",)
+
+JIT_MERGE_POINT_ARGS = tuple(step for _green, step in PORTAL_ARGUMENTS)
+RUNTIME_NAMES = tuple(step for _g, step in PORTAL_ARGUMENTS
+                      if step not in LATE_STATIC_ARGUMENTS)
+PORTAL_SOURCES = tuple(index for index, (_g, step)
+                       in enumerate(PORTAL_ARGUMENTS)
+                       if step not in LATE_STATIC_ARGUMENTS)
+GREEN_PC_INDEX = JIT_MERGE_POINT_ARGS.index("next_instr")
+GREEN_CODE_INDEX = JIT_MERGE_POINT_ARGS.index("pycode")
+
+
+def hole_names():
+    """Read the declaration, not interp_step's _pe_hole_args_: the latter is
+    attached when pe_merge_point is annotated, so it does not exist yet when
+    a caller only imported the module."""
+    from pypy.interpreter.pyopcode import pedriver
+    return pedriver.holes
+
+
+def portal_linker(jitdriver_sd, name="linked-pypy"):
+    """How a generated program plugs into the interpreter's portal."""
+    from rpython.translator.backendopt.portal_linker import PortalLinker
+
+    return PortalLinker(
+        jitdriver_sd, PORTAL_SOURCES, RUNTIME_NAMES,
+        jit_merge_point_args=JIT_MERGE_POINT_ARGS,
+        null_names=("pycode",), static_name="opcode",
+        split_names=LATE_STATIC_ARGUMENTS, hole_names=hole_names(), name=name)
+
+
+# List holder: a plain module var would fold to a translation constant.
+_runtime_cogen_state = [None]
+
+
+def stamp_after_make_jitcodes(mainjitcode):
+    """Runs after codewriter.make_jitcodes(), strictly before finish_setup."""
+    state = _runtime_cogen_state[0]
+    if state is None:
+        return
+    from rpython.translator.backendopt.jitcode_emitter import (
+        stamp_descr_indices, register_native_insn_coverage)
+    codewriter, native_table = state
+    stamp_descr_indices(codewriter, native_table)
+    register_native_insn_coverage(codewriter, native_table)
+
+
+def install_runtime_cogen(codewriter, jitdriver_sd, translator):
+    """Translation-time entry point: wire runtime cogen onto the portal."""
+    from pypy.interpreter.pycode import PyCode
+    from rpython.jit.codewriter.jitcode import (
+        PEJitCodeMetadata, register_late_jitcode)
+    from rpython.rtyper.annlowlevel import cast_gcref_to_instance
+    from rpython.translator.backendopt.jitcode_emitter import ProgramEmitter
+    from rpython.translator.backendopt.runtime_cogen import (
+        generate_for_live_code)
+
+    extension = build_generating_extension(translator)
+    linker = portal_linker(jitdriver_sd, "linked-pypy-runtime-cogen")
+    guard = (GREEN_PC_INDEX, GREEN_CODE_INDEX)
+
+    # Runtime boundary: fragments compiled here; the callback below never runs
+    # the codewriter, which is what lets it run inside a translated binary.
+    emitter = ProgramEmitter(
+        codewriter, jitdriver_sd, "opcode", LATE_STATIC_ARGUMENTS,
+        hole_names(), RUNTIME_NAMES,
+        jit_merge_point_args=JIT_MERGE_POINT_ARGS)
+    # One template at a time: an opcode the emitter cannot compile becomes a
+    # decline for the code objects that use it, not a failed build.
+    for key in sorted(extension.templates):
+        try:
+            emitter.precompile_fragments({key: extension.templates[key]})
+        except Exception as error:
+            extension.unsupported[key] = error
+            del extension.templates[key]
+    report_unsupported(extension, sys.stdout)
+    native_table = emitter.native_table()
+    _runtime_cogen_state[0] = (codewriter, native_table)
+
+    def runtime_cogen(gcref):
+        code = cast_gcref_to_instance(PyCode, gcref)
+        if code is None:
+            return None
+        program = generate_for_live_code(
+            extension, linker, codewriter, code, guard, gcref,
+            entry_pc=0, native_table=native_table)
+        if program is None:
+            return None
+        # Assembled after finish_setup() froze liveness and jitcode tables.
+        register_late_jitcode(program.jitcode,
+                              program.jitcode.own_liveness_info)
+        return program
+
+    mainjitcode = linker.mainjitcode(codewriter)
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
+    metadata.guard_ref_index = GREEN_CODE_INDEX
+    metadata.runtime_cogen = runtime_cogen
+    metadata.cogen_threshold = 32
+    metadata.threshold_env_var = "PYPY_COGEN_THRESHOLD"
+    mainjitcode.pe_metadata = metadata
+    return None

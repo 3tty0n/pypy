@@ -395,6 +395,22 @@ class PyPyTarget(object):
 
             driver.translator._pe_linked_setup = report
 
+        # PYPY_PE_COGEN wires runtime cogen: on a trace-start miss the portal
+        # generates a residual program for the live code object.
+        elif os.environ.get('PYPY_PE_COGEN'):
+            from pypy.interpreter import pe_offline
+
+            def install(codewriter, jitdriver_sd, translator):
+                if jitdriver_sd.jitdriver.name != 'pypyjit':
+                    return None
+                return pe_offline.install_runtime_cogen(
+                    codewriter, jitdriver_sd, translator)
+
+            driver.translator._pe_linked_setup = install
+            # apply_jit reads _pe_jitcode_setup before _pe_linked_setup runs.
+            driver.translator._pe_jitcode_setup = (
+                pe_offline.stamp_after_make_jitcodes)
+
         return PyPyJitPolicy(pypy_hooks)
 
     def get_gchooks(self):

@@ -14,7 +14,7 @@ from rpython.jit.codewriter.flatten import KINDS
 from rpython.jit.codewriter.jitcode import JitCode, SwitchDictDescr
 from rpython.jit.metainterp.history import AbstractDescr
 from rpython.rlib.debug import debug_print
-from rpython.rlib.rarithmetic import r_uint
+from rpython.rlib.rarithmetic import intmask, r_uint
 from rpython.rtyper.lltypesystem import llmemory, lltype
 
 from rpython.translator.backendopt.native_fragments import (
@@ -35,11 +35,13 @@ from rpython.translator.backendopt.partialeval_template import (
 _LOCAL_LABEL_SPACE = 1 << 20  # headroom: pc * this must fit a 63-bit int
 
 def _block_label_id(pc):
-    return -(pc + 1)
+    # intmask: a guest interpreter may carry its pc as an unsigned value,
+    # and these ids are signed by construction.
+    return -(intmask(pc) + 1)
 
 def _fragment_label_id(pc, local_label_id):
     assert 0 <= local_label_id < _LOCAL_LABEL_SPACE
-    return pc * _LOCAL_LABEL_SPACE + local_label_id
+    return intmask(pc) * _LOCAL_LABEL_SPACE + local_label_id
 
 
 class NativeSwitchDictDescr(SwitchDictDescr):

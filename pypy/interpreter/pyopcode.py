@@ -49,6 +49,15 @@ def binaryoperation(operationname):
 opcodedesc = bytecode_spec.opcodedesc
 HAVE_ARGUMENT = bytecode_spec.HAVE_ARGUMENT
 
+class PcMoved(Exception):
+    """A trace hook moved the pc, so JUMP_ABSOLUTE's target is not oparg.
+
+    An exception, not a second exit: a residual template's exits must be all
+    Finish or all Continue, and this one's ordinary exit is a Continue to a
+    late-static target.
+    """
+
+
 # Returned by interp_step in place of a next pc that is not late-static: a
 # residual program ends there, and the dispatch loop resumes from last_instr.
 PE_LEAVE = r_uint(-1)
@@ -82,6 +91,8 @@ class __extend__(pyframe.PyFrame):
         try:
             next_instr = self.dispatch_bytecode(
                 pycode, co_code, next_instr, ec, is_being_profiled)
+        except PcMoved:
+            next_instr = r_uint(self.last_instr)
         except OperationError as operr:
             next_instr = self.handle_operation_error(ec, operr)
         except RaiseWithExplicitTraceback as e:
@@ -205,13 +216,11 @@ class __extend__(pyframe.PyFrame):
                 next_instr += 3
                 oparg = (oparg * 65536) | (hi * 256) | lo
 
-            next_instr, leave = self.interp_step(
+            # The first result is the late-static split value, which only
+            # the partial evaluator reads; the second is the real next pc.
+            _split, next_instr, leave = self.interp_step(
                 opcode, oparg, next_instr, pycode, is_being_profiled, ec)
-            if leave:
-                if next_instr == PE_LEAVE:
-                    next_instr = r_uint(self.last_instr)
-                return next_instr
-            if jit.we_are_jitted():
+            if leave or jit.we_are_jitted():
                 return next_instr
 
     @always_inline
@@ -221,6 +230,10 @@ class __extend__(pyframe.PyFrame):
 
         ``opcode`` is offline-static, so the partial evaluator builds one
         residual template per bytecode; ``next_instr`` is late-static.
+
+        Returns ``(split, next_pc, leave)``.  ``split`` is the late-static
+        successor, or PE_LEAVE where it is not late-static -- the residual
+        program ends there and ``next_pc`` says where to resume.
         """
         pedriver.pe_merge_point(self=self, opcode=opcode, oparg=oparg,
                                 next_instr=next_instr, pycode=pycode,
@@ -237,8 +250,7 @@ class __extend__(pyframe.PyFrame):
             else:
                 unroller = SReturnValue(w_returnvalue)
                 # Inside a 'finally' block now, at a pc only the block knows.
-                self.last_instr = intmask(block.handle(self, unroller))
-                return PE_LEAVE, True
+                return PE_LEAVE, block.handle(self, unroller), True
         elif opcode == opcodedesc.END_FINALLY.index:
             unroller = self.end_finally()
             if isinstance(unroller, SuspendedUnroller):
@@ -250,18 +262,16 @@ class __extend__(pyframe.PyFrame):
                     raise Return
                 else:
                     next_instr = block.handle(self, unroller)
-            return next_instr, True
+            return next_instr, next_instr, True
         elif opcode == opcodedesc.JUMP_ABSOLUTE.index:
             if self.jump_absolute(oparg, ec):
-                return PE_LEAVE, True
-            return r_uint(oparg), True
+                raise PcMoved
+            return r_uint(oparg), r_uint(oparg), True
         elif opcode == opcodedesc.BREAK_LOOP.index:
             # Unrolling picks the pc; only the block stack knows which.
-            self.last_instr = intmask(self.BREAK_LOOP(oparg, next_instr))
-            return PE_LEAVE, True
+            return PE_LEAVE, self.BREAK_LOOP(oparg, next_instr), True
         elif opcode == opcodedesc.CONTINUE_LOOP.index:
-            self.last_instr = intmask(self.CONTINUE_LOOP(oparg, next_instr))
-            return PE_LEAVE, True
+            return PE_LEAVE, self.CONTINUE_LOOP(oparg, next_instr), True
         elif opcode == opcodedesc.FOR_ITER.index:
             if self.FOR_ITER():
                 next_instr += oparg
@@ -506,7 +516,7 @@ class __extend__(pyframe.PyFrame):
         else:
             self.MISSING_OPCODE(oparg, next_instr)
 
-        return next_instr, False
+        return next_instr, next_instr, False
 
     @jit.unroll_safe
     def unrollstack(self, unroller_kind):
