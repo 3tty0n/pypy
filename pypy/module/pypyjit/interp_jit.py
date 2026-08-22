@@ -87,7 +87,8 @@ class __extend__(PyFrame):
                     is_being_profiled=is_being_profiled)
                 co_code = pycode.co_code
                 self.valuestackdepth = hint(self.valuestackdepth, promote=True)
-                next_instr = self.handle_bytecode(co_code, next_instr, ec)
+                next_instr = self.handle_bytecode(
+                    pycode, co_code, next_instr, ec, is_being_profiled)
                 is_being_profiled = self.get_is_being_profiled()
         except Yield:
             self.last_exception = None

@@ -66,14 +66,18 @@ class __extend__(pyframe.PyFrame):
 
         try:
             while True:
-                next_instr = self.handle_bytecode(co_code, next_instr, ec)
+                next_instr = self.handle_bytecode(
+                    pycode, co_code, next_instr, ec,
+                    self.get_is_being_profiled())
         except ExitFrame:
             self.last_exception = None
             return self.popvalue()
 
-    def handle_bytecode(self, co_code, next_instr, ec):
+    def handle_bytecode(self, pycode, co_code, next_instr, ec,
+                        is_being_profiled):
         try:
-            next_instr = self.dispatch_bytecode(co_code, next_instr, ec)
+            next_instr = self.dispatch_bytecode(
+                pycode, co_code, next_instr, ec, is_being_profiled)
         except OperationError as operr:
             next_instr = self.handle_operation_error(ec, operr)
         except RaiseWithExplicitTraceback as e:
@@ -149,7 +153,8 @@ class __extend__(pyframe.PyFrame):
         return self.space.call_function(w_func, w_typ, w_val, w_tb)
 
     @jit.unroll_safe
-    def dispatch_bytecode(self, co_code, next_instr, ec):
+    def dispatch_bytecode(self, pycode, co_code, next_instr, ec,
+                          is_being_profiled):
         while True:
             self.last_instr = intmask(next_instr)
             if jit.we_are_jitted():
@@ -196,20 +201,22 @@ class __extend__(pyframe.PyFrame):
                 next_instr += 3
                 oparg = (oparg * 65536) | (hi * 256) | lo
 
-            next_instr, leave = self.interp_step(opcode, oparg,
-                                                 next_instr, ec)
+            next_instr, leave = self.interp_step(
+                opcode, oparg, next_instr, pycode, is_being_profiled, ec)
             if leave or jit.we_are_jitted():
                 return next_instr
 
     @always_inline
-    def interp_step(self, opcode, oparg, next_instr, ec):
+    def interp_step(self, opcode, oparg, next_instr, pycode,
+                    is_being_profiled, ec):
         """One bytecode's semantics, free of the dispatch loop.
 
         ``opcode`` is offline-static, so the partial evaluator builds one
         residual template per bytecode; ``next_instr`` is late-static.
         """
         pedriver.pe_merge_point(self=self, opcode=opcode, oparg=oparg,
-                                next_instr=next_instr, ec=ec)
+                                next_instr=next_instr, pycode=pycode,
+                                is_being_profiled=is_being_profiled, ec=ec)
         if opcode == opcodedesc.RETURN_VALUE.index:
             if not self.blockstack_non_empty():
                 self.frame_finished_execution = True  # for generators
