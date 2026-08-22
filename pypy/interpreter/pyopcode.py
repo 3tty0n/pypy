@@ -73,6 +73,27 @@ def _residual_exit(next_instr):
     return pyframe.W_ResidualExit(next_instr)
 
 # One residual template per bytecode; the residual code branches on the pc.
+def _guards_a_handler(code):
+    """Does this code object install a guest exception handler?
+
+    A residual program stands in for the whole portal, so it also stands in
+    for handle_bytecode's ``except OperationError`` -- which it does not
+    contain.  A guest exception raised inside one therefore never reaches the
+    ``except`` that should catch it, so a code object that installs a handler
+    must keep running on the generic loop.
+    """
+    co_code = code.co_code
+    position = 0
+    while position < len(co_code):
+        opcode = ord(co_code[position])
+        if (opcode == opcodedesc.SETUP_EXCEPT.index
+                or opcode == opcodedesc.SETUP_FINALLY.index
+                or opcode == opcodedesc.SETUP_WITH.index):
+            return True
+        position += 3 if opcode >= HAVE_ARGUMENT else 1
+    return False
+
+
 def _worth_generating(program, code):
     """Whether a residual program repays what assembling it costs.
 
@@ -86,6 +107,8 @@ def _worth_generating(program, code):
     thrown away, so specialising it buys a single trace; one with a back
     edge is re-entered for as long as the loop runs.
     """
+    if _guards_a_handler(code):
+        return False
     return len(program.loop_headers) > 0
 
 

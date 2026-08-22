@@ -60,6 +60,7 @@ def decode_instruction(code, pc):
     bindings = {
         "pc": next_instr,
         "oparg": oparg,
+        "instr_start": pc,
     }
     return opcode, bindings
 
@@ -202,7 +203,7 @@ def report_unresolvable(extension, out=None):
 
 def install_runtime_cogen(codewriter, jitdriver_sd, translator):
     """Translation-time entry point: wire runtime cogen onto the portal."""
-    from pypy.interpreter.pycode import PyCode
+    from pypy.interpreter.pycode import CO_GENERATOR, PyCode
     from rpython.jit.codewriter.jitcode import (
         PEJitCodeMetadata, register_late_jitcode)
     from rpython.rtyper.annlowlevel import cast_gcref_to_instance
@@ -233,9 +234,21 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
     _runtime_cogen_state[0] = (codewriter, native_table)
 
     def runtime_cogen(gcref):
+        from rpython.rlib.debug import debug_print, have_debug_prints
         code = cast_gcref_to_instance(PyCode, gcref)
         if code is None:
             return None
+        if code.co_flags & CO_GENERATOR:
+            # A generator's frame suspends at YIELD_VALUE and is resumed
+            # later at that pc; a residual program is entered at a block
+            # boundary and runs to one of its own exits, which is not the
+            # same contract.
+            return None
+        if have_debug_prints():
+            # Name the code object: a residual program that misbehaves is
+            # otherwise only identifiable by a raw address.
+            debug_print("pe-cogen code %s %s:%d" % (
+                code.co_name, code.co_filename, code.co_firstlineno))
         program = generate_for_live_code(
             extension, linker, codewriter, code, guard, gcref,
             entry_pc=0, native_table=native_table)
