@@ -43,6 +43,19 @@ class FrameDebugData(object):
         self.f_lineno = pycode.co_firstlineno
         self.w_globals = pycode.w_globals
 
+class W_ResidualExit(W_Root):
+    """A residual program that stopped short of the frame's end.
+
+    The portal returns the frame's result, so a residual program that ends
+    anywhere else has to say so in that same slot; execute_frame recognises
+    this and carries on interpreting from ``next_instr``.
+    """
+    _immutable_fields_ = ["next_instr"]
+
+    def __init__(self, next_instr):
+        self.next_instr = next_instr
+
+
 class PyFrame(W_Root):
     """Represents a frame for a regular Python function
     that needs to be interpreted.
@@ -284,6 +297,10 @@ class PyFrame(W_Root):
                         self.pushvalue(w_inputvalue)
                 w_exitvalue = self.dispatch(self.pycode, next_instr,
                                             executioncontext)
+                while isinstance(w_exitvalue, W_ResidualExit):
+                    w_exitvalue = self.dispatch(
+                        self.pycode, w_exitvalue.next_instr,
+                        executioncontext)
             except OperationError:
                 raise
             except Exception as e:      # general fall-back

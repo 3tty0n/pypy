@@ -67,6 +67,11 @@ PE_LEAVE = r_uint(-1)
 # generic dispatch loop, so the raise belongs to the caller.
 PE_RETURN = r_uint(-2)
 
+
+def _residual_exit(next_instr):
+    """The portal's result for a residual program that ends mid-frame."""
+    return pyframe.W_ResidualExit(next_instr)
+
 # One residual template per bytecode; the residual code branches on the pc.
 # The split argument must be called "pc": the machinery names its pc hole
 # that, whatever the step function calls the value elsewhere.
@@ -225,7 +230,7 @@ class __extend__(pyframe.PyFrame):
 
             # The first result is the late-static split value: the partial
             # evaluator reads it, and PE_RETURN also tells the loop to stop.
-            split, next_instr, leave = self.interp_step(
+            split, _w_res, next_instr, leave = self.interp_step(
                 opcode, oparg, next_instr, pycode, is_being_profiled, ec)
             if leave:
                 if split == PE_RETURN:
@@ -242,9 +247,10 @@ class __extend__(pyframe.PyFrame):
         ``opcode`` is offline-static, so the partial evaluator builds one
         residual template per bytecode; ``pc`` is late-static.
 
-        Returns ``(split, next_pc, leave)``.  ``split`` is the late-static
-        successor, or PE_LEAVE where it is not late-static -- the residual
-        program ends there and ``next_pc`` says where to resume.
+        Returns ``(split, w_result, next_pc, leave)``.  ``split`` is the
+        late-static successor, or PE_LEAVE / PE_RETURN where the residual
+        program ends there; ``w_result`` is what the portal returns in that
+        case, and ``next_pc`` says where the generic loop resumes.
         """
         pedriver.pe_merge_point(self=self, opcode=opcode, oparg=oparg,
                                 pc=pc, pycode=pycode,
@@ -252,38 +258,42 @@ class __extend__(pyframe.PyFrame):
         if opcode == opcodedesc.RETURN_VALUE.index:
             if not self.blockstack_non_empty():
                 self.frame_finished_execution = True  # for generators
-                return PE_RETURN, pc, True
+                return PE_RETURN, self.peekvalue(), pc, True
             w_returnvalue = self.popvalue()
             block = self.unrollstack(SReturnValue.kind)
             if block is None:
                 self.pushvalue(w_returnvalue)
-                return PE_RETURN, pc, True
+                return PE_RETURN, self.peekvalue(), pc, True
             else:
                 unroller = SReturnValue(w_returnvalue)
                 # Inside a 'finally' block now, at a pc only the block knows.
-                return PE_LEAVE, block.handle(self, unroller), True
+                target = block.handle(self, unroller)
+                return PE_LEAVE, _residual_exit(target), target, True
         elif opcode == opcodedesc.END_FINALLY.index:
             unroller = self.end_finally()
             # Every exit here is a Finish: a template's exits must be all
             # Finish or all Continue, and the unrolling ones are dynamic.
             if not isinstance(unroller, SuspendedUnroller):
-                return PE_LEAVE, pc, True
+                return PE_LEAVE, _residual_exit(pc), pc, True
             # go on unrolling the stack
             block = self.unrollstack(unroller.kind)
             if block is None:
                 w_result = unroller.nomoreblocks()
                 self.pushvalue(w_result)
-                return PE_RETURN, pc, True
-            return PE_LEAVE, block.handle(self, unroller), True
+                return PE_RETURN, self.peekvalue(), pc, True
+            target = block.handle(self, unroller)
+            return PE_LEAVE, _residual_exit(target), target, True
         elif opcode == opcodedesc.JUMP_ABSOLUTE.index:
             if self.jump_absolute(oparg, ec):
                 raise PcMoved
-            return r_uint(oparg), r_uint(oparg), True
+            return r_uint(oparg), None, r_uint(oparg), True
         elif opcode == opcodedesc.BREAK_LOOP.index:
             # Unrolling picks the pc; only the block stack knows which.
-            return PE_LEAVE, self.BREAK_LOOP(oparg, pc), True
+            target = self.BREAK_LOOP(oparg, pc)
+            return PE_LEAVE, _residual_exit(target), target, True
         elif opcode == opcodedesc.CONTINUE_LOOP.index:
-            return PE_LEAVE, self.CONTINUE_LOOP(oparg, pc), True
+            target = self.CONTINUE_LOOP(oparg, pc)
+            return PE_LEAVE, _residual_exit(target), target, True
         elif opcode == opcodedesc.FOR_ITER.index:
             if self.FOR_ITER():
                 pc += oparg
@@ -528,7 +538,7 @@ class __extend__(pyframe.PyFrame):
         else:
             self.MISSING_OPCODE(oparg, pc)
 
-        return pc, pc, False
+        return pc, None, pc, False
 
     @jit.unroll_safe
     def unrollstack(self, unroller_kind):
