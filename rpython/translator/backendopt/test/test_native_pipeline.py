@@ -9,6 +9,14 @@ from rpython.translator.backendopt.generating_extension import (
 from rpython.translator.backendopt.native_fragments import build_native_table
 from rpython.translator.backendopt.native_pipeline import (
     emit_and_assemble_native, NativeAssembler)
+
+
+def emit_and_assemble_native_unoptimised(*args, **kwds):
+    """The gate checks that this pipeline lowers a program exactly as the
+    translation-time one does, which is about the lowering; what the runtime
+    path folds afterwards has its own test."""
+    kwds["optimise"] = False
+    return emit_and_assemble_native(*args, **kwds)
 from rpython.translator.backendopt.test.test_partialeval_template_lowering \
     import byte_pair_decoder, get_graph
 
@@ -51,7 +59,7 @@ def test_toy_program_byte_identical():
     original_jitcode, original_positions = emitter.emit(program, "orig")
 
     native_table = build_native_table(emitter._fragments)
-    native_jitcode, native_positions, _asm = emit_and_assemble_native(
+    native_jitcode, native_positions, _asm = emit_and_assemble_native_unoptimised(
         native_table, program, "native", has_merge_points=False)
 
     assert native_jitcode.code == original_jitcode.code
@@ -102,7 +110,7 @@ def test_toy_program_with_shared_calldescr_byte_identical():
     original_jitcode, original_positions = emitter.emit(program, "orig-add")
 
     native_table = build_native_table(emitter._fragments)
-    native_jitcode, native_positions, _asm = emit_and_assemble_native(
+    native_jitcode, native_positions, _asm = emit_and_assemble_native_unoptimised(
         native_table, program, "native-add", has_merge_points=False)
 
     assert native_jitcode.code == original_jitcode.code
@@ -177,7 +185,7 @@ def test_stamp_descr_indices_covers_fragment_only_descrs_before_any_assemble():
     assert "int_sub/cc>i" in codewriter.assembler.insns
 
     assembler = NativeAssembler(share_with=codewriter.assembler, readonly=True)
-    native_jitcode, _positions, _asm = emit_and_assemble_native(
+    native_jitcode, _positions, _asm = emit_and_assemble_native_unoptimised(
         native_table, program, "native-full", has_merge_points=True,
         assembler=assembler)
     assert len(native_jitcode.code) > 0
@@ -275,7 +283,7 @@ def test_repeated_helper_call_constants_dedup():
     original_jitcode, original_positions = emitter.emit(program, "orig-add-N")
 
     native_table = build_native_table(emitter._fragments)
-    native_jitcode, native_positions, _asm = emit_and_assemble_native(
+    native_jitcode, native_positions, _asm = emit_and_assemble_native_unoptimised(
         native_table, program, "native-add-N", has_merge_points=False)
 
     assert len(original_jitcode.constants_i) == 2
@@ -329,7 +337,7 @@ def test_tla_countdown_byte_identical():
         original_jitcode, original_positions = emitter.emit(program, "orig-tla")
 
         native_table = build_native_table(emitter._fragments)
-        native_jitcode, native_positions, _asm = emit_and_assemble_native(
+        native_jitcode, native_positions, _asm = emit_and_assemble_native_unoptimised(
             native_table, program, "native-tla", has_merge_points=True)
 
         captured["original"] = original_jitcode
@@ -396,7 +404,7 @@ def test_switch_byte_identical():
     original_jitcode, original_positions = emitter.emit(program, "orig-switch")
 
     native_table = build_native_table(emitter._fragments)
-    native_jitcode, native_positions, _asm = emit_and_assemble_native(
+    native_jitcode, native_positions, _asm = emit_and_assemble_native_unoptimised(
         native_table, program, "native-switch", has_merge_points=False)
 
     assert native_jitcode.code == original_jitcode.code
@@ -434,7 +442,7 @@ def test_register_late_jitcode_twice_via_readonly_native_assembler():
         def assemble_and_register(name):
             assembler = NativeAssembler(
                 share_with=emitter.codewriter.assembler, readonly=True)
-            jitcode, _, assembler = emit_and_assemble_native(
+            jitcode, _, assembler = emit_and_assemble_native_unoptimised(
                 native_table, program, name, has_merge_points=False,
                 assembler=assembler)
             jitcode.own_liveness_info = "".join(assembler.all_liveness)

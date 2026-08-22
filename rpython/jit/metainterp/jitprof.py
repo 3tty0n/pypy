@@ -137,6 +137,9 @@ class Profiler(BaseProfiler):
                               tim[Counters.BACKEND])
         line = "TOTAL:      \t\t%f" % (self.tk - self.starttime, )
         debug_print(line)
+        from rpython.jit.metainterp.pyjitpl import _pe_insn_counts
+        self._print_intline("pe insns generic", _pe_insn_counts.generic)
+        self._print_intline("pe insns residual", _pe_insn_counts.residual)
         self._print_intline("ops", cnt[Counters.OPS])
         self._print_intline("heapcached ops", cnt[Counters.HEAPCACHED_OPS])
         self._print_intline("recorded ops", cnt[Counters.RECORDED_OPS])

@@ -75,6 +75,14 @@ _prologue_copies = [0]
 _boundary_moves = [0]
 
 
+class _FoldedLoads(object):
+    """Holder, not a module int: a prebuilt counter folds to its seed."""
+    folded = 0
+
+
+_folded_loads = _FoldedLoads()
+
+
 
 def _log_insn_mix(ssarepr, program):
     """What the emitted program is made of, per opname.
@@ -93,6 +101,8 @@ def _log_insn_mix(ssarepr, program):
         "pe-cogen-mix blocks=%d insns=%d prologue=%d boundary=%d"
         % (len(program.blocks), len(ssarepr.insns), _prologue_copies[0],
            _boundary_moves[0]))
+    debug_print("pe-cogen-mix folded-loads=%d" % (_folded_loads.folded,))
+    _folded_loads.folded = 0
     # A copy whose source is a constant is not a register move at all: it is
     # a late-static value being materialised, which is what specialising for
     # this code object produced.
@@ -1069,8 +1079,151 @@ class NativeAssembler(Assembler):
             descr.attach(as_dict)
 
 
+def _reg_key(operand):
+    """A register operand's identity as a string, empty for anything else.
+
+    A string, not a (kind, index) tuple: RPython cannot union a tuple with
+    the None a non-register would need to return.
+    """
+    if isinstance(operand, NReg):
+        return "%s%d" % (operand.kind, operand.index)
+    return ""
+
+
+def _constant_load(insn):
+    """(constant, target key) of a ``<kind>_copy`` of a constant."""
+    if not insn.opcode.endswith("_copy"):
+        return None, ""
+    if len(insn.operands) != 1 or insn.result is None:
+        return None, ""
+    source = insn.operands[0]
+    if isinstance(source, NReg):
+        return None, ""            # a register move, not a materialisation
+    target = _reg_key(insn.result)
+    if not target:
+        return None, ""
+    return source, target
+
+
+def _ends_region(opcode):
+    """A label joins other paths and a jump leaves; either ends a region."""
+    return opcode == "@label" or opcode.startswith("goto")
+
+
+def _keeps_argcode(constant, reader):
+    """Would substituting ``constant`` leave the reader's argcode alone?
+
+    The assembler builds an insn key from its operands' argcode letters, and
+    the translation-time coverage pass only registered the keys the operands
+    had then.  A ref constant contributes the same "r" a ref register does,
+    and so does an int constant too wide for the short form -- but a small
+    int in an opcode that takes the short form becomes "c", a key nothing
+    registered, so that one must stay in its register.
+    """
+    if isinstance(constant, NIntConst):
+        return not int_fits_short(constant.ivalue,
+                                  reader.opcode in USE_C_FORM)
+    return isinstance(constant, NRefConst)
+
+
+def _registers_read_before_written(insns):
+    """Registers some region reads before it writes them.
+
+    A register outside this set never carries a value across a region
+    boundary, so a definition of it dies at the end of its own region and
+    liveness -- recomputed after this pass -- will say so.
+    """
+    crossing = {}
+    written = {}
+    for insn in insns:
+        if _ends_region(insn.opcode):
+            written = {}
+            continue
+        if insn.opcode == "-live-":
+            continue
+        for operand in insn.operands:
+            key = _reg_key(operand)
+            if key and key not in written:
+                crossing[key] = True
+        key = _reg_key(insn.result)
+        if key:
+            written[key] = True
+    return crossing
+
+
+def fold_constant_loads(insns):
+    """Substitute a materialised late-static value into what reads it.
+
+    Specialising for one code object turns every pc, oparg and instruction
+    start into a constant, and the flattener puts each one in a register
+    first: on PyPy that is 148 of the 528 instructions in a seventeen-block
+    program, and the meta-interpreter executes every one of them per trace.
+
+    Runs before liveness, so the ``-live-`` sets are computed on the result:
+    a register whose readers now take the constant directly is simply not
+    live, and a guard resuming here records what it actually needs.  Only
+    registers no region reads before writing qualify, which is what makes
+    dropping the definition safe without tracking flow across labels.
+
+    Off by default: it removes 51 of the 148 constant loads in a
+    seventeen-block program, but deltablue fails an RPython assertion after
+    eight iterations with it on.  The read-before-write rule ignores the
+    ``-live-`` records, which carry no operands yet at this point in the
+    pipeline -- so a register a guard would resume into can still look
+    unread here.  Turning this on needs that information, which means
+    running after liveness and recomputing it.
+    """
+    crossing = _registers_read_before_written(insns)
+    keep = [True] * len(insns)
+    folded = 0
+    for position in range(len(insns)):
+        constant, target = _constant_load(insns[position])
+        if constant is None or target in crossing:
+            continue
+        reads = []
+        blocked = False
+        for later in range(position + 1, len(insns)):
+            other = insns[later]
+            if _ends_region(other.opcode):
+                break
+            if other.opcode == "-live-":
+                continue
+            for index in range(len(other.operands)):
+                if _reg_key(other.operands[index]) == target:
+                    if not _keeps_argcode(constant, other):
+                        blocked = True
+                        break
+                    reads.append((later, index))
+            if blocked:
+                break
+            if _reg_key(other.result) == target:
+                break
+        if blocked:
+            continue
+        for later, index in reads:
+            insns[later].operands[index] = constant
+        keep[position] = False
+        folded += 1
+    if not folded:
+        return insns
+    _folded_loads.folded += folded
+    result = []
+    for position in range(len(insns)):
+        if keep[position]:
+            result.append(insns[position])
+    return result
+
+
+def _names_register(operands, key):
+    for operand in operands:
+        if _reg_key(operand) == key:
+            return True
+    return False
+
+
 def emit_and_assemble_native(native_table, program, name,
-                             has_merge_points=False, assembler=None):
+                             has_merge_points=False, assembler=None,
+                             optimise=False):
     """Full native pipeline: emit_native -> compute_liveness_native ->
     NativeAssembler.assemble, mirroring ProgramEmitter.emit's own order.
 
@@ -1079,6 +1232,11 @@ def emit_and_assemble_native(native_table, program, name,
     from rpython.rlib.debug import debug_start, debug_stop
     debug_start("pe-cogen-emit")
     ssarepr, counts = emit_native(native_table, program, name, has_merge_points)
+    if optimise:
+        # The equivalence gate passes optimise=False: it checks that this
+        # pipeline lowers a program exactly as the translation-time one
+        # does, which is about the lowering, not about what is folded after.
+        ssarepr.insns = fold_constant_loads(ssarepr.insns)
     debug_stop("pe-cogen-emit")
     debug_start("pe-cogen-live")
     compute_liveness_native(ssarepr.insns)

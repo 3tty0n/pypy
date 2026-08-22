@@ -62,6 +62,20 @@ FASTPATHS_SAME_BOXES = {
     "ge": "history.CONST_TRUE",
 }
 
+# [generic, residual]: how many jitcode instructions the meta-interpreter
+# ran while tracing.  ``ops`` counts only what execute_and_record saw, which
+# leaves out exactly the work a residual program adds -- constant loads,
+# register copies, labels and liveness records.
+# A holder instance, not a list: a prebuilt list seeded at translation time
+# folds to its literal contents, so every read would report the seed.
+class _PEInsnCounts(object):
+    generic = 0
+    residual = 0
+
+
+_pe_insn_counts = _PEInsnCounts()
+
+
 class MIFrame(object):
     debug = False
 
@@ -1994,6 +2008,8 @@ class MIFrame(object):
             return resbox
 
     def run_one_step(self):
+        # See _pe_insn_counts: [generic, residual] jitcode instructions the
+        # meta-interpreter executed while tracing.
         # Execute the frame forward.  This method contains a loop that leaves
         # whenever the 'opcode_implementations' (which is one of the 'opimpl_'
         # methods) raises ChangeFrame.  This is the case when the current frame
@@ -2004,6 +2020,10 @@ class MIFrame(object):
             while True:
                 bytecode = self.bytecode
                 op = ord(bytecode[pc])
+                if self.jitcode.pe_is_linked:
+                    _pe_insn_counts.residual += 1
+                else:
+                    _pe_insn_counts.generic += 1
                 if op == staticdata.op_live:
                     pc += OFFSET_SIZE + 1
                     self.pc = pc
