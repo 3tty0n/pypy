@@ -71,11 +71,11 @@ def build_generating_extension(translator):
     reach one are left to the generic dispatch loop.
     """
     from pypy.interpreter.pyframe import PyFrame
-    from pypy.interpreter.pyopcode import PE_LEAVE
+    from pypy.interpreter.pyopcode import PE_LEAVE, PE_RETURN
 
     return GeneratingExtension.from_step_function(
         translator, PyFrame.interp_step.im_func, opcode_keys(),
-        decode_instruction, terminal_values=(PE_LEAVE,))
+        decode_instruction, terminal_values=(PE_LEAVE, PE_RETURN))
 
 
 def report_unsupported(extension, out=None):

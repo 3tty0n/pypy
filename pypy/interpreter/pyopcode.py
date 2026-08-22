@@ -59,8 +59,13 @@ class PcMoved(Exception):
 
 
 # Returned by interp_step in place of a next pc that is not late-static: a
-# residual program ends there, and the dispatch loop resumes from last_instr.
+# residual program ends there, and the dispatch loop resumes from next_pc.
 PE_LEAVE = r_uint(-1)
+
+# Likewise, but the frame is done.  Not `raise Return` inside interp_step: an
+# exception leaving a residual program is not the same edge as one leaving the
+# generic dispatch loop, so the raise belongs to the caller.
+PE_RETURN = r_uint(-2)
 
 # One residual template per bytecode; the residual code branches on the pc.
 # The split argument must be called "pc": the machinery names its pc hole
@@ -218,11 +223,15 @@ class __extend__(pyframe.PyFrame):
                 next_instr += 3
                 oparg = (oparg * 65536) | (hi * 256) | lo
 
-            # The first result is the late-static split value, which only
-            # the partial evaluator reads; the second is the real next pc.
-            _split, next_instr, leave = self.interp_step(
+            # The first result is the late-static split value: the partial
+            # evaluator reads it, and PE_RETURN also tells the loop to stop.
+            split, next_instr, leave = self.interp_step(
                 opcode, oparg, next_instr, pycode, is_being_profiled, ec)
-            if leave or jit.we_are_jitted():
+            if leave:
+                if split == PE_RETURN:
+                    raise Return
+                return next_instr
+            if jit.we_are_jitted():
                 return next_instr
 
     @always_inline
@@ -243,28 +252,27 @@ class __extend__(pyframe.PyFrame):
         if opcode == opcodedesc.RETURN_VALUE.index:
             if not self.blockstack_non_empty():
                 self.frame_finished_execution = True  # for generators
-                raise Return
+                return PE_RETURN, pc, True
             w_returnvalue = self.popvalue()
             block = self.unrollstack(SReturnValue.kind)
             if block is None:
                 self.pushvalue(w_returnvalue)
-                raise Return
+                return PE_RETURN, pc, True
             else:
                 unroller = SReturnValue(w_returnvalue)
                 # Inside a 'finally' block now, at a pc only the block knows.
                 return PE_LEAVE, block.handle(self, unroller), True
         elif opcode == opcodedesc.END_FINALLY.index:
             unroller = self.end_finally()
-            if isinstance(unroller, SuspendedUnroller):
-                # go on unrolling the stack
-                block = self.unrollstack(unroller.kind)
-                if block is None:
-                    w_result = unroller.nomoreblocks()
-                    self.pushvalue(w_result)
-                    raise Return
-                else:
-                    pc = block.handle(self, unroller)
-            return pc, pc, True
+            if not isinstance(unroller, SuspendedUnroller):
+                return pc, pc, True
+            # go on unrolling the stack
+            block = self.unrollstack(unroller.kind)
+            if block is None:
+                w_result = unroller.nomoreblocks()
+                self.pushvalue(w_result)
+                return PE_RETURN, pc, True
+            return PE_LEAVE, block.handle(self, unroller), True
         elif opcode == opcodedesc.JUMP_ABSOLUTE.index:
             if self.jump_absolute(oparg, ec):
                 raise PcMoved
