@@ -13,7 +13,7 @@ from rpython.jit.codewriter.assembler import (
 from rpython.jit.codewriter.flatten import KINDS
 from rpython.jit.codewriter.jitcode import JitCode, SwitchDictDescr
 from rpython.jit.metainterp.history import AbstractDescr
-from rpython.rlib.debug import debug_print
+from rpython.rlib.debug import debug_print, have_debug_prints
 from rpython.rlib.rarithmetic import intmask, r_uint
 from rpython.rtyper.lltypesystem import llmemory, lltype
 
@@ -69,6 +69,26 @@ class NativeSSARepr(object):
 
 # ____________________________________________________________
 # emit_native: port of ProgramEmitter.emit/_place/_localise/_emit_moves.
+
+def _log_insn_mix(ssarepr, program):
+    """What the emitted program is made of, per opname.
+
+    A residual program is only worth its generation cost if what it adds --
+    boundary copies, liveness records, bailout markers -- stays small next to
+    the guest work it carries.
+    """
+    if not have_debug_prints():
+        return
+    counts = {}
+    for insn in ssarepr.insns:
+        name = insn.opcode
+        counts[name] = counts.get(name, 0) + 1
+    debug_print("pe-cogen-mix blocks=%d insns=%d" % (
+        len(program.blocks), len(ssarepr.insns)))
+    # No sorted(): not RPython, and a histogram needs no order.
+    for name, count in counts.items():
+        debug_print("pe-cogen-mix   %s %d" % (name, count))
+
 
 def emit_native(native_table, program, name="emitted-residual-native",
                 has_merge_points=False):
@@ -1009,6 +1029,7 @@ def emit_and_assemble_native(native_table, program, name,
     from rpython.rlib.debug import debug_start, debug_stop
     debug_start("pe-cogen-emit")
     ssarepr, counts = emit_native(native_table, program, name, has_merge_points)
+    _log_insn_mix(ssarepr, program)
     debug_stop("pe-cogen-emit")
     debug_start("pe-cogen-live")
     compute_liveness_native(ssarepr.insns)
