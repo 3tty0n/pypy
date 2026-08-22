@@ -256,9 +256,12 @@ class __extend__(pyframe.PyFrame):
                 return PE_LEAVE, True
             return r_uint(oparg), True
         elif opcode == opcodedesc.BREAK_LOOP.index:
-            next_instr = self.BREAK_LOOP(oparg, next_instr)
+            # Unrolling picks the pc; only the block stack knows which.
+            self.last_instr = intmask(self.BREAK_LOOP(oparg, next_instr))
+            return PE_LEAVE, True
         elif opcode == opcodedesc.CONTINUE_LOOP.index:
-            return self.CONTINUE_LOOP(oparg, next_instr), True
+            self.last_instr = intmask(self.CONTINUE_LOOP(oparg, next_instr))
+            return PE_LEAVE, True
         elif opcode == opcodedesc.FOR_ITER.index:
             if self.FOR_ITER():
                 next_instr += oparg
