@@ -155,8 +155,11 @@ _BINARY_LATE_STATIC_OPS = (
     "uint_lshift", "uint_floordiv", "uint_mod",
     "uint_eq", "uint_ne", "uint_lt", "uint_le", "uint_gt", "uint_ge",
 )
+# The casts are here because a target mixing a signed oparg with an unsigned
+# pc converts one to the other before combining them.
 _UNARY_LATE_STATIC_OPS = ("int_neg", "int_invert", "int_is_true",
-                          "uint_invert", "uint_is_true")
+                          "uint_invert", "uint_is_true",
+                          "cast_int_to_uint", "cast_uint_to_int")
 
 
 def _apply_late_static_op(opname, restype, values):
@@ -245,6 +248,10 @@ def _apply_late_static_op(opname, restype, values):
             return llop.uint_invert(restype, only)
         if opname == "uint_is_true":
             return llop.uint_is_true(restype, only)
+        if opname == "cast_int_to_uint":
+            return llop.cast_int_to_uint(restype, only)
+        if opname == "cast_uint_to_int":
+            return llop.cast_uint_to_int(restype, only)
     # Not %r: RPython's rtyper only implements %s/%d/... formatting.
     raise ValueError(
         "no runtime-cogen dispatch for late-static op %s -- add it to "

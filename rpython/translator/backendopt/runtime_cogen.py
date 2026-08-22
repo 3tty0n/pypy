@@ -36,17 +36,22 @@ def generate_for_live_code(extension, linker, codewriter, code, guard, ref,
     decline, so a caller on a lookup-miss path must keep its own
     ref-keyed record, or every miss re-runs generation from scratch.
     """
-    from rpython.rlib.debug import debug_start, debug_stop
+    from rpython.rlib.debug import (debug_print, debug_start,
+                                    debug_stop)
     debug_start("pe-cogen-scan")
     try:
         program = extension.generate(code, entry_pc, entry_state)
-    except Exception:
+    except Exception as error:
         # Same catch-all as install below: one code object the scan cannot
         # handle must stay unlinked, not bring the process down.
+        debug_print("pe-cogen-scan raised", str(error))
         program = None
     finally:
         debug_stop("pe-cogen-scan")
     if program is None:
+        blocked_pc, blocked_key = extension.last_blocked
+        debug_print("pe-cogen-scan declined: blocked pc", blocked_pc,
+                    "key", blocked_key)
         return None
     debug_start("pe-cogen-install")
     try:

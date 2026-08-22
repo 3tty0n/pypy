@@ -391,6 +391,7 @@ class PyPyTarget(object):
                 print '[pe] templates: %d, unsupported: %d' % (
                     len(extension.templates), len(extension.unsupported))
                 pe_offline.report_unsupported(extension, sys.stdout)
+                pe_offline.report_unresolvable(extension, sys.stdout)
                 return None
 
             driver.translator._pe_linked_setup = report

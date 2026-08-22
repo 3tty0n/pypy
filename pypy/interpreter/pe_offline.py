@@ -155,6 +155,35 @@ def stamp_after_make_jitcodes(mainjitcode):
     register_native_insn_coverage(codewriter, native_table)
 
 
+def report_unresolvable(extension, out=None):
+    """Templates whose targets the runtime resolver cannot evaluate.
+
+    The same call the cogen callback makes, with dummy bindings: a late-static
+    operation with no dispatch shows up here, at translation time, instead of
+    as a decline inside the translated binary.
+    """
+    from pypy.tool.stdlib_opcode import opcode_method_names
+
+    from rpython.rlib.rarithmetic import r_uint
+
+    lines = []
+    # The pc must have the type interp_step declares, or a target mixing it
+    # with a signed oparg fails here for a reason the runtime would not have.
+    bindings = {"pc": r_uint(0), "oparg": 0}
+    for key in sorted(extension.templates):
+        try:
+            extension.templates[key].resolve_targets(bindings)
+        except Exception as error:
+            name = opcode_method_names[key] if key < len(
+                opcode_method_names) else str(key)
+            lines.append("[pe] unresolvable targets in %s: %s: %s" % (
+                name, error.__class__.__name__, error))
+    if out is not None:
+        for line in lines:
+            print >> out, line
+    return lines
+
+
 def install_runtime_cogen(codewriter, jitdriver_sd, translator):
     """Translation-time entry point: wire runtime cogen onto the portal."""
     from pypy.interpreter.pycode import PyCode
