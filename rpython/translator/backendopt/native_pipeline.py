@@ -70,6 +70,11 @@ class NativeSSARepr(object):
 # ____________________________________________________________
 # emit_native: port of ProgramEmitter.emit/_place/_localise/_emit_moves.
 
+# List holder: a plain module int would fold to a translation constant.
+_prologue_copies = [0]
+_boundary_moves = [0]
+
+
 def _log_insn_mix(ssarepr, program):
     """What the emitted program is made of, per opname.
 
@@ -83,8 +88,11 @@ def _log_insn_mix(ssarepr, program):
     for insn in ssarepr.insns:
         name = insn.opcode
         counts[name] = counts.get(name, 0) + 1
-    debug_print("pe-cogen-mix blocks=%d insns=%d" % (
-        len(program.blocks), len(ssarepr.insns)))
+    debug_print("pe-cogen-mix blocks=%d insns=%d prologue=%d boundary=%d" % (
+        len(program.blocks), len(ssarepr.insns), _prologue_copies[0],
+        _boundary_moves[0]))
+    _prologue_copies[0] = 0
+    _boundary_moves[0] = 0
     # No sorted(): not RPython, and a histogram needs no order.
     for name, count in counts.items():
         debug_print("pe-cogen-mix   %s %d" % (name, count))
@@ -174,6 +182,7 @@ def _place_native(ssarepr, program, pc, fragments, scratch):
         # intmask: a late-static value is a machine-word constant here, and a
         # guest interpreter may hold its pc unsigned.
         const = NIntConst(intmask(block.bindings[bname]))
+        _prologue_copies[0] += 1
         ssarepr.insns.append(
             NativeInsn("%s_copy" % kind, [const], _register(kind, index)))
     targets = flatten_resolved_targets(
@@ -288,6 +297,7 @@ def _emit_moves_native(ssarepr, sources, destinations, scratch, _names=None):
                 source = NIntConst(0)
         moves.append((kind, index, source))
 
+    _boundary_moves[0] += len(moves)
     pending = list(moves)
     emitted = []
     while pending:

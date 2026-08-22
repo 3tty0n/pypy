@@ -392,6 +392,7 @@ class PyPyTarget(object):
                     len(extension.templates), len(extension.unsupported))
                 pe_offline.report_unsupported(extension, sys.stdout)
                 pe_offline.report_unresolvable(extension, sys.stdout)
+                pe_offline.report_template_size(extension, sys.stdout)
                 return None
 
             driver.translator._pe_linked_setup = report

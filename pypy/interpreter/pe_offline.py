@@ -155,6 +155,22 @@ def stamp_after_make_jitcodes(mainjitcode):
     register_native_insn_coverage(codewriter, native_table)
 
 
+def report_template_size(extension, out=None):
+    """Total residual operations across all templates.
+
+    The emitted program is these operations plus the pipeline's own markers,
+    so this is the part a template-level simplification can move.
+    """
+    total = 0
+    for key in extension.templates:
+        total += len(extension.templates[key].operations)
+    line = "[pe] template operations: %d over %d templates" % (
+        total, len(extension.templates))
+    if out is not None:
+        print >> out, line
+    return line
+
+
 def report_unresolvable(extension, out=None):
     """Templates whose targets the runtime resolver cannot evaluate.
 
