@@ -53,6 +53,11 @@ class NativeSwitchDictDescr(SwitchDictDescr):
     instance under RPython's type system.
     """
 
+    # Class-level default: an interpreter whose residual code has no switch
+    # never constructs one, and the isinstance branches that read this would
+    # then look at a classdef with no attributes at all.
+    _native_labels = []
+
 
 class NativeSSARepr(object):
     """Minimal stand-in for SSARepr so Assembler.assemble can run on it."""

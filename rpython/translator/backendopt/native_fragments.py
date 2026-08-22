@@ -163,7 +163,15 @@ class NDescr(NOperand):
 
 class NSwitchDictOperand(NOperand):
     """Not a direct SwitchDictDescr: a shared fragment's descr must not be
-    mutated by two different placements -- emit_native rebuilds it fresh."""
+    mutated by two different placements -- emit_native rebuilds it fresh.
+
+    Class-level defaults: an interpreter whose residual code has no switch
+    never constructs one, and the isinstance branch that reads these would
+    then look at a classdef with no attributes at all.
+    """
+    keys = []
+    label_ids = []
+
     def __init__(self, keys, label_ids):
         self.keys = keys
         self.label_ids = label_ids

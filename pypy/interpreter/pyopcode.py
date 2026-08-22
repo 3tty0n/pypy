@@ -264,8 +264,10 @@ class __extend__(pyframe.PyFrame):
                 return PE_LEAVE, block.handle(self, unroller), True
         elif opcode == opcodedesc.END_FINALLY.index:
             unroller = self.end_finally()
+            # Every exit here is a Finish: a template's exits must be all
+            # Finish or all Continue, and the unrolling ones are dynamic.
             if not isinstance(unroller, SuspendedUnroller):
-                return pc, pc, True
+                return PE_LEAVE, pc, True
             # go on unrolling the stack
             block = self.unrollstack(unroller.kind)
             if block is None:
