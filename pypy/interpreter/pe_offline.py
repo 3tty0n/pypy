@@ -58,7 +58,7 @@ def decode_instruction(code, pc):
         oparg = (oparg * 65536) | (hi * 256) | lo
 
     bindings = {
-        "next_instr": next_instr,
+        "pc": next_instr,
         "oparg": oparg,
     }
     return opcode, bindings
@@ -100,7 +100,7 @@ def report_unsupported(extension, out=None):
 # name each carries in interp_step.  Everything below derives from this table,
 # so the orders cannot drift apart.
 PORTAL_ARGUMENTS = (
-    ("next_instr", "next_instr"),                # green
+    ("next_instr", "pc"),                        # green
     ("is_being_profiled", "is_being_profiled"),  # green
     ("pycode", "pycode"),                        # green
     ("frame", "self"),                           # reds from here on
@@ -108,7 +108,7 @@ PORTAL_ARGUMENTS = (
 )
 # Bound as constants by the generating extension, so the portal never supplies
 # them.
-LATE_STATIC_ARGUMENTS = ("next_instr",)
+LATE_STATIC_ARGUMENTS = ("pc",)
 
 JIT_MERGE_POINT_ARGS = tuple(step for _green, step in PORTAL_ARGUMENTS)
 RUNTIME_NAMES = tuple(step for _g, step in PORTAL_ARGUMENTS
@@ -116,7 +116,7 @@ RUNTIME_NAMES = tuple(step for _g, step in PORTAL_ARGUMENTS
 PORTAL_SOURCES = tuple(index for index, (_g, step)
                        in enumerate(PORTAL_ARGUMENTS)
                        if step not in LATE_STATIC_ARGUMENTS)
-GREEN_PC_INDEX = JIT_MERGE_POINT_ARGS.index("next_instr")
+GREEN_PC_INDEX = JIT_MERGE_POINT_ARGS.index("pc")
 GREEN_CODE_INDEX = JIT_MERGE_POINT_ARGS.index("pycode")
 
 

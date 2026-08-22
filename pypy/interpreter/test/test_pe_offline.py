@@ -19,8 +19,8 @@ def decode_all(co_code):
     while pc < len(co_code):
         opcode, bindings = pe_offline.decode_instruction(code, pc)
         result.append((pc, opcode, bindings["oparg"]))
-        assert bindings["next_instr"] > pc
-        pc = bindings["next_instr"]
+        assert bindings["pc"] > pc
+        pc = bindings["pc"]
     return result
 
 
