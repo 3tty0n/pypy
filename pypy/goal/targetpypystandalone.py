@@ -377,6 +377,24 @@ class PyPyTarget(object):
     def jitpolicy(self, driver):
         from pypy.module.pypyjit.policy import PyPyJitPolicy
         from pypy.module.pypyjit.hooks import pypy_hooks
+
+        # PYPY_PE_REPORT lists, on stdout, the opcodes the partial evaluator
+        # could not build a residual template for.  It installs nothing: the
+        # point is to learn what is specializable before wiring cogen up.
+        if os.environ.get('PYPY_PE_REPORT'):
+            from pypy.interpreter import pe_offline
+
+            def report(codewriter, jitdriver_sd, translator):
+                if jitdriver_sd.jitdriver.name != 'pypyjit':
+                    return None
+                extension = pe_offline.build_generating_extension(translator)
+                print '[pe] templates: %d, unsupported: %d' % (
+                    len(extension.templates), len(extension.unsupported))
+                pe_offline.report_unsupported(extension, sys.stdout)
+                return None
+
+            driver.translator._pe_linked_setup = report
+
         return PyPyJitPolicy(pypy_hooks)
 
     def get_gchooks(self):
