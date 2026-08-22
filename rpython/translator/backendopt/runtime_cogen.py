@@ -38,8 +38,14 @@ def generate_for_live_code(extension, linker, codewriter, code, guard, ref,
     """
     from rpython.rlib.debug import debug_start, debug_stop
     debug_start("pe-cogen-scan")
-    program = extension.generate(code, entry_pc, entry_state)
-    debug_stop("pe-cogen-scan")
+    try:
+        program = extension.generate(code, entry_pc, entry_state)
+    except Exception:
+        # Same catch-all as install below: one code object the scan cannot
+        # handle must stay unlinked, not bring the process down.
+        program = None
+    finally:
+        debug_stop("pe-cogen-scan")
     if program is None:
         return None
     debug_start("pe-cogen-install")

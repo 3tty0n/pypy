@@ -145,12 +145,18 @@ def _is_late_static_operation(opname):
         return False
 
 
+# The unsigned variants are here because an interpreter may carry its pc
+# unsigned, which makes every operation on a late-static target unsigned too.
 _BINARY_LATE_STATIC_OPS = (
     "int_add", "int_sub", "int_mul", "int_and", "int_or", "int_xor",
     "int_lshift", "int_rshift", "uint_rshift", "int_floordiv", "int_mod",
     "int_eq", "int_ne", "int_lt", "int_le", "int_gt", "int_ge",
+    "uint_add", "uint_sub", "uint_mul", "uint_and", "uint_or", "uint_xor",
+    "uint_lshift", "uint_floordiv", "uint_mod",
+    "uint_eq", "uint_ne", "uint_lt", "uint_le", "uint_gt", "uint_ge",
 )
-_UNARY_LATE_STATIC_OPS = ("int_neg", "int_invert", "int_is_true")
+_UNARY_LATE_STATIC_OPS = ("int_neg", "int_invert", "int_is_true",
+                          "uint_invert", "uint_is_true")
 
 
 def _apply_late_static_op(opname, restype, values):
@@ -197,6 +203,36 @@ def _apply_late_static_op(opname, restype, values):
             return llop.int_gt(restype, left, right)
         if opname == "int_ge":
             return llop.int_ge(restype, left, right)
+        if opname == "uint_add":
+            return llop.uint_add(restype, left, right)
+        if opname == "uint_sub":
+            return llop.uint_sub(restype, left, right)
+        if opname == "uint_mul":
+            return llop.uint_mul(restype, left, right)
+        if opname == "uint_and":
+            return llop.uint_and(restype, left, right)
+        if opname == "uint_or":
+            return llop.uint_or(restype, left, right)
+        if opname == "uint_xor":
+            return llop.uint_xor(restype, left, right)
+        if opname == "uint_lshift":
+            return llop.uint_lshift(restype, left, right)
+        if opname == "uint_floordiv":
+            return llop.uint_floordiv(restype, left, right)
+        if opname == "uint_mod":
+            return llop.uint_mod(restype, left, right)
+        if opname == "uint_eq":
+            return llop.uint_eq(restype, left, right)
+        if opname == "uint_ne":
+            return llop.uint_ne(restype, left, right)
+        if opname == "uint_lt":
+            return llop.uint_lt(restype, left, right)
+        if opname == "uint_le":
+            return llop.uint_le(restype, left, right)
+        if opname == "uint_gt":
+            return llop.uint_gt(restype, left, right)
+        if opname == "uint_ge":
+            return llop.uint_ge(restype, left, right)
     if opname in _UNARY_LATE_STATIC_OPS:
         only = values[0]
         if opname == "int_neg":
@@ -205,6 +241,10 @@ def _apply_late_static_op(opname, restype, values):
             return llop.int_invert(restype, only)
         if opname == "int_is_true":
             return llop.int_is_true(restype, only)
+        if opname == "uint_invert":
+            return llop.uint_invert(restype, only)
+        if opname == "uint_is_true":
+            return llop.uint_is_true(restype, only)
     # Not %r: RPython's rtyper only implements %s/%d/... formatting.
     raise ValueError(
         "no runtime-cogen dispatch for late-static op %s -- add it to "
