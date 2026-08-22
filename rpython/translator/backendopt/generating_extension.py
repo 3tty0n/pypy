@@ -18,6 +18,7 @@ codewriter or a JitCode: turning the generated program into executable form is
 a separate back end, which is what still ties this to translation time.
 """
 
+from rpython.rlib.rarithmetic import intmask
 from rpython.translator.backendopt.partialeval_template import (
     Finish, LinkedResidualProgram, LinkedTemplateBlock)
 
@@ -173,7 +174,9 @@ class GeneratingExtension(object):
 
             key, bindings = self.decoder(code, pc)
             if key not in self.templates:
-                self.last_blocked = (pc, key)
+                # intmask: the sentinel below is signed, and a guest
+                # interpreter may carry its pc unsigned.
+                self.last_blocked = (intmask(pc), key)
                 return None
             template = self.templates[key]
 

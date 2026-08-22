@@ -5,7 +5,8 @@ import os
 from rpython.jit.metainterp.history import AbstractDescr, ConstInt, new_ref_dict
 from rpython.jit.metainterp.support import adr2int
 from rpython.rlib.debug import debug_start, debug_stop, debug_print
-from rpython.rlib.objectmodel import we_are_translated, specialize
+from rpython.rlib.objectmodel import we_are_translated
+from rpython.rlib.rarithmetic import intmask, specialize
 from rpython.rlib.rarithmetic import base_int
 from rpython.rtyper.lltypesystem import llmemory, lltype
 
@@ -69,6 +70,11 @@ def register_late_jitcode(jitcode, own_liveness_info):
     _late_jitcodes_by_index[jitcode.index] = jitcode
 
 
+def _signed_pcs(pcs):
+    """A guest pc list, normalised to the signed ints these tables hold."""
+    return [intmask(pc) for pc in pcs]
+
+
 class PELinkedProgram(object):
     """One offline-linked JitCode, and the portal entry it stands for.
 
@@ -115,17 +121,19 @@ class PELinkedProgram(object):
 
     def set_guard(self, pc_index, pcs, ref_index, legit_entry_pcs):
         self.guard_pc_index = pc_index
-        self.guard_pcs = list(pcs)
+        self.guard_pcs = _signed_pcs(pcs)
         self.guard_ref_index = ref_index
-        self.legit_entry_pcs = list(legit_entry_pcs)
+        self.legit_entry_pcs = _signed_pcs(legit_entry_pcs)
 
     def _covers(self, pc):
+        pc = intmask(pc)
         for covered in self.guard_pcs:
             if covered == pc:
                 return True
         return False
 
     def is_legit_entry_pc(self, pc):
+        pc = intmask(pc)
         for covered in self.legit_entry_pcs:
             if covered == pc:
                 return True
@@ -197,16 +205,19 @@ class PEJitCodeMetadata(object):
 
     def __init__(self, entry_pc, block_pcs, loop_headers, backedge_sources,
                  backedge_targets, entry_pcs, entry_positions):
-        self.entry_pc = entry_pc
+        # intmask everywhere a guest pc enters these tables: an interpreter
+        # may carry its pc unsigned (PyPy's next_instr is an r_uint), while
+        # the tables and their -1 sentinels are signed.
+        self.entry_pc = intmask(entry_pc)
         # All of these must be RPython lists rather than tuples.  A portal may
         # carry several linked programs, whose CFGs differ in size, and tuples
         # of different lengths cannot be unified; the searched ones would also
         # need a constant index as tuples.
-        self.block_pcs = list(block_pcs)
-        self.loop_headers = list(loop_headers)
-        self.backedge_sources = list(backedge_sources)
-        self.backedge_targets = list(backedge_targets)
-        self.entry_pcs = list(entry_pcs)
+        self.block_pcs = _signed_pcs(block_pcs)
+        self.loop_headers = _signed_pcs(loop_headers)
+        self.backedge_sources = _signed_pcs(backedge_sources)
+        self.backedge_targets = _signed_pcs(backedge_targets)
+        self.entry_pcs = _signed_pcs(entry_pcs)
         self.entry_positions = list(entry_positions)
         # One portal serves every code object the interpreter runs, so it can
         # carry several linked programs; the first whose guard matches wins.
@@ -379,13 +390,16 @@ class PEJitCodeMetadata(object):
         return jitcode.pe_is_linked
 
     def is_loop_header(self, pc):
-        return pc in self.loop_headers
+        # intmask: these tables are signed, and a guest interpreter may
+        # carry its pc unsigned.
+        return intmask(pc) in self.loop_headers
 
     def position_for_pc(self, pc):
         # Linear scan, even though every block boundary is now a guard pc and
         # this list can run to dozens of entries: it only runs once per trace
         # start, which is rare, so a dict would trade a real cost (building
         # and keeping it) for a saving that never shows up in profiles.
+        pc = intmask(pc)
         for index in range(len(self.entry_pcs)):
             if self.entry_pcs[index] == pc:
                 return self.entry_positions[index]

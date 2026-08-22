@@ -240,7 +240,9 @@ class Continue(Terminator):
         self.dynamic_values = tuple(dynamic_values)
         # Further late-static interpreter state for the successor, as
         # (name, expression) pairs -- an operand-stack depth, for instance.
-        self.state = tuple(state)
+        # A list, not a tuple: an interpreter with no late-static state
+        # gives an empty one, and RPython cannot iterate a 0-tuple.
+        self.state = list(state)
 
 
 class Finish(Terminator):
@@ -248,7 +250,9 @@ class Finish(Terminator):
 
     def __init__(self, values, state=()):
         self.values = tuple(values)
-        self.state = tuple(state)
+        # A list, not a tuple: an interpreter with no late-static state
+        # gives an empty one, and RPython cannot iterate a 0-tuple.
+        self.state = list(state)
 
 
 class Branch(Terminator):
@@ -265,7 +269,9 @@ class Branch(Terminator):
         self.true_target = true_target
         self.false_target = false_target
         self.dynamic_values = tuple(dynamic_values)
-        self.state = tuple(state)
+        # A list, not a tuple: an interpreter with no late-static state
+        # gives an empty one, and RPython cannot iterate a 0-tuple.
+        self.state = list(state)
 
 
 class ResidualTemplate(object):

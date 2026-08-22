@@ -58,7 +58,15 @@ class NRefConst(NOperand):
 
 class NFloatConst(NOperand):
     """A float boundary with no source falls back to an int-kind
-    NIntConst(0), not NFloatConst(0) -- mirrors a legacy quirk."""
+    NIntConst(0), not NFloatConst(0) -- mirrors a legacy quirk.
+
+    Nothing constructs one, so the class-level default is what gives the
+    classdef its attribute: an interpreter whose residual code has float
+    boundaries makes the assembler's isinstance branch reachable, and
+    reading .value off an attribute-less classdef blocks annotation.
+    """
+    value = 0.0
+
     def __init__(self, value):
         self.value = value
 

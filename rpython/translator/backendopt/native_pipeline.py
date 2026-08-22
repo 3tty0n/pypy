@@ -146,7 +146,9 @@ def _place_native(ssarepr, program, pc, fragments, scratch):
     fragment = fragments[pc]
     block = program.blocks[pc]
     for kind, index, bname in fragment.prologue:
-        const = NIntConst(block.bindings[bname])
+        # intmask: a late-static value is a machine-word constant here, and a
+        # guest interpreter may hold its pc unsigned.
+        const = NIntConst(intmask(block.bindings[bname]))
         ssarepr.insns.append(
             NativeInsn("%s_copy" % kind, [const], _register(kind, index)))
     targets = flatten_resolved_targets(
@@ -222,8 +224,8 @@ def _patch_hole_native(hole, pc, bindings, is_marker):
         "native_pipeline: non-int hole %s -- no interpreter this IR "
         "currently serves has one" % (hole.name,))
     if is_marker and hole.name == "pc":
-        return NIntConst(pc)
-    return NIntConst(bindings[hole.name])
+        return NIntConst(intmask(pc))
+    return NIntConst(intmask(bindings[hole.name]))
 
 
 def _emit_moves_native(ssarepr, sources, destinations, scratch, _names=None):
