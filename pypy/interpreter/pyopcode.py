@@ -303,23 +303,28 @@ class __extend__(pyframe.PyFrame):
             return PE_LEAVE, _residual_exit(target)
         elif opcode == opcodedesc.FOR_ITER.index:
             if self.FOR_ITER():
-                pc += oparg
+                return pc + r_uint(oparg), None
+            return pc, None
         elif opcode == opcodedesc.JUMP_FORWARD.index:
             pc = self.JUMP_FORWARD(oparg, pc)
         elif opcode == opcodedesc.JUMP_IF_FALSE_OR_POP.index:
             if self.JUMP_IF_FALSE_OR_POP():
-                pc = r_uint(oparg)
+                return r_uint(oparg), None
+            return pc, None
         elif opcode == opcodedesc.JUMP_IF_NOT_DEBUG.index:
             pc = self.JUMP_IF_NOT_DEBUG(oparg, pc)
         elif opcode == opcodedesc.JUMP_IF_TRUE_OR_POP.index:
             if self.JUMP_IF_TRUE_OR_POP():
-                pc = r_uint(oparg)
+                return r_uint(oparg), None
+            return pc, None
         elif opcode == opcodedesc.POP_JUMP_IF_FALSE.index:
             if self.POP_JUMP_IF_FALSE():
-                pc = r_uint(oparg)
+                return r_uint(oparg), None
+            return pc, None
         elif opcode == opcodedesc.POP_JUMP_IF_TRUE.index:
             if self.POP_JUMP_IF_TRUE():
-                pc = r_uint(oparg)
+                return r_uint(oparg), None
+            return pc, None
         elif opcode == opcodedesc.BINARY_ADD.index:
             self.BINARY_ADD(oparg, pc)
         elif opcode == opcodedesc.BINARY_AND.index:

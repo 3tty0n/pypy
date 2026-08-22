@@ -18,6 +18,7 @@ codewriter or a JitCode: turning the generated program into executable form is
 a separate back end, which is what still ties this to translation time.
 """
 
+from rpython.rlib.debug import debug_print
 from rpython.rlib.rarithmetic import intmask
 from rpython.translator.backendopt.partialeval_template import (
     Finish, LinkedResidualProgram, LinkedTemplateBlock)
@@ -202,6 +203,8 @@ class GeneratingExtension(object):
                     continue
                 # targets is already a plain list (0-2 entries) here.
                 for target in targets:
+                    debug_print("pe-cogen-scan edge", intmask(pc), "key",
+                                key, "->", intmask(target))
                     if target not in block.successors:
                         block.successors.append(target)
                     if target not in blocks:
