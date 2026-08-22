@@ -249,19 +249,24 @@ class __extend__(pyframe.PyFrame):
         elif opcode == opcodedesc.CONTINUE_LOOP.index:
             return self.CONTINUE_LOOP(oparg, next_instr), True
         elif opcode == opcodedesc.FOR_ITER.index:
-            next_instr = self.FOR_ITER(oparg, next_instr)
+            if self.FOR_ITER():
+                next_instr += oparg
         elif opcode == opcodedesc.JUMP_FORWARD.index:
             next_instr = self.JUMP_FORWARD(oparg, next_instr)
         elif opcode == opcodedesc.JUMP_IF_FALSE_OR_POP.index:
-            next_instr = self.JUMP_IF_FALSE_OR_POP(oparg, next_instr)
+            if self.JUMP_IF_FALSE_OR_POP():
+                next_instr = r_uint(oparg)
         elif opcode == opcodedesc.JUMP_IF_NOT_DEBUG.index:
             next_instr = self.JUMP_IF_NOT_DEBUG(oparg, next_instr)
         elif opcode == opcodedesc.JUMP_IF_TRUE_OR_POP.index:
-            next_instr = self.JUMP_IF_TRUE_OR_POP(oparg, next_instr)
+            if self.JUMP_IF_TRUE_OR_POP():
+                next_instr = r_uint(oparg)
         elif opcode == opcodedesc.POP_JUMP_IF_FALSE.index:
-            next_instr = self.POP_JUMP_IF_FALSE(oparg, next_instr)
+            if self.POP_JUMP_IF_FALSE():
+                next_instr = r_uint(oparg)
         elif opcode == opcodedesc.POP_JUMP_IF_TRUE.index:
-            next_instr = self.POP_JUMP_IF_TRUE(oparg, next_instr)
+            if self.POP_JUMP_IF_TRUE():
+                next_instr = r_uint(oparg)
         elif opcode == opcodedesc.BINARY_ADD.index:
             self.BINARY_ADD(oparg, next_instr)
         elif opcode == opcodedesc.BINARY_AND.index:
@@ -1131,31 +1136,27 @@ class __extend__(pyframe.PyFrame):
         next_instr += jumpby
         return next_instr
 
-    def POP_JUMP_IF_FALSE(self, target, next_instr):
+    def POP_JUMP_IF_FALSE(self):
         w_value = self.popvalue()
-        if not self.space.is_true(w_value):
-            return target
-        return next_instr
+        return not self.space.is_true(w_value)
 
-    def POP_JUMP_IF_TRUE(self, target, next_instr):
+    def POP_JUMP_IF_TRUE(self):
         w_value = self.popvalue()
-        if self.space.is_true(w_value):
-            return target
-        return next_instr
+        return self.space.is_true(w_value)
 
-    def JUMP_IF_FALSE_OR_POP(self, target, next_instr):
+    def JUMP_IF_FALSE_OR_POP(self):
         w_value = self.peekvalue()
         if not self.space.is_true(w_value):
-            return target
+            return True
         self.popvalue()
-        return next_instr
+        return False
 
-    def JUMP_IF_TRUE_OR_POP(self, target, next_instr):
+    def JUMP_IF_TRUE_OR_POP(self):
         w_value = self.peekvalue()
         if self.space.is_true(w_value):
-            return target
+            return True
         self.popvalue()
-        return next_instr
+        return False
 
     def JUMP_IF_NOT_DEBUG(self, jumpby, next_instr):
         if not self.space.sys.debug:
@@ -1167,7 +1168,8 @@ class __extend__(pyframe.PyFrame):
         w_iterator = self.space.iter(w_iterable)
         self.pushvalue(w_iterator)
 
-    def FOR_ITER(self, jumpby, next_instr):
+    def FOR_ITER(self):
+        """Advance the iterator; True when it was exhausted and we jump."""
         w_iterator = self.peekvalue()
         try:
             w_nextitem = self.space.next(w_iterator)
@@ -1176,10 +1178,9 @@ class __extend__(pyframe.PyFrame):
                 raise
             # iterator exhausted
             self.popvalue()
-            next_instr += jumpby
-        else:
-            self.pushvalue(w_nextitem)
-        return next_instr
+            return True
+        self.pushvalue(w_nextitem)
+        return False
 
     def SETUP_LOOP(self, offsettoend, next_instr):
         block = LoopBlock(self, next_instr + offsettoend, self.lastblock)
