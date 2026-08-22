@@ -100,6 +100,8 @@ class __extend__(PyFrame):
             return self.popvalue()
 
     def jump_absolute(self, jumpto, ec):
+        """True when a trace hook moved the pc; it is then in last_instr."""
+        moved = False
         if we_are_jitted():
             #
             # assume that only threads are using the bytecode counter
@@ -110,12 +112,13 @@ class __extend__(PyFrame):
             #
             self.last_instr = intmask(jumpto)
             ec.bytecode_trace(self, decr_by)
+            moved = self.last_instr != intmask(jumpto)
             jumpto = r_uint(self.last_instr)
         #
         pypyjitdriver.can_enter_jit(frame=self, ec=ec, next_instr=jumpto,
                                  pycode=self.getcode(),
                                  is_being_profiled=self.get_is_being_profiled())
-        return jumpto
+        return moved
 
 def _get_adapted_tick_counter():
     # Normally, the tick counter is decremented by 100 for every

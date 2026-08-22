@@ -49,8 +49,12 @@ def binaryoperation(operationname):
 opcodedesc = bytecode_spec.opcodedesc
 HAVE_ARGUMENT = bytecode_spec.HAVE_ARGUMENT
 
+# Returned by interp_step in place of a next pc that is not late-static: a
+# residual program ends there, and the dispatch loop resumes from last_instr.
+PE_LEAVE = r_uint(-1)
+
 # One residual template per bytecode; the residual code branches on the pc.
-pedriver = PEDriver(static="opcode", split="next_instr")
+pedriver = PEDriver(static="opcode", split="next_instr", holes="oparg")
 
 
 class __extend__(pyframe.PyFrame):
@@ -203,7 +207,11 @@ class __extend__(pyframe.PyFrame):
 
             next_instr, leave = self.interp_step(
                 opcode, oparg, next_instr, pycode, is_being_profiled, ec)
-            if leave or jit.we_are_jitted():
+            if leave:
+                if next_instr == PE_LEAVE:
+                    next_instr = r_uint(self.last_instr)
+                return next_instr
+            if jit.we_are_jitted():
                 return next_instr
 
     @always_inline
@@ -228,8 +236,9 @@ class __extend__(pyframe.PyFrame):
                 raise Return
             else:
                 unroller = SReturnValue(w_returnvalue)
-                next_instr = block.handle(self, unroller)
-                return next_instr, True  # now inside a 'finally' block
+                # Inside a 'finally' block now, at a pc only the block knows.
+                self.last_instr = intmask(block.handle(self, unroller))
+                return PE_LEAVE, True
         elif opcode == opcodedesc.END_FINALLY.index:
             unroller = self.end_finally()
             if isinstance(unroller, SuspendedUnroller):
@@ -243,7 +252,9 @@ class __extend__(pyframe.PyFrame):
                     next_instr = block.handle(self, unroller)
             return next_instr, True
         elif opcode == opcodedesc.JUMP_ABSOLUTE.index:
-            return self.jump_absolute(oparg, ec), True
+            if self.jump_absolute(oparg, ec):
+                return PE_LEAVE, True
+            return r_uint(oparg), True
         elif opcode == opcodedesc.BREAK_LOOP.index:
             next_instr = self.BREAK_LOOP(oparg, next_instr)
         elif opcode == opcodedesc.CONTINUE_LOOP.index:
@@ -1126,11 +1137,12 @@ class __extend__(pyframe.PyFrame):
         jump_backward(self, jumpto)
 
     def jump_absolute(self, jumpto, ec):
+        """True when a trace hook moved the pc; it is then in last_instr."""
         # this function is overridden by pypy.module.pypyjit.interp_jit
         check_nonneg(jumpto)
         if self.space.reverse_debugging:
             self._revdb_jump_backward(jumpto)
-        return jumpto
+        return False
 
     def JUMP_FORWARD(self, jumpby, next_instr):
         next_instr += jumpby
@@ -1517,7 +1529,9 @@ class LoopBlock(FrameBlock):
             frame.append_block(self)
             jumpto = unroller.jump_to
             ec = frame.space.getexecutioncontext()
-            return r_uint(frame.jump_absolute(jumpto, ec))
+            if frame.jump_absolute(jumpto, ec):
+                return r_uint(frame.last_instr)
+            return r_uint(jumpto)
         else:
             # jump to the end of the loop
             self.cleanupstack(frame)
