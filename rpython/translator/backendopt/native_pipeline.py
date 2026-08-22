@@ -73,6 +73,7 @@ class NativeSSARepr(object):
 # List holder: a plain module int would fold to a translation constant.
 _prologue_copies = [0]
 _boundary_moves = [0]
+_dropped_copies = [0]
 
 
 def _log_insn_mix(ssarepr, program):
@@ -88,9 +89,11 @@ def _log_insn_mix(ssarepr, program):
     for insn in ssarepr.insns:
         name = insn.opcode
         counts[name] = counts.get(name, 0) + 1
-    debug_print("pe-cogen-mix blocks=%d insns=%d prologue=%d boundary=%d" % (
-        len(program.blocks), len(ssarepr.insns), _prologue_copies[0],
-        _boundary_moves[0]))
+    debug_print(
+        "pe-cogen-mix blocks=%d insns=%d prologue=%d boundary=%d dropped=%d"
+        % (len(program.blocks), len(ssarepr.insns), _prologue_copies[0],
+           _boundary_moves[0], _dropped_copies[0]))
+    _dropped_copies[0] = 0
     _prologue_copies[0] = 0
     _boundary_moves[0] = 0
     # No sorted(): not RPython, and a histogram needs no order.
@@ -1029,8 +1032,125 @@ class NativeAssembler(Assembler):
             descr.attach(as_dict)
 
 
+# Opcodes after which nothing may be assumed about a register: labels and
+# barriers join other paths, -live- pins registers for resume, and anything
+# that transfers control or can raise leaves the block.
+def _is_copy_barrier(opcode):
+    if opcode == "---" or opcode == "-live-":
+        return True
+    if opcode.startswith("@") or opcode.startswith("goto"):
+        return True
+    if opcode.startswith("live-"):
+        return True
+    return ("call" in opcode or "return" in opcode or "raise" in opcode
+            or opcode == "jit_merge_point" or opcode == "pe_bailout_point"
+            or opcode.startswith("guard") or "_guard_" in opcode)
+
+
+def _reg_key(operand):
+    """A register operand's identity as a string, empty for anything else.
+
+    A string, not a (kind, index) tuple: RPython cannot union a tuple with
+    the None a non-register would need to return.
+    """
+    if isinstance(operand, NReg):
+        return "%s%d" % (operand.kind, operand.index)
+    return ""
+
+
+def _copy_source(insn):
+    """The register a ``<kind>_copy`` reads, or None if it is not one."""
+    if not insn.opcode.endswith("_copy"):
+        return None
+    if len(insn.operands) != 1 or insn.result is None:
+        return None
+    if not _reg_key(insn.operands[0]) or not _reg_key(insn.result):
+        return None
+    return insn.operands[0]
+
+
+def optimise_copies(insns):
+    """Propagate and drop register copies across concatenated fragments.
+
+    Each fragment is flattened on its own, so it moves its boundary values
+    out of the registers ``enforce_input_args`` pinned them to and back
+    again.  Neither move is visible until the fragments are strung together,
+    which is why this runs here rather than on a template.
+
+    Block-local and conservative: every barrier clears what is known, and a
+    copy is dropped only when the rest of its own block overwrites the
+    destination without reading it.
+
+    Measured on PyPy this drops nothing: 202 of a 528-instruction program are
+    labels, barriers and -live- placeholders, so a block is about two and a
+    half instructions long and there is nowhere for a block-local pass to
+    look.  Removing these copies needs the live sets compute_liveness_native
+    produces, which means running after it and recomputing them, not here.
+    """
+    known = {}
+    for position in range(len(insns)):
+        insn = insns[position]
+        if _is_copy_barrier(insn.opcode):
+            known = {}
+            continue
+        operands = insn.operands
+        for index in range(len(operands)):
+            key = _reg_key(operands[index])
+            if key and key in known:
+                operands[index] = known[key]
+        result_key = _reg_key(insn.result)
+        source = _copy_source(insn)
+        if source is not None:
+            if result_key:
+                known[result_key] = source
+            continue
+        if result_key:
+            _forget(known, result_key)
+    return _drop_dead_copies(insns)
+
+
+def _forget(known, key):
+    """Drop what a write to ``key`` invalidates, as source and as target."""
+    for other in known.keys():
+        if other == key or _reg_key(known[other]) == key:
+            del known[other]
+
+
+def _drop_dead_copies(insns):
+    """Remove copies whose block overwrites the destination unread."""
+    keep = [True] * len(insns)
+    for position in range(len(insns)):
+        insn = insns[position]
+        if _copy_source(insn) is None:
+            continue
+        target = _reg_key(insn.result)
+        if not target:
+            continue
+        for later in range(position + 1, len(insns)):
+            other = insns[later]
+            if _is_copy_barrier(other.opcode):
+                break
+            read = False
+            for operand in other.operands:
+                if _reg_key(operand) == target:
+                    read = True
+                    break
+            if read:
+                break
+            if _reg_key(other.result) == target:
+                keep[position] = False
+                break
+    result = []
+    for position in range(len(insns)):
+        if keep[position]:
+            result.append(insns[position])
+    _dropped_copies[0] += len(insns) - len(result)
+    return result
+
+
 def emit_and_assemble_native(native_table, program, name,
-                             has_merge_points=False, assembler=None):
+                             has_merge_points=False, assembler=None,
+                             optimise=True):
     """Full native pipeline: emit_native -> compute_liveness_native ->
     NativeAssembler.assemble, mirroring ProgramEmitter.emit's own order.
 
@@ -1039,6 +1159,8 @@ def emit_and_assemble_native(native_table, program, name,
     from rpython.rlib.debug import debug_start, debug_stop
     debug_start("pe-cogen-emit")
     ssarepr, counts = emit_native(native_table, program, name, has_merge_points)
+    if optimise:
+        ssarepr.insns = optimise_copies(ssarepr.insns)
     _log_insn_mix(ssarepr, program)
     debug_stop("pe-cogen-emit")
     debug_start("pe-cogen-live")
