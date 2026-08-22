@@ -228,15 +228,22 @@ class __extend__(pyframe.PyFrame):
                 next_instr += 3
                 oparg = (oparg * 65536) | (hi * 256) | lo
 
-            # The first result is the late-static split value: the partial
-            # evaluator reads it, and PE_RETURN also tells the loop to stop.
-            split, _w_res, next_instr, leave = self.interp_step(
+            # (split, w_result) is the whole contract: anything returned
+            # after the result is carried to the successor as a boundary
+            # value, so the loop's own bookkeeping cannot ride along there.
+            split, w_res = self.interp_step(
                 opcode, oparg, next_instr, pycode, is_being_profiled, ec)
-            if leave:
-                if split == PE_RETURN:
-                    raise Return
-                return next_instr
-            if jit.we_are_jitted():
+            if split == PE_RETURN:
+                raise Return
+            if split == PE_LEAVE:
+                assert isinstance(w_res, pyframe.W_ResidualExit)
+                return w_res.next_instr
+            next_instr = split
+            # A backward jump must reach dispatch()'s merge point, but stays
+            # an ordinary successor inside a residual program, so it cannot
+            # say so in its split value; the opcode says it here instead.
+            if (opcode == opcodedesc.JUMP_ABSOLUTE.index
+                    or jit.we_are_jitted()):
                 return next_instr
 
     @always_inline
@@ -247,10 +254,10 @@ class __extend__(pyframe.PyFrame):
         ``opcode`` is offline-static, so the partial evaluator builds one
         residual template per bytecode; ``pc`` is late-static.
 
-        Returns ``(split, w_result, next_pc, leave)``.  ``split`` is the
-        late-static successor, or PE_LEAVE / PE_RETURN where the residual
-        program ends there; ``w_result`` is what the portal returns in that
-        case, and ``next_pc`` says where the generic loop resumes.
+        Returns ``(split, w_result)``.  ``split`` is the late-static
+        successor, or PE_LEAVE / PE_RETURN where the residual program ends
+        there; ``w_result`` is what the portal returns in that case, and for
+        PE_LEAVE it also carries the pc the generic loop resumes at.
         """
         pedriver.pe_merge_point(self=self, opcode=opcode, oparg=oparg,
                                 pc=pc, pycode=pycode,
@@ -258,42 +265,42 @@ class __extend__(pyframe.PyFrame):
         if opcode == opcodedesc.RETURN_VALUE.index:
             if not self.blockstack_non_empty():
                 self.frame_finished_execution = True  # for generators
-                return PE_RETURN, self.peekvalue(), pc, True
+                return PE_RETURN, self.peekvalue()
             w_returnvalue = self.popvalue()
             block = self.unrollstack(SReturnValue.kind)
             if block is None:
                 self.pushvalue(w_returnvalue)
-                return PE_RETURN, self.peekvalue(), pc, True
+                return PE_RETURN, self.peekvalue()
             else:
                 unroller = SReturnValue(w_returnvalue)
                 # Inside a 'finally' block now, at a pc only the block knows.
                 target = block.handle(self, unroller)
-                return PE_LEAVE, _residual_exit(target), target, True
+                return PE_LEAVE, _residual_exit(target)
         elif opcode == opcodedesc.END_FINALLY.index:
             unroller = self.end_finally()
             # Every exit here is a Finish: a template's exits must be all
             # Finish or all Continue, and the unrolling ones are dynamic.
             if not isinstance(unroller, SuspendedUnroller):
-                return PE_LEAVE, _residual_exit(pc), pc, True
+                return PE_LEAVE, _residual_exit(pc)
             # go on unrolling the stack
             block = self.unrollstack(unroller.kind)
             if block is None:
                 w_result = unroller.nomoreblocks()
                 self.pushvalue(w_result)
-                return PE_RETURN, self.peekvalue(), pc, True
+                return PE_RETURN, self.peekvalue()
             target = block.handle(self, unroller)
-            return PE_LEAVE, _residual_exit(target), target, True
+            return PE_LEAVE, _residual_exit(target)
         elif opcode == opcodedesc.JUMP_ABSOLUTE.index:
             if self.jump_absolute(oparg, ec):
                 raise PcMoved
-            return r_uint(oparg), None, r_uint(oparg), True
+            return r_uint(oparg), None
         elif opcode == opcodedesc.BREAK_LOOP.index:
             # Unrolling picks the pc; only the block stack knows which.
             target = self.BREAK_LOOP(oparg, pc)
-            return PE_LEAVE, _residual_exit(target), target, True
+            return PE_LEAVE, _residual_exit(target)
         elif opcode == opcodedesc.CONTINUE_LOOP.index:
             target = self.CONTINUE_LOOP(oparg, pc)
-            return PE_LEAVE, _residual_exit(target), target, True
+            return PE_LEAVE, _residual_exit(target)
         elif opcode == opcodedesc.FOR_ITER.index:
             if self.FOR_ITER():
                 pc += oparg
@@ -538,7 +545,7 @@ class __extend__(pyframe.PyFrame):
         else:
             self.MISSING_OPCODE(oparg, pc)
 
-        return pc, None, pc, False
+        return pc, None
 
     @jit.unroll_safe
     def unrollstack(self, unroller_kind):
