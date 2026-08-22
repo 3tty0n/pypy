@@ -259,6 +259,10 @@ class __extend__(pyframe.PyFrame):
         there; ``w_result`` is what the portal returns in that case, and for
         PE_LEAVE it also carries the pc the generic loop resumes at.
         """
+        # As dispatch() does on entry: without it the residual program reads
+        # the frame through the virtualizable's slow path and forces it on
+        # every access, which costs far more than the dispatch it removed.
+        self = jit.hint(self, access_directly=True)
         pedriver.pe_merge_point(self=self, opcode=opcode, oparg=oparg,
                                 pc=pc, pycode=pycode,
                                 is_being_profiled=is_being_profiled, ec=ec)
