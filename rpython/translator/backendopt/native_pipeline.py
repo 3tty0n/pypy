@@ -478,7 +478,8 @@ def _scan_nid_registry_native(insns):
 
 def _register_nid_native(reg, nid_to_compact, registry):
     if reg.nid not in nid_to_compact:
-        nid_to_compact[reg.nid] = len(registry)
+        reg.compact = len(registry)
+        nid_to_compact[reg.nid] = reg.compact
         registry.append(reg)
 
 
@@ -523,11 +524,11 @@ def _follow_label_bits_native(label_id, label2alive, alive):
 
 def _mark_bits_native(x, nid_to_compact, label2alive, alive):
     if isinstance(x, NReg):
-        _bits_set_native(alive, nid_to_compact[x.nid])
+        _bits_set_native(alive, x.compact)
     elif isinstance(x, NListOfKind):
         for item in x.items:
             if isinstance(item, NReg):
-                _bits_set_native(alive, nid_to_compact[item.nid])
+                _bits_set_native(alive, item.compact)
     elif isinstance(x, NTLabel):
         _follow_label_bits_native(x.label_id, label2alive, alive)
     elif isinstance(x, NDescr):
@@ -563,7 +564,7 @@ def _compute_liveness_native_pass_bits(insns, label2alive, alive,
         if opcode == "-live-":
             for x in insn.operands:
                 if isinstance(x, NReg):
-                    _bits_set_native(alive, nid_to_compact[x.nid])
+                    _bits_set_native(alive, x.compact)
                 elif isinstance(x, NTLabel):
                     _follow_label_bits_native(x.label_id, label2alive, alive)
             continue
@@ -573,7 +574,7 @@ def _compute_liveness_native_pass_bits(insns, label2alive, alive,
             continue
 
         if insn.result is not None:
-            _bits_clear_native(alive, nid_to_compact[insn.result.nid])
+            _bits_clear_native(alive, insn.result.compact)
         for x in insn.operands:
             _mark_bits_native(x, nid_to_compact, label2alive, alive)
 
@@ -619,7 +620,7 @@ def _rewrite_live_insns_bits(insns, label2alive, alive, registry,
             labels = []
             for x in insn.operands:
                 if isinstance(x, NReg):
-                    _bits_set_native(alive, nid_to_compact[x.nid])
+                    _bits_set_native(alive, x.compact)
                 elif isinstance(x, NTLabel):
                     _follow_label_bits_native(x.label_id, label2alive, alive)
                     labels.append(x)
@@ -632,7 +633,7 @@ def _rewrite_live_insns_bits(insns, label2alive, alive, registry,
             continue
 
         if insn.result is not None:
-            _bits_clear_native(alive, nid_to_compact[insn.result.nid])
+            _bits_clear_native(alive, insn.result.compact)
         for x in insn.operands:
             _mark_bits_native(x, nid_to_compact, label2alive, alive)
 

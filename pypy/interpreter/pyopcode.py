@@ -73,9 +73,26 @@ def _residual_exit(next_instr):
     return pyframe.W_ResidualExit(next_instr)
 
 # One residual template per bytecode; the residual code branches on the pc.
+def _worth_generating(program, code):
+    """Whether a residual program repays what assembling it costs.
+
+    Scanning a code object is under a tenth of a generation; the emit,
+    liveness and assembly that follow are the rest.  Deciding here, on the
+    scanned program rather than on how often the portal missed, is what lets
+    the expensive nine tenths be skipped for a code object that would not
+    have repaid them.
+
+    A program with no loop header is entered once per trace start and then
+    thrown away, so specialising it buys a single trace; one with a back
+    edge is re-entered for as long as the loop runs.
+    """
+    return len(program.loop_headers) > 0
+
+
 # The split argument must be called "pc": the machinery names its pc hole
 # that, whatever the step function calls the value elsewhere.
-pedriver = PEDriver(static="opcode", split="pc", holes="oparg")
+pedriver = PEDriver(static="opcode", split="pc", holes="oparg",
+                    worth_generating=_worth_generating)
 
 
 class __extend__(pyframe.PyFrame):

@@ -34,6 +34,12 @@ class NReg(NOperand):
     work unmodified.  nid: RPython can't key a set/dict by object identity
     at the runtime-read path, so compute_liveness_native uses nid instead.
     """
+    #: Index into the current program's compact liveness registry, stamped
+    #: by _register_nid_native.  A field, not a dict lookup: the liveness
+    #: fixpoint reads it once per operand per pass, which is where most of
+    #: a residual program's assembly time went.
+    compact = -1
+
     def __init__(self, kind, index):
         self.kind = kind
         self.index = index
