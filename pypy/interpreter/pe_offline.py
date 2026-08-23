@@ -212,13 +212,22 @@ _runtime_cogen_state = [None]
 
 
 # Generation cost is roughly linear in program size (scan+emit+liveness+
-# assembly are each one pass over the code object); calibrated from a
-# ~148-byte deltablue method costing ~1.4ms to generate.
-COST_PER_BYTE_NS = 10000
+# assembly are each one pass over the code object).  Recalibrated after the
+# static break-target change let programs span whole code objects: 87
+# krakatau programs cost 0.64s, about 7.4ms each.
+COST_PER_BYTE_NS = 20000
 # Cumulative tracing time must cover this many multiples of a generation's
 # estimated cost before it is worth doing -- it should repay itself several
 # times over, not just once.
 DEFAULT_GATE_K = 4.0
+
+
+# At most this fraction of the process's measured tracing time may be spent
+# generating.  The per-generation check says whether one program is plausibly
+# worth it; this bounds the total loss when many individually-plausible
+# programs never repay (krakatau: heavy tracing spread over hundreds of code
+# objects opens the per-generation gate for every one of them).
+GATE_BUDGET_FRACTION = 0.25
 
 
 class _GateState(object):
@@ -226,6 +235,9 @@ class _GateState(object):
     under translation (see _FoldedLoads in native_pipeline.py)."""
     k = DEFAULT_GATE_K
     env_read = False
+    # Estimated nanoseconds spent generating so far, by the same model the
+    # per-generation check uses.
+    spent_ns = 0.0
 
 
 _gate_state = _GateState()
@@ -247,7 +259,8 @@ def _gate_k():
 
 def _gate_allows(profiler, code_size):
     """Has this process traced enough to repay generating a program for a
-    code object of 'code_size' bytes, k times over?"""
+    code object of 'code_size' bytes, k times over -- and is there budget
+    left?  On success the estimated cost is charged against the budget."""
     from rpython.rlib.jit import Counters
 
     k = _gate_k()
@@ -255,7 +268,12 @@ def _gate_allows(profiler, code_size):
         return True
     tracing_ns = profiler.get_times(Counters.TRACING) * 1e9
     cost_ns = code_size * COST_PER_BYTE_NS
-    return tracing_ns >= k * cost_ns
+    if tracing_ns < k * cost_ns:
+        return False
+    if _gate_state.spent_ns + cost_ns > GATE_BUDGET_FRACTION * tracing_ns:
+        return False
+    _gate_state.spent_ns += cost_ns
+    return True
 
 
 def stamp_after_make_jitcodes(mainjitcode):
