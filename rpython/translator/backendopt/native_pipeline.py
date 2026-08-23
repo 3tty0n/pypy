@@ -548,49 +548,6 @@ def _mark_bits_native(x, nid_to_compact, label2alive, alive):
                 _follow_label_bits_native(label, label2alive, alive)
 
 
-def _compute_liveness_native_pass_bits(insns, label2alive, alive,
-                                       nid_to_compact, words):
-    """Bitmap twin of _compute_liveness_native_pass -- no -live- rewrite
-    here (that only happens once, in _rewrite_live_insns_bits, after
-    convergence; same final-only-rewrite argument as before applies
-    unchanged since this is still nid-exact, not a lossy collapse)."""
-    _bits_clear_all_native(alive)
-    must_continue = False
-
-    for i in range(len(insns) - 1, -1, -1):
-        insn = insns[i]
-        opcode = insn.opcode
-
-        if opcode == "@label":
-            label_id = insn.operands[0].label_id
-            alive_at_point = label2alive.get(label_id)
-            if alive_at_point is None:
-                alive_at_point = _new_bits_native(words)
-                label2alive[label_id] = alive_at_point
-            if _bits_or_into_native(alive_at_point, alive):
-                must_continue = True
-            continue
-
-        if opcode == "-live-":
-            for x in insn.operands:
-                if isinstance(x, NReg):
-                    _bits_set_native(alive, x.compact)
-                elif isinstance(x, NTLabel):
-                    _follow_label_bits_native(x.label_id, label2alive, alive)
-            continue
-
-        if opcode == "---":
-            _bits_clear_all_native(alive)
-            continue
-
-        if insn.result is not None:
-            _bits_clear_native(alive, insn.result.compact)
-        for x in insn.operands:
-            _mark_bits_native(x, nid_to_compact, label2alive, alive)
-
-    return must_continue
-
-
 def _materialize_bits_native(alive, registry, words):
     regs = []
     for word_idx in range(words):
@@ -648,19 +605,168 @@ def _rewrite_live_insns_bits(insns, label2alive, alive, registry,
             _mark_bits_native(x, nid_to_compact, label2alive, alive)
 
 
+def _segment_bounds_native(insns):
+    """Segments split at every '@label': a segment is the run of insns up
+    to (not including) the next '@label', so no segment ever contains one
+    -- unlike a '---'-bounded segment, which may carry several labels and
+    everything between them. Returns (starts, ends, label_after,
+    has_label_after): segment j spans insns[starts[j]:ends[j]], and, if
+    has_label_after[j], is immediately followed by the '@label' whose id
+    is label_after[j] (the label id space includes negative ids -- see
+    the module comment on _block_label_id -- so a missing-label flag is
+    needed alongside label_after, not a sentinel int).
+    """
+    n = len(insns)
+    starts = []
+    ends = []
+    label_after = []
+    has_label_after = []
+    start = 0
+    for i in range(n):
+        if insns[i].opcode == "@label":
+            starts.append(start)
+            ends.append(i)
+            label_after.append(insns[i].operands[0].label_id)
+            has_label_after.append(True)
+            start = i + 1
+    starts.append(start)
+    ends.append(n)
+    label_after.append(0)
+    has_label_after.append(False)
+    return starts, ends, label_after, has_label_after
+
+
+def _collect_labels_native(x, label_readers, seg_idx):
+    """Structural (label2alive-independent) pass: which segment indices
+    ever consult label2alive[label of 'x'], directly through a jump/
+    switch/'-live-' operand. Mirrors the label-following cases of
+    _mark_bits_native, minus the register-marking ones."""
+    if isinstance(x, NTLabel):
+        _add_reader_native(label_readers, x.label_id, seg_idx)
+    elif isinstance(x, NDescr):
+        descr = x.descr
+        if isinstance(descr, NativeSwitchDictDescr):
+            for _key, label in descr._native_labels:
+                _add_reader_native(label_readers, label, seg_idx)
+
+
+def _add_reader_native(label_readers, label_id, seg_idx):
+    readers = label_readers.get(label_id)
+    if readers is None:
+        readers = {}
+        label_readers[label_id] = readers
+    readers[seg_idx] = True
+
+
+def _process_segment_bits_native(insns, start, end, label2alive, alive,
+                                 nid_to_compact, words, label_after,
+                                 has_label_after):
+    """One local backward scan over insns[start:end) -- worklist phase
+    only, no '-live-' rewrite (that happens once, in _rewrite_live_insns_
+    bits, after convergence). Leaves the segment's own result (the alive
+    set at its leftmost point) in 'alive' for the caller to read.
+
+    Seeded from label2alive[label_after] (or empty, run off the end of
+    the program) instead of continuing from whatever segment happens to
+    sit to the right in the list: a '@label' boundary, unlike '---',
+    does not reset alive, so the whole-list pass this replaces treats
+    "falling into" this segment from the label after it as a real
+    contribution -- label2alive[label_after] is exactly that
+    contribution, already accumulated from every source (jumps in, and
+    this same physical fallthrough) that can reach the label.
+    """
+    _bits_clear_all_native(alive)
+    if has_label_after:
+        seed = label2alive.get(label_after)
+        if seed is not None:
+            _bits_or_into_native(alive, seed)
+
+    for i in range(end - 1, start - 1, -1):
+        insn = insns[i]
+        opcode = insn.opcode
+
+        if opcode == "-live-":
+            for x in insn.operands:
+                if isinstance(x, NReg):
+                    _bits_set_native(alive, x.compact)
+                elif isinstance(x, NTLabel):
+                    _follow_label_bits_native(x.label_id, label2alive, alive)
+            continue
+
+        if opcode == "---":
+            _bits_clear_all_native(alive)
+            continue
+
+        if insn.result is not None:
+            _bits_clear_native(alive, insn.result.compact)
+        for x in insn.operands:
+            _mark_bits_native(x, nid_to_compact, label2alive, alive)
+
+
 def _converge_liveness_native(insns, label2alive):
-    """Bitmap-backed replacement for repeated _compute_liveness_native_pass
+    """Segment-worklist replacement for repeated whole-list backward
     sweeps -- see the module comment above _WORD_BITS for why this stays
-    keyed by nid, not (kind, index). Returns the number of growth passes
-    (same counting convention as compute_liveness_native's dict-keyed
-    branch), for the debug_print stat.
+    keyed by nid, not (kind, index).
+
+    label2alive only crosses a segment boundary (a '@label'), so each
+    segment can be fixpointed on its own and only needs reprocessing when
+    a label it reads grows -- either directly (a jump/switch/'-live-'
+    operand naming it, see _collect_labels_native) or as its own seed
+    (the label immediately following it, see _process_segment_bits_
+    native) -- instead of rescanning the whole insn list every time one
+    label somewhere gains a register.
+
+    Returns the number of segment (re)processings, for the debug_print
+    stat -- not full-list passes, since there is no such notion here.
     """
     nid_to_compact, registry, words = _scan_nid_registry_native(insns)
+    n = len(insns)
+    if n == 0:
+        return 0
+    starts, ends, label_after, has_label_after = _segment_bounds_native(insns)
+    num_segs = len(starts)
+
+    label_readers = {}
+    for j in range(num_segs):
+        for i in range(starts[j], ends[j]):
+            for x in insns[i].operands:
+                _collect_labels_native(x, label_readers, j)
+        if has_label_after[j]:
+            _add_reader_native(label_readers, label_after[j], j)
+
     alive = _new_bits_native(words)
+    queued = [True] * num_segs
+    queue = []
+    for j in range(num_segs - 1, -1, -1):
+        queue.append(j)
+
+    qhead = 0
     rounds = 0
-    while _compute_liveness_native_pass_bits(
-            insns, label2alive, alive, nid_to_compact, words):
+    while qhead < len(queue):
+        j = queue[qhead]
+        qhead += 1
+        queued[j] = False
         rounds += 1
+        _process_segment_bits_native(
+            insns, starts[j], ends[j], label2alive, alive,
+            nid_to_compact, words, label_after[j], has_label_after[j])
+
+        if j > 0:
+            # segment j's own result is what a '@label' insn at the end
+            # of segment j - 1 would have OR'd into label2alive.
+            label_before = label_after[j - 1]
+            alive_at_point = label2alive.get(label_before)
+            if alive_at_point is None:
+                alive_at_point = _new_bits_native(words)
+                label2alive[label_before] = alive_at_point
+            if _bits_or_into_native(alive_at_point, alive):
+                readers = label_readers.get(label_before)
+                if readers is not None:
+                    for seg2 in readers.keys():
+                        if not queued[seg2]:
+                            queued[seg2] = True
+                            queue.append(seg2)
+
     _rewrite_live_insns_bits(
         insns, label2alive, alive, registry, nid_to_compact, words)
     return rounds
@@ -1080,28 +1186,30 @@ class NativeAssembler(Assembler):
 
 
 def _reg_key(operand):
-    """A register operand's identity as a string, empty for anything else.
+    """A register operand's identity as an int, -1 for anything else.
 
-    A string, not a (kind, index) tuple: RPython cannot union a tuple with
-    the None a non-register would need to return.
+    An int, not a string or tuple: this runs once per operand per fold, and
+    building a fresh string there dominated the whole pass; a tuple cannot
+    union with the None a non-register would need.  kind is "int", "ref" or
+    "float", so the first character distinguishes them.
     """
     if isinstance(operand, NReg):
-        return "%s%d" % (operand.kind, operand.index)
-    return ""
+        return operand.index * 4 + ord(operand.kind[0]) % 4
+    return -1
 
 
 def _constant_load(insn):
     """(constant, target key) of a ``<kind>_copy`` of a constant."""
     if not insn.opcode.endswith("_copy"):
-        return None, ""
+        return None, -1
     if len(insn.operands) != 1 or insn.result is None:
-        return None, ""
+        return None, -1
     source = insn.operands[0]
     if isinstance(source, NReg):
-        return None, ""            # a register move, not a materialisation
+        return None, -1            # a register move, not a materialisation
     target = _reg_key(insn.result)
-    if not target:
-        return None, ""
+    if target < 0:
+        return None, -1
     return source, target
 
 
@@ -1145,10 +1253,10 @@ def _registers_read_before_written(insns):
             continue
         for operand in insn.operands:
             key = _reg_key(operand)
-            if key and key not in written:
+            if key >= 0 and key not in written:
                 crossing[key] = True
         key = _reg_key(insn.result)
-        if key:
+        if key >= 0:
             written[key] = True
     return crossing
 
@@ -1165,9 +1273,34 @@ def _live_targets(insns):
             continue
         for operand in insn.operands:
             key = _reg_key(operand)
-            if key:
+            if key >= 0:
                 targets[key] = True
     return targets
+
+
+class _PendingLoad(object):
+    """A constant load in the current region still looking for its
+    region-end without having been proven unsafe to fold."""
+    def __init__(self, constant, position):
+        self.constant = constant
+        self.position = position
+        self.reads = []    # (insn index, operand index) pairs seen so far
+
+
+def _finalize_pending(entry, insns, keep):
+    """The load in 'entry' reached the end of its life unblocked: apply
+    its collected substitutions and drop the load itself."""
+    for later, index in entry.reads:
+        insns[later].operands[index] = entry.constant
+    keep[entry.position] = False
+
+
+def _finalize_all_pending(pending, insns, keep):
+    count = 0
+    for key, entry in pending.items():
+        _finalize_pending(entry, insns, keep)
+        count += 1
+    return count
 
 
 def fold_constant_loads(insns):
@@ -1189,43 +1322,67 @@ def fold_constant_loads(insns):
     Dropping a load only removes registers no ``-live-`` names anywhere,
     so the existing ``-live-`` sets -- conservative supersets already --
     stay valid and liveness is not recomputed.
+
+    One forward walk, not one scan per load: a region's constant loads
+    are tracked in ``pending`` (target register -> the load looking for
+    its readers) and resolved -- folded or cancelled -- as the walk
+    passes over their readers, instead of each load re-scanning the rest
+    of its region on its own.
     """
     live_targets = _live_targets(insns)
     crossing = _registers_read_before_written(insns)
     keep = [True] * len(insns)
     folded = 0
+    pending = {}    # target register key -> _PendingLoad
+
     for position in range(len(insns)):
-        constant, target = _constant_load(insns[position])
-        if constant is None or target in crossing or target in live_targets:
+        insn = insns[position]
+        opcode = insn.opcode
+
+        if _ends_region(opcode):
+            folded += _finalize_all_pending(pending, insns, keep)
+            pending = {}
             continue
-        reads = []
-        blocked = False
-        for later in range(position + 1, len(insns)):
-            other = insns[later]
-            if _ends_region(other.opcode):
-                break
-            if other.opcode == "-live-":
-                if _names_register(other.operands, target):
-                    blocked = True
-                    break
+
+        if opcode == "-live-":
+            # A guard may resume into a named register: its load must
+            # survive, so cancel any pending fold for it (in practice
+            # already excluded via live_targets above; kept here too so
+            # this stays correct even if that upfront filter ever loosens).
+            for operand in insn.operands:
+                key = _reg_key(operand)
+                if key in pending:
+                    del pending[key]
+            continue
+
+        for index in range(len(insn.operands)):
+            key = _reg_key(insn.operands[index])
+            if key < 0 or key not in pending:
                 continue
-            for index in range(len(other.operands)):
-                if _reg_key(other.operands[index]) == target:
-                    if not _keeps_argcode(constant, other):
-                        blocked = True
-                        break
-                    reads.append((later, index))
-            if blocked:
-                break
-            if _reg_key(other.result) == target:
-                break
-        if blocked:
-            continue
-        assert target not in live_targets    # no -live- resumes into it
-        for later, index in reads:
-            insns[later].operands[index] = constant
-        keep[position] = False
-        folded += 1
+            entry = pending[key]
+            if _keeps_argcode(entry.constant, insn):
+                entry.reads.append((position, index))
+            else:
+                del pending[key]    # blocked: the load stays
+
+        result_key = _reg_key(insn.result)
+        if result_key >= 0 and result_key in pending:
+            # A second write ends the first load's life: the reads seen
+            # so far are final, whether or not this insn is itself
+            # another constant load into the same register.
+            _finalize_pending(pending[result_key], insns, keep)
+            folded += 1
+            del pending[result_key]
+
+        constant, target = _constant_load(insn)
+        if constant is not None and target not in crossing and \
+                target not in live_targets:
+            pending[target] = _PendingLoad(constant, position)
+
+    # Reaching the end of insns with no closing region marker finalizes
+    # whatever is still pending, same as hitting one would.
+    folded += _finalize_all_pending(pending, insns, keep)
+
     if not folded:
         return insns
     _folded_loads.folded += folded
@@ -1234,13 +1391,6 @@ def fold_constant_loads(insns):
         if keep[position]:
             result.append(insns[position])
     return result
-
-
-def _names_register(operands, key):
-    for operand in operands:
-        if _reg_key(operand) == key:
-            return True
-    return False
 
 
 def emit_and_assemble_native(native_table, program, name,
@@ -1258,14 +1408,16 @@ def emit_and_assemble_native(native_table, program, name,
     debug_stop("pe-cogen-emit")
     debug_start("pe-cogen-live")
     compute_liveness_native(ssarepr.insns)
+    debug_stop("pe-cogen-live")
     if optimise:
         # The equivalence gate passes optimise=False: it checks that this
         # pipeline lowers a program exactly as the translation-time one
         # does, which is about the lowering, not about what is folded
         # after.  Folds after liveness, so -live- operands name the real
         # read set (see fold_constant_loads).
+        debug_start("pe-cogen-fold")
         ssarepr.insns = fold_constant_loads(ssarepr.insns)
-    debug_stop("pe-cogen-live")
+        debug_stop("pe-cogen-fold")
     _log_insn_mix(ssarepr, program)
     if assembler is None:
         assembler = NativeAssembler()

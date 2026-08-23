@@ -379,30 +379,24 @@ def test_old_algorithm_passes_scale_with_chain_length():
     assert passes_by_k[80] >= passes_by_k[10] + (80 - 10) // 4
 
 
-def test_new_and_old_round_counts_match():
-    """Field data showed pass count was never the bottleneck (~5 passes
-    on real programs) -- the redesign deliberately keeps the OLD control
-    flow (whole-list backward passes until no label grows) and only
-    swaps the per-pass representation (bitmaps instead of nid-keyed
-    dicts). Since both use the same growth-detection semantics over the
-    same nid-exact content, they must converge in the exact same number
-    of passes; this also guards against silently reintroducing a
-    representation that changes the fixpoint schedule.
+def test_new_round_counts_scale_with_chain_length():
+    """'rounds' no longer means the same thing as the old algorithm's pass
+    count: the segment worklist (native_pipeline.py's _converge_liveness_
+    native) reprocesses individual segments, not the whole insn list, so
+    a 'round' is one segment (re)processing, and there is no reason for
+    that count to match the old whole-list-pass count one for one (see
+    old_compute_liveness_native above for that algorithm). What must
+    still hold, the same shape as
+    test_old_algorithm_passes_scale_with_chain_length below: more chain
+    depth means more reprocessing, not a constant.
     """
-    for k in (5, 20, 60):
+    rounds_by_k = {}
+    for k in (10, 40, 80):
         segments = _make_chain_segments(k)
-
-        old_insns = build_program(segments)
-        old_passes = old_compute_liveness_native(old_insns)
-
-        new_insns = build_program(segments)
-        new_rounds = _converge_liveness_native(new_insns, {})
-
-        # old_compute_liveness_native counts the final zero-growth pass
-        # too (+1); _converge_liveness_native's 'rounds' -- like
-        # compute_liveness_native's dict-keyed branch -- counts only
-        # growth passes.
-        assert new_rounds == old_passes - 1
+        insns = build_program(segments)
+        rounds_by_k[k] = _converge_liveness_native(insns, {})
+    assert rounds_by_k[40] > rounds_by_k[10]
+    assert rounds_by_k[80] > rounds_by_k[40]
 
 
 def test_distinct_nids_sharing_kind_index_stay_byte_safe():
