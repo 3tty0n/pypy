@@ -35,6 +35,40 @@ def opcode_keys():
     return sorted(keys)
 
 
+def _loop_ends(co_code):
+    """For each position, the end of the innermost enclosing SETUP_LOOP.
+
+    A forward walk tracking the static loop-block nesting: SETUP_LOOP pushes
+    its end position, POP_BLOCK pops.  Sound only for code objects whose
+    block stack holds nothing but loop blocks, which is exactly the set the
+    policy admits (handler-bearing ones stay on the generic interpreter).
+    -1 where no loop encloses the position.  Jumps cannot change the block
+    depth at a merge point (the compiler keeps it consistent), so the walk
+    need not follow control flow.
+    """
+    ends = [-1] * len(co_code)
+    stack = []
+    position = 0
+    setup_loop = opcodedesc.SETUP_LOOP.index
+    pop_block = opcodedesc.POP_BLOCK.index
+    while position < len(co_code):
+        opcode = ord(co_code[position])
+        current = stack[len(stack) - 1] if stack else -1
+        length = 3 if opcode >= HAVE_ARGUMENT else 1
+        index = position
+        while index < position + length and index < len(co_code):
+            ends[index] = current
+            index += 1
+        if opcode == setup_loop:
+            oparg = ord(co_code[position + 1]) | (
+                ord(co_code[position + 2]) << 8)
+            stack.append(position + 3 + oparg)
+        elif opcode == pop_block and stack:
+            stack.pop()
+        position += length
+    return ends
+
+
 def decode_instruction(code, pc):
     """Decode the instruction of ``code`` starting at ``pc``.
 
@@ -66,10 +100,15 @@ def decode_instruction(code, pc):
         next_instr += 3
         oparg = (oparg * 65536) | (hi * 256) | lo
 
+    if opcode == opcodedesc.BREAK_LOOP.index:
+        break_target = _loop_ends(co_code)[pc]
+    else:
+        break_target = -1
     bindings = {
         "pc": next_instr,
         "oparg": oparg,
         "instr_start": pc,
+        "break_target": break_target,
     }
     return opcode, bindings
 
@@ -84,9 +123,23 @@ def build_generating_extension(translator):
     from pypy.interpreter.pyopcode import (
         PE_LEAVE, PE_LEAVE_OPCODE, PE_RETURN)
 
+    step = PyFrame.interp_step.im_func
+    # The portal runs interp_step on a hint(access_directly=True) frame, so
+    # its opcode implementations compile to direct virtualizable accesses.
+    # graphof() would return the plain variant, whose frame operations force
+    # the virtualizable -- a residual program built from it then deopts on
+    # every frame access once its trace is compiled.
+    graph = None
+    for candidate in translator.graphs:
+        if getattr(candidate, "func", None) is step and \
+                "AccessDirect" in candidate.name:
+            graph = candidate
+            break
+    print '[pe] step graph:', graph.name if graph is not None else 'PLAIN (no AccessDirect variant found)'
     extension = GeneratingExtension.from_step_function(
-        translator, PyFrame.interp_step.im_func, opcode_keys(),
-        decode_instruction, terminal_values=(PE_LEAVE, PE_RETURN))
+        translator, step, opcode_keys(),
+        decode_instruction, terminal_values=(PE_LEAVE, PE_RETURN),
+        graph=graph)
     extension.leave_key = PE_LEAVE_OPCODE
     return extension
 
@@ -103,6 +156,8 @@ def report_unsupported(extension, out=None):
             opcode_method_names) else str(key)
         lines.append("[pe] no template for %s: %s: %s" % (
             name, error.__class__.__name__, message))
+        if name == "BREAK_LOOP" and hasattr(error, "pe_traceback"):
+            lines.append(error.pe_traceback)
     if out is not None:
         for line in lines:
             print >> out, line
@@ -231,6 +286,42 @@ def report_template_size(extension, out=None):
     return line
 
 
+def report_break_template(extension, out=None):
+    """Debug probe: why does BREAK_LOOP's fragment compile find no split
+    transition when the template itself carries a Continue?"""
+    from pypy.interpreter.pyopcode import opcodedesc
+    from rpython.translator.backendopt.partialeval import (
+        _find_split_transitions)
+
+    key = opcodedesc.BREAK_LOOP.index
+    if key not in extension.templates:
+        return
+    template = extension.templates[key]
+    lines = ["[pe] BREAK terminators: %s" % (
+        [t.__class__.__name__ for t in template.terminators],)]
+    graph = template.residual_graph
+    if graph is not None:
+        transitions = _find_split_transitions(graph)
+        lines.append("[pe] BREAK residual_graph transitions: %d" %
+                     len(transitions))
+        lines.append("[pe] BREAK returnblock inputs: %s" %
+                     (graph.returnblock.inputargs,))
+        for block in graph.iterblocks():
+            lines.append("[pe] B %s exits=%d switch=%r" % (
+                block, len(block.exits), block.exitswitch))
+            for op in block.operations:
+                lines.append("[pe]    %s" % (op,))
+            for link in block.exits:
+                lines.append("[pe]    -> %s args=%s case=%r" % (
+                    link.target, link.args, link.exitcase))
+    else:
+        lines.append("[pe] BREAK residual_graph: None")
+    if out is not None:
+        for line in lines:
+            print >> out, line
+    return lines
+
+
 def report_unresolvable(extension, out=None):
     """Templates whose targets the runtime resolver cannot evaluate.
 
@@ -286,6 +377,8 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
         try:
             emitter.precompile_fragments({key: extension.templates[key]})
         except Exception as error:
+            import traceback
+            error.pe_traceback = traceback.format_exc()
             extension.unsupported[key] = error
             del extension.templates[key]
     report_unsupported(extension, sys.stdout)

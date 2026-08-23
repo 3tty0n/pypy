@@ -295,12 +295,26 @@ class PyFrame(W_Root):
                     next_instr = r_uint(self.last_instr + 1)
                     if next_instr != 0:
                         self.pushvalue(w_inputvalue)
-                w_exitvalue = self.dispatch(self.pycode, next_instr,
-                                            executioncontext)
-                while isinstance(w_exitvalue, W_ResidualExit):
-                    w_exitvalue = self.dispatch(
-                        self.pycode, w_exitvalue.next_instr,
-                        executioncontext)
+                while True:
+                    try:
+                        w_exitvalue = self.dispatch(self.pycode, next_instr,
+                                                    executioncontext)
+                    except OperationError as dispatch_operr:
+                        # On the generic path handle_bytecode searches for
+                        # the handler inside dispatch and unwinds the whole
+                        # block stack before re-raising, so an exception
+                        # arriving here with blocks still installed can only
+                        # have escaped a residual program, which replaces
+                        # dispatch wholesale.  Run the same search for it;
+                        # anything else was already searched once.
+                        if not self.blockstack_non_empty():
+                            raise
+                        next_instr = self.handle_operation_error(
+                            executioncontext, dispatch_operr)
+                        continue
+                    if not isinstance(w_exitvalue, W_ResidualExit):
+                        break
+                    next_instr = w_exitvalue.next_instr
             except OperationError:
                 raise
             except Exception as e:      # general fall-back

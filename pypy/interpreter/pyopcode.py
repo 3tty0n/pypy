@@ -5,6 +5,7 @@ The rest, dealing with variables in optimized ways, is in nestedscope.py.
 """
 
 from rpython.rlib import jit, rstackovf
+from rpython.rlib.nonconst import NonConstant
 from rpython.rlib.pe import PEDriver
 from rpython.rlib.debug import check_nonneg
 from rpython.rlib.objectmodel import (we_are_translated, always_inline,
@@ -48,6 +49,14 @@ def binaryoperation(operationname):
 
 opcodedesc = bytecode_spec.opcodedesc
 HAVE_ARGUMENT = bytecode_spec.HAVE_ARGUMENT
+
+class BreakUnrolled(Exception):
+    """BREAK_LOOP executed generically: the enclosing loop's end is found by
+    unwinding the block stack at run time.  An exception, not a second exit:
+    a residual template's exits must be all Finish or all Continue, and the
+    residual path continues to a late-static target instead.
+    """
+
 
 class PcMoved(Exception):
     """A trace hook moved the pc, so JUMP_ABSOLUTE's target is not oparg.
@@ -99,6 +108,13 @@ def _guards_a_handler(code):
 
 
 def _worth_generating(program, code):
+    # Handler-bearing code objects stay on the generic loop for now: a
+    # residual program for one livelocks in a virtualizable-forcing loop
+    # once its exception bridge compiles (reproducer: a try/except in a
+    # loop beyond ~10k iterations).  The forcing itself, not the handler
+    # search, is the open problem; see the session notes.
+    if _guards_a_handler(code):
+        return False
     """Whether a residual program repays what assembling it costs.
 
     Scanning a code object is under a tenth of a generation; the emit,
@@ -116,8 +132,6 @@ def _worth_generating(program, code):
     instruction itself had no template) buys nothing over the generic
     interpreter it immediately hands back to, so it is declined here.
     """
-    if _guards_a_handler(code):
-        return False
     if program.leave_blocks == len(program.blocks):
         return False
     return True
@@ -127,7 +141,8 @@ def _worth_generating(program, code):
 # that, whatever the step function calls the value elsewhere.  instr_start is
 # an extra hole: the instruction's own position, needed by PE_LEAVE_OPCODE to
 # say where the generic loop must resume.
-pedriver = PEDriver(static="opcode", split="pc", holes="oparg instr_start",
+pedriver = PEDriver(static="opcode", split="pc",
+                    holes="oparg instr_start break_target",
                     worth_generating=_worth_generating)
 
 
@@ -158,6 +173,8 @@ class __extend__(pyframe.PyFrame):
                 pycode, co_code, next_instr, ec, is_being_profiled)
         except PcMoved:
             next_instr = r_uint(self.last_instr)
+        except BreakUnrolled:
+            next_instr = self.unrollstack_and_jump(SBreakLoop.singleton)
         except OperationError as operr:
             next_instr = self.handle_operation_error(ec, operr)
         except RaiseWithExplicitTraceback as e:
@@ -285,9 +302,17 @@ class __extend__(pyframe.PyFrame):
             # (split, w_result) is the whole contract: anything returned
             # after the result is carried to the successor as a boundary
             # value, so the loop's own bookkeeping cannot ride along there.
+            # NonConstant: the annotator would otherwise fold the literal
+            # -1 into interp_step's graph (this is its only caller), turning
+            # the residual break_target branch into an unconditional raise
+            # before the partial evaluator ever sees it.
+            if we_are_translated():
+                no_break_target = NonConstant(-1)
+            else:
+                no_break_target = -1
             split, w_res = self.interp_step(
-                opcode, oparg, next_instr, instr_start, pycode,
-                is_being_profiled, ec)
+                opcode, oparg, next_instr, instr_start, no_break_target,
+                pycode, is_being_profiled, ec)
             if split == PE_RETURN:
                 raise Return
             if split == PE_LEAVE:
@@ -302,7 +327,8 @@ class __extend__(pyframe.PyFrame):
                 return next_instr
 
     @always_inline
-    def interp_step(self, opcode, oparg, pc, instr_start, pycode,
+    def interp_step(self, opcode, oparg, pc, instr_start, break_target,
+                    pycode,
                     is_being_profiled, ec):
         """One bytecode's semantics, free of the dispatch loop.
 
@@ -321,7 +347,8 @@ class __extend__(pyframe.PyFrame):
         # every access, which costs far more than the dispatch it removed.
         self = jit.hint(self, access_directly=True)
         pedriver.pe_merge_point(self=self, opcode=opcode, oparg=oparg,
-                                pc=pc, instr_start=instr_start, pycode=pycode,
+                                pc=pc, instr_start=instr_start,
+                                break_target=break_target, pycode=pycode,
                                 is_being_profiled=is_being_profiled, ec=ec)
         if opcode == PE_LEAVE_OPCODE:
             # No template covers the real instruction at instr_start: the
@@ -361,9 +388,15 @@ class __extend__(pyframe.PyFrame):
                 raise PcMoved
             return r_uint(oparg), None
         elif opcode == opcodedesc.BREAK_LOOP.index:
-            # Unrolling picks the pc; only the block stack knows which.
-            target = self.BREAK_LOOP(oparg, pc)
-            return PE_LEAVE, _residual_exit(target)
+            if break_target < 0:
+                raise BreakUnrolled
+            # Residual programs exist only for code objects whose block
+            # stack holds nothing but loop blocks (handler-bearing ones
+            # stay generic), so the innermost block is the loop being left
+            # and its end is the decoder's statically computed target.
+            block = self.pop_block()
+            block.cleanupstack(self)
+            return r_uint(break_target), None
         elif opcode == opcodedesc.CONTINUE_LOOP.index:
             target = self.CONTINUE_LOOP(oparg, pc)
             return PE_LEAVE, _residual_exit(target)

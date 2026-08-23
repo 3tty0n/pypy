@@ -6,6 +6,7 @@ JitCode details.
 """
 
 from rpython.flowspace.model import Constant
+from rpython.rlib.rarithmetic import intmask, r_uint
 from rpython.rtyper.lltypesystem.lloperation import llop
 
 
@@ -128,7 +129,12 @@ class ExprTarget(TargetExpr):
 
     def resolve(self, bindings):
         values = [_resolve_operand(arg, bindings) for arg in self.args]
-        return _apply_late_static_op(self.opname, self.restype, values)
+        # intmask: resolve()'s contract is a signed int (a TemplateHole
+        # returns the decoder's plain binding), but an interpreter carrying
+        # its pc unsigned makes the llop here return r_uint, which RPython
+        # cannot unify with the other implementations' int.
+        return intmask(_apply_late_static_op(self.opname, self.restype,
+                                             values))
 
 
 def _is_late_static_operation(opname):
@@ -165,6 +171,10 @@ _UNARY_LATE_STATIC_OPS = ("int_neg", "int_invert", "int_is_true",
 def _apply_late_static_op(opname, restype, values):
     """Evaluate one late-static ExprTarget operation.
 
+    Every value crosses node boundaries as a signed int (resolve()'s
+    contract), so unsigned operations re-widen their arguments here --
+    bit-identical, since intmask/r_uint round-trip.
+
     Not getattr(llop, opname)(restype, *values): RPython's annotator
     needs a literal attribute name, and splat args aren't RPython-legal.
     Add new opnames to the tables above and a branch below.
@@ -172,86 +182,88 @@ def _apply_late_static_op(opname, restype, values):
     if opname in _BINARY_LATE_STATIC_OPS:
         left = values[0]
         right = values[1]
+
         if opname == "int_add":
-            return llop.int_add(restype, left, right)
+            return intmask(llop.int_add(restype, left, right))
         if opname == "int_sub":
-            return llop.int_sub(restype, left, right)
+            return intmask(llop.int_sub(restype, left, right))
         if opname == "int_mul":
-            return llop.int_mul(restype, left, right)
+            return intmask(llop.int_mul(restype, left, right))
         if opname == "int_and":
-            return llop.int_and(restype, left, right)
+            return intmask(llop.int_and(restype, left, right))
         if opname == "int_or":
-            return llop.int_or(restype, left, right)
+            return intmask(llop.int_or(restype, left, right))
         if opname == "int_xor":
-            return llop.int_xor(restype, left, right)
+            return intmask(llop.int_xor(restype, left, right))
         if opname == "int_lshift":
-            return llop.int_lshift(restype, left, right)
+            return intmask(llop.int_lshift(restype, left, right))
         if opname == "int_rshift":
-            return llop.int_rshift(restype, left, right)
+            return intmask(llop.int_rshift(restype, left, right))
         if opname == "uint_rshift":
-            return llop.uint_rshift(restype, left, right)
+            return intmask(llop.uint_rshift(restype, r_uint(left), r_uint(right)))
         if opname == "int_floordiv":
-            return llop.int_floordiv(restype, left, right)
+            return intmask(llop.int_floordiv(restype, left, right))
         if opname == "int_mod":
-            return llop.int_mod(restype, left, right)
+            return intmask(llop.int_mod(restype, left, right))
         if opname == "int_eq":
-            return llop.int_eq(restype, left, right)
+            return intmask(llop.int_eq(restype, left, right))
         if opname == "int_ne":
-            return llop.int_ne(restype, left, right)
+            return intmask(llop.int_ne(restype, left, right))
         if opname == "int_lt":
-            return llop.int_lt(restype, left, right)
+            return intmask(llop.int_lt(restype, left, right))
         if opname == "int_le":
-            return llop.int_le(restype, left, right)
+            return intmask(llop.int_le(restype, left, right))
         if opname == "int_gt":
-            return llop.int_gt(restype, left, right)
+            return intmask(llop.int_gt(restype, left, right))
         if opname == "int_ge":
-            return llop.int_ge(restype, left, right)
+            return intmask(llop.int_ge(restype, left, right))
         if opname == "uint_add":
-            return llop.uint_add(restype, left, right)
+            return intmask(llop.uint_add(restype, r_uint(left), r_uint(right)))
         if opname == "uint_sub":
-            return llop.uint_sub(restype, left, right)
+            return intmask(llop.uint_sub(restype, r_uint(left), r_uint(right)))
         if opname == "uint_mul":
-            return llop.uint_mul(restype, left, right)
+            return intmask(llop.uint_mul(restype, r_uint(left), r_uint(right)))
         if opname == "uint_and":
-            return llop.uint_and(restype, left, right)
+            return intmask(llop.uint_and(restype, r_uint(left), r_uint(right)))
         if opname == "uint_or":
-            return llop.uint_or(restype, left, right)
+            return intmask(llop.uint_or(restype, r_uint(left), r_uint(right)))
         if opname == "uint_xor":
-            return llop.uint_xor(restype, left, right)
+            return intmask(llop.uint_xor(restype, r_uint(left), r_uint(right)))
         if opname == "uint_lshift":
-            return llop.uint_lshift(restype, left, right)
+            return intmask(llop.uint_lshift(restype, r_uint(left), r_uint(right)))
         if opname == "uint_floordiv":
-            return llop.uint_floordiv(restype, left, right)
+            return intmask(llop.uint_floordiv(restype, r_uint(left), r_uint(right)))
         if opname == "uint_mod":
-            return llop.uint_mod(restype, left, right)
+            return intmask(llop.uint_mod(restype, r_uint(left), r_uint(right)))
         if opname == "uint_eq":
-            return llop.uint_eq(restype, left, right)
+            return intmask(llop.uint_eq(restype, r_uint(left), r_uint(right)))
         if opname == "uint_ne":
-            return llop.uint_ne(restype, left, right)
+            return intmask(llop.uint_ne(restype, r_uint(left), r_uint(right)))
         if opname == "uint_lt":
-            return llop.uint_lt(restype, left, right)
+            return intmask(llop.uint_lt(restype, r_uint(left), r_uint(right)))
         if opname == "uint_le":
-            return llop.uint_le(restype, left, right)
+            return intmask(llop.uint_le(restype, r_uint(left), r_uint(right)))
         if opname == "uint_gt":
-            return llop.uint_gt(restype, left, right)
+            return intmask(llop.uint_gt(restype, r_uint(left), r_uint(right)))
         if opname == "uint_ge":
-            return llop.uint_ge(restype, left, right)
+            return intmask(llop.uint_ge(restype, r_uint(left), r_uint(right)))
     if opname in _UNARY_LATE_STATIC_OPS:
         only = values[0]
+
         if opname == "int_neg":
-            return llop.int_neg(restype, only)
+            return intmask(llop.int_neg(restype, only))
         if opname == "int_invert":
-            return llop.int_invert(restype, only)
+            return intmask(llop.int_invert(restype, only))
         if opname == "int_is_true":
-            return llop.int_is_true(restype, only)
+            return intmask(llop.int_is_true(restype, only))
         if opname == "uint_invert":
-            return llop.uint_invert(restype, only)
+            return intmask(llop.uint_invert(restype, r_uint(only)))
         if opname == "uint_is_true":
-            return llop.uint_is_true(restype, only)
+            return intmask(llop.uint_is_true(restype, r_uint(only)))
         if opname == "cast_int_to_uint":
-            return llop.cast_int_to_uint(restype, only)
+            return intmask(llop.cast_int_to_uint(restype, only))
         if opname == "cast_uint_to_int":
-            return llop.cast_uint_to_int(restype, only)
+            return intmask(llop.cast_uint_to_int(restype, r_uint(only)))
     # Not %r: RPython's rtyper only implements %s/%d/... formatting.
     raise ValueError(
         "no runtime-cogen dispatch for late-static op %s -- add it to "
@@ -431,6 +443,11 @@ class LinkedResidualProgram(object):
         # How many blocks are the synthetic "leave" fallback rather than a
         # real instruction's template; set by GeneratingExtension.generate.
         self.leave_blocks = 0
+        # pcs whose block is the leave fallback: a residual program must
+        # never be *entered* at one -- it would leave at the same pc and the
+        # portal would re-select it forever.  The generic interpreter has to
+        # execute that instruction.
+        self.leave_pcs = {}
         # Passed in, not reassigned after construction: RPython would
         # need to unify a 0-length and a 1-length tuple on this attribute
         # across the whole build, which it cannot do.

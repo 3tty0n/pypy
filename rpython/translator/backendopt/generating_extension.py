@@ -95,7 +95,7 @@ class GeneratingExtension(object):
     @classmethod
     def from_step_function(cls, translator, step_function, keys, decoder,
                            static_name=None, terminal_values=(-1,),
-                           policy=None):
+                           policy=None, graph=None):
         """Specialize ``step_function`` once per key.
 
         A key that cannot be specialized is recorded rather than raised on: it
@@ -105,7 +105,8 @@ class GeneratingExtension(object):
         from rpython.translator.backendopt.partialeval import PartialEvaluator
         from rpython.translator.translator import graphof
 
-        graph = graphof(translator, step_function)
+        if graph is None:
+            graph = graphof(translator, step_function)
         if static_name is None:
             static_name = graph.func._pe_static_args_[0]
         split_names = getattr(graph.func, "_pe_split_args_", ())
@@ -167,6 +168,7 @@ class GeneratingExtension(object):
         self.last_blocked = (-1, -1)
         self.decline_reason = None
         leave_blocks = 0
+        leave_pcs = {}
 
         while pending:
             pc, state = pending.pop()
@@ -194,6 +196,7 @@ class GeneratingExtension(object):
                     return None
                 key = self.leave_key
                 leave_blocks += 1
+                leave_pcs[intmask(pc)] = True
             template = self.templates[key]
 
             # Not `dict(bindings)`: RPython dict has no mapping-arg ctor.
@@ -226,6 +229,7 @@ class GeneratingExtension(object):
                         pending.append((target, next_state))
 
         program = LinkedResidualProgram(entry_pc, blocks, state_names)
+        program.leave_pcs = leave_pcs
         program.leave_blocks = leave_blocks
         program = program.analyze_loops()
         # After the loop analysis, so a policy can ask about loop headers --

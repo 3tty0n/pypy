@@ -97,8 +97,14 @@ class PortalLinker(object):
             from rpython.translator.backendopt.partialeval_template import (
                 sort_ints)
             entries = []
+            # Entering at a leave block would leave at the same pc and the
+            # portal would re-select this program forever; that instruction
+            # belongs to the generic interpreter.  (Three-argument getattr
+            # is not RPython; LinkedResidualProgram always has the field.)
+            leave_pcs = program.leave_pcs
             for pc in lowered.entry_positions:
-                entries.append(pc)
+                if pc not in leave_pcs:
+                    entries.append(pc)
             sort_ints(entries)
             # The loop headers and the entry: exactly the pcs where a trace
             # may legitimately start without duplicating a loop this program
