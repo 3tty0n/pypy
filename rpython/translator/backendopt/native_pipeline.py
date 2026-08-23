@@ -78,6 +78,10 @@ _boundary_moves = [0]
 class _FoldedLoads(object):
     """Holder, not a module int: a prebuilt counter folds to its seed."""
     folded = 0
+    # Candidates blocked from folding, by reason (see fold_constant_loads).
+    blocked_crossing = 0
+    blocked_live = 0
+    blocked_argcode = 0
     # The fold costs a fifth of a generation; PYPY_PE_FOLD=0 turns it off
     # at run time so its net effect is measurable from one binary.
     enabled = True
@@ -1345,6 +1349,9 @@ def fold_constant_loads(insns):
     crossing = _registers_read_before_written(insns)
     keep = [True] * len(insns)
     folded = 0
+    blocked_crossing = 0
+    blocked_live = 0
+    blocked_argcode = 0
     pending = {}    # target register key -> _PendingLoad
 
     for position in range(len(insns)):
@@ -1376,6 +1383,7 @@ def fold_constant_loads(insns):
                 entry.reads.append((position, index))
             else:
                 del pending[key]    # blocked: the load stays
+                blocked_argcode += 1
 
         result_key = _reg_key(insn.result)
         if result_key >= 0 and result_key in pending:
@@ -1387,14 +1395,21 @@ def fold_constant_loads(insns):
             del pending[result_key]
 
         constant, target = _constant_load(insn)
-        if constant is not None and target not in crossing and \
-                target not in live_targets:
-            pending[target] = _PendingLoad(constant, position)
+        if constant is not None:
+            if target in crossing:
+                blocked_crossing += 1
+            elif target in live_targets:
+                blocked_live += 1
+            else:
+                pending[target] = _PendingLoad(constant, position)
 
     # Reaching the end of insns with no closing region marker finalizes
     # whatever is still pending, same as hitting one would.
     folded += _finalize_all_pending(pending, insns, keep)
 
+    _folded_loads.blocked_crossing += blocked_crossing
+    _folded_loads.blocked_live += blocked_live
+    _folded_loads.blocked_argcode += blocked_argcode
     if not folded:
         return insns
     _folded_loads.folded += folded
@@ -1429,6 +1444,15 @@ def emit_and_assemble_native(native_table, program, name,
         # read set (see fold_constant_loads).
         debug_start("pe-cogen-fold")
         ssarepr.insns = fold_constant_loads(ssarepr.insns)
+        if have_debug_prints():
+            debug_print(
+                "pe-cogen-fold folded=%d blocked-crossing=%d "
+                "blocked-live=%d blocked-argcode=%d" % (
+                    _folded_loads.folded, _folded_loads.blocked_crossing,
+                    _folded_loads.blocked_live, _folded_loads.blocked_argcode))
+        _folded_loads.blocked_crossing = 0
+        _folded_loads.blocked_live = 0
+        _folded_loads.blocked_argcode = 0
         debug_stop("pe-cogen-fold")
     _log_insn_mix(ssarepr, program)
     if assembler is None:
