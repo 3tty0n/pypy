@@ -108,13 +108,7 @@ def _guards_a_handler(code):
 
 
 def _worth_generating(program, code):
-    # Handler-bearing code objects stay on the generic loop for now: a
-    # residual program for one livelocks in a virtualizable-forcing loop
-    # once its exception bridge compiles (reproducer: a try/except in a
-    # loop beyond ~10k iterations).  The forcing itself, not the handler
-    # search, is the open problem; see the session notes.
-    if _guards_a_handler(code):
-        return False
+
     """Whether a residual program repays what assembling it costs.
 
     Scanning a code object is under a tenth of a generation; the emit,
