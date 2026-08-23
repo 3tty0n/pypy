@@ -428,6 +428,9 @@ class LinkedResidualProgram(object):
         # entries; an RPython tuple's length must be fixed at annotation.
         self.backedges = []
         self.loop_headers = []
+        # How many blocks are the synthetic "leave" fallback rather than a
+        # real instruction's template; set by GeneratingExtension.generate.
+        self.leave_blocks = 0
         # Passed in, not reassigned after construction: RPython would
         # need to unify a 0-length and a 1-length tuple on this attribute
         # across the whole build, which it cannot do.

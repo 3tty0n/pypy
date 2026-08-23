@@ -541,6 +541,69 @@ def test_link_small_interpreter_dispatch_loop_without_tracing():
     assert get_pe_trace_start_position(jitcode) == 7
 
 
+def test_generate_declines_or_falls_back_to_leave_template():
+    """An instruction with no template declines the whole program, unless a
+    leave_key is configured -- then it becomes a synthetic Finish block, and
+    the scan continues around it rather than aborting.
+    """
+    OP_DEC_JUMP = 0
+    OP_HALT = 1
+    OP_UNSUPPORTED = 2   # deliberately never specialized below
+    OP_LEAVE = 3         # the leave fallback: always ends the program
+
+    def interpret_one(opcode, oparg, pc, value):
+        if opcode == OP_DEC_JUMP:
+            if value > 0:
+                return oparg, value - 1
+            return pc + 2, value
+        # OP_HALT and OP_LEAVE both just stop; OP_UNSUPPORTED is never
+        # reached by any specialized template, so its body here is moot.
+        return -1, value
+
+    interpret_one._pe_static_args_ = ("opcode",)
+    interpret_one._pe_split_args_ = ("pc",)
+    graph, t = get_graph(interpret_one, [int, int, int, int])
+
+    # Only DEC_JUMP, HALT and LEAVE get templates -- UNSUPPORTED does not.
+    extension = GeneratingExtension.from_step_function(
+        t, interpret_one, [OP_DEC_JUMP, OP_HALT, OP_LEAVE],
+        byte_pair_decoder)
+
+    # Two-byte instructions: DEC_JUMP 0 loops until value reaches zero, then
+    # falls through to the unsupported opcode at pc=2.
+    code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_UNSUPPORTED) + chr(0)
+
+    # No leave_key configured (the default, -1): the whole program declines,
+    # and last_blocked names exactly the instruction that blocked it.
+    assert extension.leave_key == -1
+    assert extension.generate(code) is None
+    assert extension.last_blocked == (2, OP_UNSUPPORTED)
+
+    # With a leave_key, the same scan succeeds: the unsupported instruction
+    # becomes a Finish block built from the leave template instead.
+    extension.leave_key = OP_LEAVE
+    linked = extension.generate(code)
+    assert linked is not None
+    assert set(linked.blocks) == set([0, 2])
+    assert linked.blocks[2].key == OP_LEAVE
+    assert linked.blocks[2].has_finish
+    assert linked.blocks[2].successors == []
+    assert linked.leave_blocks == 1
+    assert len(linked.blocks) == 2
+    # Not an all-leave program: the entry block (pc=0) is a real template,
+    # so _worth_generating-style policies would still accept this one.
+    assert linked.leave_blocks != len(linked.blocks)
+
+    # A program whose *entry* instruction is itself unsupported is nothing
+    # but the leave fallback: this is the signal _worth_generating (in
+    # pypy/interpreter/pyopcode.py) declines on, without needing the real
+    # PyPy interpreter to demonstrate it.
+    entry_unsupported = chr(OP_UNSUPPORTED) + chr(0)
+    all_leave = extension.generate(entry_unsupported)
+    assert all_leave is not None
+    assert all_leave.leave_blocks == len(all_leave.blocks) == 1
+
+
 def test_meta_interpreter_starts_at_offline_loop_header():
     from rpython.jit.codewriter.jitcode import JitCode, PEJitCodeMetadata
     from rpython.jit.metainterp.pyjitpl import (

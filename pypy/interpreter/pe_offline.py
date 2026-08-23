@@ -23,8 +23,16 @@ EXTENDED_ARG = opcodedesc.EXTENDED_ARG.index
 
 
 def opcode_keys():
-    """Every opcode index the interpreter has an implementation for."""
-    return sorted(set(bytecode_spec.opmap.values()))
+    """Every opcode index the interpreter has an implementation for.
+
+    Includes the synthetic PE_LEAVE_OPCODE, so from_step_function builds a
+    template for it too -- the leave fallback for instructions with none.
+    """
+    from pypy.interpreter.pyopcode import PE_LEAVE_OPCODE
+
+    keys = set(bytecode_spec.opmap.values())
+    keys.add(PE_LEAVE_OPCODE)
+    return sorted(keys)
 
 
 def decode_instruction(code, pc):
@@ -73,11 +81,14 @@ def build_generating_extension(translator):
     reach one are left to the generic dispatch loop.
     """
     from pypy.interpreter.pyframe import PyFrame
-    from pypy.interpreter.pyopcode import PE_LEAVE, PE_RETURN
+    from pypy.interpreter.pyopcode import (
+        PE_LEAVE, PE_LEAVE_OPCODE, PE_RETURN)
 
-    return GeneratingExtension.from_step_function(
+    extension = GeneratingExtension.from_step_function(
         translator, PyFrame.interp_step.im_func, opcode_keys(),
         decode_instruction, terminal_values=(PE_LEAVE, PE_RETURN))
+    extension.leave_key = PE_LEAVE_OPCODE
+    return extension
 
 
 def report_unsupported(extension, out=None):

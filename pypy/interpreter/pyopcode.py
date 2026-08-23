@@ -67,6 +67,10 @@ PE_LEAVE = r_uint(-1)
 # generic dispatch loop, so the raise belongs to the caller.
 PE_RETURN = r_uint(-2)
 
+# Synthetic opcode standing in for "no template covers this instruction".
+# Real CPython opcodes stay below ~150, so 254 cannot collide with one.
+PE_LEAVE_OPCODE = 254
+
 
 def _residual_exit(next_instr):
     """The portal's result for a residual program that ends mid-frame."""
@@ -103,18 +107,27 @@ def _worth_generating(program, code):
     the expensive nine tenths be skipped for a code object that would not
     have repaid them.
 
-    A program with no loop header is entered once per trace start and then
-    thrown away, so specialising it buys a single trace; one with a back
-    edge is re-entered for as long as the loop runs.
+    Loop-less programs matter too: a callee with no loop of its own still
+    gets inlined as residual code into its caller's trace, so structure is
+    no longer the gate -- the cost model (COST_PER_BYTE_NS, DEFAULT_GATE_K
+    in pe_offline.py) decides whether the install was worth it, not this.
+
+    A program that is nothing but the synthetic leave fallback (the entry
+    instruction itself had no template) buys nothing over the generic
+    interpreter it immediately hands back to, so it is declined here.
     """
     if _guards_a_handler(code):
         return False
-    return len(program.loop_headers) > 0
+    if program.leave_blocks == len(program.blocks):
+        return False
+    return True
 
 
 # The split argument must be called "pc": the machinery names its pc hole
-# that, whatever the step function calls the value elsewhere.
-pedriver = PEDriver(static="opcode", split="pc", holes="oparg",
+# that, whatever the step function calls the value elsewhere.  instr_start is
+# an extra hole: the instruction's own position, needed by PE_LEAVE_OPCODE to
+# say where the generic loop must resume.
+pedriver = PEDriver(static="opcode", split="pc", holes="oparg instr_start",
                     worth_generating=_worth_generating)
 
 
@@ -244,6 +257,7 @@ class __extend__(pyframe.PyFrame):
                 if actionflag.decrement_ticker(TICK_COUNTER_STEP) < 0:
                     actionflag.action_dispatcher(ec, self)
                     next_instr = r_uint(self.last_instr)
+            instr_start = next_instr
             opcode = ord(co_code[next_instr])
             next_instr += 1
 
@@ -272,7 +286,8 @@ class __extend__(pyframe.PyFrame):
             # after the result is carried to the successor as a boundary
             # value, so the loop's own bookkeeping cannot ride along there.
             split, w_res = self.interp_step(
-                opcode, oparg, next_instr, pycode, is_being_profiled, ec)
+                opcode, oparg, next_instr, instr_start, pycode,
+                is_being_profiled, ec)
             if split == PE_RETURN:
                 raise Return
             if split == PE_LEAVE:
@@ -287,12 +302,14 @@ class __extend__(pyframe.PyFrame):
                 return next_instr
 
     @always_inline
-    def interp_step(self, opcode, oparg, pc, pycode,
+    def interp_step(self, opcode, oparg, pc, instr_start, pycode,
                     is_being_profiled, ec):
         """One bytecode's semantics, free of the dispatch loop.
 
         ``opcode`` is offline-static, so the partial evaluator builds one
-        residual template per bytecode; ``pc`` is late-static.
+        residual template per bytecode; ``pc`` and ``instr_start`` are
+        late-static.  ``instr_start`` is the instruction's own position,
+        as opposed to ``pc``, which is normally the position after it.
 
         Returns ``(split, w_result)``.  ``split`` is the late-static
         successor, or PE_LEAVE / PE_RETURN where the residual program ends
@@ -304,8 +321,13 @@ class __extend__(pyframe.PyFrame):
         # every access, which costs far more than the dispatch it removed.
         self = jit.hint(self, access_directly=True)
         pedriver.pe_merge_point(self=self, opcode=opcode, oparg=oparg,
-                                pc=pc, pycode=pycode,
+                                pc=pc, instr_start=instr_start, pycode=pycode,
                                 is_being_profiled=is_being_profiled, ec=ec)
+        if opcode == PE_LEAVE_OPCODE:
+            # No template covers the real instruction at instr_start: the
+            # residual program ends here, and the generic loop resumes at
+            # the instruction itself, not at whatever comes after it.
+            return PE_LEAVE, _residual_exit(r_uint(instr_start))
         if opcode == opcodedesc.RETURN_VALUE.index:
             if not self.blockstack_non_empty():
                 self.frame_finished_execution = True  # for generators

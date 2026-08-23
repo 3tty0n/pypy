@@ -58,9 +58,15 @@ class GeneratingExtension(object):
     """
 
     def __init__(self, templates, decoder, static_name,
-                 unsupported=None, policy=None, state_names=()):
+                 unsupported=None, policy=None, state_names=(),
+                 leave_key=-1):
         self.templates = dict(templates)
         self.decoder = decoder
+        # Static key of a "leave" template: an instruction with no template
+        # of its own gets a synthetic block built from this one instead of
+        # declining the whole program, ending the residual program right
+        # where the generic interpreter must resume.  -1 means "none".
+        self.leave_key = leave_key
         # RPython tuple length is fixed at annotation time, so this can't be
         # rebuilt from a dict's keys -- only copied from a fixed-shape tuple.
         self.state_names = tuple(state_names)
@@ -160,6 +166,7 @@ class GeneratingExtension(object):
         # around.
         self.last_blocked = (-1, -1)
         self.decline_reason = None
+        leave_blocks = 0
 
         while pending:
             pc, state = pending.pop()
@@ -175,10 +182,18 @@ class GeneratingExtension(object):
 
             key, bindings = self.decoder(code, pc)
             if key not in self.templates:
-                # intmask: the sentinel below is signed, and a guest
-                # interpreter may carry its pc unsigned.
-                self.last_blocked = (intmask(pc), key)
-                return None
+                # No template for this instruction: fall back to the leave
+                # template, if one was configured, rather than declining the
+                # whole program.  Its bindings are still this instruction's
+                # own -- "instr_start" among them is exactly what the leave
+                # template needs to resume the generic loop here.
+                if self.leave_key < 0 or self.leave_key not in self.templates:
+                    # intmask: the sentinel below is signed, and a guest
+                    # interpreter may carry its pc unsigned.
+                    self.last_blocked = (intmask(pc), key)
+                    return None
+                key = self.leave_key
+                leave_blocks += 1
             template = self.templates[key]
 
             # Not `dict(bindings)`: RPython dict has no mapping-arg ctor.
@@ -211,6 +226,7 @@ class GeneratingExtension(object):
                         pending.append((target, next_state))
 
         program = LinkedResidualProgram(entry_pc, blocks, state_names)
+        program.leave_blocks = leave_blocks
         program = program.analyze_loops()
         # After the loop analysis, so a policy can ask about loop headers --
         # the usual reason to decline is that there is nothing here the
