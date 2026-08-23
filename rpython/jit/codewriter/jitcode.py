@@ -35,6 +35,7 @@ class _CogenCounters(object):
     def __init__(self):
         self.generated = 0
         self.declined = 0
+        self.deferred = 0
 
 
 _cogen_counters = _CogenCounters()
@@ -254,6 +255,15 @@ class PEJitCodeMetadata(object):
         # Green-box index carrying the ref, used only before any program is
         # installed; a runtime_cogen setter must also set this.
         self.guard_ref_index = -1
+        # Set by runtime_cogen (before returning None) when it declined for
+        # a reason that may not hold later -- e.g. a cost-model gate that
+        # wants more tracing time first.  _cogen_ref reads this right after
+        # calling runtime_cogen; linked_program_for uses it to skip caching
+        # that None, so the ref is retried on a later miss instead of being
+        # declined forever.  Plain bool, set unconditionally before every
+        # return out of runtime_cogen, so it never carries a stale value
+        # from a previous ref's call.
+        self.soft_decline = False
 
     def attach_linked_jitcode(self, jitcode, argument_sources,
                               argument_constants):
@@ -308,6 +318,12 @@ class PEJitCodeMetadata(object):
                             # a cached None here is a permanent decline.
                             return None
                         program = self._cogen_ref(ref)
+                        if program is None and self.soft_decline:
+                            # A gate declined for now, not forever: leave
+                            # this ref uncached so the next miss retries
+                            # runtime_cogen instead of finding a permanent
+                            # None here.
+                            return None
                     cache[ref] = program
                 if program is None:
                     return None
@@ -372,16 +388,26 @@ class PEJitCodeMetadata(object):
             program = self.runtime_cogen(ref)
             if program is None or program.guard_ref != ref:
                 program = None
-            if program is None:
-                generated = 0
-                _cogen_counters.declined += 1
+            if program is None and self.soft_decline:
+                # Deferred, not declined: not counted as a decline, and
+                # linked_program_for (our caller) will not cache this None.
+                _cogen_counters.deferred += 1
+                debug_print("pe-cogen ref=%d deferred "
+                            "totals-generated=%d totals-declined=%d "
+                            "totals-deferred=%d" % (
+                    lltype.cast_ptr_to_int(ref), _cogen_counters.generated,
+                    _cogen_counters.declined, _cogen_counters.deferred))
             else:
-                generated = 1
-                _cogen_counters.generated += 1
-            debug_print("pe-cogen ref=%d generated=%d "
-                        "totals-generated=%d totals-declined=%d" % (
-                lltype.cast_ptr_to_int(ref), generated,
-                _cogen_counters.generated, _cogen_counters.declined))
+                if program is None:
+                    generated = 0
+                    _cogen_counters.declined += 1
+                else:
+                    generated = 1
+                    _cogen_counters.generated += 1
+                debug_print("pe-cogen ref=%d generated=%d "
+                            "totals-generated=%d totals-declined=%d" % (
+                    lltype.cast_ptr_to_int(ref), generated,
+                    _cogen_counters.generated, _cogen_counters.declined))
         finally:
             debug_stop("pe-cogen")
         return program

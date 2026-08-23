@@ -78,9 +78,21 @@ _boundary_moves = [0]
 class _FoldedLoads(object):
     """Holder, not a module int: a prebuilt counter folds to its seed."""
     folded = 0
+    # The fold costs a fifth of a generation; PYPY_PE_FOLD=0 turns it off
+    # at run time so its net effect is measurable from one binary.
+    enabled = True
+    env_read = False
 
 
 _folded_loads = _FoldedLoads()
+
+
+def _fold_enabled():
+    if not _folded_loads.env_read:
+        _folded_loads.env_read = True
+        if os.environ.get("PYPY_PE_FOLD") == "0":
+            _folded_loads.enabled = False
+    return _folded_loads.enabled
 
 
 
@@ -1409,7 +1421,7 @@ def emit_and_assemble_native(native_table, program, name,
     debug_start("pe-cogen-live")
     compute_liveness_native(ssarepr.insns)
     debug_stop("pe-cogen-live")
-    if optimise:
+    if optimise and _fold_enabled():
         # The equivalence gate passes optimise=False: it checks that this
         # pipeline lowers a program exactly as the translation-time one
         # does, which is about the lowering, not about what is folded

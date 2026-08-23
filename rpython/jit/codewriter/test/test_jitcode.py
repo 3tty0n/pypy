@@ -207,6 +207,42 @@ def test_runtime_cogen_returning_wrong_ref_is_treated_as_decline():
     assert len(metadata.runtime_cogen.calls) == 1
 
 
+def test_soft_decline_is_not_cached_and_is_retried_on_next_miss():
+    """A gate-style decline (metadata.soft_decline set before returning
+    None) must not be cached: the next lookup for the same ref re-invokes
+    runtime_cogen instead of finding a permanent None."""
+    ref_a = _new_ref()
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+    metadata.linked_programs = []
+    metadata.guard_ref_index = 0
+    generated = _make_program(ref_index=0)
+    generated.guard_ref = ref_a
+
+    calls = []
+
+    def runtime_cogen(ref):
+        calls.append(ref)
+        if len(calls) < 3:
+            metadata.soft_decline = True
+            return None
+        metadata.soft_decline = False
+        metadata.linked_programs = [generated]
+        return generated
+    metadata.runtime_cogen = runtime_cogen
+
+    boxes = [ConstPtr(ref_a)]
+    assert metadata.linked_program_for(boxes) is None
+    assert len(calls) == 1
+    assert metadata.linked_program_for(boxes) is None
+    assert len(calls) == 2
+    assert metadata.linked_program_for(boxes) is generated
+    assert len(calls) == 3
+
+    # Now cached: a further miss does not call runtime_cogen again.
+    assert metadata.linked_program_for(boxes) is generated
+    assert len(calls) == 3
+
+
 def test_is_linked_jitcode_uses_flag_set_by_attach():
     metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
     linked = JitCode("linked")

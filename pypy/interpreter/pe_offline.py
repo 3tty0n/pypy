@@ -9,6 +9,7 @@ run time by ``compile``, ``exec`` and import, so the set of code objects to
 specialize cannot be enumerated when the binary is built.
 """
 
+import os
 import sys
 
 from pypy.interpreter.pycode import BytecodeCorruption
@@ -144,6 +145,53 @@ def portal_linker(jitdriver_sd, name="linked-pypy"):
 _runtime_cogen_state = [None]
 
 
+# Generation cost is roughly linear in program size (scan+emit+liveness+
+# assembly are each one pass over the code object); calibrated from a
+# ~148-byte deltablue method costing ~1.4ms to generate.
+COST_PER_BYTE_NS = 10000
+# Cumulative tracing time must cover this many multiples of a generation's
+# estimated cost before it is worth doing -- it should repay itself several
+# times over, not just once.
+DEFAULT_GATE_K = 4.0
+
+
+class _GateState(object):
+    """Holder, not a module float: a prebuilt float folds to its seed
+    under translation (see _FoldedLoads in native_pipeline.py)."""
+    k = DEFAULT_GATE_K
+    env_read = False
+
+
+_gate_state = _GateState()
+
+
+def _gate_k():
+    """k for the cost-model gate; PYPY_PE_GATE overrides it, read lazily
+    once at runtime.  PYPY_PE_GATE=0 disables the gate (always generate)."""
+    if not _gate_state.env_read:
+        _gate_state.env_read = True
+        value = os.environ.get("PYPY_PE_GATE")
+        if value:
+            try:
+                _gate_state.k = float(value)
+            except ValueError:
+                pass
+    return _gate_state.k
+
+
+def _gate_allows(profiler, code_size):
+    """Has this process traced enough to repay generating a program for a
+    code object of 'code_size' bytes, k times over?"""
+    from rpython.rlib.jit import Counters
+
+    k = _gate_k()
+    if k == 0.0:
+        return True
+    tracing_ns = profiler.get_times(Counters.TRACING) * 1e9
+    cost_ns = code_size * COST_PER_BYTE_NS
+    return tracing_ns >= k * cost_ns
+
+
 def stamp_after_make_jitcodes(mainjitcode):
     """Runs after codewriter.make_jitcodes(), strictly before finish_setup."""
     state = _runtime_cogen_state[0]
@@ -233,8 +281,28 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
     native_table = emitter.native_table()
     _runtime_cogen_state[0] = (codewriter, native_table)
 
+    # Prebuilt instance, captured by reference: its .times[] is mutated at
+    # run time by the JIT profiler, so only the object may be closed over
+    # here, never a value read from it (that would fold to a translation
+    # constant).  Verified chain: jitdriver_sd.warmstate.warmrunnerdesc is
+    # the WarmRunnerDesc building this portal; its metainterp_sd.profiler
+    # already exists at this point (build_meta_interp runs before
+    # pe_linked_setup in WarmRunnerDesc.__init__).
+    profiler = jitdriver_sd.warmstate.warmrunnerdesc.metainterp_sd.profiler
+
+    mainjitcode = linker.mainjitcode(codewriter)
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
+    metadata.guard_ref_index = GREEN_CODE_INDEX
+    metadata.cogen_threshold = 32
+    metadata.threshold_env_var = "PYPY_COGEN_THRESHOLD"
+
     def runtime_cogen(gcref):
         from rpython.rlib.debug import debug_print, have_debug_prints
+        from rpython.rlib.jit import Counters
+        # Set on every path out of here, permanent-decline ones included:
+        # a stale True from a previous ref's gate defer must never leak
+        # into this ref's (unrelated) result.
+        metadata.soft_decline = False
         code = cast_gcref_to_instance(PyCode, gcref)
         if code is None:
             return None
@@ -243,6 +311,17 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
             # later at that pc; a residual program is entered at a block
             # boundary and runs to one of its own exits, which is not the
             # same contract.
+            return None
+        code_size = len(code.co_code)
+        if not _gate_allows(profiler, code_size):
+            # Not enough tracing yet to repay this generation -- decline
+            # softly so the miss is retried once more tracing accrues,
+            # instead of being cached as a permanent decline.
+            metadata.soft_decline = True
+            if have_debug_prints():
+                tracing_ms = int(profiler.get_times(Counters.TRACING) * 1000)
+                debug_print("pe-cogen gate deferred code_size=%d "
+                            "tracing_ms=%d" % (code_size, tracing_ms))
             return None
         if have_debug_prints():
             # Name the code object: a residual program that misbehaves is
@@ -259,11 +338,6 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
                               program.jitcode.own_liveness_info)
         return program
 
-    mainjitcode = linker.mainjitcode(codewriter)
-    metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
-    metadata.guard_ref_index = GREEN_CODE_INDEX
     metadata.runtime_cogen = runtime_cogen
-    metadata.cogen_threshold = 32
-    metadata.threshold_env_var = "PYPY_COGEN_THRESHOLD"
     mainjitcode.pe_metadata = metadata
     return None
