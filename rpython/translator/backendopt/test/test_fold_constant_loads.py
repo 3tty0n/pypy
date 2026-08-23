@@ -77,6 +77,19 @@ def test_a_live_record_naming_others_proves_the_target_dead():
     assert result[1].operands[0] is ref
 
 
+def test_a_live_record_naming_the_target_keeps_its_load():
+    """A guard may resume into this register: its load must survive."""
+    ref = NRefConst(None)
+    insns = [
+        NativeInsn("ref_copy", [ref], reg("ref", 0)),
+        NativeInsn("-live-", [reg("ref", 0)], None),
+        NativeInsn("setfield_gc_r", [reg("ref", 0)], None),
+    ]
+    result = fold_constant_loads(insns)
+    assert len(result) == 3
+    assert result[0].opcode == "ref_copy"
+
+
 def test_a_register_move_is_not_a_constant_load():
     insns = [
         NativeInsn("int_copy", [reg("int", 0)], reg("int", 5)),

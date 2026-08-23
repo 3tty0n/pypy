@@ -1132,14 +1132,16 @@ def _registers_read_before_written(insns):
     A register outside this set never carries a value across a region
     boundary, so a definition of it dies at the end of its own region and
     liveness -- recomputed after this pass -- will say so.
+
+    ``-live-`` operands count as reads too: they name what a guard may
+    resume into, so treating them like any other operand read keeps a
+    register that only a guard needs from looking dead.
     """
     crossing = {}
     written = {}
     for insn in insns:
         if _ends_region(insn.opcode):
             written = {}
-            continue
-        if insn.opcode == "-live-":
             continue
         for operand in insn.operands:
             key = _reg_key(operand)
@@ -1151,6 +1153,23 @@ def _registers_read_before_written(insns):
     return crossing
 
 
+def _live_targets(insns):
+    """Every register any ``-live-`` insn names, anywhere in ``insns``.
+
+    Computed once and reused: a load whose target is in this set must
+    never be dropped, in the read-before-write pass and in the fold.
+    """
+    targets = {}
+    for insn in insns:
+        if insn.opcode != "-live-":
+            continue
+        for operand in insn.operands:
+            key = _reg_key(operand)
+            if key:
+                targets[key] = True
+    return targets
+
+
 def fold_constant_loads(insns):
     """Substitute a materialised late-static value into what reads it.
 
@@ -1159,26 +1178,25 @@ def fold_constant_loads(insns):
     first: on PyPy that is 148 of the 528 instructions in a seventeen-block
     program, and the meta-interpreter executes every one of them per trace.
 
-    Runs before liveness, so the ``-live-`` sets are computed on the result:
-    a register whose readers now take the constant directly is simply not
-    live, and a guard resuming here records what it actually needs.  Only
-    registers no region reads before writing qualify, which is what makes
-    dropping the definition safe without tracking flow across labels.
+    Runs after liveness, so every ``-live-`` insn's operands already name
+    the registers live at that point, including whatever a guard would
+    resume into.  Both the read-before-write pass and this pass's own scan
+    treat those operands as reads, so a register a guard needs can never
+    look unread and its load is never dropped.  Only registers no region
+    reads before writing qualify, which is what makes dropping the
+    definition safe without tracking flow across labels.
 
-    Off by default: it removes 51 of the 148 constant loads in a
-    seventeen-block program, but deltablue fails an RPython assertion after
-    eight iterations with it on.  The read-before-write rule ignores the
-    ``-live-`` records, which carry no operands yet at this point in the
-    pipeline -- so a register a guard would resume into can still look
-    unread here.  Turning this on needs that information, which means
-    running after liveness and recomputing it.
+    Dropping a load only removes registers no ``-live-`` names anywhere,
+    so the existing ``-live-`` sets -- conservative supersets already --
+    stay valid and liveness is not recomputed.
     """
+    live_targets = _live_targets(insns)
     crossing = _registers_read_before_written(insns)
     keep = [True] * len(insns)
     folded = 0
     for position in range(len(insns)):
         constant, target = _constant_load(insns[position])
-        if constant is None or target in crossing:
+        if constant is None or target in crossing or target in live_targets:
             continue
         reads = []
         blocked = False
@@ -1187,6 +1205,9 @@ def fold_constant_loads(insns):
             if _ends_region(other.opcode):
                 break
             if other.opcode == "-live-":
+                if _names_register(other.operands, target):
+                    blocked = True
+                    break
                 continue
             for index in range(len(other.operands)):
                 if _reg_key(other.operands[index]) == target:
@@ -1200,6 +1221,7 @@ def fold_constant_loads(insns):
                 break
         if blocked:
             continue
+        assert target not in live_targets    # no -live- resumes into it
         for later, index in reads:
             insns[later].operands[index] = constant
         keep[position] = False
@@ -1223,23 +1245,26 @@ def _names_register(operands, key):
 
 def emit_and_assemble_native(native_table, program, name,
                              has_merge_points=False, assembler=None,
-                             optimise=False):
+                             optimise=True):
     """Full native pipeline: emit_native -> compute_liveness_native ->
-    NativeAssembler.assemble, mirroring ProgramEmitter.emit's own order.
+    fold_constant_loads -> NativeAssembler.assemble, mirroring
+    ProgramEmitter.emit's own order plus the post-liveness fold.
 
     Returns (jitcode, entry_positions, assembler).
     """
     from rpython.rlib.debug import debug_start, debug_stop
     debug_start("pe-cogen-emit")
     ssarepr, counts = emit_native(native_table, program, name, has_merge_points)
-    if optimise:
-        # The equivalence gate passes optimise=False: it checks that this
-        # pipeline lowers a program exactly as the translation-time one
-        # does, which is about the lowering, not about what is folded after.
-        ssarepr.insns = fold_constant_loads(ssarepr.insns)
     debug_stop("pe-cogen-emit")
     debug_start("pe-cogen-live")
     compute_liveness_native(ssarepr.insns)
+    if optimise:
+        # The equivalence gate passes optimise=False: it checks that this
+        # pipeline lowers a program exactly as the translation-time one
+        # does, which is about the lowering, not about what is folded
+        # after.  Folds after liveness, so -live- operands name the real
+        # read set (see fold_constant_loads).
+        ssarepr.insns = fold_constant_loads(ssarepr.insns)
     debug_stop("pe-cogen-live")
     _log_insn_mix(ssarepr, program)
     if assembler is None:
