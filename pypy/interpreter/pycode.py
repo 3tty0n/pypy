@@ -16,6 +16,7 @@ from pypy.interpreter.astcompiler.consts import (
 from pypy.tool.stdlib_opcode import opcodedesc, HAVE_ARGUMENT
 from rpython.rlib.rarithmetic import intmask, r_longlong
 from rpython.rlib.objectmodel import compute_hash, we_are_translated
+from rpython.rlib.nonconst import NonConstant
 from rpython.rlib import jit
 from rpython.rlib.debug import debug_start, debug_stop, debug_print
 
@@ -55,6 +56,9 @@ class CodeHookCache(object):
 
 class PyCode(eval.Code):
     "CPython-style code objects."
+    # True once runtime cogen installed a residual program for this code;
+    # gates execute_frame's residual exception recovery.
+    _pe_has_linked_program = False
     _immutable_fields_ = ["_signature", "co_argcount", "co_cellvars[*]",
                           "co_code", "co_consts_w[*]", "co_filename",
                           "co_firstlineno", "co_flags", "co_freevars[*]",
@@ -72,6 +76,13 @@ class PyCode(eval.Code):
         the pypy compiler"""
         self.space = space
         eval.Code.__init__(self, name)
+        # NonConstant: the only True-writer is annotated late (during
+        # complete_helpers); a constant False here would fold at readers and
+        # the late generalization then hits "graph not in fixed_graphs".
+        if we_are_translated():
+            self._pe_has_linked_program = NonConstant(False)
+        else:
+            self._pe_has_linked_program = False
         assert nlocals >= 0
         self.co_argcount = argcount
         self.co_nlocals = nlocals

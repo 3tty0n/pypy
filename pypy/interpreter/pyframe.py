@@ -296,9 +296,14 @@ class PyFrame(W_Root):
                     next_instr = r_uint(self.last_instr + 1)
                     if next_instr != 0:
                         self.pushvalue(w_inputvalue)
+                # Read once, outside the handler: pycode and lastblock are
+                # virtualizable fields, and touching them on the exception
+                # path below forces the frame on every guest exception that
+                # crosses execute_frame (73x forcings on eparse).
+                code = self.pycode
                 while True:
                     try:
-                        w_exitvalue = self.dispatch(self.pycode, next_instr,
+                        w_exitvalue = self.dispatch(code, next_instr,
                                                     executioncontext)
                     except OperationError as dispatch_operr:
                         # On the generic path handle_bytecode searches for
@@ -399,7 +404,6 @@ class PyFrame(W_Root):
             values_w[n] = self.locals_cells_stack_w[base+n]
         return values_w
 
-    @pe.residualize
     @jit.unroll_safe
     def dropvalues(self, n):
         n = hint(n, promote=True)
@@ -451,7 +455,6 @@ class PyFrame(W_Root):
         assert index >= 0
         self.locals_cells_stack_w[index] = ll_assert_not_none(w_object)
 
-    @pe.residualize
     @jit.unroll_safe
     def dropvaluesuntil(self, finaldepth):
         depth = self.valuestackdepth - 1
