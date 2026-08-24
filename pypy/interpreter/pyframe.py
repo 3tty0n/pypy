@@ -312,7 +312,11 @@ class PyFrame(W_Root):
                         # arriving here with blocks still installed can only
                         # have escaped a residual program, which replaces
                         # dispatch wholesale.  Run the same search for it;
-                        # anything else was already searched once.
+                        # anything else was already searched once.  Codes
+                        # without a linked program cannot need it: re-raise
+                        # without touching the (virtualizable) frame.
+                        if not code._pe_has_linked_program:
+                            raise
                         if not self.blockstack_non_empty():
                             raise
                         next_instr = self.handle_operation_error(
