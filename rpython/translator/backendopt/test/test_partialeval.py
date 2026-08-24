@@ -7,9 +7,21 @@ from rpython.translator.backendopt.partialeval import (PartialEvaluator,
     make_rtyped_constant)
 from rpython.translator.backendopt.partialeval_template import (
     AbsoluteTarget, Branch, Continue, Finish, NextPcHole, PcHole,
-    RelativeTarget, ResidualTemplateGenerator)
+    RelativeTarget, ResidualTemplateGenerator, COMPACT_ENTRY_MIN_BLOCKS,
+    uses_compact_entries)
 from rpython.translator.backendopt.generating_extension import (
     GeneratingExtension)
+
+
+def test_compact_entries_are_reserved_for_large_programs():
+    class Program(object):
+        pass
+
+    program = Program()
+    program.blocks = dict.fromkeys(range(COMPACT_ENTRY_MIN_BLOCKS - 1))
+    assert not uses_compact_entries(program)
+    program.blocks[COMPACT_ENTRY_MIN_BLOCKS - 1] = None
+    assert uses_compact_entries(program)
 
 
 def byte_pair_decoder(code, pc):

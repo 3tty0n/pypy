@@ -22,7 +22,7 @@ from rpython.translator.backendopt.native_fragments import (
     NTLabel, NDescr, NListOfKind, NIndirectCallTargets, NSwitchDictOperand,
     NativeInsn, native_fragment_for)
 from rpython.translator.backendopt.partialeval_template import (
-    flatten_resolved_targets, sort_ints, sort_strings)
+    flatten_resolved_targets, sort_ints, sort_strings, uses_compact_entries)
 
 
 # ____________________________________________________________
@@ -158,6 +158,7 @@ def emit_native(native_table, program, name="emitted-residual-native",
         for pc in program.loop_headers:
             headers[pc] = True
         headers[program.entry_pc] = True
+    compact_entries = uses_compact_entries(program)
     fragments = {}
     for pc, block in program.blocks.items():
         fragments[pc] = native_fragment_for(
@@ -187,7 +188,7 @@ def emit_native(native_table, program, name="emitted-residual-native",
     for pc in order:
         ssarepr.insns.append(NativeInsn("---", []))
         ssarepr.insns.append(NativeInsn("@label", [NLabel(_block_label_id(pc))]))
-        if has_merge_points:
+        if has_merge_points and (not compact_entries or pc in headers):
             _initialise_scratch_native(ssarepr, fragments, counts)
         _place_native(ssarepr, program, pc, fragments, scratch)
 

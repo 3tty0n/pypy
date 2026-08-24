@@ -87,39 +87,24 @@ class PortalLinker(object):
         linked_program = mainjitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, list(self.portal_sources), [])
         if guard is not None:
-            # Every block boundary the emitted code has an entry position for
-            # -- not just loop headers and the entry -- so a greenkey that
-            # goes hot at any block the residual program already covers still
-            # matches this program instead of falling back to a generic
-            # portal trace for a region that duplicates it.
-            # Not sorted()/set()/|/.sort(): none are RPython-legal.
-            # Dict-as-set stands in for the union; sort_ints for the sort.
             from rpython.translator.backendopt.partialeval_template import (
-                sort_ints)
-            entries = []
-            # Entering at a leave block would leave at the same pc and the
-            # portal would re-select this program forever; that instruction
-            # belongs to the generic interpreter.  (Three-argument getattr
-            # is not RPython; LinkedResidualProgram always has the field.)
-            leave_pcs = program.leave_pcs
-            for pc in lowered.entry_positions:
-                if pc not in leave_pcs:
-                    entries.append(pc)
-            sort_ints(entries)
-            # The loop headers and the entry: exactly the pcs where a trace
-            # may legitimately start without duplicating a loop this program
-            # already provides.  A stricter subset of `entries` above, used
-            # by pe_tick_suppressed (warmstate.py) to tell a genuine loop
-            # start apart from a mid-block pc some other trace's tail landed
-            # on inside this program's coverage.
+                sort_ints, uses_compact_entries)
             legit_set = {}
             for pc in program.loop_headers:
                 legit_set[pc] = True
             legit_set[program.entry_pc] = True
             legit_entries = []
             for pc in legit_set:
-                legit_entries.append(pc)
+                if pc not in program.leave_pcs:
+                    legit_entries.append(pc)
             sort_ints(legit_entries)
+            entries = legit_entries
+            if not uses_compact_entries(program):
+                entries = []
+                for pc in lowered.entry_positions:
+                    if pc not in program.leave_pcs:
+                        entries.append(pc)
+                sort_ints(entries)
             linked_program.set_guard(guard[0], entries, guard[1],
                                      legit_entries)
         lowered.jitcode.pe_metadata.attach_linked_jitcode(

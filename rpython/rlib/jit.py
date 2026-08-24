@@ -1421,7 +1421,11 @@ def leave_portal_frame():
 class Counters(object):
     counters="""
     TRACING
+    OPTIMIZING
     BACKEND
+    PE_COGEN
+    PE_COGEN_SCAN
+    PE_COGEN_INSTALL
     OPS
     HEAPCACHED_OPS
     RECORDED_OPS

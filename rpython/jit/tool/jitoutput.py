@@ -9,8 +9,21 @@ import re
 
 REGEXES = [
     (('tracing_no', 'tracing_time'), '^Tracing:\s+([\d.]+)\s+([\d.]+)$'),
+    (('optimizing_no', 'optimizing_time'),
+     '^Optimizing:\s+([\d.]+)\s+([\d.]+)$'),
     (('backend_no', 'backend_time'), '^Backend:\s+([\d.]+)\s+([\d.]+)$'),
+    (('pe_cogen_no', 'pe_cogen_overhead_time'),
+     '^PE cogen overhead:\s+([\d.]+)\s+([\d.]+)$'),
+    (('pe_cogen_scan_no', 'pe_cogen_scan_time'),
+     '^PE cogen scan:\s+([\d.]+)\s+([\d.]+)$'),
+    (('pe_cogen_install_no', 'pe_cogen_install_time'),
+     '^PE cogen install:\s+([\d.]+)\s+([\d.]+)$'),
     (None, '^TOTAL.*$'),
+    (('pe_cogen_generated',), '^pe cogen generated:\s+(\d+)$'),
+    (('pe_cogen_declined',), '^pe cogen declined:\s+(\d+)$'),
+    (('pe_cogen_deferred',), '^pe cogen deferred:\s+(\d+)$'),
+    (('pe_insns_generic',), '^pe insns generic:\s+(\d+)$'),
+    (('pe_insns_residual',), '^pe insns residual:\s+(\d+)$'),
     (('ops.total',), '^ops:\s+(\d+)$'),
     (('heapcached_ops', ), '^heapcached ops:\s+(\d+)$'),
     (('recorded_ops.total',), '^recorded ops:\s+(\d+)$'),
@@ -50,10 +63,25 @@ class Aborts(object):
     vable_escape = 0
 
 class OutputInfo(object):
+    compilation_time = 0.0
     tracing_no = 0
     tracing_time = 0.0
+    optimizing_no = 0
+    optimizing_time = 0.0
     backend_no = 0
     backend_time = 0.0
+    pe_cogen_no = 0
+    pe_cogen_time = 0.0
+    pe_cogen_overhead_time = 0.0
+    pe_cogen_scan_no = 0
+    pe_cogen_scan_time = 0.0
+    pe_cogen_install_no = 0
+    pe_cogen_install_time = 0.0
+    pe_cogen_generated = 0
+    pe_cogen_declined = 0
+    pe_cogen_deferred = 0
+    pe_insns_generic = 0
+    pe_insns_residual = 0
     asm_no = 0
     asm_time = 0.0
     guards = 0
@@ -90,4 +118,9 @@ def parse_prof(output):
                     setattr(getattr(info, before), after, v)
                 else:
                     setattr(info, a, v)
+    info.compilation_time = (info.tracing_time + info.optimizing_time +
+                             info.backend_time)
+    info.pe_cogen_time = (info.pe_cogen_overhead_time +
+                          info.pe_cogen_scan_time +
+                          info.pe_cogen_install_time)
     return info

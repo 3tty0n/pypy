@@ -9,8 +9,8 @@ from rpython.jit.metainterp.jitexc import JitException
 from rpython.rlib.jit import Counters
 
 
-JITPROF_LINES = Counters.ncounters + 1 + 1
-# one for TOTAL, 1 for calls, update if needed
+JITPROF_LINES = Counters.ncounters + 7
+# TOTAL, calls, two PE instruction counts, three PE cogen outcomes
 _CPU_LINES = 4       # the last 4 lines are stored on the cpu
 
 class BaseProfiler(object):
@@ -35,6 +35,30 @@ class EmptyProfiler(BaseProfiler):
         pass
 
     def end_backend(self):
+        pass
+
+    def start_optimizing(self):
+        pass
+
+    def end_optimizing(self):
+        pass
+
+    def start_pe_cogen(self):
+        pass
+
+    def end_pe_cogen(self):
+        pass
+
+    def start_pe_cogen_scan(self):
+        pass
+
+    def end_pe_cogen_scan(self):
+        pass
+
+    def start_pe_cogen_install(self):
+        pass
+
+    def end_pe_cogen_install(self):
         pass
 
     def count(self, kind, inc=1):
@@ -63,7 +87,7 @@ class Profiler(BaseProfiler):
     def start(self):
         self.starttime = self.timer()
         self.t1 = self.starttime
-        self.times = [0, 0]
+        self.times = [0] * (Counters.PE_COGEN_INSTALL + 1)
         self.counters = [0] * (Counters.ncounters - _CPU_LINES)
         self.calls = 0
         self.current = []
@@ -95,8 +119,20 @@ class Profiler(BaseProfiler):
     def start_tracing(self):   self._start(Counters.TRACING)
     def end_tracing(self):     self._end  (Counters.TRACING)
 
+    def start_optimizing(self): self._start(Counters.OPTIMIZING)
+    def end_optimizing(self):   self._end  (Counters.OPTIMIZING)
+
     def start_backend(self):   self._start(Counters.BACKEND)
     def end_backend(self):     self._end  (Counters.BACKEND)
+
+    def start_pe_cogen(self):  self._start(Counters.PE_COGEN)
+    def end_pe_cogen(self):    self._end  (Counters.PE_COGEN)
+
+    def start_pe_cogen_scan(self): self._start(Counters.PE_COGEN_SCAN)
+    def end_pe_cogen_scan(self):   self._end  (Counters.PE_COGEN_SCAN)
+
+    def start_pe_cogen_install(self): self._start(Counters.PE_COGEN_INSTALL)
+    def end_pe_cogen_install(self):   self._end  (Counters.PE_COGEN_INSTALL)
 
     def count(self, kind, inc=1):
         self.counters[kind] += inc
@@ -133,11 +169,24 @@ class Profiler(BaseProfiler):
         calls = self.calls
         self._print_line_time("Tracing", cnt[Counters.TRACING],
                               tim[Counters.TRACING])
+        self._print_line_time("Optimizing", cnt[Counters.OPTIMIZING],
+                              tim[Counters.OPTIMIZING])
         self._print_line_time("Backend", cnt[Counters.BACKEND],
                               tim[Counters.BACKEND])
+        self._print_line_time("PE cogen overhead", cnt[Counters.PE_COGEN],
+                              tim[Counters.PE_COGEN])
+        self._print_line_time("PE cogen scan", cnt[Counters.PE_COGEN_SCAN],
+                              tim[Counters.PE_COGEN_SCAN])
+        self._print_line_time("PE cogen install",
+                              cnt[Counters.PE_COGEN_INSTALL],
+                              tim[Counters.PE_COGEN_INSTALL])
         line = "TOTAL:      \t\t%f" % (self.tk - self.starttime, )
         debug_print(line)
         from rpython.jit.metainterp.pyjitpl import _pe_insn_counts
+        from rpython.jit.codewriter.jitcode import _cogen_counters
+        self._print_intline("pe cogen generated", _cogen_counters.generated)
+        self._print_intline("pe cogen declined", _cogen_counters.declined)
+        self._print_intline("pe cogen deferred", _cogen_counters.deferred)
         self._print_intline("pe insns generic", _pe_insn_counts.generic)
         self._print_intline("pe insns residual", _pe_insn_counts.residual)
         self._print_intline("ops", cnt[Counters.OPS])

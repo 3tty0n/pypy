@@ -11,7 +11,7 @@ class FakeProfiler(Profiler):
         self.counter = 123456
         Profiler.start(self)
         self.events = []
-        self.times = [0, 0]
+        self.times = [0] * (Counters.PE_COGEN_INSTALL + 1)
     
     def timer(self):
         self.counter += 1
@@ -48,12 +48,16 @@ class TestProfile(ProfilerMixin):
         profiler = pyjitpl._warmrunnerdesc.metainterp_sd.profiler
         expected = [
             Counters.TRACING,
+            Counters.OPTIMIZING,
+            ~ Counters.OPTIMIZING,
+            Counters.OPTIMIZING,
+            ~ Counters.OPTIMIZING,
             Counters.BACKEND,
             ~ Counters.BACKEND,
             ~ Counters.TRACING,
             ]
         assert profiler.events == expected
-        assert profiler.times == [2, 1]
+        assert profiler.times == [4, 2, 1, 0, 0, 0]
         py.test.skip("disabled until unrolling")
         assert profiler.counters == [1, 1, 3, 3, 2, 15, 2, 0, 0, 0, 0,
                                      0, 0, 0, 0, 0, 0, 0]
@@ -125,4 +129,3 @@ class TestProfile(ProfilerMixin):
         assert res == f(6, 7)
         profiler = pyjitpl._warmrunnerdesc.metainterp_sd.profiler
         assert profiler.counters[Counters.HEAPCACHED_OPS] == 3
-

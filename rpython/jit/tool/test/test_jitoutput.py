@@ -34,6 +34,7 @@ def test_really_run():
     # assert did not crash
     # asserts below are a bit delicate, possibly they might be deleted
     assert info.tracing_no == 1
+    assert info.optimizing_no == 2
     assert info.backend_no == 1
     assert info.ops.total == 2
     assert info.recorded_ops.total == 2
@@ -44,8 +45,17 @@ def test_really_run():
     assert info.forcings == 0
 
 DATA = '''Tracing:         1       0.006992
+Optimizing:      1       0.001250
 Backend:        1       0.000525
+PE cogen overhead: 4       0.000400
+PE cogen scan:  2       0.000100
+PE cogen install: 1       0.000250
 TOTAL:                  0.025532
+pe cogen generated:     1
+pe cogen declined:      1
+pe cogen deferred:      2
+pe insns generic:       10
+pe insns residual:      20
 ops:                    2
 heapcached ops:         111
 recorded ops:           6
@@ -77,8 +87,23 @@ def test_parse():
     info = parse_prof(DATA)
     assert info.tracing_no == 1
     assert info.tracing_time == 0.006992
+    assert info.optimizing_no == 1
+    assert info.optimizing_time == 0.001250
     assert info.backend_no == 1
     assert info.backend_time == 0.000525
+    assert abs(info.compilation_time - 0.008767) < 1e-12
+    assert info.pe_cogen_no == 4
+    assert info.pe_cogen_overhead_time == 0.000400
+    assert info.pe_cogen_scan_no == 2
+    assert info.pe_cogen_scan_time == 0.000100
+    assert info.pe_cogen_install_no == 1
+    assert info.pe_cogen_install_time == 0.000250
+    assert abs(info.pe_cogen_time - 0.000750) < 1e-12
+    assert info.pe_cogen_generated == 1
+    assert info.pe_cogen_declined == 1
+    assert info.pe_cogen_deferred == 2
+    assert info.pe_insns_generic == 10
+    assert info.pe_insns_residual == 20
     assert info.ops.total == 2
     assert info.heapcached_ops == 111
     assert info.recorded_ops.total == 6

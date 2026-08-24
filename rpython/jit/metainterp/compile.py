@@ -51,12 +51,15 @@ class CompileData(object):
 
         self.box_names_memo = memo
         optimizations = build_opt_chain(self.enable_opts)
+        profiler = metainterp_sd.profiler
+        profiler.start_optimizing()
         debug_start("jit-optimize")
         try:
             return self.optimize(metainterp_sd, jitdriver_sd, optimizations)
         finally:
             self.forget_optimization_info()
             debug_stop("jit-optimize")
+            profiler.end_optimizing()
 
 
 class PreambleCompileData(CompileData):

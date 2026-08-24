@@ -9,7 +9,7 @@ and delegates the rest to ``PortalLinker.install``.
 
 def generate_for_live_code(extension, linker, codewriter, code, guard, ref,
                            entry_pc=0, entry_state=None, emitter=None,
-                           native_table=None):
+                           native_table=None, profiler=None):
     """Generate and install a residual program for ``code``, guarded on
     ``ref``.
 
@@ -38,6 +38,8 @@ def generate_for_live_code(extension, linker, codewriter, code, guard, ref,
     """
     from rpython.rlib.debug import (debug_print, debug_start,
                                     debug_stop)
+    if profiler is not None:
+        profiler.start_pe_cogen_scan()
     debug_start("pe-cogen-scan")
     try:
         program = extension.generate(code, entry_pc, entry_state)
@@ -48,12 +50,16 @@ def generate_for_live_code(extension, linker, codewriter, code, guard, ref,
         program = None
     finally:
         debug_stop("pe-cogen-scan")
+        if profiler is not None:
+            profiler.end_pe_cogen_scan()
     if program is None:
         blocked_pc, blocked_key = extension.last_blocked
         debug_print("pe-cogen-scan declined: blocked pc", blocked_pc,
                     "key", blocked_key)
         return None
     debug_start("pe-cogen-install")
+    if profiler is not None:
+        profiler.start_pe_cogen_install()
     try:
         lowered = linker.install(codewriter, program, guard=guard,
                                  emitter=emitter, native_table=native_table)
@@ -64,5 +70,7 @@ def generate_for_live_code(extension, linker, codewriter, code, guard, ref,
         return None
     finally:
         debug_stop("pe-cogen-install")
+        if profiler is not None:
+            profiler.end_pe_cogen_install()
     lowered.linked_program.guard_ref = ref
     return lowered.linked_program

@@ -10,6 +10,16 @@ from rpython.rlib.rarithmetic import intmask, r_uint
 from rpython.rtyper.lltypesystem.lloperation import llop
 
 
+# Below this size the extra external entries are cheap and improve first-use
+# latency.  Above it, their per-block scratch prologues dominate generation and
+# trace size.  Large programs retain loop headers and the program entry only.
+COMPACT_ENTRY_MIN_BLOCKS = 192
+
+
+def uses_compact_entries(program):
+    return len(program.blocks) >= COMPACT_ENTRY_MIN_BLOCKS
+
+
 class Resolvable(object):
     """Common base for anything with resolve(bindings) -> value: lets
     _resolve_operand/_resolve_target use isinstance instead of hasattr

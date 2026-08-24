@@ -569,6 +569,8 @@ class ProgramEmitter(object):
         from rpython.jit.codewriter.flatten import Label, SSARepr, TLabel
         from rpython.jit.codewriter.liveness import compute_liveness
         from rpython.rtyper.lltypesystem import llmemory
+        from rpython.translator.backendopt.partialeval_template import (
+            uses_compact_entries)
 
         if (self.compiler.portal_jd is not None
                 and not self.compiler.jit_merge_point_args):
@@ -580,6 +582,7 @@ class ProgramEmitter(object):
         headers = set()
         if self.compiler.jit_merge_point_args:
             headers = set(program.loop_headers) | set([program.entry_pc])
+        compact_entries = uses_compact_entries(program)
         fragments = dict((pc, self.fragment_for(block, pc in headers))
                          for pc, block in program.blocks.items())
         num_regs = self._widest(fragments.values())
@@ -602,17 +605,11 @@ class ProgramEmitter(object):
             # never wrote.
             ssarepr.insns.append(("---",))
             ssarepr.insns.append((Label(("block", pc)),))
-            if self.compiler.jit_merge_point_args:
-                # Every block, not only loop headers: the portal now guards on
-                # every block boundary (see PortalLinker.install), so any of
-                # them may be a trace start, and a block entered from outside
-                # has none of the registers above the calling convention set
-                # yet.  Reaching a block by an ordinary jump re-runs the
-                # copies, which the optimiser removes; reaching it as a trace
-                # start is what needs them.  The writes are into registers a
-                # fragment never reads before its own code writes them, so
-                # running this unconditionally is a no-op except where a
-                # snapshot mid-fragment needs the value defined.
+            if (self.compiler.jit_merge_point_args
+                    and (not compact_entries or pc in headers)):
+                # Only external entries need values for scratch registers the
+                # calling convention does not carry.  Internal block jumps
+                # arrive with the residual program's register state intact.
                 self._initialise_scratch(ssarepr, fragments, counts)
             self._place(ssarepr, program, pc, fragments, scratch)
 

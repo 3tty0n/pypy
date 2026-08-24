@@ -335,7 +335,8 @@ def _gate_allows(profiler, code_size):
     k = _gate_k()
     if k == 0.0:
         return True
-    tracing_ns = profiler.get_times(Counters.TRACING) * 1e9
+    tracing_ns = (profiler.get_times(Counters.TRACING) +
+                  profiler.get_times(Counters.OPTIMIZING)) * 1e9
     cost_ns = code_size * COST_PER_BYTE_NS
     if tracing_ns < k * cost_ns:
         return False
@@ -491,44 +492,50 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
     def runtime_cogen(gcref):
         from rpython.rlib.debug import debug_print, have_debug_prints
         from rpython.rlib.jit import Counters
-        # Set on every path out of here, permanent-decline ones included:
-        # a stale True from a previous ref's gate defer must never leak
-        # into this ref's (unrelated) result.
-        metadata.soft_decline = False
-        code = cast_gcref_to_instance(PyCode, gcref)
-        if code is None:
-            return None
-        if code.co_flags & CO_GENERATOR:
-            # A generator's frame suspends at YIELD_VALUE and is resumed
-            # later at that pc; a residual program is entered at a block
-            # boundary and runs to one of its own exits, which is not the
-            # same contract.
-            return None
-        code_size = len(code.co_code)
-        if not _gate_allows(profiler, code_size):
-            # Not enough tracing yet to repay this generation -- decline
-            # softly so the miss is retried once more tracing accrues,
-            # instead of being cached as a permanent decline.
-            metadata.soft_decline = True
+        profiler.start_pe_cogen()
+        try:
+            # Set on every path out of here, permanent-decline ones included:
+            # a stale True from a previous ref's gate defer must never leak
+            # into this ref's (unrelated) result.
+            metadata.soft_decline = False
+            code = cast_gcref_to_instance(PyCode, gcref)
+            if code is None:
+                return None
+            if code.co_flags & CO_GENERATOR:
+                # A generator's frame suspends at YIELD_VALUE and is resumed
+                # later at that pc; a residual program is entered at a block
+                # boundary and runs to one of its own exits, which is not the
+                # same contract.
+                return None
+            code_size = len(code.co_code)
+            if not _gate_allows(profiler, code_size):
+                # Not enough tracing yet to repay this generation -- decline
+                # softly so the miss is retried once more tracing accrues,
+                # instead of being cached as a permanent decline.
+                metadata.soft_decline = True
+                if have_debug_prints():
+                    tracing = profiler.get_times(Counters.TRACING)
+                    optimizing = profiler.get_times(Counters.OPTIMIZING)
+                    tracing_ms = int((tracing + optimizing) * 1000)
+                    debug_print("pe-cogen gate deferred code_size=%d "
+                                "tracing_ms=%d" % (code_size, tracing_ms))
+                return None
             if have_debug_prints():
-                tracing_ms = int(profiler.get_times(Counters.TRACING) * 1000)
-                debug_print("pe-cogen gate deferred code_size=%d "
-                            "tracing_ms=%d" % (code_size, tracing_ms))
-            return None
-        if have_debug_prints():
-            # Name the code object: a residual program that misbehaves is
-            # otherwise only identifiable by a raw address.
-            debug_print("pe-cogen code %s %s:%d" % (
-                code.co_name, code.co_filename, code.co_firstlineno))
-        program = generate_for_live_code(
-            extension, linker, codewriter, code, guard, gcref,
-            entry_pc=0, native_table=native_table)
-        if program is None:
-            return None
-        # Assembled after finish_setup() froze liveness and jitcode tables.
-        register_late_jitcode(program.jitcode,
-                              program.jitcode.own_liveness_info)
-        return program
+                # Name the code object: a residual program that misbehaves is
+                # otherwise only identifiable by a raw address.
+                debug_print("pe-cogen code %s %s:%d" % (
+                    code.co_name, code.co_filename, code.co_firstlineno))
+            program = generate_for_live_code(
+                extension, linker, codewriter, code, guard, gcref,
+                entry_pc=0, native_table=native_table, profiler=profiler)
+            if program is None:
+                return None
+            # Assembled after finish_setup() froze liveness and jitcode tables.
+            register_late_jitcode(program.jitcode,
+                                  program.jitcode.own_liveness_info)
+            return program
+        finally:
+            profiler.end_pe_cogen()
 
     metadata.runtime_cogen = runtime_cogen
     mainjitcode.pe_metadata = metadata
