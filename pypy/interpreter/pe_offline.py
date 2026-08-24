@@ -201,7 +201,7 @@ def build_generating_extension(translator):
     extension = GeneratingExtension.from_step_function(
         translator, step, opcode_keys(),
         decode_instruction, terminal_values=(PE_LEAVE, PE_RETURN),
-        graph=graph)
+        graph=graph, ref_hole_names=("pycode",))
     extension.leave_key = PE_LEAVE_OPCODE
     return extension
 
@@ -462,6 +462,7 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
             extension.unsupported[key] = error
             del extension.templates[key]
     report_unsupported(extension, sys.stdout)
+    print >> sys.stdout, report_template_size(extension)
     native_table = emitter.native_table()
     _runtime_cogen_state[0] = (codewriter, native_table)
 

@@ -420,11 +420,14 @@ class LinkedTemplateBlock(object):
     means what.
     """
 
-    def __init__(self, pc, key, template, bindings):
+    def __init__(self, pc, key, template, bindings, ref_bindings):
         self.pc = pc
         self.key = key
         self.template = template
         self.bindings = bindings
+        # ref-kind late-static values (currently just "pycode"): one dict,
+        # shared by every block of a program -- see GeneratingExtension.generate.
+        self.ref_bindings = ref_bindings
         # Extra late-static values this block was reached with.
         self.state = {}
         self.successors = []

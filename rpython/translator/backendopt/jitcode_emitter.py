@@ -28,6 +28,7 @@ with two properties that make it relocatable:
 """
 
 from rpython.flowspace.model import Constant
+from rpython.rtyper.lltypesystem import lltype
 
 #: A value no real late-static operand is likely to take, so a placeholder
 #: that escapes patching shows up as an obviously wrong number rather than as
@@ -80,7 +81,14 @@ class HoleConstant(Constant):
     """
 
     def __init__(self, name, concretetype):
-        Constant.__init__(self, HOLE_SENTINEL, concretetype)
+        # A GC/raw pointer needs a well-typed placeholder -- the int
+        # sentinel would leave jtransform looking at a Constant whose
+        # .value doesn't match its own concretetype.
+        if isinstance(concretetype, lltype.Ptr):
+            value = lltype.nullptr(concretetype.TO)
+        else:
+            value = HOLE_SENTINEL
+        Constant.__init__(self, value, concretetype)
         self.hole_name = name
 
     def __repr__(self):

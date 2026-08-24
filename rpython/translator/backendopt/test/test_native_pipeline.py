@@ -370,6 +370,7 @@ class _FakeSwitchTemplate(object):
 class _FakeSwitchBlock(object):
     key = "switchop"
     bindings = {}
+    ref_bindings = {}
     template = _FakeSwitchTemplate()
 
 
@@ -561,3 +562,113 @@ def test_emit_moves_native_order_independent():
                 assert got == want, (
                     "%s: order %r produced dest %r = %r, want %r" %
                     (shape_name, names, dest, got, want))
+
+
+# ____________________________________________________________
+# Rung A: pycode as a ref-valued hole.
+#
+# A hole bound to the code object itself (cast to a GCREF) rather than to
+# anything the decoder works out per instruction -- see
+# GeneratingExtension.ref_hole_names.  The two things that matter: the
+# stamped-in value must be a well-typed null pointer, not the int
+# HOLE_SENTINEL (jtransform would choke on a Ptr-typed Constant holding an
+# int), and the patched-in constant must reach the assembled jitcode's ref
+# constant pool as the concrete instance -- that's what lets the
+# meta-tracer's ConstPtr pure-folding fire on it at trace time.
+
+def test_operand_argcode_options_and_patch_hole_native_handle_ref_kind():
+    """Unit-level: NHole/_patch_hole_native's ref-kind branch, isolated
+    from the graph/annotator machinery the integration test below drives."""
+    from rpython.rtyper.lltypesystem import lltype, llmemory
+    from rpython.translator.backendopt.native_fragments import NHole, NRefConst
+    from rpython.translator.backendopt.native_pipeline import (
+        _operand_argcode_options, _patch_hole_native)
+
+    hole = NHole("obj", llmemory.GCREF)
+    assert hole.kind == "ref"
+    assert _operand_argcode_options(hole, allow_short=False) == ["r"]
+
+    S = lltype.GcStruct("S", ("tag", lltype.Signed))
+    instance = lltype.malloc(S)
+    instance.tag = 42
+    ref = lltype.cast_opaque_ptr(llmemory.GCREF, instance)
+    patched = _patch_hole_native(hole, 0, {}, {"obj": ref}, is_marker=False)
+    assert isinstance(patched, NRefConst)
+    assert patched.value == ref
+
+
+class RefHoleObj(object):
+    """Stands in for PyCode: an ordinary instance a code-independent hole
+    binds to, not a value the decoder reads out of the bytecode stream."""
+
+    def __init__(self, bytecode, tag):
+        self.bytecode = bytecode
+        self.tag = tag
+
+
+OP_DEC_JUMP = 0
+OP_HALT = 1
+
+
+def toy_ref_decoder(code, pc):
+    opcode = ord(code.bytecode[pc])
+    oparg = ord(code.bytecode[pc + 1])
+    return opcode, {"pc": pc, "oparg": oparg}
+
+
+class _RefSinkHolder(object):
+    last = None
+
+_REF_SINK = _RefSinkHolder()
+
+
+def interpret_one_ref(opcode, oparg, pc, value, obj):
+    if opcode == OP_DEC_JUMP:
+        if value > 0:
+            return oparg, value - 1
+        return pc + 2, value
+    # A real use of ``obj`` as a setfield_gc, not a call (the toy codewriter
+    # setup below has no CallControl) and not "is None"/"is obj" (the
+    # rtyper folds either away for a can_be_None=False argument before the
+    # codewriter ever sees an operand to hole-patch).
+    _REF_SINK.last = obj
+    return -1, value
+
+interpret_one_ref._pe_static_args_ = ("opcode",)
+interpret_one_ref._pe_split_args_ = ("pc",)
+interpret_one_ref._pe_hole_args_ = ("obj",)
+
+
+def _toy_ref_setup(code):
+    from rpython.jit.codewriter.codewriter import CodeWriter
+    from rpython.jit.codewriter.test.test_codewriter import FakeCPU
+
+    graph, translator = get_graph(interpret_one_ref,
+                                  [int, int, int, int, RefHoleObj])
+    extension = GeneratingExtension.from_step_function(
+        translator, interpret_one_ref, [OP_DEC_JUMP, OP_HALT],
+        toy_ref_decoder, ref_hole_names=("obj",))
+    program = extension.generate(code)
+    codewriter = CodeWriter(FakeCPU(translator.rtyper), [])
+    emitter = ProgramEmitter(codewriter, None, "opcode", ("pc",),
+                             ("pc", "oparg", "obj"), ("value",))
+    emitter.precompile_fragments(extension.templates)
+    return program, emitter
+
+
+def test_ref_hole_reaches_native_constant_pool_as_the_bound_instance():
+    from rpython.rtyper.annlowlevel import cast_instance_to_gcref
+
+    bytecode = chr(OP_DEC_JUMP) + chr(0) + chr(OP_HALT) + chr(0)
+    code = RefHoleObj(bytecode, tag=99)
+    program, emitter = _toy_ref_setup(code)
+
+    native_table = build_native_table(emitter._fragments)
+    native_jitcode, _positions, _asm = emit_and_assemble_native_unoptimised(
+        native_table, program, "native-ref", has_merge_points=False)
+
+    expected_ref = cast_instance_to_gcref(code)
+    assert expected_ref in native_jitcode.constants_r
+    # HOLE_SENTINEL is int-only; a Ptr-typed hole must never carry it,
+    # patched or not.
+    assert str(HOLE_SENTINEL) not in native_jitcode.dump()

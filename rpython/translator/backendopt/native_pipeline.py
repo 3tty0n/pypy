@@ -257,7 +257,8 @@ def _place_native(ssarepr, program, pc, fragments, scratch):
         exit_index = _exit_index(insn)
         # -1, not None: RPython ints have no null representation.
         if exit_index < 0:
-            ssarepr.insns.append(_localise_native(insn, pc, block.bindings))
+            ssarepr.insns.append(_localise_native(
+                insn, pc, block.bindings, block.ref_bindings))
             continue
         exit = fragment.exits[exit_index]
         target = targets[exit_index]
@@ -276,10 +277,10 @@ def _exit_index(insn):
     return -1
 
 
-def _localise_native(insn, pc, bindings):
+def _localise_native(insn, pc, bindings, ref_bindings):
     """Port of ProgramEmitter._localise/_patch_hole."""
     is_marker = insn.opcode in ("jit_merge_point", "pe_bailout_point")
-    operands = [_localise_operand(x, pc, bindings, is_marker)
+    operands = [_localise_operand(x, pc, bindings, ref_bindings, is_marker)
                for x in insn.operands]
     result = insn.result   # a register, never a label/hole -- untouched
     if insn.opcode == "@label":
@@ -288,16 +289,16 @@ def _localise_native(insn, pc, bindings):
     return NativeInsn(insn.opcode, operands, result)
 
 
-def _localise_operand(x, pc, bindings, is_marker):
+def _localise_operand(x, pc, bindings, ref_bindings, is_marker):
     if isinstance(x, NLabel):
         return NLabel(_fragment_label_id(pc, x.label_id))
     if isinstance(x, NTLabel):
         return NTLabel(_fragment_label_id(pc, x.label_id))
     if isinstance(x, NHole):
-        return _patch_hole_native(x, pc, bindings, is_marker)
+        return _patch_hole_native(x, pc, bindings, ref_bindings, is_marker)
     if isinstance(x, NListOfKind):
         return NListOfKind(x.kind, [
-            _localise_operand(item, pc, bindings, is_marker)
+            _localise_operand(item, pc, bindings, ref_bindings, is_marker)
             for item in x.items])
     if isinstance(x, NSwitchDictOperand):
         fresh = NativeSwitchDictDescr()
@@ -311,16 +312,18 @@ def _localise_operand(x, pc, bindings, is_marker):
     return x
 
 
-def _patch_hole_native(hole, pc, bindings, is_marker):
+def _patch_hole_native(hole, pc, bindings, ref_bindings, is_marker):
     """A marker's own 'pc' hole identifies this block; every other hole
     takes the block's bound value.
 
-    Asserts int-only: silently truncating a ref/float hole into an int
+    Asserts int/ref-only: silently truncating a float hole into an int
     would be a real, hard-to-notice correctness bug.
     """
+    if hole.kind == "ref":
+        return NRefConst(ref_bindings[hole.name])
     # Not %r: RPython's rtyper only implements %s/%d/... formatting.
     assert hole.kind == "int", (
-        "native_pipeline: non-int hole %s -- no interpreter this IR "
+        "native_pipeline: non-int/ref hole %s -- no interpreter this IR "
         "currently serves has one" % (hole.name,))
     if is_marker and hole.name == "pc":
         return NIntConst(intmask(pc))
@@ -932,6 +935,8 @@ def _operand_argcode_options(x, allow_short):
     if isinstance(x, NIntConst):
         return ["c" if int_fits_short(x.ivalue, allow_short) else "i"]
     if isinstance(x, NHole):
+        if x.kind == "ref":
+            return ["r"]
         assert x.kind == "int"
         return ["c", "i"] if allow_short else ["i"]
     if isinstance(x, NRefConst):

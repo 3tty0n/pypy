@@ -59,9 +59,15 @@ class GeneratingExtension(object):
 
     def __init__(self, templates, decoder, static_name,
                  unsupported=None, policy=None, state_names=(),
-                 leave_key=-1):
+                 leave_key=-1, ref_hole_names=()):
         self.templates = dict(templates)
         self.decoder = decoder
+        # Hole names bound to the code object itself (cast to a GCREF), not
+        # to anything the decoder works out -- "pycode", say.  Empty by
+        # default: a toy interpreter whose "code" isn't a real RPython
+        # instance (a raw byte string, in several tests) must not have this
+        # attempted on it.
+        self.ref_hole_names = tuple(ref_hole_names)
         # Static key of a "leave" template: an instruction with no template
         # of its own gets a synthetic block built from this one instead of
         # declining the whole program, ending the residual program right
@@ -95,7 +101,7 @@ class GeneratingExtension(object):
     @classmethod
     def from_step_function(cls, translator, step_function, keys, decoder,
                            static_name=None, terminal_values=(-1,),
-                           policy=None, graph=None):
+                           policy=None, graph=None, ref_hole_names=()):
         """Specialize ``step_function`` once per key.
 
         A key that cannot be specialized is recorded rather than raised on: it
@@ -135,7 +141,8 @@ class GeneratingExtension(object):
                 error.pe_traceback = traceback.format_exc()
                 unsupported[key] = error
         return cls(templates, decoder, static_name, unsupported,
-                   policy=policy, state_names=state_names)
+                   policy=policy, state_names=state_names,
+                   ref_hole_names=ref_hole_names)
 
     def handles(self, key):
         return key in self.templates
@@ -153,7 +160,17 @@ class GeneratingExtension(object):
         reaching it, and a mismatch means that assumption does not hold, so it
         is an error rather than something to paper over.
         """
+        from rpython.rtyper.annlowlevel import cast_instance_to_gcref
+
         blocks = {}
+        # Ref holes bound to the code object itself -- "pycode" for pypy --
+        # so trace-time ConstPtr pure-folding sees it as a real constant
+        # rather than a runtime-loaded green.  Shared by every block: it's
+        # the same code for the whole program.  Empty unless the interpreter
+        # opted in via ref_hole_names.
+        ref_bindings = {}
+        for name in self.ref_hole_names:
+            ref_bindings[name] = cast_instance_to_gcref(code)
         if entry_state is None:
             entry_state = {}
         # Not `x or {}`: mixing dict/tuple types at a merge point fails
@@ -203,7 +220,8 @@ class GeneratingExtension(object):
             bindings = bindings.copy()
             bindings[self.static_name] = key
             bindings.update(state)
-            block = LinkedTemplateBlock(pc, key, template, bindings)
+            block = LinkedTemplateBlock(pc, key, template, bindings,
+                                        ref_bindings)
             block.state = state
             # Publish before following successors so backedges hit the cache.
             blocks[pc] = block
