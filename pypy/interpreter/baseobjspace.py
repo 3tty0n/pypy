@@ -1213,7 +1213,6 @@ class ObjSpace(object):
         args = Arguments(self, list(args_w))
         return self.call_args(w_func, args)
 
-    @pe.residualize
     def call_valuestack(self, w_func, nargs, frame, dropvalues, methodcall=False):
         # methodcall is only used for better error messages in argument.py
         from pypy.interpreter.function import Function, Method, is_builtin_code

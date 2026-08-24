@@ -250,7 +250,6 @@ class GlobalCache(object):
     def getvalue(self, space):
         return unwrap_cell(space, self.cell)
 
-@pe.residualize
 def LOAD_GLOBAL_cached(self, nameindex, next_instr):
     w_value = _LOAD_GLOBAL_cached(self, nameindex, next_instr)
     self.pushvalue(w_value)
@@ -295,7 +294,6 @@ def _LOAD_GLOBAL_cached(self, nameindex, next_instr):
             pycode._globals_caches[nameindex] = cache.ref
     return _load_global_fallback(self, varname)
 
-@pe.residualize
 @objectmodel.dont_inline
 def _load_global_fallback(self, varname):
     return self._load_global(varname)

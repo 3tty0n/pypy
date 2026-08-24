@@ -673,7 +673,6 @@ class __extend__(pyframe.PyFrame):
     def getconstant_w(self, index):
         return self.getcode().co_consts_w[index]
 
-    @pe.residualize
     def getname_u(self, index):
         return self.space.text_w(self.getcode().co_names_w[index])
 
@@ -1325,7 +1324,6 @@ class __extend__(pyframe.PyFrame):
         w_iterator = self.space.iter(w_iterable)
         self.pushvalue(w_iterator)
 
-    @pe.residualize
     def FOR_ITER(self):
         """Advance the iterator; True when it was exhausted and we jump."""
         w_iterator = self.peekvalue()
@@ -1422,7 +1420,6 @@ class __extend__(pyframe.PyFrame):
             w_result = self.space.call_args(w_function, args)
         self.pushvalue(w_result)
 
-    @pe.residualize
     def CALL_FUNCTION(self, oparg, next_instr):
         # XXX start of hack for performance
         if (oparg >> 8) & 0xff == 0:
