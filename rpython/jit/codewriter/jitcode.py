@@ -41,6 +41,9 @@ class _CogenCounters(object):
 _cogen_counters = _CogenCounters()
 
 
+COGEN_RETRY_MAX_DELAY = 256
+
+
 def set_late_jitcode_base(count):
     _late_jitcode_counter.base = count
     _late_jitcode_counter.next_index = count
@@ -240,6 +243,10 @@ class PEJitCodeMetadata(object):
         # idiom as _program_cache, kept separate since it is written on every
         # miss, not only on a ref's first one.
         self._miss_counts = None
+        # ref -> next miss count at which a soft-declined generation is
+        # retried.  A cost gate can stay closed for thousands of misses;
+        # calling it on every one adds warm-up work without new information.
+        self._retry_at = None
         # Misses required for a ref before runtime_cogen is invoked for it;
         # 0 (default) keeps today's behaviour of generating on the first
         # miss.  Set at runtime only (e.g. from an env var), never at
@@ -373,7 +380,25 @@ class PEJitCodeMetadata(object):
         else:
             count = 1
         counts[ref] = count
+        retry_at = self._retry_at
+        if retry_at is not None and ref in retry_at:
+            return count >= retry_at[ref]
         return count >= self.cogen_threshold
+
+    def _defer_ref(self, ref):
+        """Back off retries after a temporary runtime-cogen decline."""
+        count = self._miss_counts[ref]
+        delay = count
+        if delay < self.cogen_threshold:
+            delay = self.cogen_threshold
+        if delay < 1:
+            delay = 1
+        if delay > COGEN_RETRY_MAX_DELAY:
+            delay = COGEN_RETRY_MAX_DELAY
+        retry_at = self._retry_at
+        if retry_at is None:
+            retry_at = self._retry_at = new_ref_dict()
+        retry_at[ref] = count + delay
 
     def _cogen_ref(self, ref):
         """Invoked once per ref; linked_program_for caches the result.
@@ -391,6 +416,7 @@ class PEJitCodeMetadata(object):
             if program is None and self.soft_decline:
                 # Deferred, not declined: not counted as a decline, and
                 # linked_program_for (our caller) will not cache this None.
+                self._defer_ref(ref)
                 _cogen_counters.deferred += 1
                 debug_print("pe-cogen ref=%d deferred "
                             "totals-generated=%d totals-declined=%d "

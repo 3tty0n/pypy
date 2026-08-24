@@ -38,31 +38,35 @@ def opcode_keys():
 def _loop_ends(co_code):
     """For each position, the end of the innermost enclosing SETUP_LOOP.
 
-    A forward walk tracking the static loop-block nesting: SETUP_LOOP pushes
-    its end position, POP_BLOCK pops.  Sound only for code objects whose
-    block stack holds nothing but loop blocks, which is exactly the set the
-    policy admits (handler-bearing ones stay on the generic interpreter).
-    -1 where no loop encloses the position.  Jumps cannot change the block
-    depth at a merge point (the compiler keeps it consistent), so the walk
-    need not follow control flow.
+    Track every statically pushed block, not only loops.  POP_BLOCK closes the
+    innermost setup, which may be an exception/finally/with block nested in a
+    loop.  Treating every POP_BLOCK as a loop pop loses that enclosing loop
+    and makes a later BREAK_LOOP resolve to -1.
     """
     ends = [-1] * len(co_code)
     stack = []
     position = 0
     setup_loop = opcodedesc.SETUP_LOOP.index
+    setup_blocks = (setup_loop, opcodedesc.SETUP_EXCEPT.index,
+                    opcodedesc.SETUP_FINALLY.index,
+                    opcodedesc.SETUP_WITH.index)
     pop_block = opcodedesc.POP_BLOCK.index
     while position < len(co_code):
         opcode = ord(co_code[position])
-        current = stack[len(stack) - 1] if stack else -1
+        current = -1
+        for block_opcode, block_end in reversed(stack):
+            if block_opcode == setup_loop:
+                current = block_end
+                break
         length = 3 if opcode >= HAVE_ARGUMENT else 1
         index = position
         while index < position + length and index < len(co_code):
             ends[index] = current
             index += 1
-        if opcode == setup_loop:
+        if opcode in setup_blocks:
             oparg = ord(co_code[position + 1]) | (
                 ord(co_code[position + 2]) << 8)
-            stack.append(position + 3 + oparg)
+            stack.append((opcode, position + 3 + oparg))
         elif opcode == pop_block and stack:
             stack.pop()
         position += length
@@ -79,8 +83,11 @@ def decode_instruction(code, pc):
     EXTENDED_ARG prefix is folded into the argument of what follows it rather
     than reported as an instruction of its own.
     """
-    assert pc >= 0
     co_code = code.co_code
+    if pc < 0 or pc >= len(co_code):
+        # A malformed statically resolved edge must decline this code object,
+        # not turn an assertion in the translated cogen into a process abort.
+        raise BytecodeCorruption
     opcode = ord(co_code[pc])
     next_instr = pc + 1
     if opcode >= HAVE_ARGUMENT:

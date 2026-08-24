@@ -1,8 +1,10 @@
 """The PE decoder must tile a code object exactly as dispatch_bytecode does."""
 
 import dis
+import py
 
 from pypy.interpreter import pe_offline
+from pypy.interpreter.pycode import BytecodeCorruption
 from pypy.tool.stdlib_opcode import bytecode_spec
 
 
@@ -84,6 +86,38 @@ def test_opcode_keys_are_unique_and_in_range():
     keys = pe_offline.opcode_keys()
     assert keys == sorted(set(keys))
     assert keys and 0 <= keys[0] and keys[-1] < 256
+
+
+def test_invalid_entry_pc_declines_instead_of_asserting():
+    code = FakeCode(chr(bytecode_spec.opcodedesc.RETURN_VALUE.index))
+    py.test.raises(BytecodeCorruption, pe_offline.decode_instruction,
+                   code, -1)
+    py.test.raises(BytecodeCorruption, pe_offline.decode_instruction,
+                   code, len(code.co_code))
+
+
+def test_break_loop_keeps_enclosing_loop_across_handler_pop_block():
+    def loop_with_handler(items):
+        while items:
+            try:
+                items.pop()
+            except IndexError:
+                break
+            if items:
+                break
+
+    co_code = loop_with_handler.func_code.co_code
+    break_loop = bytecode_spec.opcodedesc.BREAK_LOOP.index
+    targets = []
+    pc = 0
+    while pc < len(co_code):
+        opcode, bindings = pe_offline.decode_instruction(
+            loop_with_handler.func_code, pc)
+        if opcode == break_loop:
+            targets.append(bindings["break_target"])
+        pc = bindings["pc"]
+    assert targets
+    assert min(targets) >= 0
 
 
 if __name__ == "__main__":

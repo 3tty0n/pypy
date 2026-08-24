@@ -207,10 +207,9 @@ def test_runtime_cogen_returning_wrong_ref_is_treated_as_decline():
     assert len(metadata.runtime_cogen.calls) == 1
 
 
-def test_soft_decline_is_not_cached_and_is_retried_on_next_miss():
+def test_soft_decline_is_not_cached_and_retries_with_backoff():
     """A gate-style decline (metadata.soft_decline set before returning
-    None) must not be cached: the next lookup for the same ref re-invokes
-    runtime_cogen instead of finding a permanent None."""
+    None) must not be cached, but repeated gate checks are backed off."""
     ref_a = _new_ref()
     metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
     metadata.linked_programs = []
@@ -235,12 +234,33 @@ def test_soft_decline_is_not_cached_and_is_retried_on_next_miss():
     assert len(calls) == 1
     assert metadata.linked_program_for(boxes) is None
     assert len(calls) == 2
+    assert metadata.linked_program_for(boxes) is None
+    assert len(calls) == 2
     assert metadata.linked_program_for(boxes) is generated
     assert len(calls) == 3
 
     # Now cached: a further miss does not call runtime_cogen again.
     assert metadata.linked_program_for(boxes) is generated
     assert len(calls) == 3
+
+
+def test_soft_decline_backoff_scales_from_cogen_threshold():
+    ref_a = _new_ref()
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+    metadata.guard_ref_index = 0
+    metadata.cogen_threshold = 3
+    calls = []
+
+    def runtime_cogen(ref):
+        calls.append(ref)
+        metadata.soft_decline = True
+        return None
+    metadata.runtime_cogen = runtime_cogen
+
+    boxes = [ConstPtr(ref_a)]
+    for expected_calls in [0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3]:
+        assert metadata.linked_program_for(boxes) is None
+        assert len(calls) == expected_calls
 
 
 def test_is_linked_jitcode_uses_flag_set_by_attach():
