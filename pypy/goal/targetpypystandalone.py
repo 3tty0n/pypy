@@ -402,6 +402,13 @@ class PyPyTarget(object):
         # generates a residual program for the live code object.
         elif os.environ.get('PYPY_PE_COGEN'):
             from pypy.interpreter import pe_offline
+            from rpython.rlib.jit import PARAMETERS
+
+            # Eager bridge compilation: residual-origin traces are thinner,
+            # so steady state pays boundary traffic until bridges compile.
+            # Measured sweet spot (raytrace steady +16% -> -9%, krakatau/
+            # bm_mdp/deltablue safe); --jit trace_eagerness=N still wins.
+            PARAMETERS['trace_eagerness'] = 5
 
             def install(codewriter, jitdriver_sd, translator):
                 if jitdriver_sd.jitdriver.name != 'pypyjit':
