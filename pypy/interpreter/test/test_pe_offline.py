@@ -120,8 +120,105 @@ def test_break_loop_keeps_enclosing_loop_across_handler_pop_block():
     assert min(targets) >= 0
 
 
+def _setup_loop_target(co_code, setup_pc):
+    """The break target CPython encodes at a SETUP_LOOP instruction."""
+    setup_loop = bytecode_spec.opcodedesc.SETUP_LOOP.index
+    assert ord(co_code[setup_pc]) == setup_loop
+    oparg = ord(co_code[setup_pc + 1]) | (ord(co_code[setup_pc + 2]) << 8)
+    return setup_pc + 3 + oparg
+
+
+def _break_loop_targets(func_code):
+    break_loop = bytecode_spec.opcodedesc.BREAK_LOOP.index
+    co_code = func_code.co_code
+    targets = []
+    pc = 0
+    while pc < len(co_code):
+        opcode, bindings = pe_offline.decode_instruction(func_code, pc)
+        if opcode == break_loop:
+            targets.append(bindings["break_target"])
+        pc = bindings["pc"]
+    return targets
+
+
+def test_break_inside_try_body_keeps_enclosing_loop():
+    # Shaped like eatWhitespace: the `break` inside the try body's normal
+    # exit is POP_BLOCK (closes SETUP_EXCEPT) + BREAK_LOOP -- a block-stack
+    # scan mistakes that POP_BLOCK for the try's own and loses the loop.
+    def eat_whitespace(f):
+        while True:
+            try:
+                x = f()
+                if x == 1:
+                    break
+                elif x == 2:
+                    y = x
+                else:
+                    y = 0
+            except EOFError:
+                break
+        return y
+
+    co_code = eat_whitespace.func_code.co_code
+    setup_loop = bytecode_spec.opcodedesc.SETUP_LOOP.index
+    setup_pc = co_code.index(chr(setup_loop))
+    expected = _setup_loop_target(co_code, setup_pc)
+
+    targets = _break_loop_targets(eat_whitespace.func_code)
+    assert targets
+    assert targets == [expected] * len(targets)
+
+
+def test_nested_loops_resolve_to_their_own_loop():
+    def nested(a, b):
+        while a:
+            while b:
+                if b:
+                    break
+                b = None
+            if a:
+                break
+        return a
+
+    func_code = nested.func_code
+    co_code = func_code.co_code
+    setup_loop = bytecode_spec.opcodedesc.SETUP_LOOP.index
+    setup_positions = [i for i in range(len(co_code))
+                        if ord(co_code[i]) == setup_loop]
+    assert len(setup_positions) == 2
+    outer_target = _setup_loop_target(co_code, setup_positions[0])
+    inner_target = _setup_loop_target(co_code, setup_positions[1])
+    assert outer_target != inner_target
+
+    ends = pe_offline._loop_ends(co_code)
+    break_loop = bytecode_spec.opcodedesc.BREAK_LOOP.index
+    seen = set()
+    pc = 0
+    while pc < len(co_code):
+        opcode, bindings = pe_offline.decode_instruction(func_code, pc)
+        if opcode == break_loop:
+            seen.add(bindings["break_target"])
+            inner_body_start = setup_positions[1] + 3
+            if inner_body_start <= pc < inner_target:
+                assert bindings["break_target"] == inner_target
+            else:
+                assert bindings["break_target"] == outer_target
+        pc = bindings["pc"]
+    assert seen == set([outer_target, inner_target])
+
+
+def test_break_loop_without_enclosing_loop_declines():
+    break_loop = bytecode_spec.opcodedesc.BREAK_LOOP.index
+    code = FakeCode(chr(break_loop))
+    py.test.raises(BytecodeCorruption, pe_offline.decode_instruction,
+                   code, 0)
+
+
 if __name__ == "__main__":
     test_decode_matches_dis_on_real_functions()
     test_extended_arg_folds_into_the_following_instruction()
     test_opcode_keys_are_unique_and_in_range()
+    test_break_inside_try_body_keeps_enclosing_loop()
+    test_nested_loops_resolve_to_their_own_loop()
+    test_break_loop_without_enclosing_loop_declines()
     print "ok"

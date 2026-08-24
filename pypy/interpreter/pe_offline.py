@@ -36,40 +36,52 @@ def opcode_keys():
 
 
 def _loop_ends(co_code):
-    """For each position, the end of the innermost enclosing SETUP_LOOP.
+    """For each position, the break target of the innermost SETUP_LOOP whose
+    body encloses it.
 
-    Track every statically pushed block, not only loops.  POP_BLOCK closes the
-    innermost setup, which may be an exception/finally/with block nested in a
-    loop.  Treating every POP_BLOCK as a loop pop loses that enclosing loop
-    and makes a later BREAK_LOOP resolve to -1.
+    A block-stack scan that pops on every POP_BLOCK is wrong for early exits:
+    a ``break`` inside a try body compiles to POP_BLOCK (closing the
+    try/except) + BREAK_LOOP, and that POP_BLOCK is indistinguishable from
+    the try's normal-exit POP_BLOCK, which would wrongly pop the enclosing
+    loop too. SETUP_LOOP's oparg is instead a jump offset: at position s it
+    jumps to t = s+3+oparg on break, and CPython loop bodies are properly
+    nested intervals [s+3, t). So collect every such interval by a linear
+    scan (folding EXTENDED_ARG so a prefixed SETUP_LOOP's oparg is whole) and
+    assign each position the *last* (innermost, since intervals nest and are
+    visited outer-to-inner) interval containing it -- immune to any POP_BLOCK
+    imbalance.
     """
-    ends = [-1] * len(co_code)
-    stack = []
-    position = 0
+    n = len(co_code)
+    ends = [-1] * n
     setup_loop = opcodedesc.SETUP_LOOP.index
-    setup_blocks = (setup_loop, opcodedesc.SETUP_EXCEPT.index,
-                    opcodedesc.SETUP_FINALLY.index,
-                    opcodedesc.SETUP_WITH.index)
-    pop_block = opcodedesc.POP_BLOCK.index
-    while position < len(co_code):
+    intervals = []
+    position = 0
+    extended_arg = 0
+    while position < n:
         opcode = ord(co_code[position])
-        current = -1
-        for block_opcode, block_end in reversed(stack):
-            if block_opcode == setup_loop:
-                current = block_end
-                break
-        length = 3 if opcode >= HAVE_ARGUMENT else 1
-        index = position
-        while index < position + length and index < len(co_code):
-            ends[index] = current
-            index += 1
-        if opcode in setup_blocks:
-            oparg = ord(co_code[position + 1]) | (
-                ord(co_code[position + 2]) << 8)
-            stack.append((opcode, position + 3 + oparg))
-        elif opcode == pop_block and stack:
-            stack.pop()
+        if opcode >= HAVE_ARGUMENT:
+            lo = ord(co_code[position + 1])
+            hi = ord(co_code[position + 2])
+            oparg = (extended_arg << 16) | (hi << 8) | lo
+            length = 3
+        else:
+            oparg = 0
+            length = 1
+        if opcode == EXTENDED_ARG:
+            extended_arg = oparg
+            position += length
+            continue
+        extended_arg = 0
+        if opcode == setup_loop:
+            body_start = position + length
+            intervals.append((body_start, body_start + oparg))
         position += length
+    for body_start, target in intervals:
+        pos = body_start
+        stop = target if target < n else n
+        while pos < stop:
+            ends[pos] = target
+            pos += 1
     return ends
 
 
@@ -109,6 +121,10 @@ def decode_instruction(code, pc):
 
     if opcode == opcodedesc.BREAK_LOOP.index:
         break_target = _loop_ends(co_code)[pc]
+        if break_target < 0:
+            # BREAK_LOOP with no enclosing SETUP_LOOP: malformed code, must
+            # decline rather than emit an unresolvable -1 successor.
+            raise BytecodeCorruption
     else:
         break_target = -1
     bindings = {
@@ -530,6 +546,9 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
                 entry_pc=0, native_table=native_table, profiler=profiler)
             if program is None:
                 return None
+            # execute_frame's exception recovery is gated on this flag so
+            # program-less codes never touch the virtualizable frame there.
+            code._pe_has_linked_program = True
             # Assembled after finish_setup() froze liveness and jitcode tables.
             register_late_jitcode(program.jitcode,
                                   program.jitcode.own_liveness_info)
