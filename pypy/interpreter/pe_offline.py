@@ -113,6 +113,66 @@ def decode_instruction(code, pc):
     return opcode, bindings
 
 
+def inline_residualized(translator, graph):
+    """Copy of ``graph`` with every call to a ``@pe.residualize`` helper
+    inlined, so the helper's body is visible to the partial evaluator.
+
+    A copy, not an in-place rewrite: the generic interpreter keeps calling
+    the helper as a real function; only the template-building path sees the
+    inlined body.  Zero-cost when nothing is marked -- the scan below simply
+    finds no candidates and the original graph is returned untouched.
+    """
+    from rpython.flowspace.model import checkgraph, copygraph
+    from rpython.translator.backendopt.canraise import RaiseAnalyzer
+    from rpython.translator.backendopt.inline import CannotInline, inline_function
+    from rpython.translator.simplify import cleanup_graph, get_graph
+
+    def residualized_callees(g):
+        found = {}
+        for block in g.iterblocks():
+            for op in block.operations:
+                if op.opname != "direct_call":
+                    continue
+                callee = get_graph(op.args[0], translator)
+                if callee is not None and \
+                        getattr(callee.func, "_pe_residualize_", False):
+                    found[callee] = True
+        return found
+
+    if not residualized_callees(graph):
+        return graph
+
+    copied = copygraph(graph)
+    # copygraph makes fresh Variable instances for the entry block's
+    # inputargs (it copies concretetype but not .annotation), yet
+    # make_symbolic_template later looks up static-argument bindings by
+    # indexing straight into copied.startblock.inputargs and asking the
+    # annotator for each one's binding.  Carry the annotation across by
+    # position -- entry-block arity and order are preserved by copygraph.
+    for old, new in zip(graph.startblock.inputargs,
+                        copied.startblock.inputargs):
+        new.annotation = old.annotation
+    lltype_to_classdef = translator.rtyper.lltype_to_classdef_mapping()
+    raise_analyzer = RaiseAnalyzer(translator)
+    failed = {}
+    for _round in range(10):
+        callees = [g for g in residualized_callees(copied) if g not in failed]
+        if not callees:
+            break
+        for callee in callees:
+            try:
+                inline_function(translator, callee, copied,
+                                lltype_to_classdef, raise_analyzer,
+                                cleanup=False)
+            except CannotInline as error:
+                print '[pe] could not inline %s: %s' % (
+                    callee.name, error)
+                failed[callee] = True
+    cleanup_graph(copied)
+    checkgraph(copied)
+    return copied
+
+
 def build_generating_extension(translator):
     """Specialize interp_step once per opcode.
 
@@ -136,6 +196,8 @@ def build_generating_extension(translator):
             graph = candidate
             break
     print '[pe] step graph:', graph.name if graph is not None else 'PLAIN (no AccessDirect variant found)'
+    if graph is not None:
+        graph = inline_residualized(translator, graph)
     extension = GeneratingExtension.from_step_function(
         translator, step, opcode_keys(),
         decode_instruction, terminal_values=(PE_LEAVE, PE_RETURN),

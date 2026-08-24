@@ -324,3 +324,16 @@ class ExtPEMergePoint(ExtRegistryEntry):
 
 class PEHintError(Exception):
     """Raised when a pe_merge_point disagrees with its driver."""
+
+
+def residualize(func):
+    """Mark a helper for PE-time inlining into the entry graph.
+
+    build_generating_extension inlines a copy of every call to this helper
+    into the PE entry graph before building templates, so its body
+    participates in partial evaluation.  The generic interpreter's call to
+    the helper is untouched -- only the copy used for template-building is
+    affected.
+    """
+    func._pe_residualize_ = True
+    return func
