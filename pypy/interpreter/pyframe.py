@@ -2,7 +2,7 @@
 """
 
 import sys
-from rpython.rlib import jit
+from rpython.rlib import jit, pe
 from rpython.rlib.debug import make_sure_not_resized, check_nonneg
 from rpython.rlib.debug import ll_assert_not_none
 from rpython.rlib.jit import hint
@@ -399,6 +399,7 @@ class PyFrame(W_Root):
             values_w[n] = self.locals_cells_stack_w[base+n]
         return values_w
 
+    @pe.residualize
     @jit.unroll_safe
     def dropvalues(self, n):
         n = hint(n, promote=True)
@@ -450,6 +451,7 @@ class PyFrame(W_Root):
         assert index >= 0
         self.locals_cells_stack_w[index] = ll_assert_not_none(w_object)
 
+    @pe.residualize
     @jit.unroll_safe
     def dropvaluesuntil(self, finaldepth):
         depth = self.valuestackdepth - 1

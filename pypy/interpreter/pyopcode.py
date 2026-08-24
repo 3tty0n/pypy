@@ -6,6 +6,7 @@ The rest, dealing with variables in optimized ways, is in nestedscope.py.
 
 from rpython.rlib import jit, rstackovf
 from rpython.rlib.nonconst import NonConstant
+from rpython.rlib import pe
 from rpython.rlib.pe import PEDriver
 from rpython.rlib.debug import check_nonneg
 from rpython.rlib.objectmodel import (we_are_translated, always_inline,
@@ -134,9 +135,12 @@ def _worth_generating(program, code):
 # The split argument must be called "pc": the machinery names its pc hole
 # that, whatever the step function calls the value elsewhere.  instr_start is
 # an extra hole: the instruction's own position, needed by PE_LEAVE_OPCODE to
-# say where the generic loop must resume.
+# say where the generic loop must resume.  pycode is a ref hole: baking the
+# concrete code object into each generated program's constant pool, rather
+# than threading it as a dynamic green, is what lets the meta-tracer's
+# ConstPtr pure-folding fire on it at trace time.
 pedriver = PEDriver(static="opcode", split="pc",
-                    holes="oparg instr_start break_target",
+                    holes="oparg instr_start break_target pycode",
                     worth_generating=_worth_generating)
 
 
@@ -669,6 +673,7 @@ class __extend__(pyframe.PyFrame):
     def getconstant_w(self, index):
         return self.getcode().co_consts_w[index]
 
+    @pe.residualize
     def getname_u(self, index):
         return self.space.text_w(self.getcode().co_names_w[index])
 
@@ -1320,6 +1325,7 @@ class __extend__(pyframe.PyFrame):
         w_iterator = self.space.iter(w_iterable)
         self.pushvalue(w_iterator)
 
+    @pe.residualize
     def FOR_ITER(self):
         """Advance the iterator; True when it was exhausted and we jump."""
         w_iterator = self.peekvalue()
@@ -1416,6 +1422,7 @@ class __extend__(pyframe.PyFrame):
             w_result = self.space.call_args(w_function, args)
         self.pushvalue(w_result)
 
+    @pe.residualize
     def CALL_FUNCTION(self, oparg, next_instr):
         # XXX start of hack for performance
         if (oparg >> 8) & 0xff == 0:
