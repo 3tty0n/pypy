@@ -206,6 +206,7 @@ class __extend__(pyframe.PyFrame):
         return self.handle_operation_error(ec, operr)
 
     def handle_operation_error(self, ec, operr, attach_tb=True):
+        operr.pe_frame = self
         if attach_tb:
             if 1:
                 # xxx this is a hack.  It allows bytecode_trace() to
@@ -353,6 +354,9 @@ class __extend__(pyframe.PyFrame):
                                 pc=pc, instr_start=instr_start,
                                 break_target=break_target, pycode=pycode,
                                 is_being_profiled=is_being_profiled, ec=ec)
+        # Redundant on the generic path, which set it in dispatch_bytecode;
+        # a residual program has no other writer, and tracebacks read it.
+        self.last_instr = intmask(instr_start)
         if opcode == PE_LEAVE_OPCODE:
             # No template covers the real instruction at instr_start: the
             # residual program ends here, and the generic loop resumes at

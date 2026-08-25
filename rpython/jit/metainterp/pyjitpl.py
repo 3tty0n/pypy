@@ -1409,6 +1409,9 @@ class MIFrame(object):
     def _opimpl_recursive_call(self, jdindex, greenboxes, redboxes, pc):
         targetjitdriver_sd = self.metainterp.staticdata.jitdrivers_sd[jdindex]
         allboxes = greenboxes + redboxes
+        if self.metainterp.pe_resuming_root(targetjitdriver_sd, redboxes):
+            self.metainterp.pe_tail_enter_root(allboxes)
+            raise ChangeFrame
         warmrunnerstate = targetjitdriver_sd.warmstate
         assembler_call = False
         if warmrunnerstate.inlining:
@@ -2701,6 +2704,8 @@ class MetaInterp(object):
 
     def finishframe_exception(self):
         excvalue = self.last_exc_value
+        root_is_linked = bool(self.framestack) and \
+            self.framestack[0].jitcode.pe_program is not None
         while self.framestack:
             frame = self.framestack[-1]
             code = frame.bytecode
@@ -2726,12 +2731,98 @@ class MetaInterp(object):
                     assert arg1 == 1
                     cintf.jit_rvmprof_code(arg1, arg2)
             self.popframe()
+        if root_is_linked and self.pe_recover_in_trace():
+            raise ChangeFrame
         try:
             self.compile_exit_frame_with_exception(self.last_exc_box)
         except SwitchToBlackhole as stb:
             self.aborted_tracing(stb.reason)
         raise jitexc.ExitFrameWithExceptionRef(
             lltype.cast_opaque_ptr(llmemory.GCREF, excvalue))
+
+    def pe_recover_in_trace(self):
+        """A guest exception escaped the trace's root linked program.
+
+        A linked program stands in for the whole portal, so the portal's
+        own handler search never ran.  Instead of leaving the trace with
+        the exception (after which the interpreter would have to force the
+        virtualizable to search), continue tracing into the interpreter's
+        recovery function, which searches and calls the portal at the
+        handler's pc; pe_tail_enter_root turns that call into re-entering
+        the root there, at this same level -- so the search is part of the
+        trace, as it is for the generic portal.
+        """
+        jd = self.jitdriver_sd
+        jitcode = jd.pe_recover_jitcode
+        if jitcode is None or jd.virtualizable_info is None:
+            return False
+        real_instance = rclass.ll_cast_to_object(self.last_exc_value)
+        if not rclass.ll_isinstance(real_instance, jd.pe_recover_exc_class):
+            return False
+        excbox = self.last_exc_box
+        self.clear_exception()
+        f = self.newframe(jitcode)
+        f.setup_call([self.virtualizable_boxes[-1], excbox])
+        return True
+
+    def pe_resuming_root(self, targetjitdriver_sd, redboxes):
+        """Is this the resume function's call of the portal on the trace's
+        own virtualizable, under the recovery function traced as the root
+        frame?  Only that call: the handler search itself may call the
+        portal for other frames, and so may a nested frame's own recovery.
+        """
+        jd = self.jitdriver_sd
+        if jd.pe_resume_jitcode is None or not self.framestack:
+            return False
+        if self.framestack[0].jitcode is not jd.pe_recover_jitcode:
+            return False
+        if targetjitdriver_sd is not jd or jd.virtualizable_info is None:
+            return False
+        vbox = redboxes[jd.index_of_virtualizable]
+        if vbox is not self.virtualizable_boxes[-1]:
+            return False
+        if self.framestack[-1].jitcode is jd.pe_resume_jitcode:
+            return True
+        return len(self.framestack) >= 2 and \
+            self.framestack[-2].jitcode is jd.pe_resume_jitcode
+
+    def pe_tail_enter_root(self, original_boxes):
+        """The resume function's call of the portal: not a nested call
+        (the callee is the trace's own virtualizable frame) but the root
+        continuing at the handler's pc."""
+        while self.framestack:
+            self.popframe()
+        self.pe_enter_root(original_boxes)
+
+    def pe_enter_root(self, original_boxes):
+        """The trace's bottom frame for the portal called with these
+        greens+reds: the linked program for them, entered at the matching
+        position, or the generic portal."""
+        mainjitcode = self.jitdriver_sd.mainjitcode
+        metadata = mainjitcode.pe_metadata
+        jitcode = mainjitcode
+        call_boxes = original_boxes
+        program = None
+        if metadata is not None:
+            program = metadata.linked_program_for(original_boxes)
+        if program is not None:
+            jitcode = program.jitcode
+            call_boxes = program.build_call_boxes(original_boxes)
+        f = self.newframe(jitcode)
+        f.setup_call(call_boxes)
+        if program is not None and program.guard_pc_index >= 0:
+            # Enter at the instruction the portal came in on, which is not
+            # always the one the program was generated from.
+            f.pc = program.start_position(original_boxes)
+        elif jitcode is mainjitcode and metadata is not None and \
+                metadata.has_linked_programs():
+            # Linked programs exist, but none was built for this code object
+            # and entry pc.  Their entry positions index the linked JitCodes,
+            # so they are meaningless here: enter the generic portal.
+            f.pc = 0
+        else:
+            f.pc = get_pe_trace_start_position(jitcode)
+        return f, program, metadata
 
     def check_recursion_invariant(self):
         portal_call_depth = -1
@@ -3511,30 +3602,7 @@ class MetaInterp(object):
         # ----- make a new frame -----
         self.portal_call_depth = -1 # always one portal around
         self.framestack = []
-        mainjitcode = self.jitdriver_sd.mainjitcode
-        metadata = mainjitcode.pe_metadata
-        jitcode = mainjitcode
-        call_boxes = original_boxes
-        program = None
-        if metadata is not None:
-            program = metadata.linked_program_for(original_boxes)
-        if program is not None:
-            jitcode = program.jitcode
-            call_boxes = program.build_call_boxes(original_boxes)
-        f = self.newframe(jitcode)
-        f.setup_call(call_boxes)
-        if program is not None and program.guard_pc_index >= 0:
-            # Enter at the instruction the portal came in on, which is not
-            # always the one the program was generated from.
-            f.pc = program.start_position(original_boxes)
-        elif jitcode is mainjitcode and metadata is not None and \
-                metadata.has_linked_programs():
-            # Linked programs exist, but none was built for this code object
-            # and entry pc.  Their entry positions index the linked JitCodes,
-            # so they are meaningless here: enter the generic portal.
-            f.pc = 0
-        else:
-            f.pc = get_pe_trace_start_position(jitcode)
+        f, program, metadata = self.pe_enter_root(original_boxes)
         self.pe_trace_start_position = f.pc
         self.pe_metadata_consumed = metadata is not None
         if self.pe_metadata_consumed:

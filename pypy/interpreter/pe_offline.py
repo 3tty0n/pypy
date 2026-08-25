@@ -455,6 +455,34 @@ def report_unresolvable(extension, out=None):
     return lines
 
 
+def _install_pe_recover(codewriter, jitdriver_sd, translator):
+    """Let the tracer unwind an escaped guest exception in the trace."""
+    from pypy.interpreter.error import OperationError
+    from pypy.interpreter.pyframe import PyFrame
+    from rpython.rtyper.rclass import getclassrepr
+    from rpython.translator.translator import graphof
+
+    def helper_jitcode(func):
+        jitcode = codewriter.callcontrol.get_jitcode(
+            graphof(translator, func))
+        # It becomes the trace's bottom frame, standing in for the portal
+        # like a linked program does: the blackhole interpreter and the
+        # frame bookkeeping expect that frame to be portal-like.
+        jitcode.jitdriver_sd = jitdriver_sd
+        jitcode.pe_is_linked = True
+        return jitcode
+
+    jitdriver_sd.pe_recover_jitcode = helper_jitcode(
+        PyFrame.pe_recover.im_func)
+    # Only recognised, never a root frame.
+    jitdriver_sd.pe_resume_jitcode = codewriter.callcontrol.get_jitcode(
+        graphof(translator, PyFrame.pe_resume.im_func))
+    classdef = translator.annotator.bookkeeper.getuniqueclassdef(
+        OperationError)
+    jitdriver_sd.pe_recover_exc_class = getclassrepr(
+        translator.rtyper, classdef).getvtable()
+
+
 def install_runtime_cogen(codewriter, jitdriver_sd, translator):
     """Translation-time entry point: wire runtime cogen onto the portal."""
     from pypy.interpreter.pycode import CO_GENERATOR, PyCode
@@ -467,6 +495,7 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
 
     extension = build_generating_extension(translator)
     linker = portal_linker(jitdriver_sd, "linked-pypy-runtime-cogen")
+    _install_pe_recover(codewriter, jitdriver_sd, translator)
     guard = (GREEN_PC_INDEX, GREEN_CODE_INDEX)
 
     # Runtime boundary: fragments compiled here; the callback below never runs

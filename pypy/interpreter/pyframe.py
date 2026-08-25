@@ -7,6 +7,7 @@ from rpython.rlib.debug import make_sure_not_resized, check_nonneg
 from rpython.rlib.debug import ll_assert_not_none
 from rpython.rlib.jit import hint
 from rpython.rlib.objectmodel import instantiate, specialize, we_are_translated
+from rpython.rlib.objectmodel import dont_inline
 from rpython.rlib.objectmodel import not_rpython
 from rpython.rlib.rarithmetic import intmask, r_uint
 from rpython.tool.pairtype import extendabletype
@@ -305,23 +306,17 @@ class PyFrame(W_Root):
                     try:
                         w_exitvalue = self.dispatch(code, next_instr,
                                                     executioncontext)
-                    except OperationError as dispatch_operr:
-                        # On the generic path handle_bytecode searches for
-                        # the handler inside dispatch and unwinds the whole
-                        # block stack before re-raising, so an exception
-                        # arriving here with blocks still installed can only
-                        # have escaped a residual program, which replaces
-                        # dispatch wholesale.  Run the same search for it;
-                        # anything else was already searched once.  Codes
-                        # without a linked program cannot need it: re-raise
-                        # without touching the (virtualizable) frame.
-                        if not code._pe_has_linked_program:
+                    except OperationError as operr:
+                        # Generic dispatch searched for a handler and
+                        # unwound before re-raising (pe_frame says so); an
+                        # exception that escaped a residual program has
+                        # not been.  The tracer normally handles this in
+                        # the trace (pe_recover_in_trace); here is the
+                        # interpreter's own path.
+                        if not code._pe_has_linked_program or \
+                                operr.pe_frame is self:
                             raise
-                        if not self.blockstack_non_empty():
-                            raise
-                        next_instr = self.handle_operation_error(
-                            executioncontext, dispatch_operr)
-                        continue
+                        w_exitvalue = self.pe_recover(operr)
                     if not isinstance(w_exitvalue, W_ResidualExit):
                         break
                     next_instr = w_exitvalue.next_instr
@@ -977,6 +972,33 @@ class PyFrame(W_Root):
                     return last
             frame = frame.f_backref()
         return None
+
+    def pe_recover(self, operr):
+        """A guest exception escaped a residual program: search this frame's
+        handler, raising when there is none, and carry on from it.  The
+        tracer runs it for the trace's root frame too, so the search stays
+        inside the trace; the pc is promoted, as it becomes a green."""
+        # As dispatch() does: without it every frame access below would
+        # force the virtualizable, in the trace as well.  pe_resume gets
+        # the plain alias: a hinted self would specialize a second copy of
+        # the portal, and its jit_merge_point with it.
+        frame = self
+        self = jit.hint(self, access_directly=True)
+        ec = self.space.getexecutioncontext()
+        next_instr = self.handle_operation_error(ec, operr)
+        return frame.pe_resume(r_uint(jit.promote(intmask(next_instr))))
+
+    @dont_inline
+    def pe_resume(self, next_instr):
+        """Carry on from the handler pe_recover found.  Its own function
+        (never inlined, so the tracer sees its frame) to let the tracer
+        recognise this call of the portal, and nothing else, as the point
+        to re-enter the portal at the trace's root level."""
+        frame = self
+        self = jit.hint(self, access_directly=True)
+        pycode = jit.promote(self.pycode)
+        ec = self.space.getexecutioncontext()
+        return frame.dispatch(pycode, next_instr, ec)
 
     def _convert_unexpected_exception(self, e):
         from pypy.interpreter import error

@@ -1,5 +1,9 @@
 
 
+from rpython.rtyper.lltypesystem import lltype
+from rpython.rtyper import rclass
+
+
 class JitDriverStaticData(object):
     """There is one instance of this class per JitDriver used in the program.
     """
@@ -22,6 +26,21 @@ class JitDriverStaticData(object):
     #    self.propagate_exc_descr.. rpython.jit.metainterp.pyjitpl
     #    self.index             ... rpython.jit.codewriter.call
     #    self.mainjitcode       ... rpython.jit.codewriter.call
+
+    # Set by the interpreter's PE setup (pe_linked_setup), optional:
+    #    self.pe_recover_jitcode   jitcode of a function (virtualizable,
+    #                              exception) -> portal result: unwinds a
+    #                              guest exception that escaped a linked
+    #                              program to its handler and carries on
+    #                              from there through pe_resume_jitcode
+    #    self.pe_resume_jitcode    the function (virtualizable, pc) ->
+    #                              portal result it calls the portal from;
+    #                              the tracer re-enters its root frame at
+    #                              that call instead of nesting it
+    #    self.pe_recover_exc_class vtable of the exceptions it handles
+    pe_recover_jitcode = None
+    pe_resume_jitcode = None
+    pe_recover_exc_class = lltype.nullptr(rclass.CLASSTYPE.TO)
 
     # These attributes are read by the backend in CALL_ASSEMBLER:
     #    self.assembler_helper_adr

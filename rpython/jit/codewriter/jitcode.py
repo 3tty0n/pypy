@@ -286,6 +286,10 @@ class PEJitCodeMetadata(object):
         # on the jitcode itself is equivalent to (and cheaper than) asking
         # this metadata's is_linked_jitcode() to search for it.
         jitcode.pe_is_linked = True
+        # The program as the portal sees it; the linked JitCode's own
+        # metadata attaches it once more with no argument layout.
+        if argument_sources or jitcode.pe_program is None:
+            jitcode.pe_program = program
         return program
 
     def has_linked_programs(self):
@@ -470,6 +474,7 @@ class JitCode(AbstractDescr):
         self.jitdriver_sd = None # None for non-portals
         self.pe_metadata = None
         self.pe_is_linked = False # set True by attach_linked_jitcode
+        self.pe_program = None    # its PELinkedProgram, when linked
         self._called_from = called_from   # debugging
         self._ssarepr     = None          # debugging
         # None: offsets relative to global liveness_info. Set (runtime
