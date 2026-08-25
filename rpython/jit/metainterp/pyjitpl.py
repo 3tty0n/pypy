@@ -2766,25 +2766,26 @@ class MetaInterp(object):
         return True
 
     def pe_resuming_root(self, targetjitdriver_sd, redboxes):
-        """Is this the resume function's call of the portal on the trace's
-        own virtualizable, under the recovery function traced as the root
-        frame?  Only that call: the handler search itself may call the
-        portal for other frames, and so may a nested frame's own recovery.
+        """Is this a call of the portal on the trace's own virtualizable?
+
+        Only pe_resume makes one (a frame cannot otherwise re-enter its
+        own portal while it runs), and it is never a nested call: the
+        root continues at the handler's pc.  The handler search itself,
+        and a nested frame's own recovery, call the portal on other frames.
         """
         jd = self.jitdriver_sd
         if jd.pe_resume_jitcode is None or not self.framestack:
             return False
-        if self.framestack[0].jitcode is not jd.pe_recover_jitcode:
-            return False
         if targetjitdriver_sd is not jd or jd.virtualizable_info is None:
             return False
-        vbox = redboxes[jd.index_of_virtualizable]
-        if vbox is not self.virtualizable_boxes[-1]:
+        if redboxes[jd.index_of_virtualizable] is not \
+                self.virtualizable_boxes[-1]:
             return False
-        if self.framestack[-1].jitcode is jd.pe_resume_jitcode:
-            return True
-        return len(self.framestack) >= 2 and \
-            self.framestack[-2].jitcode is jd.pe_resume_jitcode
+        if self.framestack[0].jitcode is not jd.pe_recover_jitcode:
+            debug_print("pe_resuming_root: unexpected root",
+                        self.framestack[0].jitcode.name,
+                        self.framestack[-1].jitcode.name)
+        return True
 
     def pe_tail_enter_root(self, original_boxes):
         """The resume function's call of the portal: not a nested call
