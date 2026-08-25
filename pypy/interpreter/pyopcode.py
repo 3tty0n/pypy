@@ -82,8 +82,13 @@ PE_RETURN = r_uint(-2)
 PE_LEAVE_OPCODE = 254
 
 
-def _residual_exit(next_instr):
-    """The portal's result for a residual program that ends mid-frame."""
+def _residual_exit(frame, next_instr):
+    """The portal's result for a residual program that ends mid-frame.
+
+    Like a generator's yield, the frame outlives this portal exit, so its
+    virtualizable state must be written back before the trace finishes.
+    """
+    jit.hint(frame, force_virtualizable=True)
     return pyframe.W_ResidualExit(next_instr)
 
 # One residual template per bytecode; the residual code branches on the pc.
@@ -352,7 +357,7 @@ class __extend__(pyframe.PyFrame):
             # No template covers the real instruction at instr_start: the
             # residual program ends here, and the generic loop resumes at
             # the instruction itself, not at whatever comes after it.
-            return PE_LEAVE, _residual_exit(r_uint(instr_start))
+            return PE_LEAVE, _residual_exit(self, r_uint(instr_start))
         if opcode == opcodedesc.RETURN_VALUE.index:
             if not self.blockstack_non_empty():
                 self.frame_finished_execution = True  # for generators
@@ -366,13 +371,13 @@ class __extend__(pyframe.PyFrame):
                 unroller = SReturnValue(w_returnvalue)
                 # Inside a 'finally' block now, at a pc only the block knows.
                 target = block.handle(self, unroller)
-                return PE_LEAVE, _residual_exit(target)
+                return PE_LEAVE, _residual_exit(self, target)
         elif opcode == opcodedesc.END_FINALLY.index:
             unroller = self.end_finally()
             # Every exit here is a Finish: a template's exits must be all
             # Finish or all Continue, and the unrolling ones are dynamic.
             if not isinstance(unroller, SuspendedUnroller):
-                return PE_LEAVE, _residual_exit(pc)
+                return PE_LEAVE, _residual_exit(self, pc)
             # go on unrolling the stack
             block = self.unrollstack(unroller.kind)
             if block is None:
@@ -380,7 +385,7 @@ class __extend__(pyframe.PyFrame):
                 self.pushvalue(w_result)
                 return PE_RETURN, self.peekvalue()
             target = block.handle(self, unroller)
-            return PE_LEAVE, _residual_exit(target)
+            return PE_LEAVE, _residual_exit(self, target)
         elif opcode == opcodedesc.JUMP_ABSOLUTE.index:
             if self.jump_absolute(oparg, ec):
                 raise PcMoved
@@ -397,7 +402,7 @@ class __extend__(pyframe.PyFrame):
             return r_uint(break_target), None
         elif opcode == opcodedesc.CONTINUE_LOOP.index:
             target = self.CONTINUE_LOOP(oparg, pc)
-            return PE_LEAVE, _residual_exit(target)
+            return PE_LEAVE, _residual_exit(self, target)
         elif opcode == opcodedesc.FOR_ITER.index:
             if self.FOR_ITER():
                 return pc + r_uint(oparg), None

@@ -1018,7 +1018,6 @@ class NativeAssembler(Assembler):
             self.insns = share_with.insns
             self.indirectcalltargets = share_with.indirectcalltargets
             self.list_of_addr2name = share_with.list_of_addr2name
-            self._seen_raw_objects = share_with._seen_raw_objects
             if not readonly:
                 self._counters = share_with._counters
                 self.all_liveness = share_with.all_liveness
