@@ -342,6 +342,23 @@ def _gate_k():
     return _gate_state.k
 
 
+# Debugging aid: PYPY_COGEN_EXCLUDE=name,name never generates for these
+# code object names, to bisect a misbehaving program at run time.
+_exclude_state = [None]
+
+
+def _excluded(co_name):
+    names = _exclude_state[0]
+    if names is None:
+        value = os.environ.get("PYPY_COGEN_EXCLUDE")
+        names = value.split(",") if value else []
+        _exclude_state[0] = names
+    for name in names:
+        if name == co_name:
+            return True
+    return False
+
+
 def _gate_allows(profiler, code_size):
     """Has this process traced enough to repay generating a program for a
     code object of 'code_size' bytes, k times over -- and is there budget
@@ -551,6 +568,8 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
                 # later at that pc; a residual program is entered at a block
                 # boundary and runs to one of its own exits, which is not the
                 # same contract.
+                return None
+            if _excluded(code.co_name):
                 return None
             code_size = len(code.co_code)
             if not _gate_allows(profiler, code_size):

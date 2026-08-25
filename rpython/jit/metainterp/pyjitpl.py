@@ -2761,6 +2761,10 @@ class MetaInterp(object):
             return False
         excbox = self.last_exc_box
         self.clear_exception()
+        debug_start("pe-resume")
+        if have_debug_prints():
+            debug_print("recover")
+        debug_stop("pe-resume")
         f = self.newframe(jitcode)
         f.setup_call([self.virtualizable_boxes[-1], excbox])
         return True
@@ -2778,13 +2782,11 @@ class MetaInterp(object):
             return False
         if targetjitdriver_sd is not jd or jd.virtualizable_info is None:
             return False
-        if redboxes[jd.index_of_virtualizable] is not \
-                self.virtualizable_boxes[-1]:
+        # By value: in a bridge the frame's register and the virtualizable
+        # box can be distinct boxes for the same object.
+        vbox = redboxes[jd.index_of_virtualizable]
+        if vbox.getref_base() != self.virtualizable_boxes[-1].getref_base():
             return False
-        if self.framestack[0].jitcode is not jd.pe_recover_jitcode:
-            debug_print("pe_resuming_root: unexpected root",
-                        self.framestack[0].jitcode.name,
-                        self.framestack[-1].jitcode.name)
         return True
 
     def pe_tail_enter_root(self, original_boxes):
@@ -2793,7 +2795,12 @@ class MetaInterp(object):
         continuing at the handler's pc."""
         while self.framestack:
             self.popframe()
-        self.pe_enter_root(original_boxes)
+        f, program, metadata = self.pe_enter_root(original_boxes)
+        debug_start("pe-resume")
+        if have_debug_prints():
+            debug_print("tail-enter:", f.jitcode.name, "pc", f.pc,
+                        "program" if program is not None else "generic")
+        debug_stop("pe-resume")
 
     def pe_enter_root(self, original_boxes):
         """The trace's bottom frame for the portal called with these
