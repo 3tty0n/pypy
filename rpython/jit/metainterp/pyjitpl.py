@@ -1441,8 +1441,8 @@ class MIFrame(object):
             # send_loop_to_backend() already ran and set its
             # compiled_loop_token before attach_procedure_to_interp() made
             # the cell reachable, for both loops and entry bridges alike.
-            # pe_call_threshold is a coarse cap on top of the
-            # abort-history decision above; default is effectively off.
+            # pe_call_threshold: a compiled callee program at least this
+            # large is called rather than re-inlined.
             already_compiled = ptoken is not None and (
                 program.code_size >= warmrunnerstate.pe_call_threshold or
                 not warmrunnerstate.can_inline_callable(greenboxes))

@@ -606,9 +606,11 @@ PARAMETERS = {'threshold': 1039, # just above 1024, prime
               'vec': 0,
               'vec_all': 0,
               'vec_cost': 0,
-              # Coarse cap, not the decision itself (see
-              # can_inline_callable() in pyjitpl.py); default is off.
-              'pe_call_threshold': 1000000,
+              # A compiled callee program larger than this is called, not
+              # re-inlined: re-inlining every compiled callee is what made
+              # warmup expensive (eparse: warmup -20% at 3000, steady and
+              # krakatau unchanged); tiny callees still inline.
+              'pe_call_threshold': 3000,
               }
 unroll_parameters = unrolling_iterable(PARAMETERS.items())
 
