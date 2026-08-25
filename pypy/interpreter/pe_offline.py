@@ -226,6 +226,12 @@ def build_generating_extension(translator):
         decode_instruction, terminal_values=(PE_LEAVE, PE_RETURN),
         graph=graph, ref_hole_names=("pycode",))
     extension.leave_key = PE_LEAVE_OPCODE
+    # A handler's code is part of the program's CFG: with the loop-closing
+    # jump inside an except clause (the "try each alternative" pattern),
+    # the loop header is only recognised through this edge.
+    for name in ("SETUP_EXCEPT", "SETUP_FINALLY", "SETUP_WITH"):
+        extension.handler_edges[
+            getattr(bytecode_spec.opcodedesc, name).index] = ("pc", "oparg")
     return extension
 
 

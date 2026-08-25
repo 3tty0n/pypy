@@ -68,6 +68,12 @@ class GeneratingExtension(object):
         # instance (a raw byte string, in several tests) must not have this
         # attempted on it.
         self.ref_hole_names = tuple(ref_hole_names)
+        # Edges the templates cannot express: an instruction that installs
+        # a handler makes the handler reachable, though it never branches
+        # there itself.  {key: (hole naming the pc after the instruction,
+        # hole naming the offset)}: the handler is at their sum.  The edge
+        # counts for reachability and loop analysis only.
+        self.handler_edges = {}
         # Static key of a "leave" template: an instruction with no template
         # of its own gets a synthetic block built from this one instead of
         # declining the whole program, ending the residual program right
@@ -186,6 +192,7 @@ class GeneratingExtension(object):
         self.decline_reason = None
         leave_blocks = 0
         leave_pcs = {}
+        handler_pcs = {}
 
         while pending:
             pc, state = pending.pop()
@@ -245,9 +252,20 @@ class GeneratingExtension(object):
                         block.successors.append(target)
                     if target not in blocks:
                         pending.append((target, next_state))
+            if key in self.handler_edges:
+                pc_name, offset_name = self.handler_edges[key]
+                target = bindings[pc_name] + bindings[offset_name]
+                debug_print("pe-cogen-scan handler edge", intmask(pc),
+                            "->", intmask(target))
+                handler_pcs[intmask(target)] = True
+                if target not in block.successors:
+                    block.successors.append(target)
+                if target not in blocks:
+                    pending.append((target, state))
 
         program = LinkedResidualProgram(entry_pc, blocks, state_names)
         program.leave_pcs = leave_pcs
+        program.handler_pcs = handler_pcs
         program.leave_blocks = leave_blocks
         program = program.analyze_loops()
         # After the loop analysis, so a policy can ask about loop headers --

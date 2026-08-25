@@ -102,8 +102,14 @@ class PortalLinker(object):
             if not uses_compact_entries(program):
                 entries = []
                 for pc in lowered.entry_positions:
-                    if pc not in program.leave_pcs:
-                        entries.append(pc)
+                    if pc in program.leave_pcs:
+                        continue
+                    # Reached only by unwinding an exception, which the
+                    # interpreter does generically: entering a program at
+                    # an except handler's pc miscompiles (krakatau, zip).
+                    if pc in program.handler_pcs:
+                        continue
+                    entries.append(pc)
                 sort_ints(entries)
             linked_program.set_guard(guard[0], entries, guard[1],
                                      legit_entries)

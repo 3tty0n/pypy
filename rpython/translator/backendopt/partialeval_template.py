@@ -461,6 +461,9 @@ class LinkedResidualProgram(object):
         # portal would re-select it forever.  The generic interpreter has to
         # execute that instruction.
         self.leave_pcs = {}
+        # pcs reached only through a handler edge (see
+        # GeneratingExtension.handler_edges): exception handlers' code.
+        self.handler_pcs = {}
         # Passed in, not reassigned after construction: RPython would
         # need to unify a 0-length and a 1-length tuple on this attribute
         # across the whole build, which it cannot do.
