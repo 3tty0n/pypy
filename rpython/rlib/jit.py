@@ -478,6 +478,17 @@ def virtual_ref_finish(vref, x):
     keepalive_until_here(x)   # otherwise the whole function call is removed
     _virtual_ref_finish(vref, x)
 
+@oopspec('virtual_ref_finish_escaped(x)')
+@specialize.argtype(1)
+def virtual_ref_finish_escaped(vref, x):
+    """Like virtual_ref_finish(), but if the vref escaped (something the
+    JIT cannot see may still hold it), 'x' is forced so that the vref stays
+    dereferenceable afterwards; a vref that did not escape costs nothing.
+    For frames leaving with an exception: a traceback may hold a callee
+    frame whose f_back is this vref."""
+    keepalive_until_here(x)
+    _virtual_ref_finish_escaped(vref, x)
+
 def non_virtual_ref(x):
     """Creates a 'vref' that just returns x when called; nothing more special.
     Used for None or for frames outside JIT scope."""
@@ -522,6 +533,11 @@ def _virtual_ref_finish(vref, x):
     assert vref._x is x, "Invalid call to virtual_ref_finish"
     vref._finish()
 
+def _virtual_ref_finish_escaped(vref, x):
+    assert vref._x is x, "Invalid call to virtual_ref_finish_escaped"
+    vref()            # untranslated: always forced, hence always valid
+    vref._finish()
+
 class Entry(ExtRegistryEntry):
     _about_ = (non_virtual_ref, DirectJitVRef)
 
@@ -543,6 +559,15 @@ class Entry(ExtRegistryEntry):
 
 class Entry(ExtRegistryEntry):
     _about_ = _virtual_ref_finish
+
+    def compute_result_annotation(self, s_vref, s_obj):
+        pass
+
+    def specialize_call(self, hop):
+        hop.exception_cannot_occur()
+
+class Entry(ExtRegistryEntry):
+    _about_ = _virtual_ref_finish_escaped
 
     def compute_result_annotation(self, s_vref, s_obj):
         pass

@@ -1969,6 +1969,21 @@ class MIFrame(object):
             metainterp.history.record2(rop.VIRTUAL_REF_FINISH,
                                        vrefbox, nullbox, None)
 
+    @arguments("box")
+    def opimpl_virtual_ref_finish_escaped(self, box):
+        # As opimpl_virtual_ref_finish, but the object goes along: the
+        # optimizer stores it as vref.forced, which forces it only if the
+        # vref is not virtual any more, i.e. escaped.
+        metainterp = self.metainterp
+        vrefbox = metainterp.virtualref_boxes.pop()
+        lastbox = metainterp.virtualref_boxes.pop()
+        assert box.getref_base() == lastbox.getref_base()
+        vrefinfo = metainterp.staticdata.virtualref_info
+        vref = vrefbox.getref_base()
+        if vrefinfo.is_virtual_ref(vref):
+            metainterp.history.record2(rop.VIRTUAL_REF_FINISH,
+                                       vrefbox, lastbox, None)
+
     @arguments("int", "box")
     def opimpl_rvmprof_code(self, leaving, box_unique_id):
         from rpython.rlib.rvmprof import cintf

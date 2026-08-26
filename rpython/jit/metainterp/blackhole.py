@@ -1178,6 +1178,10 @@ class BlackholeInterpreter(object):
     def bhimpl_virtual_ref_finish(a):
         pass
 
+    @arguments("r")
+    def bhimpl_virtual_ref_finish_escaped(a):
+        pass
+
     # ----------
     # list operations
 

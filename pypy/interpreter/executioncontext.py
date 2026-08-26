@@ -82,7 +82,7 @@ class ExecutionContext(object):
         finally:
             frame_vref = self.topframeref
             self.topframeref = frame.f_backref
-            if frame.escaped or got_exception:
+            if frame.escaped:
                 # if this frame escaped to applevel, we must ensure that also
                 # f_back does
                 f_back = frame.f_backref()
@@ -91,7 +91,16 @@ class ExecutionContext(object):
                 # force the frame (from the JIT point of view), so that it can
                 # be accessed also later
                 frame_vref()
-            jit.virtual_ref_finish(frame_vref, frame)
+                jit.virtual_ref_finish(frame_vref, frame)
+            elif got_exception:
+                # A traceback may hold a callee frame whose f_back is
+                # frame_vref; that is only so if the vref escaped, and
+                # then this forces the frame.  Not forcing unconditionally
+                # keeps frames virtual when the exception is caught and
+                # dropped within compiled code.
+                jit.virtual_ref_finish_escaped(frame_vref, frame)
+            else:
+                jit.virtual_ref_finish(frame_vref, frame)
             if self.space.reverse_debugging:
                 self._revdb_leave(got_exception)
 
