@@ -61,11 +61,13 @@ def plot(results, output, title):
             ax.axis("off")
         axes.flat[0].legend(fontsize=7)
         fig.suptitle(title)
-        fig.tight_layout()
+        fig.tight_layout(rect=(0, 0, 1, 0.97))
         pdf.savefig(fig)
         pyplot.close(fig)
 
         rows = ratios(results)
+        rows.append(("geomean", gmean([r[1] for r in rows]),
+                     gmean([r[2] for r in rows])))
         fig, ax = pyplot.subplots(figsize=(max(8, 0.45 * len(rows)), 4.5))
         xs = range(len(rows))
         ax.bar([x - 0.2 for x in xs], [r[1] for r in rows], 0.4,
@@ -76,8 +78,10 @@ def plot(results, output, title):
         ax.set_xticks(list(xs))
         ax.set_xticklabels([r[0] for r in rows], rotation=90, fontsize=7)
         ax.set_ylabel("changed / baseline")
+        ax.axvline(len(rows) - 1.5, color="black", linewidth=0.8,
+                   linestyle=":")
         ax.set_title("%s  gmean warm %.3f  steady %.3f" % (
-            title, gmean([r[1] for r in rows]), gmean([r[2] for r in rows])))
+            title, rows[-1][1], rows[-1][2]))
         ax.legend(fontsize=8)
         fig.tight_layout()
         pdf.savefig(fig)
