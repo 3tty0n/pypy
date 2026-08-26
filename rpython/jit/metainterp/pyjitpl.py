@@ -1452,10 +1452,20 @@ class MIFrame(object):
             # compiled_loop_token before attach_procedure_to_interp() made
             # the cell reachable, for both loops and entry bridges alike.
             # pe_call_threshold: a compiled callee program at least this
-            # large is called rather than re-inlined -- but only if it has
-            # loops; a leaf callee inlines however large its residual is.
-            big = program is not None and program.has_loops and \
-                program.code_size >= warmrunnerstate.pe_call_threshold
+            # large is called rather than re-inlined -- when it has loops
+            # of its own, or when this trace is a guard bridge.  Inlining
+            # into a loop/entry body costs one tracing of the callee, into
+            # bridges one per bridge of the caller (html5lib: +190); a
+            # loop-bearing callee brings its loops along wherever it goes
+            # (eparse: +35% warmup).  A loop-less callee inlined into a
+            # body keeps its frame virtual, which CALL_ASSEMBLER forces
+            # (raytrace: +24% steady).  Threshold 0 means always call.
+            threshold = warmrunnerstate.pe_call_threshold
+            in_bridge = isinstance(self.metainterp.resumekey,
+                                   compile.ResumeGuardDescr)
+            big = program is not None and \
+                program.code_size >= threshold and \
+                (threshold == 0 or in_bridge or program.has_loops)
             already_compiled = ptoken is not None and (
                 big or not warmrunnerstate.can_inline_callable(greenboxes))
             if already_compiled:
