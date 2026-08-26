@@ -34,6 +34,12 @@ class EmptyProfiler(BaseProfiler):
     def start_backend(self):
         pass
 
+    def start_blackhole(self):
+        pass
+
+    def end_blackhole(self):
+        pass
+
     def end_backend(self):
         pass
 
@@ -125,6 +131,9 @@ class Profiler(BaseProfiler):
     def start_backend(self):   self._start(Counters.BACKEND)
     def end_backend(self):     self._end  (Counters.BACKEND)
 
+    def start_blackhole(self): self._start(Counters.BLACKHOLE)
+    def end_blackhole(self):   self._end  (Counters.BLACKHOLE)
+
     def start_pe_cogen(self):  self._start(Counters.PE_COGEN)
     def end_pe_cogen(self):    self._end  (Counters.PE_COGEN)
 
@@ -173,6 +182,8 @@ class Profiler(BaseProfiler):
                               tim[Counters.OPTIMIZING])
         self._print_line_time("Backend", cnt[Counters.BACKEND],
                               tim[Counters.BACKEND])
+        self._print_line_time("Blackhole", cnt[Counters.BLACKHOLE],
+                              tim[Counters.BLACKHOLE])
         self._print_line_time("PE cogen overhead", cnt[Counters.PE_COGEN],
                               tim[Counters.PE_COGEN])
         self._print_line_time("PE cogen scan", cnt[Counters.PE_COGEN_SCAN],

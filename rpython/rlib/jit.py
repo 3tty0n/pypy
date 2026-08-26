@@ -1455,6 +1455,7 @@ class Counters(object):
     TRACING
     OPTIMIZING
     BACKEND
+    BLACKHOLE
     PE_COGEN
     PE_COGEN_SCAN
     PE_COGEN_INSTALL

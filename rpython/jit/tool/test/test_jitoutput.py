@@ -47,6 +47,7 @@ def test_really_run():
 DATA = '''Tracing:         1       0.006992
 Optimizing:      1       0.001250
 Backend:        1       0.000525
+Blackhole:      2       0.000300
 PE cogen overhead: 4       0.000400
 PE cogen scan:  2       0.000100
 PE cogen install: 1       0.000250
@@ -55,6 +56,7 @@ pe cogen generated:     1
 pe cogen declined:      1
 pe cogen deferred:      2
 pe insns generic:       10
+pe insns portal:        5
 pe insns residual:      20
 ops:                    2
 heapcached ops:         111

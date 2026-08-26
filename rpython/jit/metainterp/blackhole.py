@@ -1833,7 +1833,12 @@ def resume_in_blackhole(metainterp_sd, jitdriver_sd, resumedescr, deadframe,
 
     current_exc = blackholeinterp._prepare_resume_from_failure(deadframe)
 
-    _run_forever(blackholeinterp, current_exc)
+    profiler = metainterp_sd.profiler
+    profiler.start_blackhole()
+    try:
+        _run_forever(blackholeinterp, current_exc)
+    finally:
+        profiler.end_blackhole()
 resume_in_blackhole._dont_inline_ = True
 
 def convert_and_run_from_pyjitpl(metainterp, raising_exception=False):
@@ -1857,5 +1862,10 @@ def convert_and_run_from_pyjitpl(metainterp, raising_exception=False):
         firstbh.exception_last_value = current_exc
         current_exc = lltype.nullptr(rclass.OBJECTPTR.TO)
     #
-    _run_forever(firstbh, current_exc)
+    profiler = metainterp_sd.profiler
+    profiler.start_blackhole()
+    try:
+        _run_forever(firstbh, current_exc)
+    finally:
+        profiler.end_blackhole()
 convert_and_run_from_pyjitpl._dont_inline_ = True

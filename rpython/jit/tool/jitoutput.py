@@ -12,6 +12,8 @@ REGEXES = [
     (('optimizing_no', 'optimizing_time'),
      '^Optimizing:\s+([\d.]+)\s+([\d.]+)$'),
     (('backend_no', 'backend_time'), '^Backend:\s+([\d.]+)\s+([\d.]+)$'),
+    (('blackhole_no', 'blackhole_time'),
+     '^Blackhole:\s+([\d.]+)\s+([\d.]+)$'),
     (('pe_cogen_no', 'pe_cogen_overhead_time'),
      '^PE cogen overhead:\s+([\d.]+)\s+([\d.]+)$'),
     (('pe_cogen_scan_no', 'pe_cogen_scan_time'),
@@ -23,6 +25,7 @@ REGEXES = [
     (('pe_cogen_declined',), '^pe cogen declined:\s+(\d+)$'),
     (('pe_cogen_deferred',), '^pe cogen deferred:\s+(\d+)$'),
     (('pe_insns_generic',), '^pe insns generic:\s+(\d+)$'),
+    (('pe_insns_portal',), '^pe insns portal:\s+(\d+)$'),
     (('pe_insns_residual',), '^pe insns residual:\s+(\d+)$'),
     (('ops.total',), '^ops:\s+(\d+)$'),
     (('heapcached_ops', ), '^heapcached ops:\s+(\d+)$'),
@@ -70,6 +73,8 @@ class OutputInfo(object):
     optimizing_time = 0.0
     backend_no = 0
     backend_time = 0.0
+    blackhole_no = 0
+    blackhole_time = 0.0
     pe_cogen_no = 0
     pe_cogen_time = 0.0
     pe_cogen_overhead_time = 0.0
@@ -81,6 +86,7 @@ class OutputInfo(object):
     pe_cogen_declined = 0
     pe_cogen_deferred = 0
     pe_insns_generic = 0
+    pe_insns_portal = 0
     pe_insns_residual = 0
     asm_no = 0
     asm_time = 0.0
