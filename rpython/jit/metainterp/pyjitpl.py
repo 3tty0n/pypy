@@ -70,6 +70,7 @@ FASTPATHS_SAME_BOXES = {
 # folds to its literal contents, so every read would report the seed.
 class _PEInsnCounts(object):
     generic = 0
+    portal = 0
     residual = 0
 
 
@@ -2068,6 +2069,8 @@ class MIFrame(object):
                 op = ord(bytecode[pc])
                 if self.jitcode.pe_is_linked:
                     _pe_insn_counts.residual += 1
+                elif self.greenkey is not None:
+                    _pe_insn_counts.portal += 1
                 else:
                     _pe_insn_counts.generic += 1
                 if op == staticdata.op_live:

@@ -9,7 +9,7 @@ from rpython.jit.metainterp.jitexc import JitException
 from rpython.rlib.jit import Counters
 
 
-JITPROF_LINES = Counters.ncounters + 7
+JITPROF_LINES = Counters.ncounters + 8
 # TOTAL, calls, two PE instruction counts, three PE cogen outcomes
 _CPU_LINES = 4       # the last 4 lines are stored on the cpu
 
@@ -188,6 +188,7 @@ class Profiler(BaseProfiler):
         self._print_intline("pe cogen declined", _cogen_counters.declined)
         self._print_intline("pe cogen deferred", _cogen_counters.deferred)
         self._print_intline("pe insns generic", _pe_insn_counts.generic)
+        self._print_intline("pe insns portal", _pe_insn_counts.portal)
         self._print_intline("pe insns residual", _pe_insn_counts.residual)
         self._print_intline("ops", cnt[Counters.OPS])
         self._print_intline("heapcached ops", cnt[Counters.HEAPCACHED_OPS])
