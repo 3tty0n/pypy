@@ -198,3 +198,34 @@ def test_must_compile_uses_pe_eagerness_for_residual_roots():
         descr.rd_loop_token.pe_origin = pe_origin
         descr.must_compile(None, SD, JD)
     assert seen == [1, 2]
+
+
+def test_must_compile_backs_off_after_aborted_bridges():
+    from rpython.jit.metainterp.compile import ResumeGuardDescr
+    from rpython.jit.backend.model import CompiledLoopToken
+    seen = []
+    class FakeCounter:
+        def tick(self, hash, increment):
+            seen.append(increment)
+            return False
+    class State:
+        increment_trace_eagerness = 1.0
+        increment_pe_trace_eagerness = 1.0
+        warmrunnerdesc = None
+    class JD:
+        warmstate = State()
+    class SD:
+        class warmrunnerdesc:
+            jitcounter = FakeCounter()
+    descr = ResumeGuardDescr()
+    descr.status = 0
+    descr.rd_loop_token = CompiledLoopToken.__new__(CompiledLoopToken)
+    descr.must_compile(None, SD, JD)
+    descr.note_aborted_bridge()
+    descr.must_compile(None, SD, JD)
+    descr.note_aborted_bridge()
+    descr.must_compile(None, SD, JD)
+    assert seen == [1.0, 0.5, 0.25]
+    for i in range(100):
+        descr.note_aborted_bridge()
+    assert descr.abort_count == descr.ABORT_COUNT_MAX

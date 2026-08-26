@@ -687,9 +687,14 @@ class ResumeDescr(AbstractFailDescr):
         return self
 
 class AbstractResumeGuardDescr(ResumeDescr):
-    _attrs_ = ('status',)
+    _attrs_ = ('status', 'abort_count')
 
     status = r_uint(0)
+    # Bridges traced from this guard that aborted; each one doubles the
+    # failures needed before the next attempt (eparse at eagerness 5:
+    # 10k retries of one quasi-immutable write without it).
+    abort_count = 0
+    ABORT_COUNT_MAX = 16
 
     ST_BUSY_FLAG    = 0x01     # if set, busy tracing from the guard
     ST_TYPE_MASK    = 0x06     # mask for the type (TY_xxx)
@@ -792,7 +797,13 @@ class AbstractResumeGuardDescr(ResumeDescr):
             increment = warmstate.increment_pe_trace_eagerness
         else:
             increment = warmstate.increment_trace_eagerness
+        if self.abort_count:
+            increment = increment / float(1 << self.abort_count)
         return jitcounter.tick(hash, increment)
+
+    def note_aborted_bridge(self):
+        if self.abort_count < self.ABORT_COUNT_MAX:
+            self.abort_count += 1
 
     def start_compiling(self):
         # start tracing and compiling from this guard.
@@ -841,7 +852,7 @@ class AbstractResumeGuardDescr(ResumeDescr):
             self.status = hash & self.ST_SHIFT_MASK
 
 class ResumeGuardCopiedDescr(AbstractResumeGuardDescr):
-    _attrs_ = ('status', 'prev')
+    _attrs_ = ('status', 'abort_count', 'prev')
 
     def __init__(self, prev):
         AbstractResumeGuardDescr.__init__(self)

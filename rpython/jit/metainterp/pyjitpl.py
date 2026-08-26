@@ -3103,6 +3103,9 @@ class MetaInterp(object):
         self.staticdata.profiler.count(reason)
         debug_print('~~~ ABORTING TRACING %s' % Counters.counter_names[reason])
         jd_sd = self.jitdriver_sd
+        resumekey = self.resumekey
+        if isinstance(resumekey, compile.AbstractResumeGuardDescr):
+            resumekey.note_aborted_bridge()
         if not self.current_merge_points:
             greenkey = None # we're in the bridge
         else:
