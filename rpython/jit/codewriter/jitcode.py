@@ -117,13 +117,19 @@ class PELinkedProgram(object):
         # loop this program already provides (see pe_tick_suppressed in
         # warmstate.py).
         self.legit_entry_pcs = []
+        # A loop-less program is a leaf: calling its compiled code instead
+        # of inlining it forces the caller's virtuals across the call, so
+        # size alone must not make it a CALL_ASSEMBLER target.
+        self.has_loops = False
         # A program is built from a bytecode image, so the code object it
         # belongs to does not exist yet at translation time.  The matcher
         # recognises it the first time the portal hands one over, and the
         # pointer is remembered from then on.
         self.guard_match = _never_matches
 
-    def set_guard(self, pc_index, pcs, ref_index, legit_entry_pcs):
+    def set_guard(self, pc_index, pcs, ref_index, legit_entry_pcs,
+                  has_loops):
+        self.has_loops = has_loops
         self.guard_pc_index = pc_index
         self.guard_pcs = _signed_pcs(pcs)
         self.guard_ref_index = ref_index

@@ -33,7 +33,7 @@ def _make_program(ref_index, pc_index=-1, pcs=None):
     jitcode = JitCode("callee")
     jitcode.setup(code='')
     program = PELinkedProgram(jitcode, [], [])
-    program.set_guard(pc_index, pcs or [], ref_index, pcs or [])
+    program.set_guard(pc_index, pcs or [], ref_index, pcs or [], False)
     return program
 
 
