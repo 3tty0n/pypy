@@ -1452,9 +1452,8 @@ class MIFrame(object):
             # compiled_loop_token before attach_procedure_to_interp() made
             # the cell reachable, for both loops and entry bridges alike.
             # pe_call_threshold: a compiled callee program at least this
-            # large is called rather than re-inlined -- but only if it has
-            # loops; a leaf callee inlines however large its residual is.
-            big = program is not None and program.has_loops and \
+            # large is called rather than re-inlined.
+            big = program is not None and \
                 program.code_size >= warmrunnerstate.pe_call_threshold
             already_compiled = ptoken is not None and (
                 big or not warmrunnerstate.can_inline_callable(greenboxes))

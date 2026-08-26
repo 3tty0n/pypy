@@ -112,8 +112,7 @@ class PortalLinker(object):
                     entries.append(pc)
                 sort_ints(entries)
             linked_program.set_guard(guard[0], entries, guard[1],
-                                     legit_entries,
-                                     len(program.loop_headers) > 0)
+                                     legit_entries)
         lowered.jitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, [], [])
         # Either back end plants jit_merge_points when the interpreter named
