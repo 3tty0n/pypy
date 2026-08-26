@@ -111,6 +111,12 @@ class PyCode(eval.Code):
 
     def frame_stores_global(self, w_globals):
         if self.w_globals is None:
+            if jit.we_are_jitted():
+                # w_globals is quasi-immutable: writing it from compiled
+                # code forces it and aborts the trace, and code objects
+                # created at run time (eval) do this on every call.  Let
+                # this frame keep its globals itself instead.
+                return True
             self.w_globals = w_globals
             return False
         if self.w_globals is w_globals:

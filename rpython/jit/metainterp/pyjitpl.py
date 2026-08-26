@@ -1144,6 +1144,16 @@ class MIFrame(object):
                                                 mutatefielddescr, box)
         if mutatebox.nonnull():
             from rpython.jit.metainterp.quasiimmut import do_force_quasi_immutable
+            debug_start("jit-quasiimmut-abort")
+            if have_debug_prints():
+                loc = "?"
+                for f in self.metainterp.framestack:
+                    if f.greenkey is not None and f.jitcode.jitdriver_sd:
+                        loc = f.jitcode.jitdriver_sd.warmstate.get_location_str(
+                            f.greenkey)
+                debug_print("force quasi-immut", mutatefielddescr.repr_of_descr(),
+                            "in", self.jitcode.name, "portal", loc)
+            debug_stop("jit-quasiimmut-abort")
             do_force_quasi_immutable(self.metainterp.cpu, box.getref_base(),
                                      mutatefielddescr)
             raise SwitchToBlackhole(Counters.ABORT_FORCE_QUASIIMMUT)
