@@ -579,7 +579,15 @@ class WarmEnterState(object):
                     return
                 if pe_tick_suppressed(greenargs):
                     return
-                # attached by compile_tmp_callback().  count normally
+                # attached by compile_tmp_callback().  A dont_trace_here
+                # function never traced yet is traced right away, as
+                # below: until it is, every CALL_ASSEMBLER of it goes
+                # through the callback and forces the caller.  Otherwise
+                # count normally.
+                if (cell.flags & JC_DONT_TRACE_HERE and
+                        not cell.flags & JC_TRACING_OCCURRED):
+                    bound_reached(hash, cell, *args)
+                    return
                 if jitcounter.tick(hash, increment_threshold):
                     bound_reached(hash, cell, *args)
                 return
