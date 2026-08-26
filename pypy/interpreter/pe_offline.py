@@ -326,8 +326,7 @@ class _GateState(object):
     under translation (see _FoldedLoads in native_pipeline.py)."""
     k = DEFAULT_GATE_K
     env_read = False
-    # Estimated nanoseconds spent generating so far, by the same model the
-    # per-generation check uses.
+    # Measured nanoseconds spent on successful generations so far.
     spent_ns = 0.0
 
 
@@ -368,7 +367,8 @@ def _excluded(co_name):
 def _gate_allows(profiler, code_size):
     """Has this process traced enough to repay generating a program for a
     code object of 'code_size' bytes, k times over -- and is there budget
-    left?  On success the estimated cost is charged against the budget."""
+    left?  The caller charges the measured cost of a successful generation;
+    a declined one costs the budget nothing."""
     from rpython.rlib.jit import Counters
 
     k = _gate_k()
@@ -381,8 +381,13 @@ def _gate_allows(profiler, code_size):
         return False
     if _gate_state.spent_ns + cost_ns > GATE_BUDGET_FRACTION * tracing_ns:
         return False
-    _gate_state.spent_ns += cost_ns
     return True
+
+
+def _cogen_ns(profiler):
+    from rpython.rlib.jit import Counters
+    return (profiler.get_times(Counters.PE_COGEN_SCAN) +
+            profiler.get_times(Counters.PE_COGEN_INSTALL)) * 1e9
 
 
 def stamp_after_make_jitcodes(mainjitcode):
@@ -595,11 +600,13 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
                 # otherwise only identifiable by a raw address.
                 debug_print("pe-cogen code %s %s:%d" % (
                     code.co_name, code.co_filename, code.co_firstlineno))
+            before_ns = _cogen_ns(profiler)
             program = generate_for_live_code(
                 extension, linker, codewriter, code, guard, gcref,
                 entry_pc=0, native_table=native_table, profiler=profiler)
             if program is None:
                 return None
+            _gate_state.spent_ns += _cogen_ns(profiler) - before_ns
             # execute_frame's exception recovery is gated on this flag so
             # program-less codes never touch the virtualizable frame there.
             code._pe_has_linked_program = True

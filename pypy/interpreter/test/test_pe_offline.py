@@ -222,3 +222,28 @@ if __name__ == "__main__":
     test_nested_loops_resolve_to_their_own_loop()
     test_break_loop_without_enclosing_loop_declines()
     print "ok"
+
+
+class FakeProfiler(object):
+    def __init__(self, tracing_s):
+        self.tracing_s = tracing_s
+
+    def get_times(self, num):
+        from rpython.rlib.jit import Counters
+        if num == Counters.TRACING:
+            return self.tracing_s
+        return 0.0
+
+
+def test_gate_does_not_charge_the_estimate(monkeypatch):
+    state = pe_offline._gate_state
+    monkeypatch.setattr(state, "k", 1.0)
+    monkeypatch.setattr(state, "env_read", True)
+    monkeypatch.setattr(state, "spent_ns", 0.0)
+    profiler = FakeProfiler(tracing_s=1.0)
+    code_size = 1000   # 20ms estimated: within k and within the budget
+    assert pe_offline._gate_allows(profiler, code_size)
+    assert pe_offline._gate_allows(profiler, code_size)
+    assert state.spent_ns == 0.0
+    state.spent_ns = pe_offline.GATE_BUDGET_FRACTION * 1e9
+    assert not pe_offline._gate_allows(profiler, code_size)
