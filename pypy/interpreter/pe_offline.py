@@ -326,7 +326,7 @@ class _GateState(object):
     under translation (see _FoldedLoads in native_pipeline.py)."""
     k = DEFAULT_GATE_K
     env_read = False
-    # Measured nanoseconds spent on successful generations so far.
+    # Measured nanoseconds spent on generation attempts so far.
     spent_ns = 0.0
 
 
@@ -367,8 +367,8 @@ def _excluded(co_name):
 def _gate_allows(profiler, code_size):
     """Has this process traced enough to repay generating a program for a
     code object of 'code_size' bytes, k times over -- and is there budget
-    left?  The caller charges the measured cost of a successful generation;
-    a declined one costs the budget nothing."""
+    left?  The caller charges the measured cost of every attempt, so a
+    gate-level decline is the only free outcome."""
     from rpython.rlib.jit import Counters
 
     k = _gate_k()
@@ -601,12 +601,15 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
                 debug_print("pe-cogen code %s %s:%d" % (
                     code.co_name, code.co_filename, code.co_firstlineno))
             before_ns = _cogen_ns(profiler)
-            program = generate_for_live_code(
-                extension, linker, codewriter, code, guard, gcref,
-                entry_pc=0, native_table=native_table, profiler=profiler)
+            try:
+                program = generate_for_live_code(
+                    extension, linker, codewriter, code, guard, gcref,
+                    entry_pc=0, native_table=native_table,
+                    profiler=profiler)
+            finally:
+                _gate_state.spent_ns += _cogen_ns(profiler) - before_ns
             if program is None:
                 return None
-            _gate_state.spent_ns += _cogen_ns(profiler) - before_ns
             # execute_frame's exception recovery is gated on this flag so
             # program-less codes never touch the virtualizable frame there.
             code._pe_has_linked_program = True
