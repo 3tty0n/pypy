@@ -1443,9 +1443,10 @@ class MIFrame(object):
             # the cell reachable, for both loops and entry bridges alike.
             # pe_call_threshold: a compiled callee program at least this
             # large is called rather than re-inlined.
+            big = program is not None and \
+                program.code_size >= warmrunnerstate.pe_call_threshold
             already_compiled = ptoken is not None and (
-                program.code_size >= warmrunnerstate.pe_call_threshold or
-                not warmrunnerstate.can_inline_callable(greenboxes))
+                big or not warmrunnerstate.can_inline_callable(greenboxes))
             if already_compiled:
                 # the linked program already has compiled machine code:
                 # call it via CALL_ASSEMBLER instead of re-inlining/
@@ -1459,6 +1460,12 @@ class MIFrame(object):
                     debug_print("asmcall: compiled target found", loc,
                                program.code_size)
                     debug_stop("jit-pe-asmcall")
+            elif big:
+                # A big callee program not compiled yet: inlining it here
+                # would only pay its tracing cost into this trace; have it
+                # traced from its own entry instead and call it (a temporary
+                # callback until then), as for any dont_trace_here callee.
+                warmrunnerstate.dont_trace_here(greenboxes)
             elif warmrunnerstate.can_inline_callable(greenboxes):
                 # We've found a potentially inlinable function; now we need to
                 # see if it's already on the stack. In other words: are we about
