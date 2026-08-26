@@ -349,6 +349,9 @@ class WarmEnterState(object):
     def set_param_vec_cost(self, ivalue):
         self.vec_cost = ivalue
 
+    def set_param_pe_trace_eagerness(self, value):
+        self.increment_pe_trace_eagerness = self._compute_threshold(value)
+
     def set_param_pe_call_threshold(self, value):
         if value < 0:
             raise ValueError

@@ -292,6 +292,7 @@ class AbstractCPU(object):
 class CompiledLoopToken(object):
     asmmemmgr_blocks = None
     asmmemmgr_gcreftracers = None
+    pe_origin = False
 
     def __init__(self, cpu, number):
         cpu.tracker.total_compiled_loops += 1

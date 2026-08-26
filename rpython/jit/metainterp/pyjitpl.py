@@ -2630,6 +2630,7 @@ class MetaInterp(object):
         self.call_pure_results = args_dict()
         self.heapcache = HeapCache()
         self.pe_metadata_consumed = False
+        self.pe_root_linked = False
         self.pe_trace_start_position = 0
         self.pe_portal_boxes = []
 
@@ -3659,6 +3660,7 @@ class MetaInterp(object):
         f, program, metadata = self.pe_enter_root(original_boxes)
         self.pe_trace_start_position = f.pc
         self.pe_metadata_consumed = metadata is not None
+        self.pe_root_linked = program is not None
         if self.pe_metadata_consumed:
             self.staticdata.stats.pe_metadata_used()
         assert self.portal_call_depth == 0

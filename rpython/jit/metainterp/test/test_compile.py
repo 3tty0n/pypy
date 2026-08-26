@@ -70,6 +70,7 @@ class FakeMetaInterpStaticData(object):
 
 class FakeMetaInterp:
     call_pure_results = {}
+    pe_root_linked = False
     box_names_memo = {}
     class jitdriver_sd:
         index = 0
@@ -171,3 +172,29 @@ def test_compile_tmp_callback():
         assert lltype.cast_opaque_ptr(lltype.Ptr(EXC), e.value) == llexc
     else:
         assert 0, "should have raised"
+
+
+def test_must_compile_uses_pe_eagerness_for_residual_roots():
+    from rpython.jit.metainterp.compile import ResumeGuardDescr
+    from rpython.jit.backend.model import CompiledLoopToken
+    seen = []
+    class FakeCounter:
+        def tick(self, hash, increment):
+            seen.append(increment)
+            return False
+    class State:
+        increment_trace_eagerness = 1
+        increment_pe_trace_eagerness = 2
+        warmrunnerdesc = None
+    class JD:
+        warmstate = State()
+    class SD:
+        class warmrunnerdesc:
+            jitcounter = FakeCounter()
+    descr = ResumeGuardDescr()
+    descr.status = 0
+    for pe_origin in (False, True):
+        descr.rd_loop_token = CompiledLoopToken.__new__(CompiledLoopToken)
+        descr.rd_loop_token.pe_origin = pe_origin
+        descr.must_compile(None, SD, JD)
+    assert seen == [1, 2]

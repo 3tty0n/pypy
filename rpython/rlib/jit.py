@@ -607,6 +607,8 @@ PARAMETER_DOCS = {
     'vec_cost': 'threshold for which traces to bail. Unpacking increases the counter,'\
                 ' vector operation decrease the cost',
     'vec_all': 'try to vectorize trace loops that occur outside of the numpypy library',
+    'pe_trace_eagerness': 'trace_eagerness for guards in traces rooted in a '
+                          'linked (residual) program',
     'pe_call_threshold': 'size in bytes of a linked callee\'s residual '
                          'jitcode above which it is called via '
                          'CALL_ASSEMBLER instead of inlined, as a coarse '
@@ -636,6 +638,9 @@ PARAMETERS = {'threshold': 1039, # just above 1024, prime
               # warmup expensive (eparse: warmup -20% at 3000, steady and
               # krakatau unchanged); tiny callees still inline.
               'pe_call_threshold': 3000,
+              # Residual-origin traces are thinner, so their bridges are
+              # worth compiling early; generic traces keep the default.
+              'pe_trace_eagerness': 5,
               }
 unroll_parameters = unrolling_iterable(PARAMETERS.items())
 

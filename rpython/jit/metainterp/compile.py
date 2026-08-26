@@ -166,9 +166,10 @@ def create_empty_loop(metainterp, name_prefix=''):
     return loop
 
 
-def make_jitcell_token(jitdriver_sd):
+def make_jitcell_token(jitdriver_sd, pe_origin=False):
     jitcell_token = JitCellToken()
     jitcell_token.outermost_jitdriver_sd = jitdriver_sd
+    jitcell_token.pe_origin = pe_origin
     return jitcell_token
 
 def record_loop_or_bridge(metainterp_sd, loop):
@@ -183,6 +184,7 @@ def record_loop_or_bridge(metainterp_sd, loop):
     wref = weakref.ref(original_jitcell_token)
     clt = original_jitcell_token.compiled_loop_token
     clt.loop_token_wref = wref
+    clt.pe_origin = original_jitcell_token.pe_origin
     for op in loop.operations:
         descr = op.getdescr()
         if isinstance(descr, ResumeDescr):
@@ -220,7 +222,8 @@ def compile_simple_loop(metainterp, greenkey, trace, runtime_args, enable_opts,
                         cut_at, patch_jumpop_at_end=True):
     jitdriver_sd = metainterp.jitdriver_sd
     metainterp_sd = metainterp.staticdata
-    jitcell_token = make_jitcell_token(jitdriver_sd)
+    jitcell_token = make_jitcell_token(jitdriver_sd,
+                                       metainterp.pe_root_linked)
     call_pure_results = metainterp.call_pure_results
     data = SimpleCompileData(trace, call_pure_results=call_pure_results,
                              enable_opts=enable_opts)
@@ -266,7 +269,8 @@ def compile_loop(metainterp, greenkey, start, inputargs, jumpargs,
             faildescr=None, entry_bridge=False)
     #
     enable_opts = jitdriver_sd.warmstate.enable_opts
-    jitcell_token = make_jitcell_token(jitdriver_sd)
+    jitcell_token = make_jitcell_token(jitdriver_sd,
+                                       metainterp.pe_root_linked)
     cut_at = history.get_trace_position()
     history.record(rop.JUMP, jumpargs, None, descr=jitcell_token)
     if start != (0, 0, 0, 0, 0):
@@ -783,7 +787,11 @@ class AbstractResumeGuardDescr(ResumeDescr):
             hash = r_uint(current_object_addr_as_int(self) * 777767777 +
                           intval * 1442968193)
         #
-        increment = jitdriver_sd.warmstate.increment_trace_eagerness
+        warmstate = jitdriver_sd.warmstate
+        if self.rd_loop_token.pe_origin:
+            increment = warmstate.increment_pe_trace_eagerness
+        else:
+            increment = warmstate.increment_trace_eagerness
         return jitcounter.tick(hash, increment)
 
     def start_compiling(self):
@@ -1013,7 +1021,8 @@ class ResumeFromInterpDescr(ResumeDescr):
         # with completely unoptimized arguments, as in the interpreter.
         metainterp_sd = metainterp.staticdata
         jitdriver_sd = metainterp.jitdriver_sd
-        new_loop.original_jitcell_token = jitcell_token = make_jitcell_token(jitdriver_sd)
+        new_loop.original_jitcell_token = jitcell_token = make_jitcell_token(
+            jitdriver_sd, metainterp.pe_root_linked)
         propagate_original_jitcell_token(new_loop)
         send_loop_to_backend(self.original_greenkey, metainterp.jitdriver_sd,
                              metainterp_sd, new_loop, "entry bridge",

@@ -444,6 +444,8 @@ class JitCellToken(AbstractDescr):
     target_tokens = None
     failed_states = None
     retraced_count = 0
+    # True when the root trace started from a linked (residual) program.
+    pe_origin = False
     invalidated = False
     outermost_jitdriver_sd = None
     # and more data specified by the backend when the loop is compiled
