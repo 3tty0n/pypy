@@ -71,7 +71,7 @@ def load(pattern, time_pattern, configs, benches):
     return data
 
 
-def plot(data, configs, benches, output, title):
+def plot(data, configs, labels, benches, output, title):
     import matplotlib
     matplotlib.use("pdf")
     from matplotlib import pyplot
@@ -84,7 +84,7 @@ def plot(data, configs, benches, output, title):
     width = 0.8
     with PdfPages(output) as pdf:
         fig, axes = pyplot.subplots(lines, cols,
-                                    figsize=(4 * cols, 3 * lines),
+                                    figsize=(4.5 * cols, 3.6 * lines),
                                     squeeze=False)
         for ax, bench in zip(axes.flat, benches):
             xs = list(range(len(configs)))
@@ -104,7 +104,7 @@ def plot(data, configs, benches, output, title):
                 ax2.set_ylim(0, max(r for r in reals if r) * 1.15)
                 ax2.tick_params(labelsize=7)
             ax.set_xticks(xs)
-            ax.set_xticklabels(configs, fontsize=8)
+            ax.set_xticklabels(labels, fontsize=6)
             ax.set_title(bench, fontsize=9)
             ax.tick_params(labelsize=7)
             ax.set_ylabel("JIT seconds", fontsize=7)
@@ -117,7 +117,7 @@ def plot(data, configs, benches, output, title):
         pyplot.close(fig)
 
         fig, axes = pyplot.subplots(lines, cols,
-                                    figsize=(4 * cols, 3 * lines),
+                                    figsize=(4.5 * cols, 3.6 * lines),
                                     squeeze=False)
         for ax, bench in zip(axes.flat, benches):
             xs = list(range(len(configs)))
@@ -130,7 +130,7 @@ def plot(data, configs, benches, output, title):
                        label=key)
             ax.set_yscale("symlog")
             ax.set_xticks(xs)
-            ax.set_xticklabels(configs, fontsize=8)
+            ax.set_xticklabels(labels, fontsize=6)
             ax.set_title(bench, fontsize=9)
             ax.tick_params(labelsize=7)
         for ax in list(axes.flat)[len(benches):]:
@@ -146,12 +146,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pattern", required=True)
     parser.add_argument("--time-pattern", default=None)
-    parser.add_argument("--configs", required=True)
+    parser.add_argument("--configs", required=True,
+                        help="comma-separated config keys used in --pattern")
+    parser.add_argument("--labels", default=None,
+                        help="comma-separated x-axis labels, one per config "
+                             "(default: the keys); use '\\n' for line breaks")
     parser.add_argument("--benches", required=True)
     parser.add_argument("-o", "--output", default="breakdown.pdf")
     parser.add_argument("--title", default="JIT time breakdown")
     opts = parser.parse_args()
     configs = opts.configs.split(",")
+    labels = configs
+    if opts.labels:
+        labels = [l.replace("\\n", "\n") for l in opts.labels.split(",")]
+        assert len(labels) == len(configs), "one label per config"
     benches = opts.benches.split(",")
     data = load(opts.pattern, opts.time_pattern, configs, benches)
     for bench in benches:
@@ -165,7 +173,7 @@ def main():
                      row["optimizing"], row["backend"], row["blackhole"],
                      row["cogen"], row["loops"], row["bridges"],
                      row["aborts"]))
-    plot(data, configs, benches, opts.output, opts.title)
+    plot(data, configs, labels, benches, opts.output, opts.title)
 
 
 if __name__ == "__main__":
