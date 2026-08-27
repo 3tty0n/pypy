@@ -299,7 +299,7 @@ class PyFrame(W_Root):
                         w_exitvalue = self.dispatch(code, next_instr,
                                                     executioncontext)
                     except OperationError as operr:
-                        # pe_frame is set once dispatch has unwound to a handler.
+                        # pe_frame is set once dispatch unwound to a handler.
                         if not code._pe_has_linked_program or \
                                 operr.pe_frame is self:
                             raise
