@@ -2,7 +2,7 @@
 """
 
 import sys
-from rpython.rlib import jit, pe
+from rpython.rlib import jit
 from rpython.rlib.debug import make_sure_not_resized, check_nonneg
 from rpython.rlib.debug import ll_assert_not_none
 from rpython.rlib.jit import hint
@@ -45,12 +45,8 @@ class FrameDebugData(object):
         self.w_globals = pycode.w_globals
 
 class W_ResidualExit(W_Root):
-    """A residual program that stopped short of the frame's end.
-
-    The portal returns the frame's result, so a residual program that ends
-    anywhere else has to say so in that same slot; execute_frame recognises
-    this and carries on interpreting from ``next_instr``.
-    """
+    """A residual program that stopped short of the frame's end; carries
+    the pc execute_frame resumes interpreting from."""
     _immutable_fields_ = ["next_instr"]
 
     def __init__(self, next_instr):
@@ -297,22 +293,18 @@ class PyFrame(W_Root):
                     next_instr = r_uint(self.last_instr + 1)
                     if next_instr != 0:
                         self.pushvalue(w_inputvalue)
-                # Read once, outside the handler: pycode and lastblock are
-                # virtualizable fields, and touching them on the exception
-                # path below forces the frame on every guest exception that
-                # crosses execute_frame (73x forcings on eparse).
+                # Read once, outside the handler: pycode is a virtualizable
+                # field, and touching it on the exception path forces the
+                # frame on every guest exception crossing execute_frame.
                 code = self.pycode
                 while True:
                     try:
                         w_exitvalue = self.dispatch(code, next_instr,
                                                     executioncontext)
                     except OperationError as operr:
-                        # Generic dispatch searched for a handler and
-                        # unwound before re-raising (pe_frame says so); an
-                        # exception that escaped a residual program has
-                        # not been.  The tracer normally handles this in
-                        # the trace (pe_recover_in_trace); here is the
-                        # interpreter's own path.
+                        # pe_frame is set once generic dispatch has already
+                        # unwound to a handler; an exception still escaping
+                        # a residual program has not been through that yet.
                         if not code._pe_has_linked_program or \
                                 operr.pe_frame is self:
                             raise
@@ -974,14 +966,11 @@ class PyFrame(W_Root):
         return None
 
     def pe_recover(self, operr):
-        """A guest exception escaped a residual program: search this frame's
-        handler, raising when there is none, and carry on from it.  The
-        tracer runs it for the trace's root frame too, so the search stays
-        inside the trace; the pc is promoted, as it becomes a green."""
-        # As dispatch() does: without it every frame access below would
-        # force the virtualizable, in the trace as well.  pe_resume gets
-        # the plain alias: a hinted self would specialize a second copy of
-        # the portal, and its jit_merge_point with it.
+        """A guest exception escaped a residual program: search this
+        frame's handler, raising when there is none, and carry on from it.
+        The tracer runs this for the trace's root frame too."""
+        # pe_resume gets the plain self alias: a hinted self would
+        # specialize a second copy of the portal and its jit_merge_point.
         frame = self
         self = jit.hint(self, access_directly=True)
         ec = self.space.getexecutioncontext()
@@ -990,10 +979,8 @@ class PyFrame(W_Root):
 
     @dont_inline
     def pe_resume(self, next_instr):
-        """Carry on from the handler pe_recover found.  Its own function
-        (never inlined, so the tracer sees its frame) to let the tracer
-        recognise this call of the portal, and nothing else, as the point
-        to re-enter the portal at the trace's root level."""
+        """Carry on from the handler pe_recover found; never inlined, so
+        the tracer can recognise this call as the portal re-entry point."""
         frame = self
         self = jit.hint(self, access_directly=True)
         pycode = jit.promote(self.pycode)

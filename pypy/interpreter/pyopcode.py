@@ -6,7 +6,6 @@ The rest, dealing with variables in optimized ways, is in nestedscope.py.
 
 from rpython.rlib import jit, rstackovf
 from rpython.rlib.nonconst import NonConstant
-from rpython.rlib import pe
 from rpython.rlib.pe import PEDriver
 from rpython.rlib.debug import check_nonneg
 from rpython.rlib.objectmodel import (we_are_translated, always_inline,
@@ -52,98 +51,41 @@ opcodedesc = bytecode_spec.opcodedesc
 HAVE_ARGUMENT = bytecode_spec.HAVE_ARGUMENT
 
 class BreakUnrolled(Exception):
-    """BREAK_LOOP executed generically: the enclosing loop's end is found by
-    unwinding the block stack at run time.  An exception, not a second exit:
-    a residual template's exits must be all Finish or all Continue, and the
-    residual path continues to a late-static target instead.
-    """
+    """Signals a generic BREAK_LOOP; residual exits must be all-Finish or
+    all-Continue, so unrolling can't be one of a template's exits."""
 
 
 class PcMoved(Exception):
-    """A trace hook moved the pc, so JUMP_ABSOLUTE's target is not oparg.
-
-    An exception, not a second exit: a residual template's exits must be all
-    Finish or all Continue, and this one's ordinary exit is a Continue to a
-    late-static target.
-    """
+    """A trace hook moved the pc, so JUMP_ABSOLUTE's target is not oparg."""
 
 
-# Returned by interp_step in place of a next pc that is not late-static: a
-# residual program ends there, and the dispatch loop resumes from next_pc.
+# Sentinel splits: a next pc that is not late-static, so the residual
+# program ends here instead of continuing to a successor template.
 PE_LEAVE = r_uint(-1)
-
-# Likewise, but the frame is done.  Not `raise Return` inside interp_step: an
-# exception leaving a residual program is not the same edge as one leaving the
-# generic dispatch loop, so the raise belongs to the caller.
 PE_RETURN = r_uint(-2)
 
-# Synthetic opcode standing in for "no template covers this instruction".
-# Real CPython opcodes stay below ~150, so 254 cannot collide with one.
+# Synthetic opcode for "no template covers this instruction" (real opcodes
+# stay below ~150).
 PE_LEAVE_OPCODE = 254
 
 
 def _residual_exit(frame, next_instr):
-    """The portal's result for a residual program that ends mid-frame.
-
-    Like a generator's yield, the frame outlives this portal exit, so its
-    virtualizable state must be written back before the trace finishes.
-    """
+    # The frame outlives this portal exit (like a generator's yield), so
+    # its virtualizable state must be written back now.
     jit.hint(frame, force_virtualizable=True)
     return pyframe.W_ResidualExit(next_instr)
 
-# One residual template per bytecode; the residual code branches on the pc.
-def _guards_a_handler(code):
-    """Does this code object install a guest exception handler?
-
-    A residual program stands in for the whole portal, so it also stands in
-    for handle_bytecode's ``except OperationError`` -- which it does not
-    contain.  A guest exception raised inside one therefore never reaches the
-    ``except`` that should catch it, so a code object that installs a handler
-    must keep running on the generic loop.
-    """
-    co_code = code.co_code
-    position = 0
-    while position < len(co_code):
-        opcode = ord(co_code[position])
-        if (opcode == opcodedesc.SETUP_EXCEPT.index
-                or opcode == opcodedesc.SETUP_FINALLY.index
-                or opcode == opcodedesc.SETUP_WITH.index):
-            return True
-        position += 3 if opcode >= HAVE_ARGUMENT else 1
-    return False
-
 
 def _worth_generating(program, code):
-
-    """Whether a residual program repays what assembling it costs.
-
-    Scanning a code object is under a tenth of a generation; the emit,
-    liveness and assembly that follow are the rest.  Deciding here, on the
-    scanned program rather than on how often the portal missed, is what lets
-    the expensive nine tenths be skipped for a code object that would not
-    have repaid them.
-
-    Loop-less programs matter too: a callee with no loop of its own still
-    gets inlined as residual code into its caller's trace, so structure is
-    no longer the gate -- the cost model (COST_PER_BYTE_NS, DEFAULT_GATE_K
-    in pe_offline.py) decides whether the install was worth it, not this.
-
-    A program that is nothing but the synthetic leave fallback (the entry
-    instruction itself had no template) buys nothing over the generic
-    interpreter it immediately hands back to, so it is declined here.
-    """
+    """Decline a program that is nothing but the synthetic leave fallback."""
     if program.leave_blocks == len(program.blocks):
         return False
     return True
 
 
-# The split argument must be called "pc": the machinery names its pc hole
-# that, whatever the step function calls the value elsewhere.  instr_start is
-# an extra hole: the instruction's own position, needed by PE_LEAVE_OPCODE to
-# say where the generic loop must resume.  pycode is a ref hole: baking the
-# concrete code object into each generated program's constant pool, rather
-# than threading it as a dynamic green, is what lets the meta-tracer's
-# ConstPtr pure-folding fire on it at trace time.
+# pc/instr_start/pycode names are fixed: the machinery looks holes up by
+# name (pycode as a ref hole bakes the code object into the constant pool
+# so trace-time ConstPtr folding can fire on it).
 pedriver = PEDriver(static="opcode", split="pc",
                     holes="oparg instr_start break_target pycode",
                     worth_generating=_worth_generating)
@@ -303,13 +245,9 @@ class __extend__(pyframe.PyFrame):
                 next_instr += 3
                 oparg = (oparg * 65536) | (hi * 256) | lo
 
-            # (split, w_result) is the whole contract: anything returned
-            # after the result is carried to the successor as a boundary
-            # value, so the loop's own bookkeeping cannot ride along there.
-            # NonConstant: the annotator would otherwise fold the literal
-            # -1 into interp_step's graph (this is its only caller), turning
-            # the residual break_target branch into an unconditional raise
-            # before the partial evaluator ever sees it.
+            # NonConstant: a literal -1 would fold into interp_step's graph
+            # and turn the residual break_target branch into an unconditional
+            # raise before the partial evaluator sees it.
             if we_are_translated():
                 no_break_target = NonConstant(-1)
             else:
@@ -323,9 +261,8 @@ class __extend__(pyframe.PyFrame):
                 assert isinstance(w_res, pyframe.W_ResidualExit)
                 return w_res.next_instr
             next_instr = split
-            # A backward jump must reach dispatch()'s merge point, but stays
-            # an ordinary successor inside a residual program, so it cannot
-            # say so in its split value; the opcode says it here instead.
+            # A backward jump must reach dispatch()'s merge point; the split
+            # value alone can't say so, so the opcode does.
             if (opcode == opcodedesc.JUMP_ABSOLUTE.index
                     or jit.we_are_jitted()):
                 return next_instr
@@ -336,31 +273,20 @@ class __extend__(pyframe.PyFrame):
                     is_being_profiled, ec):
         """One bytecode's semantics, free of the dispatch loop.
 
-        ``opcode`` is offline-static, so the partial evaluator builds one
-        residual template per bytecode; ``pc`` and ``instr_start`` are
-        late-static.  ``instr_start`` is the instruction's own position,
-        as opposed to ``pc``, which is normally the position after it.
-
-        Returns ``(split, w_result)``.  ``split`` is the late-static
-        successor, or PE_LEAVE / PE_RETURN where the residual program ends
-        there; ``w_result`` is what the portal returns in that case, and for
-        PE_LEAVE it also carries the pc the generic loop resumes at.
+        ``opcode`` is offline-static and ``pc``/``instr_start`` late-static.
+        Returns ``(split, w_result)``: split is the late-static successor,
+        or PE_LEAVE / PE_RETURN where the residual program ends there.
         """
-        # As dispatch() does on entry: without it the residual program reads
-        # the frame through the virtualizable's slow path and forces it on
-        # every access, which costs far more than the dispatch it removed.
+        # Direct virtualizable access; else every frame access forces it.
         self = jit.hint(self, access_directly=True)
         pedriver.pe_merge_point(self=self, opcode=opcode, oparg=oparg,
                                 pc=pc, instr_start=instr_start,
                                 break_target=break_target, pycode=pycode,
                                 is_being_profiled=is_being_profiled, ec=ec)
-        # Redundant on the generic path, which set it in dispatch_bytecode;
-        # a residual program has no other writer, and tracebacks read it.
+        # A residual program has no other writer, and tracebacks read it.
         self.last_instr = intmask(instr_start)
         if opcode == PE_LEAVE_OPCODE:
-            # No template covers the real instruction at instr_start: the
-            # residual program ends here, and the generic loop resumes at
-            # the instruction itself, not at whatever comes after it.
+            # No template for instr_start: resume the generic loop there.
             return PE_LEAVE, _residual_exit(self, r_uint(instr_start))
         if opcode == opcodedesc.RETURN_VALUE.index:
             if not self.blockstack_non_empty():
@@ -378,11 +304,9 @@ class __extend__(pyframe.PyFrame):
                 return PE_LEAVE, _residual_exit(self, target)
         elif opcode == opcodedesc.END_FINALLY.index:
             unroller = self.end_finally()
-            # Every exit here is a Finish: a template's exits must be all
-            # Finish or all Continue, and the unrolling ones are dynamic.
+            # A template's exits must be all Finish or all Continue.
             if not isinstance(unroller, SuspendedUnroller):
                 return PE_LEAVE, _residual_exit(self, pc)
-            # go on unrolling the stack
             block = self.unrollstack(unroller.kind)
             if block is None:
                 w_result = unroller.nomoreblocks()
@@ -397,10 +321,8 @@ class __extend__(pyframe.PyFrame):
         elif opcode == opcodedesc.BREAK_LOOP.index:
             if break_target < 0:
                 raise BreakUnrolled
-            # Residual programs exist only for code objects whose block
-            # stack holds nothing but loop blocks (handler-bearing ones
-            # stay generic), so the innermost block is the loop being left
-            # and its end is the decoder's statically computed target.
+            # Handler-bearing code stays generic, so the block stack here
+            # holds only loop blocks: the innermost one is the loop left.
             block = self.pop_block()
             block.cleanupstack(self)
             return r_uint(break_target), None
