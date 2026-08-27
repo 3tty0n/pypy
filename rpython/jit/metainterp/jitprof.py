@@ -9,7 +9,7 @@ from rpython.jit.metainterp.jitexc import JitException
 from rpython.rlib.jit import Counters
 
 
-JITPROF_LINES = Counters.ncounters + 8
+JITPROF_LINES = Counters.ncounters + 9
 # TOTAL, calls, two PE instruction counts, three PE cogen outcomes
 _CPU_LINES = 4       # the last 4 lines are stored on the cpu
 
@@ -37,8 +37,11 @@ class EmptyProfiler(BaseProfiler):
     def start_blackhole(self):
         pass
 
-    def end_blackhole(self):
+    def end_blackhole(self, insns):
         pass
+
+    def bridge_break_even(self, tail_ops):
+        return -1.0
 
     def end_backend(self):
         pass
@@ -90,6 +93,15 @@ class Profiler(BaseProfiler):
     current = None
     cpu = None
 
+    # Least-squares fit of blackhole time per resume = C + B * insns;
+    # see bridge_break_even().
+    bh_n = 0
+    bh_sum_m = 0.0
+    bh_sum_mm = 0.0
+    bh_sum_t = 0.0
+    bh_sum_mt = 0.0
+    BH_MIN_SAMPLES = 16
+
     def start(self):
         self.starttime = self.timer()
         self.t1 = self.starttime
@@ -132,7 +144,59 @@ class Profiler(BaseProfiler):
     def end_backend(self):     self._end  (Counters.BACKEND)
 
     def start_blackhole(self): self._start(Counters.BLACKHOLE)
-    def end_blackhole(self):   self._end  (Counters.BLACKHOLE)
+
+    def end_blackhole(self, insns):
+        t0 = self.t1
+        self._end(Counters.BLACKHOLE)
+        elapsed = self.t1 - t0
+        m = float(insns)
+        self.bh_n += 1
+        self.bh_sum_m += m
+        self.bh_sum_mm += m * m
+        self.bh_sum_t += elapsed
+        self.bh_sum_mt += m * elapsed
+
+    def blackhole_cost_model(self):
+        """(C, B): seconds per resume and per blackholed insn; (-1, -1)
+        until enough resumes were seen to fit them."""
+        n = self.bh_n
+        if n < self.BH_MIN_SAMPLES:
+            return -1.0, -1.0
+        denom = n * self.bh_sum_mm - self.bh_sum_m * self.bh_sum_m
+        if denom <= 0.0:
+            return -1.0, -1.0
+        b = (n * self.bh_sum_mt - self.bh_sum_m * self.bh_sum_t) / denom
+        c = (self.bh_sum_t - b * self.bh_sum_m) / n
+        if b <= 0.0 or c <= 0.0:
+            return -1.0, -1.0
+        return c, b
+
+    def bridge_break_even(self, tail_ops):
+        """Guard failures after which compiling the bridge from a guard
+        with 'tail_ops' optimized ops left to the end of its trace has
+        cost as much as blackholing that tail on every failure.
+
+        A failure without a bridge costs C + B * tail (resume/re-entry
+        plus blackholing to the trace end); the bridge costs T * tail to
+        trace and compile.  Short tails are dominated by C, so their
+        bridges pay back after a few failures; long tails approach T/B.
+        Returns -1.0 until the blackhole model is fitted.
+        """
+        c, b = self.blackhole_cost_model()
+        if b < 0.0:
+            return -1.0
+        opt_ops = self.counters[Counters.OPT_OPS]
+        rec_ops = self.counters[Counters.RECORDED_OPS]
+        if opt_ops <= 0 or rec_ops <= 0:
+            return -1.0
+        compile_time = (self.times[Counters.TRACING] +
+                        self.times[Counters.OPTIMIZING] +
+                        self.times[Counters.BACKEND])
+        # Blackhole insns and recorded ops share a unit (jitcode insns);
+        # optimized ops are fewer by the measured ratio.
+        tail_rec = tail_ops * (float(rec_ops) / opt_ops)
+        t = compile_time / rec_ops
+        return (t * tail_rec) / (b * tail_rec + c)
 
     def start_pe_cogen(self):  self._start(Counters.PE_COGEN)
     def end_pe_cogen(self):    self._end  (Counters.PE_COGEN)
@@ -184,6 +248,9 @@ class Profiler(BaseProfiler):
                               tim[Counters.BACKEND])
         self._print_line_time("Blackhole", cnt[Counters.BLACKHOLE],
                               tim[Counters.BLACKHOLE])
+        c, b = self.blackhole_cost_model()
+        debug_print("bridge model:\tC=%f us\tB=%f ns\tbreak-even(100)=%f" % (
+            c * 1e6, b * 1e9, self.bridge_break_even(100)))
         self._print_line_time("PE cogen overhead", cnt[Counters.PE_COGEN],
                               tim[Counters.PE_COGEN])
         self._print_line_time("PE cogen scan", cnt[Counters.PE_COGEN_SCAN],

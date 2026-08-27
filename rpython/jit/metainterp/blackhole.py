@@ -49,10 +49,16 @@ NULL = lltype.nullptr(llmemory.GCREF.TO)
 # ____________________________________________________________
 
 
+class _BlackholeStats(object):
+    # Holder: a plain int on the builder would fold to its prebuilt value.
+    insns = 0
+
+
 class BlackholeInterpBuilder(object):
     verbose = True
 
     def __init__(self, codewriter, metainterp_sd=None):
+        self.stats = _BlackholeStats()
         self.cpu = codewriter.cpu
         asm = codewriter.assembler
         self.setup_insns(asm.insns)
@@ -80,9 +86,12 @@ class BlackholeInterpBuilder(object):
             all_funcs.append(self._get_method(name, argcodes))
         all_funcs = unrolling_iterable(enumerate(all_funcs))
         #
+        stats = self.stats
+
         def dispatch_loop(self, code, position):
             assert position >= 0
             while True:
+                stats.insns += 1
                 if (not we_are_translated()
                     and self.jitcode._startpoints is not None):
                     assert position in self.jitcode._startpoints, (
@@ -1834,11 +1843,13 @@ def resume_in_blackhole(metainterp_sd, jitdriver_sd, resumedescr, deadframe,
     current_exc = blackholeinterp._prepare_resume_from_failure(deadframe)
 
     profiler = metainterp_sd.profiler
+    stats = metainterp_sd.blackholeinterpbuilder.stats
     profiler.start_blackhole()
+    insns = stats.insns
     try:
         _run_forever(blackholeinterp, current_exc)
     finally:
-        profiler.end_blackhole()
+        profiler.end_blackhole(stats.insns - insns)
 resume_in_blackhole._dont_inline_ = True
 
 def convert_and_run_from_pyjitpl(metainterp, raising_exception=False):
@@ -1863,9 +1874,11 @@ def convert_and_run_from_pyjitpl(metainterp, raising_exception=False):
         current_exc = lltype.nullptr(rclass.OBJECTPTR.TO)
     #
     profiler = metainterp_sd.profiler
+    stats = metainterp_sd.blackholeinterpbuilder.stats
     profiler.start_blackhole()
+    insns = stats.insns
     try:
         _run_forever(firstbh, current_exc)
     finally:
-        profiler.end_blackhole()
+        profiler.end_blackhole(stats.insns - insns)
 convert_and_run_from_pyjitpl._dont_inline_ = True

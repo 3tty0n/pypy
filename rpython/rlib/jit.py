@@ -638,9 +638,9 @@ PARAMETERS = {'threshold': 1039, # just above 1024, prime
               # warmup expensive (eparse: warmup -20% at 3000, steady and
               # krakatau unchanged); tiny callees still inline.
               'pe_call_threshold': 3000,
-              # Residual-origin traces are thinner, so their bridges are
-              # worth compiling early; generic traces keep the default.
-              'pe_trace_eagerness': 5,
+              # Neutral by default: the measured bridge model (jitprof
+              # bridge_break_even) decides eagerness per guard.
+              'pe_trace_eagerness': 200,
               }
 unroll_parameters = unrolling_iterable(PARAMETERS.items())
 

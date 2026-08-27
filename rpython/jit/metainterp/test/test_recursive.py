@@ -375,7 +375,9 @@ class RecursiveTests:
         TRACE_LIMIT = 20
         res = self.meta_interp(loop, [100], enable_opts='', inline=True, trace_limit=TRACE_LIMIT)
         self.check_max_trace_length(TRACE_LIMIT)
-        self.check_aborted_count(9)
+        # Each aborted bridge doubles the failures before the next try
+        # (AbstractResumeGuardDescr.note_aborted_bridge): 4, not 9.
+        self.check_aborted_count(4)
         self.check_enter_count_at_most(30)
 
     def test_trace_limit_with_exception_bug(self):

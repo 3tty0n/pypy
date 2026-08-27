@@ -508,9 +508,23 @@ def forget_optimization_info(lst, reset_values=False):
         if reset_values:
             item.reset_value()
 
+def stamp_guard_tails(operations):
+    """Record on each guard how many ops follow it: a bridge from the
+    guard retraces roughly that tail, and a failure without one
+    blackholes it (see Profiler.bridge_break_even)."""
+    n = len(operations)
+    for i in range(n):
+        op = operations[i]
+        if op.is_guard():
+            descr = op.getdescr()
+            if isinstance(descr, AbstractResumeGuardDescr):
+                descr.tail_ops = n - i
+
+
 def send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, loop, type,
                          orig_inpargs, memo):
     forget_optimization_info(loop.operations)
+    stamp_guard_tails(loop.operations)
     forget_optimization_info(loop.inputargs)
     vinfo = jitdriver_sd.virtualizable_info
     if vinfo is not None:
@@ -576,6 +590,7 @@ def send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, loop, type,
 def send_bridge_to_backend(jitdriver_sd, metainterp_sd, faildescr, inputargs,
                            operations, original_loop_token, memo):
     forget_optimization_info(operations)
+    stamp_guard_tails(operations)
     forget_optimization_info(inputargs)
     if not we_are_translated():
         show_procedures(metainterp_sd)
@@ -687,9 +702,11 @@ class ResumeDescr(AbstractFailDescr):
         return self
 
 class AbstractResumeGuardDescr(ResumeDescr):
-    _attrs_ = ('status', 'abort_count')
+    _attrs_ = ('status', 'abort_count', 'tail_ops')
 
     status = r_uint(0)
+    # Optimized ops from this guard to the end of its trace.
+    tail_ops = 0
     # Bridges traced from this guard that aborted; each one doubles the
     # failures needed before the next attempt (eparse at eagerness 5:
     # 10k retries of one quasi-immutable write without it).
@@ -797,6 +814,14 @@ class AbstractResumeGuardDescr(ResumeDescr):
             increment = warmstate.increment_pe_trace_eagerness
         else:
             increment = warmstate.increment_trace_eagerness
+        failures = metainterp_sd.profiler.bridge_break_even(self.tail_ops)
+        if failures > 0.0:
+            # Measured model available: never lazier than the parameter.
+            if failures < 1.0:
+                failures = 1.0
+            model_increment = 1.0 / failures
+            if model_increment > increment:
+                increment = model_increment
         if self.abort_count:
             increment = increment / float(1 << self.abort_count)
         return jitcounter.tick(hash, increment)
@@ -852,7 +877,7 @@ class AbstractResumeGuardDescr(ResumeDescr):
             self.status = hash & self.ST_SHIFT_MASK
 
 class ResumeGuardCopiedDescr(AbstractResumeGuardDescr):
-    _attrs_ = ('status', 'abort_count', 'prev')
+    _attrs_ = ('status', 'abort_count', 'tail_ops', 'prev')
 
     def __init__(self, prev):
         AbstractResumeGuardDescr.__init__(self)

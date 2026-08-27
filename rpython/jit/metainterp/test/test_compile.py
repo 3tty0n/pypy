@@ -191,6 +191,10 @@ def test_must_compile_uses_pe_eagerness_for_residual_roots():
     class SD:
         class warmrunnerdesc:
             jitcounter = FakeCounter()
+        class profiler:
+            @staticmethod
+            def bridge_break_even(tail_ops):
+                return -1.0
     descr = ResumeGuardDescr()
     descr.status = 0
     for pe_origin in (False, True):
@@ -217,6 +221,10 @@ def test_must_compile_backs_off_after_aborted_bridges():
     class SD:
         class warmrunnerdesc:
             jitcounter = FakeCounter()
+        class profiler:
+            @staticmethod
+            def bridge_break_even(tail_ops):
+                return -1.0
     descr = ResumeGuardDescr()
     descr.status = 0
     descr.rd_loop_token = CompiledLoopToken.__new__(CompiledLoopToken)
@@ -229,3 +237,49 @@ def test_must_compile_backs_off_after_aborted_bridges():
     for i in range(100):
         descr.note_aborted_bridge()
     assert descr.abort_count == descr.ABORT_COUNT_MAX
+
+
+def test_must_compile_uses_bridge_model_when_more_eager():
+    from rpython.jit.metainterp.compile import ResumeGuardDescr
+    from rpython.jit.backend.model import CompiledLoopToken
+    seen = []
+    class FakeCounter:
+        def tick(self, hash, increment):
+            seen.append(increment)
+            return False
+    class State:
+        increment_trace_eagerness = 1.0 / 200
+        increment_pe_trace_eagerness = 1.0 / 200
+        warmrunnerdesc = None
+    class JD:
+        warmstate = State()
+    class SD:
+        class warmrunnerdesc:
+            jitcounter = FakeCounter()
+        class profiler:
+            @staticmethod
+            def bridge_break_even(tail_ops):
+                return {10: 4.0, 1000: 400.0, 5: 0.2}[tail_ops]
+    descr = ResumeGuardDescr()
+    descr.status = 0
+    descr.rd_loop_token = CompiledLoopToken.__new__(CompiledLoopToken)
+    for tail in (10, 1000, 5):
+        descr.tail_ops = tail
+        descr.must_compile(None, SD, JD)
+    assert seen == [0.25, 1.0 / 200, 1.0]
+
+
+def test_stamp_guard_tails():
+    from rpython.jit.metainterp.compile import (stamp_guard_tails,
+                                               ResumeGuardDescr)
+    from rpython.jit.metainterp.resoperation import ResOperation, rop, InputArgInt
+    from rpython.jit.metainterp.history import ConstInt
+    i0 = InputArgInt()
+    d1, d2 = ResumeGuardDescr(), ResumeGuardDescr()
+    ops = [ResOperation(rop.INT_ADD, [i0, ConstInt(1)]),
+           ResOperation(rop.GUARD_TRUE, [i0], descr=d1),
+           ResOperation(rop.INT_ADD, [i0, ConstInt(1)]),
+           ResOperation(rop.GUARD_TRUE, [i0], descr=d2),
+           ResOperation(rop.FINISH, [i0])]
+    stamp_guard_tails(ops)
+    assert (d1.tail_ops, d2.tail_ops) == (4, 2)
