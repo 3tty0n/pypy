@@ -1456,6 +1456,7 @@ class Counters(object):
     OPTIMIZING
     BACKEND
     BLACKHOLE
+    BLACKHOLE_CALL
     PE_COGEN
     PE_COGEN_SCAN
     PE_COGEN_INSTALL

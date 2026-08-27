@@ -59,7 +59,7 @@ class TestProfile(ProfilerMixin):
             ~ Counters.TRACING,
             ]
         assert profiler.events == expected
-        assert profiler.times == [5, 2, 1, 1, 0, 0, 0]
+        assert profiler.times == [5, 2, 1, 1, 0, 0, 0, 0]
         py.test.skip("disabled until unrolling")
         assert profiler.counters == [1, 1, 3, 3, 2, 15, 2, 0, 0, 0, 0,
                                      0, 0, 0, 0, 0, 0, 0]

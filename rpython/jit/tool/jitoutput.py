@@ -14,6 +14,8 @@ REGEXES = [
     (('backend_no', 'backend_time'), '^Backend:\s+([\d.]+)\s+([\d.]+)$'),
     (('blackhole_no', 'blackhole_time'),
      '^Blackhole:\s+([\d.]+)\s+([\d.]+)$'),
+    (('blackhole_call_no', 'blackhole_call_time'),
+     '^Blackhole callee:\s+([\d.]+)\s+([\d.]+)$'),
     (('bridge_model_c', 'bridge_model_b', 'bridge_model_be'),
      '^bridge model:\s+C=([-\d.]+) us\s+B=([-\d.]+) ns\s+'
      'break-even\(100\)=([-\d.]+)$'),
@@ -78,6 +80,8 @@ class OutputInfo(object):
     backend_time = 0.0
     blackhole_no = 0
     blackhole_time = 0.0
+    blackhole_call_no = 0
+    blackhole_call_time = 0.0
     bridge_model_c = 0.0
     bridge_model_b = 0.0
     bridge_model_be = 0.0

@@ -16,13 +16,15 @@ import re
 
 TIMES = [("Tracing", "tracing"), ("Optimizing", "optimizing"),
          ("Backend", "backend"), ("Blackhole", "blackhole"),
+         ("Blackhole callee", "bh_callee"),
          ("PE cogen scan", "cogen"), ("PE cogen install", "cogen")]
 COUNTS = [("Total # of loops", "loops"), ("Total # of bridges", "bridges")]
 
 
 def parse_summary(path):
     out = {"tracing": 0.0, "optimizing": 0.0, "backend": 0.0,
-           "blackhole": 0.0, "cogen": 0.0, "loops": 0, "bridges": 0,
+           "blackhole": 0.0, "bh_callee": 0.0, "cogen": 0.0,
+           "loops": 0, "bridges": 0,
            "aborts": 0, "total": 0.0}
     with open(path) as stream:
         for line in stream:
@@ -78,7 +80,7 @@ def plot(data, configs, labels, benches, output, title):
     from matplotlib.backends.backend_pdf import PdfPages
 
     parts = [("tracing", "C0"), ("optimizing", "C1"), ("backend", "C2"),
-             ("blackhole", "C3"), ("cogen", "C4")]
+             ("blackhole", "C3"), ("bh_callee", "C5"), ("cogen", "C4")]
     cols = 4
     lines = (len(benches) + cols - 1) // cols
     width = 0.8

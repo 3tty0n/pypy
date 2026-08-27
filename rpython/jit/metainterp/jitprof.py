@@ -40,6 +40,12 @@ class EmptyProfiler(BaseProfiler):
     def end_blackhole(self, insns):
         pass
 
+    def start_portal_call(self, insns):
+        pass
+
+    def end_portal_call(self, insns):
+        pass
+
     def bridge_break_even(self, tail_ops):
         return -1.0
 
@@ -101,6 +107,12 @@ class Profiler(BaseProfiler):
     bh_sum_t = 0.0
     bh_sum_mt = 0.0
     BH_MIN_SAMPLES = 16
+    # Per active resume (innermost last): time and insns spent in portal
+    # calls made from the blackhole, excluded from that resume's sample.
+    bh_excl_time = None
+    bh_excl_insns = None
+    bh_call_t0 = 0.0
+    bh_call_insns0 = 0
 
     def start(self):
         self.starttime = self.timer()
@@ -143,18 +155,42 @@ class Profiler(BaseProfiler):
     def start_backend(self):   self._start(Counters.BACKEND)
     def end_backend(self):     self._end  (Counters.BACKEND)
 
-    def start_blackhole(self): self._start(Counters.BLACKHOLE)
+    def start_blackhole(self):
+        self._start(Counters.BLACKHOLE)
+        if self.bh_excl_time is None:
+            self.bh_excl_time = []
+            self.bh_excl_insns = []
+        self.bh_excl_time.append(0.0)
+        self.bh_excl_insns.append(0)
 
     def end_blackhole(self, insns):
         t0 = self.t1
         self._end(Counters.BLACKHOLE)
-        elapsed = self.t1 - t0
+        elapsed = self.t1 - t0 - self.bh_excl_time.pop()
+        insns -= self.bh_excl_insns.pop()
+        if elapsed <= 0.0 or insns < 0:
+            return
         m = float(insns)
         self.bh_n += 1
         self.bh_sum_m += m
         self.bh_sum_mm += m * m
         self.bh_sum_t += elapsed
         self.bh_sum_mt += m * elapsed
+
+    def start_portal_call(self, insns):
+        # A callee frame run from the blackhole: real execution, not
+        # blackholing; keep it out of the enclosing resume's sample.
+        self._start(Counters.BLACKHOLE_CALL)
+        self.bh_call_t0 = self.t1
+        self.bh_call_insns0 = insns
+
+    def end_portal_call(self, insns):
+        t0 = self.bh_call_t0
+        insns0 = self.bh_call_insns0
+        self._end(Counters.BLACKHOLE_CALL)
+        if self.bh_excl_time:
+            self.bh_excl_time[-1] += self.t1 - t0
+            self.bh_excl_insns[-1] += insns - insns0
 
     def blackhole_cost_model(self):
         """(C, B): seconds per resume and per blackholed insn; (-1, -1)
@@ -248,6 +284,8 @@ class Profiler(BaseProfiler):
                               tim[Counters.BACKEND])
         self._print_line_time("Blackhole", cnt[Counters.BLACKHOLE],
                               tim[Counters.BLACKHOLE])
+        self._print_line_time("Blackhole callee", cnt[Counters.BLACKHOLE_CALL],
+                              tim[Counters.BLACKHOLE_CALL])
         c, b = self.blackhole_cost_model()
         debug_print("bridge model:\tC=%f us\tB=%f ns\tbreak-even(100)=%f" % (
             c * 1e6, b * 1e9, self.bridge_break_even(100)))

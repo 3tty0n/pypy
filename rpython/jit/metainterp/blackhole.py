@@ -1143,38 +1143,62 @@ class BlackholeInterpreter(object):
         calldescr = jitdriver_sd.mainjitcode.calldescr
         return fnptr, calldescr
 
+    def _portal_call_profile(self):
+        builder = self.builder
+        return builder.metainterp_sd.profiler, builder.stats
+
     @arguments("self", "i", "I", "R", "F", "I", "R", "F", returns="i")
     def bhimpl_recursive_call_i(self, jdindex, greens_i, greens_r, greens_f,
                                                reds_i,   reds_r,   reds_f):
         fnptr, calldescr = self.get_portal_runner(jdindex)
-        return self.cpu.bh_call_i(fnptr,
-                                  greens_i + reds_i,
-                                  greens_r + reds_r,
-                                  greens_f + reds_f, calldescr)
+        profiler, stats = self._portal_call_profile()
+        profiler.start_portal_call(stats.insns)
+        try:
+            return self.cpu.bh_call_i(fnptr,
+                                      greens_i + reds_i,
+                                      greens_r + reds_r,
+                                      greens_f + reds_f, calldescr)
+        finally:
+            profiler.end_portal_call(stats.insns)
     @arguments("self", "i", "I", "R", "F", "I", "R", "F", returns="r")
     def bhimpl_recursive_call_r(self, jdindex, greens_i, greens_r, greens_f,
                                                reds_i,   reds_r,   reds_f):
         fnptr, calldescr = self.get_portal_runner(jdindex)
-        return self.cpu.bh_call_r(fnptr,
-                                  greens_i + reds_i,
-                                  greens_r + reds_r,
-                                  greens_f + reds_f, calldescr)
+        profiler, stats = self._portal_call_profile()
+        profiler.start_portal_call(stats.insns)
+        try:
+            return self.cpu.bh_call_r(fnptr,
+                                      greens_i + reds_i,
+                                      greens_r + reds_r,
+                                      greens_f + reds_f, calldescr)
+        finally:
+            profiler.end_portal_call(stats.insns)
     @arguments("self", "i", "I", "R", "F", "I", "R", "F", returns="f")
     def bhimpl_recursive_call_f(self, jdindex, greens_i, greens_r, greens_f,
                                                reds_i,   reds_r,   reds_f):
         fnptr, calldescr = self.get_portal_runner(jdindex)
-        return self.cpu.bh_call_f(fnptr,
-                                  greens_i + reds_i,
-                                  greens_r + reds_r,
-                                  greens_f + reds_f, calldescr)
+        profiler, stats = self._portal_call_profile()
+        profiler.start_portal_call(stats.insns)
+        try:
+            return self.cpu.bh_call_f(fnptr,
+                                      greens_i + reds_i,
+                                      greens_r + reds_r,
+                                      greens_f + reds_f, calldescr)
+        finally:
+            profiler.end_portal_call(stats.insns)
     @arguments("self", "i", "I", "R", "F", "I", "R", "F")
     def bhimpl_recursive_call_v(self, jdindex, greens_i, greens_r, greens_f,
                                                reds_i,   reds_r,   reds_f):
         fnptr, calldescr = self.get_portal_runner(jdindex)
-        return self.cpu.bh_call_v(fnptr,
-                                  greens_i + reds_i,
-                                  greens_r + reds_r,
-                                  greens_f + reds_f, calldescr)
+        profiler, stats = self._portal_call_profile()
+        profiler.start_portal_call(stats.insns)
+        try:
+            return self.cpu.bh_call_v(fnptr,
+                                      greens_i + reds_i,
+                                      greens_r + reds_r,
+                                      greens_f + reds_f, calldescr)
+        finally:
+            profiler.end_portal_call(stats.insns)
 
     # ----------
     # virtual refs
