@@ -1,13 +1,4 @@
-"""Measure TLA meta-tracing work with and without offline PE.
-
-Run from the repository root with Python 2::
-
-    python2 rpython/jit/tl/tla/measure_offline_pe.py --runs 5 --value 42
-
-The profiler's TRACING counter measures time spent tracing, not translation
-or test-process startup.  Recorded operations are the more deterministic
-metric; timing should be compared using the reported median.
-"""
+"""Measure TLA meta-tracing work with and without offline PE."""
 
 from __future__ import print_function
 
@@ -45,9 +36,7 @@ BYTECODE = assemble(CODE)
 
 
 def interpret(value):
-    # Assemble inside the entry function, as a normal interpreter frontend
-    # would.  Keeping the string as a literal makes the green bytecode appear
-    # constant before warmspot splits the portal graph.
+    # Literal bytecode here keeps the green portal argument constant.
     bytecode = ''.join([chr(op) for op in CODE])
     result = tla.run(bytecode, tla.W_IntObject(value))
     return result.intvalue

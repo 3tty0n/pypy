@@ -194,8 +194,7 @@ def test_offline_pe_catalog_and_linked_tla_loop():
     assert set(catalog.keys()) == set(range(len(tla.OPNAMES)))
     for opcode in catalog.keys():
         template = catalog.lookup(opcode)
-        # The nine-way opcode dispatch is gone.  A few opcode semantics retain
-        # their own integer comparisons (for example type/stack checks).
+        # A few opcode semantics keep their own int_eq (type/stack checks).
         assert sum(op.opname == "int_eq"
                    for op in template.operations) < 9
 

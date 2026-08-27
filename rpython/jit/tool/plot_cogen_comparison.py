@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Plot warmup and steady changes from two PyPy suite raw-result files.
-
-The forward file uses baseline=old and changed=new.  The reverse file uses
-baseline=new and changed=old.  Rendering uses matplotlib's PDF backend.
-"""
+"""Plot warmup and steady changes from two PyPy suite raw-result files."""
 
 import argparse
 import json

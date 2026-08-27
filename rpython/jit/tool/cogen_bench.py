@@ -1,13 +1,5 @@
 #!/usr/bin/env python2
-"""Run benchmarks/runner.py for a warmup/steady comparison of two pypy-c.
-
-    cogen_bench.py OLD NEW -o result.json [-b a,b,c] [--fast] [--reverse]
-
-Every benchmark subprocess gets PYPY_GC_NURSERY=1G; binaries are made
-absolute (runner.py chdirs).  --reverse also runs with the roles swapped
-into result.reverse.json, the pair plot_cogen_comparison.py takes.
-Plot a single result with plot_cogen_warmup.py.
-"""
+"""Run benchmarks/runner.py for a warmup/steady comparison of two pypy-c."""
 
 import argparse
 import os
@@ -18,8 +10,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 RUNNER = os.path.join(ROOT, "benchmarks", "runner.py")
 
-# BENCHMARK_DEFAULT minus builds (translate, cpython_doc), twisted, and
-# the sympy/genshi variants that only duplicate their siblings.
+# BENCHMARK_DEFAULT minus builds, twisted, and sympy/genshi duplicates.
 DEFAULT = ("ai,bm_chameleon,bm_dulwich_log,bm_krakatau,bm_mako,bm_mdp,"
            "chaos,crypto_pyaes,deltablue,django,eparse,genshi_xml,go,"
            "html5lib,json_bench,meteor-contest,pyflate-fast,pyxl_bench,"
@@ -43,8 +34,7 @@ def run(baseline, changed, output, benchmarks, args, fast):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("old")
     parser.add_argument("new")
     parser.add_argument("-o", "--output", default="result.json")

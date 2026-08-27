@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Plot warmup curves and warm/steady ratios from one cogen_bench.py JSON.
-
-Page 1: per-benchmark iteration time, baseline vs changed (log y).
-Page 2: changed/baseline ratio of warm (sum of the first 5 iterations)
-and steady (mean of the last half), one bar pair per benchmark.
-"""
+"""Plot warmup curves and warm/steady ratios from one cogen_bench.py JSON."""
 
 import argparse
 import json

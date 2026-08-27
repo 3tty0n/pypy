@@ -15,8 +15,16 @@ def _never_matches(gcref):
     return False
 
 
-# Holder class, not a single-element list: RPython folds a prebuilt
-# list's element into a literal at each read site; a holder avoids it.
+def _pc_in(pcs, pc):
+    pc = intmask(pc)
+    for covered in pcs:
+        if covered == pc:
+            return True
+    return False
+
+
+# Holder class, not a [0]-list: RPython folds a prebuilt list's
+# element into a literal at each read site.
 class _LateJitcodeCounter(object):
     def __init__(self):
         self.base = 0
@@ -27,10 +35,6 @@ _late_jitcode_counter = _LateJitcodeCounter()
 _late_jitcodes_by_index = {}
 
 
-# Running totals for PEJitCodeMetadata._cogen_ref (below), read out via
-# debug_print on every call.  A holder class instance, not a module-level
-# [0]-list: see _LateJitcodeCounter's own docstring above for why a list
-# seeded before annotation gets its reads constant-folded.
 class _CogenCounters(object):
     def __init__(self):
         self.generated = 0
@@ -50,19 +54,16 @@ def set_late_jitcode_base(count):
 
 
 def get_late_jitcode(index):
-    # NonConstant(False) keeps this branch live for annotation (not pruned),
-    # so _late_jitcodes_by_index gets a known JitCode value type; never runs.
+    # keeps this branch live for annotation, so the dict's value type
+    # is known; never actually runs.
     from rpython.rlib.nonconst import NonConstant
     if NonConstant(False):
-        # fnaddr=llmemory.NULL, not None: JitCode.fnaddr's type is unified
-        # across call sites; None here conflicts (SomeAddress vs None).
         _late_jitcodes_by_index[-1] = JitCode(
             "late-jitcode-type-hint", fnaddr=llmemory.NULL)
     return _late_jitcodes_by_index[index]
 
 
 def register_late_jitcode(jitcode, own_liveness_info):
-    """Single-threaded: no locking, matching the rest of this setup pipeline."""
     if jitcode.own_liveness_info is None:
         jitcode.own_liveness_info = own_liveness_info
     jitcode.index = _late_jitcode_counter.next_index
@@ -80,53 +81,28 @@ def _signed_pcs(pcs):
 
 
 class PELinkedProgram(object):
-    """One offline-linked JitCode, and the portal entry it stands for.
-
-    A portal runs many code objects, so a program says which one it was linked
-    for.  An interpreter with a single bytecode string (TLA) leaves both guard
-    indices at -1 and always matches.
-    """
+    """One offline-linked JitCode, and the portal entry it stands for."""
 
     def __init__(self, jitcode, argument_sources, argument_constants):
         self.jitcode = jitcode
-        # Size of the assembled residual jitcode, in bytes -- the axis
-        # pe_call_threshold (rlib/jit.py) compares against to decide
-        # whether an already-compiled call to this program is worth an
-        # assembler call (large body) or better off inlined (tiny body).
         self.code_size = len(jitcode.code)
-        # Lists keep one homogeneous RPython annotation whether linked
-        # lowering is enabled or not; fixed-size tuples of () and (2, 1)
-        # cannot be unified during native translation.
+        # Lists, not tuples: linked programs vary in argument count, and
+        # RPython cannot unify tuples of different lengths.
         self.argument_sources = list(argument_sources)
         self.argument_constants = list(argument_constants)
         self.guard_pc_index = -1
-        # Every block boundary this program may be entered at -- one entry
-        # per block the emitted code has a position for, not only its loop
-        # headers.  One generated program covers each of them, so a method
-        # the JIT traced from several points needs one program, not one per
-        # point: the later ones would be the same code with its front cut
-        # off.  Only these carry the register setup a trace start needs.
         self.guard_pcs = []
         self.guard_ref_index = -1
         self.guard_ref = lltype.nullptr(llmemory.GCREF.TO)
-        # Subset of guard_pcs where a trace may legitimately start: this
-        # program's loop headers plus its primary entry pc, exactly what the
-        # offline CFG declares as trace starts.  A pc in guard_pcs but not
-        # here is a mid-block pc some OTHER trace duplicated into this
-        # program's tail -- looping there again would duplicate a residual
-        # loop this program already provides (see pe_tick_suppressed in
-        # warmstate.py).
+        # Subset of guard_pcs valid as trace starts: loop headers plus the
+        # primary entry pc.  A pc in guard_pcs but not here belongs to
+        # another trace's duplicated tail.
         self.legit_entry_pcs = []
-        # Guest pcs outside the program that its PE_LEAVE exits go to.
         self.leave_pcs = []
-        # A loop-less program is a leaf: calling its compiled code instead
-        # of inlining it forces the caller's virtuals across the call, so
-        # size alone must not make it a CALL_ASSEMBLER target.
+        # Loop-less programs are leaves: CALL_ASSEMBLER would force the
+        # caller's virtuals across the call, so only looping ones qualify.
         self.has_loops = False
-        # A program is built from a bytecode image, so the code object it
-        # belongs to does not exist yet at translation time.  The matcher
-        # recognises it the first time the portal hands one over, and the
-        # pointer is remembered from then on.
+        # Set the first time the portal hands over a matching ref.
         self.guard_match = _never_matches
 
     def set_guard(self, pc_index, pcs, ref_index, legit_entry_pcs,
@@ -139,33 +115,15 @@ class PELinkedProgram(object):
         self.leave_pcs = _signed_pcs(leave_pcs)
 
     def is_leave_pc(self, pc):
-        pc = intmask(pc)
-        for covered in self.leave_pcs:
-            if covered == pc:
-                return True
-        return False
+        return _pc_in(self.leave_pcs, pc)
 
     def _covers(self, pc):
-        pc = intmask(pc)
-        for covered in self.guard_pcs:
-            if covered == pc:
-                return True
-        return False
+        return _pc_in(self.guard_pcs, pc)
 
     def is_legit_entry_pc(self, pc):
-        pc = intmask(pc)
-        for covered in self.legit_entry_pcs:
-            if covered == pc:
-                return True
-        return False
+        return _pc_in(self.legit_entry_pcs, pc)
 
     def start_position(self, boxes):
-        """Where tracing begins, for whichever entry point matched.
-
-        Only the guarded instructions are valid starts: each is a merge point
-        and each carries the register setup, so entering there is as sound as
-        entering the program's own first instruction.
-        """
         index = self.guard_pc_index
         if index < 0:
             return 0
@@ -175,26 +133,20 @@ class PELinkedProgram(object):
         return metadata.position_for_pc(boxes[index].getint())
 
     def build_call_boxes(self, boxes):
-        """Map a caller's greens+reds onto this program's argument layout.
-
-        Mirrors what initialize_state_from_start builds for a trace root:
-        each source index >= 0 takes the box at that position from the
-        caller, each negative one is a folded-in constant taken from
-        argument_constants in order.  Both call sites -- trace roots and
-        inlined calls -- route through here so they cannot diverge.
-        """
+        """Map a caller's greens+reds onto this program's argument layout."""
         call_boxes = []
         constant_index = 0
         for source in self.argument_sources:
             if source >= 0:
                 call_boxes.append(boxes[source])
             else:
-                call_boxes.append(ConstInt(self.argument_constants[constant_index]))
+                const = self.argument_constants[constant_index]
+                call_boxes.append(ConstInt(const))
                 constant_index += 1
         return call_boxes
 
     def matches(self, boxes):
-        """Is the portal entering the code object this program was linked for?"""
+        """Is the portal entering the code object linked to this program?"""
         index = self.guard_pc_index
         if index >= 0 and not self._covers(boxes[index].getint()):
             return False
@@ -204,11 +156,7 @@ class PELinkedProgram(object):
         return self.matches_ref(boxes[index].getref_base())
 
     def matches_ref(self, actual):
-        """Ref-only half of matches(): does this program own 'actual'?
-
-        Split out so PEJitCodeMetadata.linked_program_for can resolve the
-        ref independently of the per-call pc guard, and cache the result.
-        """
+        """Ref-only half of matches(): does this program own 'actual'?"""
         if self.guard_ref_index < 0:
             return True
         expected = self.guard_ref
@@ -225,68 +173,34 @@ class PEJitCodeMetadata(object):
 
     def __init__(self, entry_pc, block_pcs, loop_headers, backedge_sources,
                  backedge_targets, entry_pcs, entry_positions):
-        # intmask everywhere a guest pc enters these tables: an interpreter
-        # may carry its pc unsigned (PyPy's next_instr is an r_uint), while
-        # the tables and their -1 sentinels are signed.
+        # intmask: guest pcs may be unsigned; these tables are signed.
         self.entry_pc = intmask(entry_pc)
-        # All of these must be RPython lists rather than tuples.  A portal may
-        # carry several linked programs, whose CFGs differ in size, and tuples
-        # of different lengths cannot be unified; the searched ones would also
-        # need a constant index as tuples.
         self.block_pcs = _signed_pcs(block_pcs)
         self.loop_headers = _signed_pcs(loop_headers)
         self.backedge_sources = _signed_pcs(backedge_sources)
         self.backedge_targets = _signed_pcs(backedge_targets)
         self.entry_pcs = _signed_pcs(entry_pcs)
         self.entry_positions = list(entry_positions)
-        # One portal serves every code object the interpreter runs, so it can
-        # carry several linked programs; the first whose guard matches wins.
         self.linked_programs = []
-        # Read on every goto while tracing linked code, so it is resolved once
-        # here rather than searched for each time.
         self.entry_position = self.position_for_pc(entry_pc)
         self.owns_linked_jitcode = False
-        # True when the linked JitCode carries real jit_merge_points, which
-        # close loops themselves -- including loops nested inside the program.
         self.has_merge_points = False
-        # ref -> program (or None) cache for linked_program_for, keyed by the
-        # runtime method GCREF.  Built lazily: most metadata never links more
-        # than a couple of programs, where the linear walk is cheap enough
-        # that a cache would just be overhead.
+        # ref -> program cache for linked_program_for; built lazily.
         self._program_cache = None
-        # ref -> miss count, consulted only while below cogen_threshold (see
-        # linked_program_for/_miss_count_reached below); same lazy-new_ref_dict
-        # idiom as _program_cache, kept separate since it is written on every
-        # miss, not only on a ref's first one.
         self._miss_counts = None
-        # ref -> next miss count at which a soft-declined generation is
-        # retried.  A cost gate can stay closed for thousands of misses;
-        # calling it on every one adds warm-up work without new information.
+        # ref -> next miss count at which a soft decline is retried.
         self._retry_at = None
-        # Misses required for a ref before runtime_cogen is invoked for it;
-        # 0 (default) keeps today's behaviour of generating on the first
-        # miss.  Set at runtime only (e.g. from an env var), never at
-        # translation time, so this plain int field is safe to mutate.
+        # Misses required before runtime_cogen is invoked for a ref;
+        # 0 means generate on first miss.
         self.cogen_threshold = 0
-        # Env var name to read cogen_threshold from, lazily on the first miss.
-        # Read there, not at process start: startup code annotates before
-        # apply_jit builds this metadata, so an early read folds to a no-op.
         self.threshold_env_var = None
         self._threshold_env_read = False
-        # runtime_cogen: f(gcref) -> program or None; called once per ref.
+        # f(gcref) -> program or None; called once per ref.
         self.runtime_cogen = None
-        # Green-box indices carrying the ref and the pc, used before any
-        # program is installed; a runtime_cogen setter must also set them.
         self.guard_ref_index = -1
         self.guard_pc_index = -1
-        # Set by runtime_cogen (before returning None) when it declined for
-        # a reason that may not hold later -- e.g. a cost-model gate that
-        # wants more tracing time first.  _cogen_ref reads this right after
-        # calling runtime_cogen; linked_program_for uses it to skip caching
-        # that None, so the ref is retried on a later miss instead of being
-        # declined forever.  Plain bool, set unconditionally before every
-        # return out of runtime_cogen, so it never carries a stale value
-        # from a previous ref's call.
+        # Set by runtime_cogen when it declines for a reason that may
+        # not hold later, so the ref is retried instead of cached None.
         self.soft_decline = False
 
     def attach_linked_jitcode(self, jitcode, argument_sources,
@@ -296,15 +210,10 @@ class PEJitCodeMetadata(object):
                                   argument_constants)
         self.linked_programs.append(program)
         if jitcode.pe_metadata is self:
-            # This metadata belongs to the linked JitCode itself, which is what
-            # the goto check below asks about.
             self.owns_linked_jitcode = True
-        # A residual jitcode is only ever attached to one portal, so a flag
-        # on the jitcode itself is equivalent to (and cheaper than) asking
-        # this metadata's is_linked_jitcode() to search for it.
         jitcode.pe_is_linked = True
-        # The program as the portal sees it; the linked JitCode's own
-        # metadata attaches it once more with no argument layout.
+        # The portal's own view of the program wins over the linked
+        # JitCode's no-argument self-attach.
         if argument_sources or jitcode.pe_program is None:
             jitcode.pe_program = program
         return program
@@ -315,14 +224,8 @@ class PEJitCodeMetadata(object):
     def linked_program_for(self, boxes):
         """The program linked for the code object the portal is entering.
 
-        All programs on one portal share the same guard_ref_index (derived
-        from the portal's green layout), so the runtime method ref resolves
-        to at most one program; cache that resolution keyed by ref instead
-        of re-walking every program -- each doing a full guard_match byte
-        compare -- on every call.  The pc guard still varies per call, so it
-        is checked fresh after a cache hit.  Portals with no ref to guard on
-        (guard_ref_index < 0, e.g. TLA's single-program case) fall back to
-        the plain linear walk.
+        Resolution is cached by ref; the pc guard is re-checked on every
+        call.  Portals with no ref to guard on fall back to a linear walk.
         """
         programs = self.linked_programs
         ref_index = -1
@@ -342,15 +245,11 @@ class PEJitCodeMetadata(object):
                     program = self._resolve_ref(ref)
                     if program is None and self.runtime_cogen is not None:
                         if not self._miss_count_reached(ref):
-                            # Below threshold: neither generate nor cache --
-                            # a cached None here is a permanent decline.
+                            # below threshold: don't cache a permanent None
                             return None
                         program = self._cogen_ref(ref)
                         if program is None and self.soft_decline:
-                            # A gate declined for now, not forever: leave
-                            # this ref uncached so the next miss retries
-                            # runtime_cogen instead of finding a permanent
-                            # None here.
+                            # soft decline: leave uncached, retry later
                             return None
                     cache[ref] = program
                 if program is None:
@@ -378,13 +277,7 @@ class PEJitCodeMetadata(object):
         return None
 
     def _resolve_ref(self, ref):
-        """Which program owns 'ref', ignoring the pc guard.
-
-        Kept independent of the pc check: a program that owns this ref but
-        whose pc guard fails on this particular call must still be cached
-        under the ref, so a later call with a covered pc finds it instead of
-        being cached as a permanent non-match.
-        """
+        """Which program owns 'ref', ignoring the pc guard."""
         for program in self.linked_programs:
             if program.matches_ref(ref):
                 return program
@@ -392,12 +285,10 @@ class PEJitCodeMetadata(object):
 
     def _miss_count_reached(self, ref):
         """Has 'ref' missed at least cogen_threshold times (this one
-        included)?  threshold=0 makes this always True on the first miss,
-        i.e. today's "generate immediately" behaviour.
+        included)?  threshold=0 means "generate on first miss".
         """
         if not self._threshold_env_read:
             self._threshold_env_read = True
-            # Local binding: attribute re-reads don't flow-narrow away None.
             env_var = self.threshold_env_var
             if env_var is not None:
                 value = os.environ.get(env_var)
@@ -435,21 +326,13 @@ class PEJitCodeMetadata(object):
         retry_at[ref] = count + delay
 
     def _cogen_ref(self, ref):
-        """Invoked once per ref; linked_program_for caches the result.
-
-        The sole choke point every runtime generation routes through
-        (both PySOM's production callback and every in-process test one) --
-        wrapped in a PYPYLOG section (PYPYLOG=pe-cogen:...) so generation
-        cost shows up as wall time for free, with running totals alongside.
-        """
+        """Invoked once per ref; linked_program_for caches the result."""
         debug_start("pe-cogen")
         try:
             program = self.runtime_cogen(ref)
             if program is None or program.guard_ref != ref:
                 program = None
             if program is None and self.soft_decline:
-                # Deferred, not declined: not counted as a decline, and
-                # linked_program_for (our caller) will not cache this None.
                 self._defer_ref(ref)
                 _cogen_counters.deferred += 1
                 debug_print("pe-cogen ref=%d deferred "
@@ -604,12 +487,7 @@ class JitCode(AbstractDescr):
         return labelvalue
 
     def pe_loop_header_position(self):
-        """Where a jump means an offline-linked loop's back edge, or -1.
-
-        Resolved once per frame rather than on every goto.  A JitCode with
-        real merge points closes its loops through those instead, so it wants
-        no position check at all.
-        """
+        """Where a jump means an offline-linked loop's back edge, or -1."""
         metadata = self.pe_metadata
         if (metadata is None or not metadata.owns_linked_jitcode
                 or metadata.has_merge_points):
@@ -688,14 +566,8 @@ def enumerate_vars(offset, all_liveness, callback_i, callback_r, callback_f, spe
 
 
 def dump_jitcode(jitcode, metainterp_sd):
-    """PYPYLOG=jit-jitcode-dump: one line per instruction of 'jitcode'.
-
-    Decodes the code string the way the blackhole interpreter does
-    (see BlackholeInterpBuilder._get_method), so it works at runtime on
-    residual JitCodes too, which have no ssarepr to format.
-    """
-    from rpython.rlib.debug import (debug_start, debug_stop, debug_print,
-                                    have_debug_prints)
+    """PYPYLOG=jit-jitcode-dump: one line per instruction of 'jitcode'."""
+    from rpython.rlib.debug import have_debug_prints
     debug_start("jit-jitcode-dump")
     if have_debug_prints():
         _dump_jitcode(jitcode, metainterp_sd)
@@ -725,7 +597,6 @@ def _pad5(n):
 
 
 def _dump_jitcode(jitcode, metainterp_sd):
-    from rpython.rlib.debug import debug_print
     from rpython.jit.metainterp.blackhole import signedord
     code = jitcode.code
     names = metainterp_sd.opcode_names

@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""Where does JIT time go?  Stacked bars per benchmark and config from
-jit-summary logs (PYPYLOG=jit-summary:...) plus wall time.
-
-    plot_jit_breakdown.py --pattern 'dec-{cfg}-{bench}.log' \\
-        --time-pattern 'time-{cfg}-{bench}.txt' \\
-        --configs A,B,C,D --benches eparse,go -o breakdown.pdf
-
-Page 1: seconds of Tracing / Optimizing / Backend / Blackhole / PE cogen,
-with wall time as a marker.  Page 2: loops, bridges, aborts.
-"""
+"""Stacked JIT-time bars per benchmark/config from jit-summary logs."""
 
 import argparse
 import os

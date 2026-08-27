@@ -96,9 +96,7 @@ jitdriver = JitDriver(greens=['pc', 'bytecode'],
                       virtualizables=['self'],
                       get_printable_location=get_printable_location)
 
-# The opcode selects a residual template; the pc is late-static, so each
-# linked bytecode position gets its own hole, while self and bytecode stay
-# residual runtime values.
+# opcode is late-static; pc is split, so each linked position gets its own hole.
 pedriver = PEDriver(static="opcode", split="pc")
 
 
@@ -142,9 +140,6 @@ class Frame(object):
             if w_result is not None:
                 return w_result
 
-    # The opcode selects an offline semantics template.  The pc is late-static:
-    # each linked bytecode position instantiates its own hole, while frame and
-    # bytecode stay residual runtime values.
     @always_inline
     def interp_step(self, bytecode, opcode, oparg, pc):
         pedriver.pe_merge_point(self=self, bytecode=bytecode, opcode=opcode,

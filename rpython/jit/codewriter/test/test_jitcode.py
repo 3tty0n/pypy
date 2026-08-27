@@ -277,7 +277,6 @@ def test_is_linked_jitcode_uses_flag_set_by_attach():
 
 
 def test_leave_pcs_and_installed_program():
-    from rpython.jit.codewriter.jitcode import PEJitCodeMetadata
     program = _make_program(0, pc_index=1, pcs=[0, 10])
     program.set_guard(1, [0, 10], 0, [0], True, [20, 30])
     assert program.is_leave_pc(20) and program.is_leave_pc(30)

@@ -31,9 +31,7 @@ def build_generating_extension(translator):
     if extension.unsupported:
         raise ValueError(extension.report(tla.OPNAMES.__getitem__))
 
-    # RPython keeps the syntactically following ``return pc, None`` as an
-    # additional residual exit on some graph iteration orders.  RETURN is
-    # unconditionally terminal in the TLA bytecode format.
+    # RETURN is terminal; drop the spurious residual continue some orders keep.
     template = extension.templates[tla.RETURN]
     extension.templates[tla.RETURN] = ResidualTemplate(
         template.key, template.operations, template.holes,
@@ -48,13 +46,9 @@ def lower_and_install(codewriter, jitdriver_sd, translator, bytecode,
     from rpython.translator.backendopt.portal_linker import PortalLinker
 
     linked = build_generating_extension(translator).generate(bytecode)
-    # Portal boxes are (pc, bytecode, self); interp_step expects
-    # (self, bytecode, opcode, oparg, pc).
-    # The default back end needs merge points: it cannot place the -live-
-    # record that position-based back edge detection wants, because the
-    # assembler hoists a label above a -live- that follows it.  TLA's
-    # whole-graph lowering predates them and stays as it was.
+    # Portal boxes are (pc, bytecode, self); interp_step wants (2, 1) order.
     linker = PortalLinker(jitdriver_sd, (2, 1), ("self", "bytecode"),
+                          # whole_graph predates -live- backedge detection.
                           jit_merge_point_args=()
                           if whole_graph else ("pc", "bytecode", "self"),
                           null_names=("bytecode",),
