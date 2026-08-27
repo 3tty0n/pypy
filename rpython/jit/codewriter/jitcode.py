@@ -117,6 +117,8 @@ class PELinkedProgram(object):
         # loop this program already provides (see pe_tick_suppressed in
         # warmstate.py).
         self.legit_entry_pcs = []
+        # Guest pcs outside the program that its PE_LEAVE exits go to.
+        self.leave_pcs = []
         # A loop-less program is a leaf: calling its compiled code instead
         # of inlining it forces the caller's virtuals across the call, so
         # size alone must not make it a CALL_ASSEMBLER target.
@@ -128,12 +130,20 @@ class PELinkedProgram(object):
         self.guard_match = _never_matches
 
     def set_guard(self, pc_index, pcs, ref_index, legit_entry_pcs,
-                  has_loops):
+                  has_loops, leave_pcs=[]):
         self.has_loops = has_loops
         self.guard_pc_index = pc_index
         self.guard_pcs = _signed_pcs(pcs)
         self.guard_ref_index = ref_index
         self.legit_entry_pcs = _signed_pcs(legit_entry_pcs)
+        self.leave_pcs = _signed_pcs(leave_pcs)
+
+    def is_leave_pc(self, pc):
+        pc = intmask(pc)
+        for covered in self.leave_pcs:
+            if covered == pc:
+                return True
+        return False
 
     def _covers(self, pc):
         pc = intmask(pc)
@@ -265,9 +275,10 @@ class PEJitCodeMetadata(object):
         self._threshold_env_read = False
         # runtime_cogen: f(gcref) -> program or None; called once per ref.
         self.runtime_cogen = None
-        # Green-box index carrying the ref, used only before any program is
-        # installed; a runtime_cogen setter must also set this.
+        # Green-box indices carrying the ref and the pc, used before any
+        # program is installed; a runtime_cogen setter must also set them.
         self.guard_ref_index = -1
+        self.guard_pc_index = -1
         # Set by runtime_cogen (before returning None) when it declined for
         # a reason that may not hold later -- e.g. a cost-model gate that
         # wants more tracing time first.  _cogen_ref reads this right after
@@ -350,6 +361,19 @@ class PEJitCodeMetadata(object):
                 return program
         for program in programs:
             if program.matches(boxes):
+                return program
+        return None
+
+    def installed_program_for_ref(self, ref):
+        """The program already generated for 'ref', or None.  Never
+        generates: the caller is on the portal's hot entry path."""
+        if not ref:
+            return None
+        cache = self._program_cache
+        if cache is not None and ref in cache:
+            return cache[ref]
+        for program in self.linked_programs:
+            if program.guard_ref and program.guard_ref == ref:
                 return program
         return None
 

@@ -274,3 +274,19 @@ def test_is_linked_jitcode_uses_flag_set_by_attach():
     metadata.attach_linked_jitcode(linked, [], [])
     assert metadata.is_linked_jitcode(linked)
     assert not metadata.is_linked_jitcode(other)
+
+
+def test_leave_pcs_and_installed_program():
+    from rpython.jit.codewriter.jitcode import PEJitCodeMetadata
+    program = _make_program(0, pc_index=1, pcs=[0, 10])
+    program.set_guard(1, [0, 10], 0, [0], True, [20, 30])
+    assert program.is_leave_pc(20) and program.is_leave_pc(30)
+    assert not program.is_leave_pc(10)
+    ref = _new_ref()
+    program.guard_ref = ref
+    metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
+    metadata.linked_programs.append(program)
+    assert metadata.installed_program_for_ref(ref) is program
+    assert metadata.installed_program_for_ref(_new_ref()) is None
+    assert metadata.installed_program_for_ref(
+        lltype.nullptr(llmemory.GCREF.TO)) is None

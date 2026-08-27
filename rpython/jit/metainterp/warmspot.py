@@ -744,9 +744,13 @@ class WarmRunnerDesc(object):
         way).
         """
         metadata = jd.mainjitcode.pe_metadata
-        if metadata is None or not metadata.linked_programs:
+        if metadata is None:
             return -1
-        ref_index = metadata.linked_programs[0].guard_ref_index
+        if metadata.linked_programs:
+            ref_index = metadata.linked_programs[0].guard_ref_index
+        else:
+            # Runtime cogen: programs arrive later, the layout is fixed now.
+            ref_index = metadata.guard_ref_index
         green_types = jd._green_args_spec
         if ref_index < 0 or history.getkind(green_types[ref_index]) != 'ref':
             return -1
@@ -764,9 +768,12 @@ class WarmRunnerDesc(object):
         guarded green is not int-kind.
         """
         metadata = jd.mainjitcode.pe_metadata
-        if metadata is None or not metadata.linked_programs:
+        if metadata is None:
             return -1
-        pc_index = metadata.linked_programs[0].guard_pc_index
+        if metadata.linked_programs:
+            pc_index = metadata.linked_programs[0].guard_pc_index
+        else:
+            pc_index = metadata.guard_pc_index
         green_types = jd._green_args_spec
         if pc_index < 0 or history.getkind(green_types[pc_index]) != 'int':
             return -1

@@ -559,6 +559,7 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
     mainjitcode = linker.mainjitcode(codewriter)
     metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
     metadata.guard_ref_index = GREEN_CODE_INDEX
+    metadata.guard_pc_index = GREEN_PC_INDEX
     metadata.cogen_threshold = 32
     metadata.threshold_env_var = "PYPY_COGEN_THRESHOLD"
 

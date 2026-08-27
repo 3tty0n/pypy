@@ -452,13 +452,51 @@ class WarmEnterState(object):
             # keep ticking.
             for program in metadata.linked_programs:
                 if program.guard_ref and program.guard_ref == method_ref:
-                    suppressed = not program.is_legit_entry_pc(pc)
+                    # A leave pc lies outside the program: nothing to
+                    # duplicate there.
+                    suppressed = not (program.is_legit_entry_pc(pc) or
+                                      program.is_leave_pc(pc))
                     if suppressed:
                         debug_start("jit-pe-suppress")
                         debug_print("suppressed tick, pc", pc)
                         debug_stop("jit-pe-suppress")
                     return suppressed
             return False
+
+        def pe_entry_increment(greenargs, increment_threshold):
+            # A portal entry at a linked program's leave pc is the
+            # continuation of a residual exit (PE_LEAVE): what runs from
+            # here until compiled code is reached again is what a bridge
+            # from the exiting guard would have covered, so count it with
+            # the bridge's eagerness, not the function-entry threshold.
+            if increment_threshold != self.increment_function_threshold:
+                return increment_threshold
+            wanted_ref = self.pe_suppress_greenref_index
+            wanted_pc = self.pe_suppress_greenint_index
+            if wanted_ref < 0 or wanted_pc < 0:
+                return increment_threshold
+            pc = 0
+            position = 0
+            for i, TYPE in green_int_args:
+                if position == wanted_pc:
+                    pc = greenargs[i]
+                position += 1
+            if pc == 0:
+                return increment_threshold
+            metadata = jitdriver_sd.mainjitcode.pe_metadata
+            if metadata is None:
+                return increment_threshold
+            method_ref = lltype.nullptr(llmemory.GCREF.TO)
+            position = 0
+            for i, TYPE in green_ref_args:
+                if position == wanted_ref:
+                    method_ref = lltype.cast_opaque_ptr(
+                        llmemory.GCREF, greenargs[i])
+                position += 1
+            program = metadata.installed_program_for_ref(method_ref)
+            if program is None or not program.is_leave_pc(pc):
+                return increment_threshold
+            return self.increment_trace_eagerness
 
         JitCell = self.make_jitcell_subclass()
         self.make_jitdriver_callbacks()
@@ -555,6 +593,8 @@ class WarmEnterState(object):
             # These few lines inline some logic that is also on the
             # JitCell class, to avoid computing the hash several times.
             greenargs = args[:num_green_args]
+            increment_threshold = pe_entry_increment(greenargs,
+                                                     increment_threshold)
             hash = JitCell.get_uhash(*greenargs)
             cell = jitcounter.lookup_chain(hash)
             while cell is not None:
