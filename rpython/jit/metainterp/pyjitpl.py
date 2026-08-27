@@ -3299,8 +3299,17 @@ class MetaInterp(object):
             self.run_blackhole_interp_to_cancel_tracing(stb)
         finally:
             self.resumekey_original_loop_token = None
-            self.staticdata.profiler.end_bridge_attempt()
-            self.staticdata.profiler.end_tracing()
+            profiler = self.staticdata.profiler
+            profiler.end_bridge_attempt()
+            profiler.end_tracing()
+            debug_start('jit-bridge-cost')
+            if have_debug_prints():
+                debug_print('bridge-attempt us',
+                            int(profiler.last_bridge_time * 1e6),
+                            'rec ops', profiler.last_bridge_rec_ops,
+                            'tail', resumedescr.tail_ops,
+                            'failures', resumedescr.fail_count)
+            debug_stop('jit-bridge-cost')
             debug_stop('jit-tracing')
 
     def _handle_guard_failure(self, resumedescr, key, inputargs, deadframe, excdata):

@@ -193,6 +193,9 @@ def test_must_compile_uses_pe_eagerness_for_residual_roots():
             jitcounter = FakeCounter()
         class profiler:
             @staticmethod
+            def note_guard_failure(count):
+                pass
+            @staticmethod
             def bridge_break_even(tail_ops):
                 return -1.0
     descr = ResumeGuardDescr()
@@ -222,6 +225,9 @@ def test_must_compile_backs_off_after_aborted_bridges():
         class warmrunnerdesc:
             jitcounter = FakeCounter()
         class profiler:
+            @staticmethod
+            def note_guard_failure(count):
+                pass
             @staticmethod
             def bridge_break_even(tail_ops):
                 return -1.0
@@ -257,6 +263,9 @@ def test_must_compile_uses_bridge_model_when_more_eager():
         class warmrunnerdesc:
             jitcounter = FakeCounter()
         class profiler:
+            @staticmethod
+            def note_guard_failure(count):
+                pass
             @staticmethod
             def bridge_break_even(tail_ops):
                 return {10: 4.0, 1000: 400.0, 5: 0.2}[tail_ops]

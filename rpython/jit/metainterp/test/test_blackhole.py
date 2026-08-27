@@ -131,6 +131,10 @@ def test_convert_and_run_from_pyjitpl():
                 def start_blackhole(): pass
                 @staticmethod
                 def end_blackhole(insns): pass
+                @staticmethod
+                def start_decode(): pass
+                @staticmethod
+                def end_decode(): pass
         last_exc_value = None
         framestack = [MyMIFrame()]
     MyMetaInterp.staticdata.blackholeinterpbuilder = getblackholeinterp(

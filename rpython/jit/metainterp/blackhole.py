@@ -1863,13 +1863,17 @@ def resume_in_blackhole(metainterp_sd, jitdriver_sd, resumedescr, deadframe,
     profiler.start_blackhole()
     insns = stats.insns
     try:
-        blackholeinterp = blackhole_from_resumedata(
-            metainterp_sd.blackholeinterpbuilder,
-            metainterp_sd.jitcodes,
-            jitdriver_sd,
-            resumedescr,
-            deadframe,
-            all_virtuals)
+        profiler.start_decode()
+        try:
+            blackholeinterp = blackhole_from_resumedata(
+                metainterp_sd.blackholeinterpbuilder,
+                metainterp_sd.jitcodes,
+                jitdriver_sd,
+                resumedescr,
+                deadframe,
+                all_virtuals)
+        finally:
+            profiler.end_decode()
         current_exc = blackholeinterp._prepare_resume_from_failure(deadframe)
         _run_forever(blackholeinterp, current_exc)
     finally:

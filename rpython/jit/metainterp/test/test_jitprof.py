@@ -55,11 +55,13 @@ class TestProfile(ProfilerMixin):
             Counters.BACKEND,
             ~ Counters.BACKEND,
             Counters.BLACKHOLE,
+            Counters.BLACKHOLE_DECODE,
+            ~ Counters.BLACKHOLE_DECODE,
             ~ Counters.BLACKHOLE,
             ~ Counters.TRACING,
             ]
         assert profiler.events == expected
-        assert profiler.times == [5, 2, 1, 1, 0, 0, 0, 0]
+        assert profiler.times == [5, 2, 1, 2, 0, 1, 0, 0, 0]
         py.test.skip("disabled until unrolling")
         assert profiler.counters == [1, 1, 3, 3, 2, 15, 2, 0, 0, 0, 0,
                                      0, 0, 0, 0, 0, 0, 0]
@@ -166,3 +168,16 @@ def test_blackhole_cost_model_needs_samples():
     p.start()
     assert p.blackhole_cost_model() == (-1.0, -1.0)
     assert p.bridge_break_even(10) == -1.0
+
+
+def test_failure_histograms():
+    from rpython.jit.metainterp.jitprof import Profiler
+    prof = Profiler()
+    prof.start()
+    for count in range(1, 10):
+        prof.note_guard_failure(count)
+    prof.note_bridge_at(9)
+    prof.note_bridge_at(1)
+    assert prof.fail_hist[:5] == [1, 1, 1, 1, 0]
+    assert prof.bridge_hist[:4] == [1, 0, 0, 1]
+    assert prof._hist(prof.fail_hist) == "1 1 1 1"

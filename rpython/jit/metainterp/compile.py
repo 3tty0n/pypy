@@ -702,7 +702,7 @@ class ResumeDescr(AbstractFailDescr):
         return self
 
 class AbstractResumeGuardDescr(ResumeDescr):
-    _attrs_ = ('status', 'abort_count', 'tail_ops')
+    _attrs_ = ('status', 'abort_count', 'tail_ops', 'fail_count')
 
     status = r_uint(0)
     # Optimized ops from this guard to the end of its trace.
@@ -712,6 +712,7 @@ class AbstractResumeGuardDescr(ResumeDescr):
     # 10k retries of one quasi-immutable write without it).
     abort_count = 0
     ABORT_COUNT_MAX = 16
+    fail_count = 0
 
     ST_BUSY_FLAG    = 0x01     # if set, busy tracing from the guard
     ST_TYPE_MASK    = 0x06     # mask for the type (TY_xxx)
@@ -766,6 +767,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
 
     def must_compile(self, deadframe, metainterp_sd, jitdriver_sd):
         jitcounter = metainterp_sd.warmrunnerdesc.jitcounter
+        self.fail_count += 1
+        metainterp_sd.profiler.note_guard_failure(self.fail_count)
         #
         if self.status & (self.ST_BUSY_FLAG | self.ST_TYPE_MASK) == 0:
             # common case: this is not a guard_value, and we are not
@@ -855,6 +858,7 @@ class AbstractResumeGuardDescr(ResumeDescr):
                                self, inputargs, new_loop.operations,
                                new_loop.original_jitcell_token,
                                metainterp.box_names_memo)
+        metainterp.staticdata.profiler.note_bridge_at(self.fail_count)
         record_loop_or_bridge(metainterp.staticdata, new_loop)
 
     def make_a_counter_per_value(self, guard_value_op, index):

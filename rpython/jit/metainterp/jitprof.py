@@ -9,8 +9,9 @@ from rpython.jit.metainterp.jitexc import JitException
 from rpython.rlib.jit import Counters
 
 
-JITPROF_LINES = Counters.ncounters + 10
-# TOTAL, calls, two PE instruction counts, three PE cogen outcomes
+JITPROF_LINES = Counters.ncounters + 12
+# TOTAL, calls, two PE instruction counts, three PE cogen outcomes,
+# two guard-failure histograms
 _CPU_LINES = 4       # the last 4 lines are stored on the cpu
 
 class BaseProfiler(object):
@@ -18,6 +19,8 @@ class BaseProfiler(object):
 
 class EmptyProfiler(BaseProfiler):
     initialized = True
+    last_bridge_time = 0.0
+    last_bridge_rec_ops = 0
 
     def start(self):
         pass
@@ -38,6 +41,18 @@ class EmptyProfiler(BaseProfiler):
         pass
 
     def end_blackhole(self, insns):
+        pass
+
+    def start_decode(self):
+        pass
+
+    def end_decode(self):
+        pass
+
+    def note_guard_failure(self, count):
+        pass
+
+    def note_bridge_at(self, count):
         pass
 
     def start_portal_call(self, insns):
@@ -126,6 +141,11 @@ class Profiler(BaseProfiler):
     bridge_rec_ops = 0
     bridge_t0 = 0.0
     bridge_rec_ops0 = 0
+    last_bridge_time = 0.0
+    last_bridge_rec_ops = 0
+    # Survivor histogram: fail_hist[k] = guards that failed >= 2**k times;
+    # bridge_hist[k] = bridges compiled from a guard at 2**k <= n < 2**k+1.
+    HIST_BUCKETS = 32
 
     def start(self):
         self.starttime = self.timer()
@@ -133,6 +153,8 @@ class Profiler(BaseProfiler):
         self.times = [0] * (Counters.PE_COGEN_INSTALL + 1)
         self.counters = [0] * (Counters.ncounters - _CPU_LINES)
         self.calls = 0
+        self.fail_hist = [0] * self.HIST_BUCKETS
+        self.bridge_hist = [0] * self.HIST_BUCKETS
         self.current = []
 
     def finish(self):
@@ -190,6 +212,27 @@ class Profiler(BaseProfiler):
         self.bh_sum_t += elapsed
         self.bh_sum_mt += m * elapsed
 
+    def start_decode(self):
+        self._start(Counters.BLACKHOLE_DECODE)
+
+    def end_decode(self):
+        self._end(Counters.BLACKHOLE_DECODE)
+
+    @staticmethod
+    def _bucket(count):
+        k = 0
+        while count > 1 and k < Profiler.HIST_BUCKETS - 1:
+            count >>= 1
+            k += 1
+        return k
+
+    def note_guard_failure(self, count):
+        if count & (count - 1) == 0:
+            self.fail_hist[self._bucket(count)] += 1
+
+    def note_bridge_at(self, count):
+        self.bridge_hist[self._bucket(count)] += 1
+
     def start_portal_call(self, insns):
         # A callee frame run from the blackhole: real execution, not
         # blackholing; keep it out of the enclosing resume's sample.
@@ -210,9 +253,11 @@ class Profiler(BaseProfiler):
         self.bridge_rec_ops0 = self.counters[Counters.RECORDED_OPS]
 
     def end_bridge_attempt(self):
-        self.bridge_time += self.timer() - self.bridge_t0
-        self.bridge_rec_ops += (self.counters[Counters.RECORDED_OPS] -
-                                self.bridge_rec_ops0)
+        self.last_bridge_time = self.timer() - self.bridge_t0
+        self.last_bridge_rec_ops = (self.counters[Counters.RECORDED_OPS] -
+                                    self.bridge_rec_ops0)
+        self.bridge_time += self.last_bridge_time
+        self.bridge_rec_ops += self.last_bridge_rec_ops
 
     def blackhole_cost_model(self):
         """(C, B): seconds per resume and per blackholed insn; (-1, -1)
@@ -313,6 +358,11 @@ class Profiler(BaseProfiler):
                               tim[Counters.BLACKHOLE])
         self._print_line_time("Blackhole callee", cnt[Counters.BLACKHOLE_CALL],
                               tim[Counters.BLACKHOLE_CALL])
+        self._print_line_time("Blackhole decode",
+                              cnt[Counters.BLACKHOLE_DECODE],
+                              tim[Counters.BLACKHOLE_DECODE])
+        debug_print("guard failures >=2^k:\t" + self._hist(self.fail_hist))
+        debug_print("bridges at 2^k:\t" + self._hist(self.bridge_hist))
         c, b = self.blackhole_cost_model()
         debug_print("bridge model:\tC=%f us\tB=%f ns\tbreak-even(100)=%f" % (
             c * 1e6, b * 1e9, self.bridge_break_even(100)))
@@ -373,6 +423,12 @@ class Profiler(BaseProfiler):
                                 cpu.tracker.total_freed_loops)
             self._print_intline("Freed # of bridges",
                                 cpu.tracker.total_freed_bridges)
+
+    def _hist(self, hist):
+        last = len(hist)
+        while last > 0 and hist[last - 1] == 0:
+            last -= 1
+        return " ".join([str(hist[i]) for i in range(last)])
 
     def _print_line_time(self, string, i, tim):
         final = "%s:%s\t%d\t%f" % (string, " " * max(0, 13-len(string)), i, tim)

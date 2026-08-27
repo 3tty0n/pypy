@@ -43,12 +43,16 @@ def test_really_run():
     assert info.opt_ops == 11
     assert info.opt_guards == 2
     assert info.forcings == 0
+    assert info.guard_fail_hist == [1]
 
 DATA = '''Tracing:         1       0.006992
 Optimizing:      1       0.001250
 Backend:        1       0.000525
 Blackhole:      2       0.000300
 Blackhole callee: 1     0.000100
+Blackhole decode: 2     0.000050
+guard failures >=2^k:	5 3 1
+bridges at 2^k:	0 0 1
 bridge model:	C=2.500000 us	B=30.000000 ns	break-even(100)=6.000000
 bridge attempts:	0.100000 s	2000 rec ops	50.000000 us/op
 PE cogen overhead: 4       0.000400
@@ -128,3 +132,5 @@ def test_parse():
     assert info.nvreused == 15
     assert info.vecopt_tried == 12
     assert info.vecopt_success == 4
+    assert info.guard_fail_hist == [5, 3, 1]
+    assert info.bridge_at_hist == [0, 0, 1]

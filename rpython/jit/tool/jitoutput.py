@@ -16,6 +16,10 @@ REGEXES = [
      '^Blackhole:\s+([\d.]+)\s+([\d.]+)$'),
     (('blackhole_call_no', 'blackhole_call_time'),
      '^Blackhole callee:\s+([\d.]+)\s+([\d.]+)$'),
+    (('blackhole_decode_no', 'blackhole_decode_time'),
+     '^Blackhole decode:\s+([\d.]+)\s+([\d.]+)$'),
+    (('guard_fail_hist',), '^guard failures >=2\^k:\s*(.*)$'),
+    (('bridge_at_hist',), '^bridges at 2\^k:\s*(.*)$'),
     (('bridge_model_c', 'bridge_model_b', 'bridge_model_be'),
      '^bridge model:\s+C=([-\d.]+) us\s+B=([-\d.]+) ns\s+'
      'break-even\(100\)=([-\d.]+)$'),
@@ -130,7 +134,9 @@ def parse_prof(output):
         if attrs:
             for i, a in enumerate(attrs):
                 v = m.group(i + 1)
-                if '.' in v:
+                if a.endswith('_hist'):
+                    v = [int(x) for x in v.split()]
+                elif '.' in v:
                     v = float(v)
                 else:
                     v = int(v)
