@@ -14,7 +14,6 @@ EXTENDED_ARG = opcodedesc.EXTENDED_ARG.index
 
 
 def opcode_keys():
-    """Every opcode index, plus the synthetic PE_LEAVE_OPCODE fallback."""
     from pypy.interpreter.pyopcode import PE_LEAVE_OPCODE
 
     keys = set(bytecode_spec.opmap.values())
@@ -23,12 +22,7 @@ def opcode_keys():
 
 
 def _loop_ends(co_code):
-    """For each position, the break target of the innermost enclosing loop.
-
-    A block-stack POP_BLOCK scan is ambiguous for break-in-try (both compile
-    to POP_BLOCK); use SETUP_LOOP's jump-offset intervals instead, assigning
-    each position the innermost (last-visited) interval containing it.
-    """
+    """Break target per position, via SETUP_LOOP intervals, not POP_BLOCK."""
     n = len(co_code)
     ends = [-1] * n
     setup_loop = opcodedesc.SETUP_LOOP.index
@@ -64,11 +58,9 @@ def _loop_ends(co_code):
 
 
 def decode_instruction(code, pc):
-    """Decode one instruction; must match dispatch_bytecode's semantics
-    exactly, since the bindings fill the holes its templates left."""
+    """Decode one instruction; must match dispatch_bytecode exactly."""
     co_code = code.co_code
     if pc < 0 or pc >= len(co_code):
-        # Decline the code object rather than abort the process.
         raise BytecodeCorruption
     opcode = ord(co_code[pc])
     next_instr = pc + 1
@@ -106,9 +98,7 @@ def decode_instruction(code, pc):
 
 
 def inline_residualized(translator, graph):
-    """Copy of ``graph`` with every ``@pe.residualize`` callee inlined, so
-    the partial evaluator sees its body; the generic interpreter still
-    calls the original helper untouched."""
+    """Copy of graph with every @pe.residualize callee inlined."""
     from rpython.flowspace.model import checkgraph, copygraph
     from rpython.translator.backendopt.canraise import RaiseAnalyzer
     from rpython.translator.backendopt.inline import (
@@ -131,8 +121,7 @@ def inline_residualized(translator, graph):
         return graph
 
     copied = copygraph(graph)
-    # copygraph drops .annotation on the fresh inputarg Variables; carry it
-    # across by position (entry-block arity/order is preserved).
+    # copygraph drops .annotation on the fresh inputargs; carry it across.
     for old, new in zip(graph.startblock.inputargs,
                         copied.startblock.inputargs):
         new.annotation = old.annotation
@@ -158,14 +147,12 @@ def inline_residualized(translator, graph):
 
 
 def build_generating_extension(translator):
-    """Specialize interp_step once per opcode."""
     from pypy.interpreter.pyframe import PyFrame
     from pypy.interpreter.pyopcode import (
         PE_LEAVE, PE_LEAVE_OPCODE, PE_RETURN)
 
     step = PyFrame.interp_step.im_func
-    # Need the AccessDirect variant: the plain one forces the virtualizable
-    # on every frame access, which a generated program would then deopt on.
+    # Need the AccessDirect variant, or every frame access forces it.
     graph = None
     for candidate in translator.graphs:
         if getattr(candidate, "func", None) is step and \
@@ -181,8 +168,7 @@ def build_generating_extension(translator):
         decode_instruction, terminal_values=(PE_LEAVE, PE_RETURN),
         graph=graph, ref_hole_names=("pycode",))
     extension.leave_key = PE_LEAVE_OPCODE
-    # The "try each alternative" pattern closes its loop from inside an
-    # except clause; the loop header is only recognised via this edge.
+    # "try each alternative" closes its loop from inside an except clause.
     for name in ("SETUP_EXCEPT", "SETUP_FINALLY", "SETUP_WITH"):
         extension.handler_edges[
             getattr(bytecode_spec.opcodedesc, name).index] = ("pc", "oparg")
@@ -190,7 +176,6 @@ def build_generating_extension(translator):
 
 
 def report_unsupported(extension, out=None):
-    """One line per opcode that could not be specialized, and why."""
     from pypy.tool.stdlib_opcode import opcode_method_names
 
     lines = []
@@ -217,8 +202,7 @@ PORTAL_ARGUMENTS = (
     ("frame", "self"),                           # reds from here on
     ("ec", "ec"),
 )
-# Bound as constants by the generating extension; the portal never
-# supplies these.
+# Bound as constants by the extension; the portal never supplies these.
 LATE_STATIC_ARGUMENTS = ("pc",)
 
 JIT_MERGE_POINT_ARGS = tuple(step for _green, step in PORTAL_ARGUMENTS)
@@ -232,8 +216,7 @@ GREEN_CODE_INDEX = JIT_MERGE_POINT_ARGS.index("pycode")
 
 
 def hole_names():
-    """Read the declaration, not interp_step's _pe_hole_args_, which does
-    not exist yet for a caller that only imported the module."""
+    """Read the declaration; _pe_hole_args_ doesn't exist until annotated."""
     from pypy.interpreter.pyopcode import pedriver
     return pedriver.holes
 
@@ -248,23 +231,17 @@ def portal_linker(jitdriver_sd, name="linked-pypy"):
         split_names=LATE_STATIC_ARGUMENTS, hole_names=hole_names(), name=name)
 
 
-# List holder: a plain module var would fold to a translation constant.
 _runtime_cogen_state = [None]
 
 COST_PER_BYTE_NS = 20000
-# Cumulative tracing time must cover this many multiples of a generation's
-# estimated cost before it is worth doing.
 DEFAULT_GATE_K = 4.0
 
-# At most this fraction of the process's measured tracing time may be spent
-# generating, bounding the total loss when many per-generation checks pass
-# but never individually repay.
+# Caps total generation time even if every individual gate check passes.
 GATE_BUDGET_FRACTION = 0.25
 
 
 class _GateState(object):
-    """Holder, not a module float: a prebuilt float folds to its seed
-    under translation (see _FoldedLoads in native_pipeline.py)."""
+    """Holder: a prebuilt float folds to its seed under translation."""
     k = DEFAULT_GATE_K
     env_read = False
     spent_ns = 0.0
@@ -274,8 +251,7 @@ _gate_state = _GateState()
 
 
 def _gate_k():
-    """k for the cost-model gate; PYPY_PE_GATE overrides it, read lazily
-    once at runtime.  PYPY_PE_GATE=0 disables the gate (always generate)."""
+    """PYPY_PE_GATE overrides k, read lazily once; 0 disables the gate."""
     if not _gate_state.env_read:
         _gate_state.env_read = True
         value = os.environ.get("PYPY_PE_GATE")
@@ -287,8 +263,7 @@ def _gate_k():
     return _gate_state.k
 
 
-# Debugging aid: PYPY_COGEN_EXCLUDE=name,name never generates for these
-# code object names, to bisect a misbehaving program at run time.
+# PYPY_COGEN_EXCLUDE=name,name skips generation, to bisect a bad program.
 _exclude_state = [None]
 
 
@@ -305,8 +280,7 @@ def _excluded(co_name):
 
 
 def _gate_allows(profiler, code_size):
-    """Has this process traced enough to repay generating a program of
-    'code_size' bytes, k times over, within the remaining budget?"""
+    """Has tracing repaid code_size bytes k times over, within budget?"""
     from rpython.rlib.jit import Counters
 
     k = _gate_k()
@@ -341,7 +315,6 @@ def stamp_after_make_jitcodes(mainjitcode):
 
 
 def report_template_size(extension, out=None):
-    """Total residual operations across all templates."""
     total = 0
     for key in extension.templates:
         total += len(extension.templates[key].operations)
@@ -353,8 +326,7 @@ def report_template_size(extension, out=None):
 
 
 def report_break_template(extension, out=None):
-    """Debug probe: why does BREAK_LOOP's fragment compile find no split
-    transition when the template itself carries a Continue?"""
+    """Debug probe for BREAK_LOOP's split-transition search."""
     from pypy.interpreter.pyopcode import opcodedesc
     from rpython.translator.backendopt.partialeval import (
         _find_split_transitions)
@@ -395,8 +367,7 @@ def report_unresolvable(extension, out=None):
     from rpython.rlib.rarithmetic import r_uint
 
     lines = []
-    # pc must be r_uint, as interp_step declares it, or resolving a target
-    # that mixes it with a signed oparg fails here for an unrelated reason.
+    # pc must be r_uint, matching interp_step's declared type.
     bindings = {"pc": r_uint(0), "oparg": 0}
     for key in sorted(extension.templates):
         try:
@@ -422,8 +393,7 @@ def _install_pe_recover(codewriter, jitdriver_sd, translator):
     def helper_jitcode(func):
         jitcode = codewriter.callcontrol.get_jitcode(
             graphof(translator, func))
-        # Stands in for the portal as the trace's bottom frame, like a
-        # linked program does.
+        # Stands in for the portal as the trace's bottom frame.
         jitcode.jitdriver_sd = jitdriver_sd
         jitcode.pe_is_linked = True
         return jitcode
@@ -454,14 +424,12 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
     _install_pe_recover(codewriter, jitdriver_sd, translator)
     guard = (GREEN_PC_INDEX, GREEN_CODE_INDEX)
 
-    # Fragments are compiled here, at the RPython/translation boundary; the
-    # callback below never runs the codewriter, so it can run once translated.
+    # Fragments compile here; the callback below never runs the codewriter.
     emitter = ProgramEmitter(
         codewriter, jitdriver_sd, "opcode", LATE_STATIC_ARGUMENTS,
         hole_names(), RUNTIME_NAMES,
         jit_merge_point_args=JIT_MERGE_POINT_ARGS)
-    # One template at a time: an opcode the emitter cannot compile becomes a
-    # decline for the code objects that use it, not a failed build.
+    # One template at a time: a bad opcode declines its codes, not the build.
     for key in sorted(extension.templates):
         try:
             emitter.precompile_fragments({key: extension.templates[key]})
@@ -475,8 +443,6 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
     native_table = emitter.native_table()
     _runtime_cogen_state[0] = (codewriter, native_table)
 
-    # Captured by reference, not by value: reading a field off it here would
-    # fold to a translation constant, but .times[] is mutated at run time.
     profiler = jitdriver_sd.warmstate.warmrunnerdesc.metainterp_sd.profiler
 
     mainjitcode = linker.mainjitcode(codewriter)
@@ -491,22 +457,19 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
         from rpython.rlib.jit import Counters
         profiler.start_pe_cogen()
         try:
-            # Reset on every path, decline included: a stale True from a
-            # previous ref's gate defer must never leak into this result.
+            # Reset on every path: a stale True must never leak across refs.
             metadata.soft_decline = False
             code = cast_gcref_to_instance(PyCode, gcref)
             if code is None:
                 return None
             if code.co_flags & CO_GENERATOR:
-                # A generator resumes at its suspended pc; a residual
-                # program only runs from a block boundary to its own exit.
+                # A residual program can't resume at a generator's suspended pc.
                 return None
             if _excluded(code.co_name):
                 return None
             code_size = len(code.co_code)
             if not _gate_allows(profiler, code_size):
-                # Decline softly: retried once more tracing accrues, not
-                # cached as a permanent decline.
+                # Soft decline: retried once more tracing accrues.
                 metadata.soft_decline = True
                 if have_debug_prints():
                     tracing = profiler.get_times(Counters.TRACING)

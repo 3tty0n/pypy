@@ -51,27 +51,23 @@ opcodedesc = bytecode_spec.opcodedesc
 HAVE_ARGUMENT = bytecode_spec.HAVE_ARGUMENT
 
 class BreakUnrolled(Exception):
-    """Signals a generic BREAK_LOOP; residual exits must be all-Finish or
-    all-Continue, so unrolling can't be one of a template's exits."""
+    """Signals a generic BREAK_LOOP; a template's exits can't include it."""
 
 
 class PcMoved(Exception):
     """A trace hook moved the pc, so JUMP_ABSOLUTE's target is not oparg."""
 
 
-# Sentinel splits: a next pc that is not late-static, so the residual
-# program ends here instead of continuing to a successor template.
+# Sentinel splits: not late-static, so the residual program ends here.
 PE_LEAVE = r_uint(-1)
 PE_RETURN = r_uint(-2)
 
-# Synthetic opcode for "no template covers this instruction" (real opcodes
-# stay below ~150).
+# Synthetic opcode for "no template covers this" (real opcodes stay <~150).
 PE_LEAVE_OPCODE = 254
 
 
 def _residual_exit(frame, next_instr):
-    # The frame outlives this portal exit (like a generator's yield), so
-    # its virtualizable state must be written back now.
+    # The frame outlives this exit, so it must be written back now.
     jit.hint(frame, force_virtualizable=True)
     return pyframe.W_ResidualExit(next_instr)
 
@@ -83,9 +79,7 @@ def _worth_generating(program, code):
     return True
 
 
-# pc/instr_start/pycode names are fixed: the machinery looks holes up by
-# name (pycode as a ref hole bakes the code object into the constant pool
-# so trace-time ConstPtr folding can fire on it).
+# pc/instr_start/pycode names are fixed: the machinery looks holes up by name.
 pedriver = PEDriver(static="opcode", split="pc",
                     holes="oparg instr_start break_target pycode",
                     worth_generating=_worth_generating)
@@ -245,9 +239,7 @@ class __extend__(pyframe.PyFrame):
                 next_instr += 3
                 oparg = (oparg * 65536) | (hi * 256) | lo
 
-            # NonConstant: a literal -1 would fold into interp_step's graph
-            # and turn the residual break_target branch into an unconditional
-            # raise before the partial evaluator sees it.
+            # NonConstant: a literal -1 would fold and hide this branch.
             if we_are_translated():
                 no_break_target = NonConstant(-1)
             else:
@@ -261,8 +253,7 @@ class __extend__(pyframe.PyFrame):
                 assert isinstance(w_res, pyframe.W_ResidualExit)
                 return w_res.next_instr
             next_instr = split
-            # A backward jump must reach dispatch()'s merge point; the split
-            # value alone can't say so, so the opcode does.
+            # A backward jump must reach dispatch()'s merge point.
             if (opcode == opcodedesc.JUMP_ABSOLUTE.index
                     or jit.we_are_jitted()):
                 return next_instr
@@ -271,12 +262,7 @@ class __extend__(pyframe.PyFrame):
     def interp_step(self, opcode, oparg, pc, instr_start, break_target,
                     pycode,
                     is_being_profiled, ec):
-        """One bytecode's semantics, free of the dispatch loop.
-
-        ``opcode`` is offline-static and ``pc``/``instr_start`` late-static.
-        Returns ``(split, w_result)``: split is the late-static successor,
-        or PE_LEAVE / PE_RETURN where the residual program ends there.
-        """
+        """One bytecode's semantics; returns (split, w_result)."""
         # Direct virtualizable access; else every frame access forces it.
         self = jit.hint(self, access_directly=True)
         pedriver.pe_merge_point(self=self, opcode=opcode, oparg=oparg,
@@ -299,7 +285,6 @@ class __extend__(pyframe.PyFrame):
                 return PE_RETURN, self.peekvalue()
             else:
                 unroller = SReturnValue(w_returnvalue)
-                # Inside a 'finally' block now, at a pc only the block knows.
                 target = block.handle(self, unroller)
                 return PE_LEAVE, _residual_exit(self, target)
         elif opcode == opcodedesc.END_FINALLY.index:
@@ -321,8 +306,7 @@ class __extend__(pyframe.PyFrame):
         elif opcode == opcodedesc.BREAK_LOOP.index:
             if break_target < 0:
                 raise BreakUnrolled
-            # Handler-bearing code stays generic, so the block stack here
-            # holds only loop blocks: the innermost one is the loop left.
+            # Handler-bearing code stays generic, so only loop blocks remain.
             block = self.pop_block()
             block.cleanupstack(self)
             return r_uint(break_target), None

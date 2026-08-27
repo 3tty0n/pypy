@@ -45,8 +45,7 @@ class FrameDebugData(object):
         self.w_globals = pycode.w_globals
 
 class W_ResidualExit(W_Root):
-    """A residual program that stopped short of the frame's end; carries
-    the pc execute_frame resumes interpreting from."""
+    """A residual program that stopped short of the frame's end."""
     _immutable_fields_ = ["next_instr"]
 
     def __init__(self, next_instr):
@@ -293,18 +292,14 @@ class PyFrame(W_Root):
                     next_instr = r_uint(self.last_instr + 1)
                     if next_instr != 0:
                         self.pushvalue(w_inputvalue)
-                # Read once, outside the handler: pycode is a virtualizable
-                # field, and touching it on the exception path forces the
-                # frame on every guest exception crossing execute_frame.
+                # Read once: touching pycode on the exception path forces it.
                 code = self.pycode
                 while True:
                     try:
                         w_exitvalue = self.dispatch(code, next_instr,
                                                     executioncontext)
                     except OperationError as operr:
-                        # pe_frame is set once generic dispatch has already
-                        # unwound to a handler; an exception still escaping
-                        # a residual program has not been through that yet.
+                        # pe_frame is set once dispatch has unwound to a handler.
                         if not code._pe_has_linked_program or \
                                 operr.pe_frame is self:
                             raise
@@ -966,11 +961,8 @@ class PyFrame(W_Root):
         return None
 
     def pe_recover(self, operr):
-        """A guest exception escaped a residual program: search this
-        frame's handler, raising when there is none, and carry on from it.
-        The tracer runs this for the trace's root frame too."""
-        # pe_resume gets the plain self alias: a hinted self would
-        # specialize a second copy of the portal and its jit_merge_point.
+        """A guest exception escaped a residual program: find its handler."""
+        # pe_resume gets the plain self, or a hinted self doubles the portal.
         frame = self
         self = jit.hint(self, access_directly=True)
         ec = self.space.getexecutioncontext()
@@ -979,8 +971,7 @@ class PyFrame(W_Root):
 
     @dont_inline
     def pe_resume(self, next_instr):
-        """Carry on from the handler pe_recover found; never inlined, so
-        the tracer can recognise this call as the portal re-entry point."""
+        """Carry on from pe_recover; never inlined, so the tracer sees it."""
         frame = self
         self = jit.hint(self, access_directly=True)
         pycode = jit.promote(self.pycode)
