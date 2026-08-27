@@ -22,8 +22,6 @@ def replace_uses(graph, replacements):
         for op in block.operations:
             op.args = [replacements.get(arg, arg) for arg in op.args]
 
-        # Not inside the loop above: a block that merely switches on a value
-        # has no operations at all, and its exitswitch still needs replacing.
         if block.exitswitch in replacements:
             block.exitswitch = replacements[block.exitswitch]
             _resolve_constant_switch(block)
@@ -33,27 +31,14 @@ def replace_uses(graph, replacements):
 
 
 def _resolve_constant_switch(block):
-    """Collapse a switch whose selector just became a constant.
-
-    Substituting a static value straight into ``exitswitch`` leaves a block
-    with several exits and no runtime condition, which ``checkgraph`` rejects.
-    Pick the taken exit here so the caller always sees a valid graph.  This is
-    where a long ``if opcode == ...`` chain gets pruned: RPython merges it into
-    a single operation-free switch block before the partial evaluator runs.
-    """
+    """Collapse a switch whose selector just became a constant, so
+    ``checkgraph`` doesn't see several exits with no runtime condition."""
     switch = block.exitswitch
     if not isinstance(switch, Constant) or switch is c_last_exception:
         return
     from rpython.translator.backendopt.jitcode_emitter import HoleConstant
-    assert not isinstance(switch, HoleConstant), (
-        "a HoleConstant reached a block's exitswitch: this pruned a branch "
-        "using the sentinel value instead of a real one. Stage A "
-        "(make_symbolic_template) is supposed to have already lifted any "
-        "branch whose shape depends on a late-static value into the "
-        "template's own terminators, so an ordinary graph operation should "
-        "never make control flow depend on a hole -- if it does, folding "
-        "here would silently pick the wrong branch for every real value "
-        "except (by chance) HOLE_SENTINEL itself.")
+    # A HoleConstant here would fold on the sentinel instead of a real value.
+    assert not isinstance(switch, HoleConstant)
     if block.exits[-1].exitcase == "default":
         default, candidates = block.exits[-1], block.exits[:-1]
     else:
@@ -226,8 +211,9 @@ class PartialEvaluator(object):
         static_names, split_names = _pe_argument_names(graph)
         overlap = set(static_names).intersection(split_names)
         if overlap:
-            raise ValueError("PE arguments cannot be both static and split: %r" %
-                             (sorted(overlap),))
+            raise ValueError(
+                "PE arguments cannot be both static and split: %r" %
+                (sorted(overlap),))
 
         indexed_values = _argument_values(
             graph, static_names, static_env, "static")
@@ -239,7 +225,8 @@ class PartialEvaluator(object):
                                terminal_values=(-1,)):
         _, split_names = _pe_argument_names(graph)
         if len(split_names) != 1:
-            raise ValueError("split graph connection requires one split argument")
+            raise ValueError(
+                "split graph connection requires one split argument")
 
         residual = self.specialize(graph, static_env, split_env)
         connector = _SplitGraphConnector(
@@ -286,12 +273,8 @@ class PartialEvaluator(object):
                 raise ValueError(
                     "symbolic templates require at least one split argument")
             pc_name = split_names[0]
-        # Any further split arguments are late-static interpreter state which
-        # the linker resolves per block, exactly like the pc.  They arrive back
-        # as tuple items 2, 3, ... of the step function's result.
+        # Further split args are late-static state, resolved per block like pc.
         state_names = tuple(name for name in split_names if name != pc_name)
-        # Fix only offline-static arguments.  The declared split argument
-        # remains a graph variable and is lifted into a PcHole below.
         static_names, _ = _pe_argument_names(graph)
         indexed_values = _argument_values(
             graph, static_names, static_env, "static")
@@ -300,9 +283,6 @@ class PartialEvaluator(object):
             self.translator, graph, residual, indexed_values)
         transitions = _find_split_transitions(residual)
         generator = ResidualTemplateGenerator(terminal_values)
-        # Late-static operands the decoder supplies per bytecode.  Declared
-        # rather than assumed: an interpreter with two operand bytes, or one
-        # that needs a send's argument count, says so itself.
         hole_names = getattr(graph.func, "_pe_hole_args_", ("oparg2",))
         return generator.from_symbolic_residual_graph(
             key, residual, transitions, pc_name, oparg_name,
@@ -369,7 +349,8 @@ class _SplitTransition(object):
 def _find_split_transitions(graph):
     transitions = []
     for block in graph.iterblocks():
-        if len(block.exits) != 1 or block.exits[0].target is not graph.returnblock:
+        if (len(block.exits) != 1 or
+                block.exits[0].target is not graph.returnblock):
             continue
         linkargs = block.exits[0].args
         if len(linkargs) != 1 or not isinstance(linkargs[0], Variable):

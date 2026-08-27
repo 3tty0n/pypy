@@ -1,21 +1,8 @@
 """The generating extension an interpreter's step function specializes into.
 
-In Futamura's terms, applying a partial evaluator to an interpreter yields a
-compiler: not a compiled program, but a program that compiles.  That is what
-this module builds.
-
-Construction depends only on the interpreter, so it happens once, during
-translation: the offline partial evaluator is applied to the step function for
-every value of its static argument, producing one residual template per
-instruction.  ``generate`` then supplies a concrete code object and returns
-residual code for it, resolving the late-static values -- program counters,
-operand bytes, an operand-stack depth -- that the templates left as holes.
-
-The split matters because it is what the two halves cost.  Specializing the
-interpreter is expensive and happens once per interpreter; generating code for
-a program is cheap and happens once per program.  Nothing here needs a
-codewriter or a JitCode: turning the generated program into executable form is
-a separate back end, which is what still ties this to translation time.
+Construction (specializing the step function per opcode) happens once per
+interpreter; ``generate`` then turns a concrete code object into residual
+code cheaply, resolving the late-static holes the templates left behind.
 """
 
 from rpython.rlib.debug import debug_print
@@ -25,7 +12,7 @@ from rpython.translator.backendopt.partialeval_template import (
 
 
 def _states_equal(a, b):
-    """RPython has no dict comparison (binaryop.py's ne raises); by hand."""
+    # RPython has no dict comparison (binaryop.py's ne raises).
     if len(a) != len(b):
         return False
     for key, value in a.items():
@@ -37,24 +24,10 @@ def _states_equal(a, b):
 class GeneratingExtension(object):
     """Residual templates for one interpreter, plus the decoder for its code.
 
-    ``templates`` maps a static key -- an opcode -- to the residual template
-    the partial evaluator produced for it.  ``unsupported`` records the keys it
-    could not specialize, so a caller can report *why* a program was left to
-    the generic interpreter instead of only that it was.
-
-    ``decoder`` is supplied by the interpreter, never assumed here: only the
-    interpreter knows how its own instructions are laid out.  It is called once
-    per reachable instruction,
-
-        decoder(code, pc) -> (key, bindings)
-
-    where ``key`` selects the template and ``bindings`` gives every late-static
-    name its value at this pc: the pc itself, each operand the step function
-    declares as a hole, and anything else the decoder can work out from the
-    code object but the instruction bytes alone do not determine -- a send's
-    arity read from a literal table, for instance.  The static key and the
-    propagated state are added here, so what reaches the back end is the whole
-    specialization environment.
+    ``templates`` maps a static key (opcode) to its residual template;
+    ``unsupported`` records keys that failed to specialize.  ``decoder``
+    is supplied by the interpreter: ``decoder(code, pc) -> (key, bindings)``,
+    where ``bindings`` gives every late-static name its value at this pc.
     """
 
     def __init__(self, templates, decoder, static_name,
@@ -68,52 +41,30 @@ class GeneratingExtension(object):
         # instance (a raw byte string, in several tests) must not have this
         # attempted on it.
         self.ref_hole_names = tuple(ref_hole_names)
-        # Edges the templates cannot express: an instruction that installs
-        # a handler makes the handler reachable, though it never branches
-        # there itself.  {key: (hole naming the pc after the instruction,
-        # hole naming the offset)}: the handler is at their sum.  The edge
-        # counts for reachability and loop analysis only.
+        # {key: (hole naming pc after the instruction, hole naming offset)};
+        # a handler is reachable at their sum without the template branching
+        # there itself.  Counts for reachability and loop analysis only.
         self.handler_edges = {}
-        # Static key of a "leave" template: an instruction with no template
-        # of its own gets a synthetic block built from this one instead of
-        # declining the whole program, ending the residual program right
-        # where the generic interpreter must resume.  -1 means "none".
+        # Static key of the "leave" template used for an instruction with no
+        # template of its own; -1 means none.
         self.leave_key = leave_key
-        # RPython tuple length is fixed at annotation time, so this can't be
-        # rebuilt from a dict's keys -- only copied from a fixed-shape tuple.
         self.state_names = tuple(state_names)
-        # Consulted once a program has been generated, with the program and
-        # the code it came from; returning False declines it.  Generating is cheap and
-        # installing is not -- every installed program is looked at on every
-        # trace start, and the JitCodes are carried in the binary -- so which
-        # programs are worth that is a judgement about the interpreter, and
-        # belongs to whoever wrote it.  None accepts everything.
+        # (program, code) -> bool; declines a generated program. None accepts
+        # everything.
         self.policy = policy
-        # The step function's static argument, under the name it
-        # declared.  Every generated block binds the key to it, so
-        # the back end never has to know which name that is.
         self.static_name = static_name
         self.unsupported = dict(unsupported or {})
-        # The (pc, key) that made the most recent generate() call return
-        # None because that instruction has no template, so a caller can say
-        # *why* nothing came out instead of only that nothing did.
-        # (-1, -1) means "nothing blocked": RPython tuples have no null.
+        # (pc, key) that made the last generate() decline; (-1, -1) is none.
         self.last_blocked = (-1, -1)
-        # Set instead of last_blocked when every reachable instruction did
-        # specialize but the policy declined the resulting program anyway
-        # (the usual case: too small to be worth a JitCode and a guard).
+        # Set instead of last_blocked when the policy declined the program.
         self.decline_reason = None
 
     @classmethod
     def from_step_function(cls, translator, step_function, keys, decoder,
                            static_name=None, terminal_values=(-1,),
                            policy=None, graph=None, ref_hole_names=()):
-        """Specialize ``step_function`` once per key.
-
-        A key that cannot be specialized is recorded rather than raised on: it
-        only matters if a program actually uses that instruction, and whether
-        one does is not known until ``generate`` walks it.
-        """
+        """Specialize ``step_function`` once per key; a key that fails to
+        specialize is recorded, not raised on."""
         from rpython.translator.backendopt.partialeval import PartialEvaluator
         from rpython.translator.translator import graphof
 
@@ -125,9 +76,7 @@ class GeneratingExtension(object):
         state_names = tuple(name for name in split_names[1:])
         evaluator = PartialEvaluator(translator)
 
-        # Keys the interpreter declared off limits: recorded exactly like one
-        # that failed to specialize, so a program reaching it is left to the
-        # portal and one that never does costs nothing.
+        # Keys the interpreter declared off limits, recorded like a failure.
         skipped = getattr(graph.func, "_pe_skip_keys_", ())
         if policy is None:
             policy = getattr(graph.func, "_pe_link_policy_", None)
@@ -154,26 +103,14 @@ class GeneratingExtension(object):
         return key in self.templates
 
     def generate(self, code, entry_pc=0, entry_state=None):
-        """Residual code for ``code``, entered at ``entry_pc``.
-
-        Returns None when the reachable instructions include one with no
-        template -- only reachability matters, so an unsupported instruction
-        the program never runs costs nothing.
-
-        ``entry_state`` seeds the late-static values that are not the pc, an
-        operand-stack depth being the usual one.  Blocks stay keyed by pc: in
-        well-formed code the state at a given pc is the same on every path
-        reaching it, and a mismatch means that assumption does not hold, so it
-        is an error rather than something to paper over.
-        """
+        """Residual code for ``code``, entered at ``entry_pc``.  Returns None
+        when a reachable instruction has no template.  ``entry_state`` seeds
+        late-static values other than the pc (an operand-stack depth, say)."""
         from rpython.rtyper.annlowlevel import cast_instance_to_gcref
 
         blocks = {}
-        # Ref holes bound to the code object itself -- "pycode" for pypy --
-        # so trace-time ConstPtr pure-folding sees it as a real constant
-        # rather than a runtime-loaded green.  Shared by every block: it's
-        # the same code for the whole program.  Empty unless the interpreter
-        # opted in via ref_hole_names.
+        # Ref holes bound to the code object itself ("pycode" for pypy), so
+        # trace-time ConstPtr folding sees it as a constant, not a green.
         ref_bindings = {}
         for name in self.ref_hole_names:
             ref_bindings[name] = cast_instance_to_gcref(code)
@@ -208,11 +145,8 @@ class GeneratingExtension(object):
 
             key, bindings = self.decoder(code, pc)
             if key not in self.templates:
-                # No template for this instruction: fall back to the leave
-                # template, if one was configured, rather than declining the
-                # whole program.  Its bindings are still this instruction's
-                # own -- "instr_start" among them is exactly what the leave
-                # template needs to resume the generic loop here.
+                # Fall back to the leave template instead of declining the
+                # whole program, if one was configured.
                 if self.leave_key < 0 or self.leave_key not in self.templates:
                     # intmask: the sentinel below is signed, and a guest
                     # interpreter may carry its pc unsigned.
