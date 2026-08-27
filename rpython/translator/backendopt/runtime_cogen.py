@@ -4,13 +4,7 @@
 def generate_for_live_code(extension, linker, codewriter, code, guard, ref,
                            entry_pc=0, entry_state=None, emitter=None,
                            native_table=None, profiler=None):
-    """Generate and install a residual program for ``code``, guarded on
-    ``ref``.  Returns the installed ``PELinkedProgram``, or None when
-    ``code`` is declined.
-
-    Declines are not cached here: a caller on a lookup-miss path must
-    keep its own ref-keyed record, or every miss re-runs generation.
-    """
+    """Generate and install a residual program for ``code``, guarded on ref."""
     from rpython.rlib.debug import (debug_print, debug_start,
                                     debug_stop)
     if profiler is not None:

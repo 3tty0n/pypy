@@ -9,7 +9,6 @@ from rpython.translator.backendopt.generating_extension import (
 
 
 def byte_pair_decoder(code, pc):
-    """A decoder for the flat ``<opcode><operand>`` streams used below."""
     opcode = ord(code[pc])
     oparg = ord(code[pc + 1])
     return opcode, {"pc": pc, "oparg": oparg, "code": code}

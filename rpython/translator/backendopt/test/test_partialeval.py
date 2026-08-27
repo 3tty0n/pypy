@@ -25,7 +25,6 @@ def test_compact_entries_are_reserved_for_large_programs():
 
 
 def byte_pair_decoder(code, pc):
-    """A decoder for the flat ``<opcode><operand>`` streams used below."""
     opcode = ord(code[pc])
     oparg = ord(code[pc + 1])
     return opcode, {"pc": pc, "oparg": oparg, "code": code}
@@ -142,7 +141,7 @@ def test_specicalize_dispatch_simple_1():
     graph, t = get_graph(dispatch, [str, int, int])
 
     residual = specialize_entry_point(
-        t, graph, {"opcode": opcode, "pc": 1}) # Specialize to ADD
+        t, graph, {"opcode": opcode, "pc": 1})
 
     ops = summary(residual)
     assert "int_eq" not in ops
@@ -178,7 +177,6 @@ def test_specialize_dispatch_simple_2():
     )
 
     ops = summary(residual)
-    # pc is still dynamic, so dispatch remains for now.
     assert "int_eq" in ops
 
     ll_code = to_llvalue(t, graph.startblock.inputargs[0], code)
@@ -281,8 +279,6 @@ def test_connect_all_split_exits_in_dynamic_cfg():
     connected = specialize_split_graph(
         pe, graph, {"code": code}, {"pc": 0})
 
-    # Both variants retain their dynamic exit test.  Their continuing exits
-    # form pc=0 -> pc=1 -> pc=0, while both terminal exits share one return.
     checkgraph(connected)
     assert len(pe.cache) == 2
     ops = summary(connected)
@@ -294,7 +290,6 @@ def test_connect_all_split_exits_in_dynamic_cfg():
     res = interp.eval_graph(connected, [ll_code, 999, 5])
     assert res.item0 == -1 and res.item1 == 0
 
-    # The connected residual CFG is accepted by the meta-tracing codewriter
     assert "goto" in assert_codewriter_accepts(connected, t).dump()
 
 
@@ -353,8 +348,6 @@ def test_split_variants_share_exception_block():
     assert len(pe.cache) == 2
     exitblocks = [block for block in connected.iterblocks()
                   if not block.exits]
-    # This program has no normal loop exit, so only the shared exception block
-    # is reachable.  Variant-local exception blocks must not remain.
     assert exitblocks == [connected.exceptblock]
 
 
@@ -450,8 +443,6 @@ def test_offline_pe_of_small_symbolic_interpreter():
             return oparg, value
         return -1, value
 
-    # opcode semantics are offline-static.  pc/oparg remain late-static and
-    # value remains dynamic.
     interpret_one._pe_static_args_ = ("opcode",)
     interpret_one._pe_split_args_ = ("pc",)
     graph, t = get_graph(interpret_one, [int, int, int, int])
@@ -474,8 +465,6 @@ def test_offline_pe_of_small_symbolic_interpreter():
             graph, {"opcode": opcode}, {"pc": 0})
         assert_codewriter_accepts(residual, t)
 
-    # PE selected one opcode arm: dispatch comparisons are absent, while the
-    # genuinely dynamic ADD operation remains in the residual template.
     assert not any(op.opname == "int_eq" for op in add.operations)
     assert [op.opname for op in add.operations] == ["int_add"]
     assert add.resolve_targets({"pc": 10, "oparg": 7}) == [[11]]
@@ -515,28 +504,22 @@ def test_link_small_interpreter_dispatch_loop_without_tracing():
             graph, {"opcode": opcode}, {"pc": 0})
         assert_codewriter_accepts(residual, t)
 
-    # Two-byte instructions: DEC_JUMP 0 loops until value reaches zero, then
-    # falls through to HALT at pc=2.
     code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_HALT) + chr(0)
     assert dispatch(code, 5) == 0
 
     linked = extension.generate(code)
     assert set(linked.blocks) == set([0, 2])
     assert set(linked.blocks[0].successors) == set([0, 2])
-    assert 0 in linked.blocks[0].successors       # cached self-backedge
+    assert 0 in linked.blocks[0].successors
     assert linked.blocks[2].has_finish
     assert linked.loop_headers == [0]
     assert linked.backedges == [(0, 0)]
     assert linked.blocks[0].is_loop_header
 
-    # Opcode selection happened offline/in the linker.  No dispatch comparison
-    # remains in either linked opcode template.
     for block in linked.blocks.values():
         assert not any(op.opname == "int_eq"
                        for op in block.template.operations)
 
-    # Offline-discovered loop facts survive codewriter lowering as a JitCode
-    # side table, ready for the meta-interpreter to consume.
     dec_graph = pe.specialize(
         graph, {"opcode": OP_DEC_JUMP}, {"pc": 0})
     jitcode = assert_codewriter_accepts(dec_graph, t)
@@ -554,45 +537,33 @@ def test_link_small_interpreter_dispatch_loop_without_tracing():
 
 
 def test_generate_declines_or_falls_back_to_leave_template():
-    """An instruction with no template declines the whole program, unless a
-    leave_key is configured -- then it becomes a synthetic Finish block, and
-    the scan continues around it rather than aborting.
-    """
+    """No template for an instruction declines, unless leave_key is set."""
     OP_DEC_JUMP = 0
     OP_HALT = 1
-    OP_UNSUPPORTED = 2   # deliberately never specialized below
-    OP_LEAVE = 3         # the leave fallback: always ends the program
+    OP_UNSUPPORTED = 2
+    OP_LEAVE = 3
 
     def interpret_one(opcode, oparg, pc, value):
         if opcode == OP_DEC_JUMP:
             if value > 0:
                 return oparg, value - 1
             return pc + 2, value
-        # OP_HALT and OP_LEAVE both just stop; OP_UNSUPPORTED is never
-        # reached by any specialized template, so its body here is moot.
         return -1, value
 
     interpret_one._pe_static_args_ = ("opcode",)
     interpret_one._pe_split_args_ = ("pc",)
     graph, t = get_graph(interpret_one, [int, int, int, int])
 
-    # Only DEC_JUMP, HALT and LEAVE get templates -- UNSUPPORTED does not.
     extension = GeneratingExtension.from_step_function(
         t, interpret_one, [OP_DEC_JUMP, OP_HALT, OP_LEAVE],
         byte_pair_decoder)
 
-    # Two-byte instructions: DEC_JUMP 0 loops until value reaches zero, then
-    # falls through to the unsupported opcode at pc=2.
     code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_UNSUPPORTED) + chr(0)
 
-    # No leave_key configured (the default, -1): the whole program declines,
-    # and last_blocked names exactly the instruction that blocked it.
     assert extension.leave_key == -1
     assert extension.generate(code) is None
     assert extension.last_blocked == (2, OP_UNSUPPORTED)
 
-    # With a leave_key, the same scan succeeds: the unsupported instruction
-    # becomes a Finish block built from the leave template instead.
     extension.leave_key = OP_LEAVE
     linked = extension.generate(code)
     assert linked is not None
@@ -602,14 +573,8 @@ def test_generate_declines_or_falls_back_to_leave_template():
     assert linked.blocks[2].successors == []
     assert linked.leave_blocks == 1
     assert len(linked.blocks) == 2
-    # Not an all-leave program: the entry block (pc=0) is a real template,
-    # so _worth_generating-style policies would still accept this one.
     assert linked.leave_blocks != len(linked.blocks)
 
-    # A program whose *entry* instruction is itself unsupported is nothing
-    # but the leave fallback: this is the signal _worth_generating (in
-    # pypy/interpreter/pyopcode.py) declines on, without needing the real
-    # PyPy interpreter to demonstrate it.
     entry_unsupported = chr(OP_UNSUPPORTED) + chr(0)
     all_leave = extension.generate(entry_unsupported)
     assert all_leave is not None
@@ -660,8 +625,6 @@ def test_meta_interpreter_starts_at_offline_loop_header():
     assert frame.boxes == boxes
     assert frame.pc == 23
 
-    # Metadata is advisory: incomplete metadata and non-loop entries retain
-    # the existing portal position zero.
     jitcode.pe_metadata = PEJitCodeMetadata(
         10, (10,), (10,), (), (), (), ())
     assert get_pe_trace_start_position(jitcode) == 0
@@ -708,8 +671,6 @@ def test_meta_traces_small_interpreter_with_offline_metadata():
         return value
 
     def attach_offline_metadata(jitcode):
-        # The mini portal starts at its loop header, so its JitCode offset is
-        # zero.  Later stencil lowering will compute non-zero offsets.
         linked.attach_to_jitcode(jitcode, {0: 0, 2: 0})
 
     runner = LLJitMixin()

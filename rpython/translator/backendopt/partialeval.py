@@ -31,8 +31,7 @@ def replace_uses(graph, replacements):
 
 
 def _resolve_constant_switch(block):
-    """Collapse a switch whose selector just became a constant, so
-    ``checkgraph`` doesn't see several exits with no runtime condition."""
+    """Collapse a switch whose selector just became a constant."""
     switch = block.exitswitch
     if not isinstance(switch, Constant) or switch is c_last_exception:
         return
@@ -94,8 +93,6 @@ def try_fold_static_calls(translator, op):
 def fold_static_calls(translator, graph):
     replacements = {}
     for block in graph.iterblocks():
-        # Guarded: the return and except blocks carry an empty *tuple*, and
-        # checkgraph insists on that exact type.
         if block.operations:
             newops = []
             for op in block.operations:
@@ -196,8 +193,7 @@ class PartialEvaluator(object):
             return self.cache[key]
 
         residual = copygraph(graph)
-        # Register the shell first so recursive specialization and backedges can
-        # reuse this variant instead of expanding forever.
+        # Register before recursing, so backedges reuse this variant.
         self.cache[key] = residual
         try:
             _specialize_copied_graph(
@@ -238,11 +234,7 @@ class PartialEvaluator(object):
 
     def install_split_graph(self, graph, static_env, split_env,
                             terminal_values=(-1,)):
-        """Install a connected residual CFG in the original graph object.
-
-        Keeping the original FunctionGraph preserves all existing call targets
-        and its position in ``translator.graphs``.
-        """
+        """Install a connected residual CFG in the original graph object."""
         residual = self.specialize_split_graph(
             graph, static_env, split_env, terminal_values)
         return self._install_residual(graph, residual)
@@ -327,12 +319,7 @@ class _SplitTransition(object):
         return None
 
     def dynamic_values(self, skip=0):
-        """Residual values passed to the successor.
-
-        ``item0`` is the next split value and ``item1`` the return value; the
-        next ``skip`` items are further late-static state (a stack depth, say)
-        and are resolved at link time rather than carried at runtime.
-        """
+        """Residual values passed to the successor, minus late-static ones."""
         result = []
         index = 1
         while "item%d" % index in self.fields:
@@ -403,7 +390,7 @@ class _SplitGraphConnector(object):
 
         edge = (residual, next_value)
         if edge not in self.connected_edges:
-            # Mark before recursion: a successor may lead back to this variant.
+            # Mark before recursing: a successor may lead back here.
             self.connected_edges.add(edge)
             self.connect(successor)
 
@@ -506,11 +493,7 @@ def _specialize_copied_graph(translator, graph, residual, indexed_values):
     checkgraph(residual)
 
 def partial_evaluate(translator, static_program):
-    """Specialize and install all declared PE entry points.
-
-    ``static_program`` maps a graph (or its function) to either a static-value
-    dictionary, or to ``(static_values, initial_split_values)``.
-    """
+    """Specialize and install all declared PE entry points."""
     graphs = find_pe_entrypoints(translator)
     pe = PartialEvaluator(translator)
     installed = []

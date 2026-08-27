@@ -1,17 +1,8 @@
-"""Install generated programs on a jitdriver's portal.
-
-Set ``PE_DUMP_JITCODE`` to a directory to write each generated program's
-JitCode listing there as ``<name>.jitcode``, or to ``-`` for stdout.
-"""
+"""Install generated programs on a jitdriver's portal."""
 
 
 class PortalLinker(object):
-    """One interpreter's portal, and how a generated program plugs into it.
-
-    ``portal_sources`` says where each residual parameter sits among the
-    portal's boxes; ``runtime_names`` names those parameters in the step
-    function.  The two are parallel.
-    """
+    """One interpreter's portal, and how a generated program plugs into it."""
 
     def __init__(self, jitdriver_sd, portal_sources, runtime_names,
                  jit_merge_point_args=(), null_names=(), static_name="opcode",
@@ -28,17 +19,7 @@ class PortalLinker(object):
 
     def install(self, codewriter, program, whole_graph=False, guard=None,
                emitter=None, native_table=None):
-        """Compile ``program`` and register it on the portal.
-
-        ``whole_graph`` selects the older back end (one FunctionGraph for
-        the whole program) over the default (assemble each template once
-        and concatenate).  ``guard`` is ``(pc_index, ref_index)`` into the
-        merge point's greens for a portal serving more than one program.
-        ``emitter``, with the default back end, is a ``ProgramEmitter``
-        whose fragments were already built by ``precompile_fragments``.
-        ``native_table``, when given, selects the native pipeline
-        (native_pipeline.py) over the SSARepr ``ProgramEmitter.emit``.
-        """
+        """Compile ``program`` and register it on the portal."""
         mainjitcode = self.mainjitcode(codewriter)
         if whole_graph:
             lowered = program.lower(
@@ -51,13 +32,9 @@ class PortalLinker(object):
             lowered = self._emit(codewriter, program, emitter=emitter)
         lowered.jitcode.jitdriver_sd = self.jitdriver_sd
 
-        # Order matters: the first program to arrive creates the metadata that
-        # every later one registers itself in.
+        # The first program to arrive creates the metadata others register in.
         if mainjitcode.pe_metadata is None:
             program.attach_to_jitcode(mainjitcode, lowered.entry_positions)
-        # Lists, not tuples: attach_linked_jitcode's argument_sources
-        # parameter sees different lengths across this method's two call
-        # sites, and an RPython tuple parameter can't vary in shape.
         linked_program = mainjitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, list(self.portal_sources), [])
         if guard is not None:
@@ -78,9 +55,7 @@ class PortalLinker(object):
                 for pc in lowered.entry_positions:
                     if pc in program.leave_pcs:
                         continue
-                    # Reached only by unwinding an exception, which the
-                    # interpreter does generically: entering a program at
-                    # an except handler's pc miscompiles (krakatau, zip).
+                    # Entering a program at an except handler's pc miscompiles.
                     if pc in program.handler_pcs:
                         continue
                     entries.append(pc)
@@ -93,9 +68,6 @@ class PortalLinker(object):
                                      leave_pcs)
         lowered.jitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, [], [])
-        # Either back end plants jit_merge_points when the interpreter named
-        # its merge point arguments; without them the metainterp falls back to
-        # recognising a jump to the entry position as the loop header.
         lowered.jitcode.pe_metadata.has_merge_points = bool(
             self.jit_merge_point_args)
         lowered.linked_program = linked_program
@@ -105,8 +77,6 @@ class PortalLinker(object):
     def _dump(self, lowered):
         """Write the JitCode listing where PE_DUMP_JITCODE asks for it."""
         from rpython.rlib.objectmodel import we_are_translated
-        # Debug tooling only, not RPython-legal as written; the
-        # we_are_translated() guard keeps it out of real annotation.
         if we_are_translated():
             return
         import os
@@ -164,16 +134,13 @@ class PortalLinker(object):
             LoweredResidualProgram)
 
         has_merge_points = bool(self.jit_merge_point_args)
-        # readonly=True: may run after metainterp_sd froze, so it must never
-        # grow the shared insns/descrs tables -- decline instead.
+        # readonly: may run after metainterp_sd froze; never grow shared tables.
         assembler = NativeAssembler(share_with=codewriter.assembler,
                                     readonly=True)
         jitcode, entry_positions, assembler = emit_and_assemble_native(
             native_table, program, self.name,
             has_merge_points=has_merge_points, assembler=assembler)
-        # Resume pcs cast to a signed 16-bit short (resumecode.py); 32767 is
-        # the largest surviving pc.  AssemblerError, not assert: a translated
-        # binary's assert is fatal, not catchable by the decline path.
+        # 32767: resume pcs are a signed 16-bit short (resumecode.py).
         from rpython.jit.codewriter.assembler import AssemblerError
         from rpython.rlib.debug import debug_print
         if len(jitcode.code) > 32767:
