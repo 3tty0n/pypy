@@ -515,7 +515,7 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
     """Translation-time entry point: wire runtime cogen onto the portal."""
     from pypy.interpreter.pycode import CO_GENERATOR, PyCode
     from rpython.jit.codewriter.jitcode import (
-        PEJitCodeMetadata, register_late_jitcode)
+        PEJitCodeMetadata, dump_jitcode, register_late_jitcode)
     from rpython.rtyper.annlowlevel import cast_gcref_to_instance
     from rpython.translator.backendopt.jitcode_emitter import ProgramEmitter
     from rpython.translator.backendopt.runtime_cogen import (
@@ -616,6 +616,8 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
             # Assembled after finish_setup() froze liveness and jitcode tables.
             register_late_jitcode(program.jitcode,
                                   program.jitcode.own_liveness_info)
+            dump_jitcode(program.jitcode,
+                         jitdriver_sd.warmstate.warmrunnerdesc.metainterp_sd)
             return program
         finally:
             profiler.end_pe_cogen()

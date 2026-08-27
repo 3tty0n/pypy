@@ -661,3 +661,102 @@ def enumerate_vars(offset, all_liveness, callback_i, callback_r, callback_f, spe
         it = LivenessIterator(offset, length_f, all_liveness)
         for index in it:
             callback_f(index)
+
+
+def dump_jitcode(jitcode, metainterp_sd):
+    """PYPYLOG=jit-jitcode-dump: one line per instruction of 'jitcode'.
+
+    Decodes the code string the way the blackhole interpreter does
+    (see BlackholeInterpBuilder._get_method), so it works at runtime on
+    residual JitCodes too, which have no ssarepr to format.
+    """
+    from rpython.rlib.debug import (debug_start, debug_stop, debug_print,
+                                    have_debug_prints)
+    debug_start("jit-jitcode-dump")
+    if have_debug_prints():
+        _dump_jitcode(jitcode, metainterp_sd)
+    debug_stop("jit-jitcode-dump")
+
+
+def _operand(jitcode, kind, index):
+    if kind == 'i':
+        if index < jitcode.num_regs_i():
+            return "%%i%d" % index
+        return "$%d" % jitcode.constants_i[index - jitcode.num_regs_i()]
+    if kind == 'r':
+        if index < jitcode.num_regs_r():
+            return "%%r%d" % index
+        ref = jitcode.constants_r[index - jitcode.num_regs_r()]
+        return "$ref(0x%x)" % lltype.cast_ptr_to_int(ref)
+    if index < jitcode.num_regs_f():
+        return "%%f%d" % index
+    return "$f%d" % (index - jitcode.num_regs_f())
+
+
+def _dump_jitcode(jitcode, metainterp_sd):
+    from rpython.rlib.debug import debug_print
+    from rpython.jit.metainterp.blackhole import signedord
+    code = jitcode.code
+    names = metainterp_sd.opcode_names
+    descrs = metainterp_sd.opcode_descrs
+    debug_print("jitcode %s: %d bytes, regs i=%d r=%d f=%d, "
+                "consts i=%d r=%d f=%d" % (
+        jitcode.name, len(code), jitcode.num_regs_i(),
+        jitcode.num_regs_r(), jitcode.num_regs_f(),
+        len(jitcode.constants_i), len(jitcode.constants_r),
+        len(jitcode.constants_f)))
+    pos = 0
+    while pos < len(code):
+        start = pos
+        opcode = ord(code[pos])
+        pos += 1
+        if opcode == metainterp_sd.op_live:
+            offset = ord(code[pos]) | (ord(code[pos + 1]) << 8)
+            pos += 2
+            debug_print("%5d: -live- @%d" % (start, offset))
+            continue
+        key = names[opcode]
+        slash = key.find('/')
+        name = key[:slash]
+        argcodes = key[slash + 1:]
+        parts = []
+        i = 0
+        while i < len(argcodes):
+            c = argcodes[i]
+            if c == '>':
+                parts.append("-> " + _operand(jitcode, argcodes[i + 1],
+                                              ord(code[pos])))
+                pos += 1
+                i += 2
+                continue
+            if c == 'i' or c == 'r' or c == 'f':
+                parts.append(_operand(jitcode, c, ord(code[pos])))
+                pos += 1
+            elif c == 'c':
+                parts.append(str(signedord(code[pos])))
+                pos += 1
+            elif c == 'L':
+                parts.append("L%d" % (ord(code[pos]) |
+                                      (ord(code[pos + 1]) << 8)))
+                pos += 2
+            elif c == 'I' or c == 'R' or c == 'F':
+                length = ord(code[pos])
+                pos += 1
+                items = []
+                for k in range(length):
+                    items.append(_operand(jitcode, c.lower(),
+                                          ord(code[pos])))
+                    pos += 1
+                parts.append("[" + ", ".join(items) + "]")
+            elif c == 'd':
+                index = ord(code[pos]) | (ord(code[pos + 1]) << 8)
+                pos += 2
+                descr = descrs[index]
+                if isinstance(descr, JitCode):
+                    parts.append("<JitCode %s>" % descr.name)
+                else:
+                    parts.append(descr.repr_of_descr())
+            else:
+                parts.append("?" + c)
+            i += 1
+        debug_print("%5d: %s %s" % (start, name, " ".join(parts)))
