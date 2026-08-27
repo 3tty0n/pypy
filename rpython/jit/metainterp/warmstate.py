@@ -390,70 +390,52 @@ class WarmEnterState(object):
         vinfo = jitdriver_sd.virtualizable_info
         index_of_virtualizable = jitdriver_sd.index_of_virtualizable
         num_green_args = jitdriver_sd.num_green_args
-        # (position, TYPE) of every green REF (resp. INT) arg, in order --
-        # unrolled so that pe_tick_suppressed() below can pick
-        # greenargs[position] with a compile-time-constant index (a runtime
-        # index into the heterogeneous greenargs tuple is not valid
-        # RPython); same idiom as green_args_name_spec in
-        # make_jitcell_subclass(). Split by kind up front (unlike that one)
-        # so the cast_opaque_ptr below is only ever generated for a green
-        # that is actually a GC pointer.
+        # (position, TYPE) of every green REF/INT arg: unrolled so the
+        # greens below can be picked with a compile-time-constant index.
         green_ref_args = unrolling_iterable(
             [(i, TYPE) for i, TYPE in enumerate(jitdriver_sd._green_args_spec)
              if history.getkind(TYPE) == 'ref'])
         green_int_args = unrolling_iterable(
             [(i, TYPE) for i, TYPE in enumerate(jitdriver_sd._green_args_spec)
              if history.getkind(TYPE) == 'int'])
-        # jitdriver_sd.mainjitcode does not exist yet at this point --
-        # make_enter_functions() (which calls make_entry_point) runs
-        # BEFORE WarmRunnerDesc.__init__ links any offline-PE program onto
-        # a portal's mainjitcode (see the pe_linked_setup / make_jitcodes
-        # sequencing in warmspot.py) -- so reading it here, NOT_RPYTHON,
-        # would permanently bake in "no PE metadata" for every jitdriver
-        # regardless of what gets linked later (measured: pe_tick_suppressed
-        # never fired in a real translation). jitdriver_sd.mainjitcode.
-        # pe_metadata is read fresh inside pe_tick_suppressed() below
-        # instead: that function body is only actually run once the whole
-        # program is running, by which point every mainjitcode and its
-        # pe_metadata are long since final.
-        def pe_tick_suppressed(greenargs):
-            # Cheap gate first: this only runs inside a pe_bailout_point
-            # replay tail (rare), and only when a linked program exists
-            # that could name both "the method" and "the pc" greens.
-            if not self.pe_suppress_ticks:
-                return False
+
+        def pe_method_and_pc(greenargs):
             wanted_ref = self.pe_suppress_greenref_index
             wanted_pc = self.pe_suppress_greenint_index
-            if wanted_ref < 0 or wanted_pc < 0:
-                return False
-            metadata = jitdriver_sd.mainjitcode.pe_metadata
-            if metadata is None:
-                return False
             method_ref = lltype.nullptr(llmemory.GCREF.TO)
+            pc = 0
+            if wanted_ref < 0 or wanted_pc < 0:
+                return method_ref, pc
             position = 0
             for i, TYPE in green_ref_args:
                 if position == wanted_ref:
                     method_ref = lltype.cast_opaque_ptr(
                         llmemory.GCREF, greenargs[i])
                 position += 1
-            if not method_ref:
-                return False
-            pc = 0
             position = 0
             for i, TYPE in green_int_args:
                 if position == wanted_pc:
                     pc = greenargs[i]
                 position += 1
-            # Suppress iff some linked program was bound (guard_ref set)
-            # to this method AND pc is not one of ITS legitimate trace
-            # starts -- a pc covered by a DIFFERENT linked program's
-            # guard_pcs is not this program's concern, and unlinked
-            # methods never match any program here, so their keys always
-            # keep ticking.
+            return method_ref, pc
+
+        def pe_tick_suppressed(greenargs):
+            # Only runs inside a pe_bailout_point replay tail (rare).
+            # jitdriver_sd.mainjitcode.pe_metadata is read fresh here
+            # (not cached at NOT_RPYTHON setup time) because linking
+            # happens later, in WarmRunnerDesc.finish() (warmspot.py).
+            if not self.pe_suppress_ticks:
+                return False
+            method_ref, pc = pe_method_and_pc(greenargs)
+            if not method_ref:
+                return False
+            metadata = jitdriver_sd.mainjitcode.pe_metadata
+            if metadata is None:
+                return False
+            # Suppress iff a linked program was bound to this method AND
+            # pc is not one of ITS legitimate trace starts/leave pcs.
             for program in metadata.linked_programs:
                 if program.guard_ref and program.guard_ref == method_ref:
-                    # A leave pc lies outside the program: nothing to
-                    # duplicate there.
                     suppressed = not (program.is_legit_entry_pc(pc) or
                                       program.is_leave_pc(pc))
                     if suppressed:
@@ -464,35 +446,17 @@ class WarmEnterState(object):
             return False
 
         def pe_entry_increment(greenargs, increment_threshold):
-            # A portal entry at a linked program's leave pc is the
-            # continuation of a residual exit (PE_LEAVE): what runs from
-            # here until compiled code is reached again is what a bridge
-            # from the exiting guard would have covered, so count it with
-            # the bridge's eagerness, not the function-entry threshold.
+            # A portal entry at a linked program's leave pc continues a
+            # residual exit: count it at the bridge's eagerness instead
+            # of the function-entry threshold.
             if increment_threshold != self.increment_function_threshold:
                 return increment_threshold
-            wanted_ref = self.pe_suppress_greenref_index
-            wanted_pc = self.pe_suppress_greenint_index
-            if wanted_ref < 0 or wanted_pc < 0:
-                return increment_threshold
-            pc = 0
-            position = 0
-            for i, TYPE in green_int_args:
-                if position == wanted_pc:
-                    pc = greenargs[i]
-                position += 1
+            method_ref, pc = pe_method_and_pc(greenargs)
             if pc == 0:
                 return increment_threshold
             metadata = jitdriver_sd.mainjitcode.pe_metadata
             if metadata is None:
                 return increment_threshold
-            method_ref = lltype.nullptr(llmemory.GCREF.TO)
-            position = 0
-            for i, TYPE in green_ref_args:
-                if position == wanted_ref:
-                    method_ref = lltype.cast_opaque_ptr(
-                        llmemory.GCREF, greenargs[i])
-                position += 1
             program = metadata.installed_program_for_ref(method_ref)
             if program is None or not program.is_leave_pc(pc):
                 return increment_threshold
@@ -602,10 +566,7 @@ class WarmEnterState(object):
                     break    # found
                 cell = cell.next
             else:
-                # not found. No cell means no compiled code exists for
-                # this greenkey yet, so a suppressed pe_bailout_point
-                # replay has nothing useful to do here besides ticking,
-                # which it must not do.
+                # not found.
                 if pe_tick_suppressed(greenargs):
                     return
                 # increment the counter
@@ -622,11 +583,8 @@ class WarmEnterState(object):
                     return
                 if pe_tick_suppressed(greenargs):
                     return
-                # attached by compile_tmp_callback().  A dont_trace_here
-                # function never traced yet is traced right away, as
-                # below: until it is, every CALL_ASSEMBLER of it goes
-                # through the callback and forces the caller.  Otherwise
-                # count normally.
+                # attached by compile_tmp_callback().  A not-yet-traced
+                # dont_trace_here function is traced right away.
                 if (cell.flags & JC_DONT_TRACE_HERE and
                         not cell.flags & JC_TRACING_OCCURRED):
                     bound_reached(hash, cell, *args)
@@ -844,9 +802,7 @@ class WarmEnterState(object):
         self.dont_trace_here = dont_trace_here
 
         def bump_pe_abort_count(greenkey):
-            # Count aborts where this greenkey was the biggest linked
-            # callee; only repeat offenders get dont_trace_here()'d, not
-            # a single one-off deep-recursion trace.
+            # Only repeat offenders get dont_trace_here()'d.
             cell = JitCell.ensure_jit_cell_at_key(greenkey)
             cell.pe_abort_count += 1
             return cell.pe_abort_count

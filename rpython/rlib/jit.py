@@ -481,11 +481,8 @@ def virtual_ref_finish(vref, x):
 @oopspec('virtual_ref_finish_escaped(x)')
 @specialize.argtype(1)
 def virtual_ref_finish_escaped(vref, x):
-    """Like virtual_ref_finish(), but if the vref escaped (something the
-    JIT cannot see may still hold it), 'x' is forced so that the vref stays
-    dereferenceable afterwards; a vref that did not escape costs nothing.
-    For frames leaving with an exception: a traceback may hold a callee
-    frame whose f_back is this vref."""
+    """Like virtual_ref_finish(), but forces 'x' if the vref escaped, so
+    it stays dereferenceable (e.g. a traceback holding a callee's f_back)."""
     keepalive_until_here(x)
     _virtual_ref_finish_escaped(vref, x)
 
@@ -633,13 +630,9 @@ PARAMETERS = {'threshold': 1039, # just above 1024, prime
               'vec': 0,
               'vec_all': 0,
               'vec_cost': 0,
-              # A compiled callee program larger than this is called, not
-              # re-inlined: re-inlining every compiled callee is what made
-              # warmup expensive (eparse: warmup -20% at 3000, steady and
-              # krakatau unchanged); tiny callees still inline.
+              # A compiled callee larger than this is called via
+              # CALL_ASSEMBLER instead of re-inlined.
               'pe_call_threshold': 3000,
-              # Neutral by default: the measured bridge model (jitprof
-              # bridge_break_even) decides eagerness per guard.
               'pe_trace_eagerness': 200,
               }
 unroll_parameters = unrolling_iterable(PARAMETERS.items())

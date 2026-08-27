@@ -9,9 +9,7 @@ from rpython.jit.metainterp.jitexc import JitException
 from rpython.rlib.jit import Counters
 
 
-JITPROF_LINES = Counters.ncounters + 12
-# TOTAL, calls, two PE instruction counts, three PE cogen outcomes,
-# two guard-failure histograms
+JITPROF_LINES = Counters.ncounters + 12  # TOTAL, calls, PE/bridge stats
 _CPU_LINES = 4       # the last 4 lines are stored on the cpu
 
 class BaseProfiler(object):
@@ -275,16 +273,9 @@ class Profiler(BaseProfiler):
         return c, b
 
     def bridge_break_even(self, tail_ops):
-        """Guard failures after which compiling the bridge from a guard
-        with 'tail_ops' optimized ops left to the end of its trace has
-        cost as much as blackholing that tail on every failure.
-
-        A failure without a bridge costs C + B * tail (resume/re-entry
-        plus blackholing to the trace end); the bridge costs T * tail to
-        trace and compile.  Short tails are dominated by C, so their
-        bridges pay back after a few failures; long tails approach T/B.
-        Returns -1.0 until the blackhole model is fitted.
-        """
+        """Guard failures at which a bridge over 'tail_ops' optimized ops
+        pays back its trace+compile cost vs. blackholing on each failure.
+        Returns -1.0 until the blackhole model is fitted."""
         c, b = self.blackhole_cost_model()
         if b < 0.0:
             return -1.0

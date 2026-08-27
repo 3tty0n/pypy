@@ -509,9 +509,7 @@ def forget_optimization_info(lst, reset_values=False):
             item.reset_value()
 
 def stamp_guard_tails(operations):
-    """Record on each guard how many ops follow it: a bridge from the
-    guard retraces roughly that tail, and a failure without one
-    blackholes it (see Profiler.bridge_break_even)."""
+    # tail_ops feeds Profiler.bridge_break_even's cost model.
     n = len(operations)
     for i in range(n):
         op = operations[i]
@@ -705,11 +703,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
     _attrs_ = ('status', 'abort_count', 'tail_ops', 'fail_count')
 
     status = r_uint(0)
-    # Optimized ops from this guard to the end of its trace.
     tail_ops = 0
-    # Bridges traced from this guard that aborted; each one doubles the
-    # failures needed before the next attempt (eparse at eagerness 5:
-    # 10k retries of one quasi-immutable write without it).
+    # Aborted bridges from this guard; each one halves tick eagerness.
     abort_count = 0
     ABORT_COUNT_MAX = 16
     fail_count = 0

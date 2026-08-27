@@ -28,15 +28,8 @@ class JitDriverStaticData(object):
     #    self.mainjitcode       ... rpython.jit.codewriter.call
 
     # Set by the interpreter's PE setup (pe_linked_setup), optional:
-    #    self.pe_recover_jitcode   jitcode of a function (virtualizable,
-    #                              exception) -> portal result: unwinds a
-    #                              guest exception that escaped a linked
-    #                              program to its handler and carries on
-    #                              from there through pe_resume_jitcode
-    #    self.pe_resume_jitcode    the function (virtualizable, pc) ->
-    #                              portal result it calls the portal from;
-    #                              the tracer re-enters its root frame at
-    #                              that call instead of nesting it
+    #    self.pe_recover_jitcode   (vable, exc) -> portal result
+    #    self.pe_resume_jitcode    (vable, pc) -> portal result
     #    self.pe_recover_exc_class vtable of the exceptions it handles
     pe_recover_jitcode = None
     pe_resume_jitcode = None

@@ -1,47 +1,4 @@
-"""Runtime support for offline partial evaluation.
-
-A file of scalars shadowing array slots whose indices are late-static.
-
-An interpreter keeps state in arrays: a register file, an operand stack, a
-frame's locals.  Meta-tracing records every access to such an array, and those
-records survive optimisation whenever the array escapes -- which it does as
-soon as it is handed to a variadic call.  The values are already known; only
-the array is not.
-
-When the *index* of an access is late-static -- resolved once per instruction
-by the offline partial evaluator, rather than carried at runtime -- the value
-can be held in an ordinary variable instead, and the array need not be touched
-at all.
-
-This module is indifferent to what the array means.  It offers a file of
-``FILE_SIZE`` scalars addressed by a slot number that the caller derives from
-its own addressing scheme:
-
-    a register machine   slot = the decoded register number
-    an operand stack     slot = depth - position, from a late-static depth
-    a frame's locals     slot = the decoded local index
-
-In each case the slot number is a link-time constant, so every test below is a
-comparison between constants and folds away; an access landing inside the file
-compiles to nothing, and one landing outside falls back to the array.
-
-Two shapes of use are supported.  Direct addressing (registers, locals) needs
-only ``read`` and ``write``.  Sliding-window addressing (a stack, a ring) also
-needs ``shift_in``/``shift_out``, which move the whole file by one slot and
-exchange the slot falling off the end with the array.  Building a push and a
-pop out of those two is a couple of lines, and belongs to the interpreter that
-knows its own stack discipline rather than here.
-
-Around anything that receives the array itself, ``spill`` and ``refill``
-exchange the file with the array; their index arguments spell out the mapping,
-so this module never has to assume one.
-
-The file is flat scalars rather than a tuple or an object on purpose.  Either
-of those survives as an allocation across the step-function boundary, which is
-exactly the traffic being removed.  ``FILE_SIZE`` is therefore part of the
-signatures: widening the file means changing them and the interpreter's step
-function together.
-"""
+"""Scalar shadow file for array slots whose indices are late-static."""
 
 from rpython.rtyper.extregistry import ExtRegistryEntry
 from rpython.rlib.objectmodel import always_inline, specialize
@@ -62,23 +19,13 @@ def _names(value):
 def value_file(array, scalars, late_static):
     """Declare an array whose late-static accesses are held in scalars.
 
-    ``array`` names the argument holding the array, ``scalars`` the arguments
-    standing in for its hot slots, and ``late_static`` the arguments whose
-    values must be known at link time for the slot numbers to be constants.
-    Every name in ``late_static`` has to be a split argument; that is what
-    makes the tests in this module fold, and without it the file costs more
-    than it saves.  Name lists may be written as a string or a list.
-
-    Pass the result to PEDriver's ``value_file``.
-    """
+    late_static names must be split args, so slot numbers fold to
+    constants; pass the result to PEDriver's value_file."""
     return (array, _names(scalars), _names(late_static))
 
 
 def check_value_file(func):
-    """Raise if a declared value file cannot actually be held in scalars.
-
-    Returns the declaration, or None when the function does not declare one.
-    """
+    """Raise if a declared value file cannot be held in scalars."""
     declaration = getattr(func, "_pe_value_file_", None)
     if declaration is None:
         return None
@@ -107,11 +54,7 @@ def check_value_file(func):
 @specialize.arg(0)
 @always_inline
 def read(slot, index, array, v0, v1, v2):
-    """The value in ``slot``, falling back to ``array[index]``.
-
-    ``slot`` must be a constant; ``index`` is only evaluated for a slot outside
-    the file.
-    """
+    """The value in slot (a constant), falling back to array[index]."""
     if slot == 0:
         return v0
     if slot == 1:
@@ -124,10 +67,7 @@ def read(slot, index, array, v0, v1, v2):
 @specialize.arg(0)
 @always_inline
 def write(slot, index, value, array, v0, v1, v2):
-    """Store ``value`` in ``slot``, or in ``array[index]`` if it is outside.
-
-    Returns the new file.  ``slot`` must be a constant.
-    """
+    """Store value in slot (a constant), or array[index]; returns the file."""
     if slot == 0:
         return value, v1, v2
     if slot == 1:
@@ -140,12 +80,9 @@ def write(slot, index, value, array, v0, v1, v2):
 
 @always_inline
 def shift_in(value, evict_index, array, v0, v1, v2):
-    """Move the file up by one, ``value`` entering at slot 0.
+    """Move the file up by one, value entering at slot 0.
 
-    The slot pushed off the end is written to ``array[evict_index]``, and only
-    then; a negative index means nothing is evicted because the file is not yet
-    full.
-    """
+    A negative evict_index means the file is not yet full: nothing evicted."""
     if evict_index >= 0:
         array[evict_index] = v2
     return value, v0, v1
@@ -155,9 +92,7 @@ def shift_in(value, evict_index, array, v0, v1, v2):
 def shift_out(fill_index, array, v0, v1, v2):
     """Move the file down by one, dropping slot 0.
 
-    The slot entering at the end is read from ``array[fill_index]``; a negative
-    index means there is nothing left to read and the slot becomes empty.
-    """
+    A negative fill_index means nothing left to read; slot becomes empty."""
     if fill_index >= 0:
         return v1, v2, array[fill_index]
     return v1, v2, None
@@ -165,11 +100,7 @@ def shift_out(fill_index, array, v0, v1, v2):
 
 @always_inline
 def spill(array, i0, i1, i2, v0, v1, v2):
-    """Write the file back, before handing the array to someone else.
-
-    A negative index marks a slot that the array does not own, so it is
-    skipped.
-    """
+    """Write the file back to array; a negative index skips that slot."""
     if i0 >= 0:
         array[i0] = v0
     if i1 >= 0:
@@ -188,45 +119,12 @@ def refill(array, i0, i1, i2):
 
 
 class PEDriver(object):
-    """Declares how an interpreter may be partially evaluated, ahead of time.
-
-    The shape mirrors JitDriver: one object naming the variables and their
-    roles, and a marker called at the point it describes.
-
-        pedriver = PEDriver(static="opcode", split="pc stack_ptr",
-                            holes="oparg2 send_argc",
-                            never=SELF_MODIFYING, min_size=20)
-
-        def _interp_step(opcode, oparg, oparg2, send_argc, pc, stack_ptr,
-                         s0, s1, s2, method, frame, stack):
-            pedriver.pe_merge_point(
-                opcode=opcode, oparg=oparg, oparg2=oparg2,
-                send_argc=send_argc, pc=pc, stack_ptr=stack_ptr,
-                s0=s0, s1=s1, s2=s2,
-                method=method, frame=frame, stack=stack)
-            ...
-
-    ``static`` is fixed when the interpreter is translated -- the instruction
-    being executed, so there is one residual template per instruction.
-    ``split`` is unknown then but known once a program is chosen, and the
-    residual code branches on it.  ``holes`` are late-static too but only flow
-    through, so they become typed slots rather than branches.  Everything else
-    named at the merge point stays dynamic.  Name lists may be written as one
-    space-separated string.
-
-    ``never`` names instructions the evaluator must leave alone -- ones that
-    rewrite their own bytecode, where a generated program would be stale the
-    moment it ran.  ``min_size`` is the smallest program worth generating, in
-    instructions: what specializing saves is the dispatch removed from every
-    instruction executed, so it grows with the method, while what it costs --
-    a JitCode in the binary, one more guard at every trace start -- does not.
-    ``worth_generating`` takes a predicate instead, for a judgement size cannot
-    make.
-
-    Calling the merge point checks that its keywords are exactly the step
-    function's arguments, and binds this declaration to the function it is
-    called from, the way jit_merge_point binds a JitDriver to its loop.
-    """
+    """Declares how an interpreter may be partially evaluated, ahead of
+    time.  Mirrors JitDriver: static is fixed at translation (one
+    template per instruction), split is known once a program is chosen
+    and branches the residual code, holes are late-static but flow
+    through untested, never lists self-modifying instructions to skip,
+    and min_size/worth_generating gate which programs are worth it."""
 
     name = "pedriver"
 
@@ -250,11 +148,7 @@ class PEDriver(object):
         pass
 
     def bind(self, func):
-        """Attach this declaration to a step function.
-
-        Called for you when the merge point is annotated; also usable directly
-        for a function the annotator never sees, as in a test.
-        """
+        """Attach this declaration to a step function."""
         func._pe_entry_point_ = True
         func._pe_static_args_ = self.static
         func._pe_split_args_ = self.split
@@ -287,11 +181,7 @@ def _at_least(instructions):
 
 
 class ExtPEMergePoint(ExtRegistryEntry):
-    """Bind a PEDriver to the function its merge point is called from.
-
-    Nothing is emitted: the partial evaluator reads the declaration off the
-    function, so the marker leaves no trace in the residual code.
-    """
+    """Bind a PEDriver to the function its merge point is called from."""
 
     def compute_result_annotation(self, **kwds_s):
         from rpython.annotator import model as annmodel
@@ -327,13 +217,7 @@ class PEHintError(Exception):
 
 
 def residualize(func):
-    """Mark a helper for PE-time inlining into the entry graph.
-
-    build_generating_extension inlines a copy of every call to this helper
-    into the PE entry graph before building templates, so its body
-    participates in partial evaluation.  The generic interpreter's call to
-    the helper is untouched -- only the copy used for template-building is
-    affected.
-    """
+    """Mark a helper to be inlined into the PE entry graph at PE time,
+    leaving the interpreter's own call to it untouched."""
     func._pe_residualize_ = True
     return func

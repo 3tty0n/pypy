@@ -293,8 +293,6 @@ class WarmRunnerDesc(object):
             for jd in self.jitdrivers_sd:
                 lowered = pe_linked_setup(self.codewriter, jd, translator)
                 if lowered is not None:
-                    # One portal may carry several linked programs, one per
-                    # code object the offline PE was given.
                     if isinstance(lowered, list):
                         pe_linked_programs.extend(lowered)
                     else:
@@ -304,25 +302,16 @@ class WarmRunnerDesc(object):
             lowered.jitcode.index = len(jitcodes)
             jitcodes.append(lowered.jitcode)
         if pe_jitcode_setup is not None:
-            # Must run before finish_setup() snapshots this table into
-            # blackholeinterpbuilder; growing it after has nothing to fold.
+            # Must run before finish_setup() snapshots blackholeinterpbuilder.
             assert not hasattr(self.metainterp_sd, 'blackholeinterpbuilder')
             for jd in self.jitdrivers_sd:
                 pe_jitcode_setup(jd.mainjitcode)
-        # jd.mainjitcode now exists for every jitdriver (grab_initial_jitcodes()
-        # inside make_jitcodes() above sets it unconditionally), so its
-        # pe_metadata -- present only when an offline PE program was linked --
-        # can be read now to tell maybe_compile_and_run() (warmstate.py) which
-        # greens identify "the method" and "the pc" for pe_bailout_point tick
-        # suppression.
         for jd in self.jitdrivers_sd:
             jd.warmstate.pe_suppress_greenref_index = (
                 self._pe_suppress_greenref_index(jd))
             jd.warmstate.pe_suppress_greenint_index = (
                 self._pe_suppress_greenint_index(jd))
         self.metainterp_sd.jitcodes = jitcodes
-        # Pass a plain int, not the metainterp_sd instance: see
-        # jitcode.py's module comment on the old _late_metainterp_sd holder.
         from rpython.jit.codewriter.jitcode import set_late_jitcode_base
         set_late_jitcode_base(len(jitcodes))
         self.rewrite_can_enter_jits()
@@ -729,20 +718,7 @@ class WarmRunnerDesc(object):
             [llmemory.GCREF, llmemory.GCREF], ASMRESTYPE))
 
     def _pe_suppress_greenref_index(self, jd):
-        """Which green of jd is "the method", for pe_bailout_point tick
-        suppression (see warmstate.maybe_compile_and_run) -- as a position
-        among jd's green REF args only, because that is how both
-        ContinueRunningNormally (jitexc.py) and maybe_compile_and_run's
-        greenargs split greens by kind.
-
-        Derived from PELinkedProgram.guard_ref_index (jit/codewriter/
-        jitcode.py), which indexes all greens and is uniform across every
-        program of one driver.  Returns -1 -- "suppress nothing", see
-        warmstate.py -- when there is no offline-PE linked program, no
-        guard_ref_index, or the guarded green is not ref-kind (an all-int
-        greenkey jitdriver has no green that can name "the method" this
-        way).
-        """
+        """Position of "the method" green among jd's REF greens, or -1."""
         metadata = jd.mainjitcode.pe_metadata
         if metadata is None:
             return -1
@@ -758,15 +734,7 @@ class WarmRunnerDesc(object):
                     if history.getkind(T) == 'ref'])
 
     def _pe_suppress_greenint_index(self, jd):
-        """Which green of jd is "the pc", for pe_bailout_point tick
-        suppression (see warmstate.pe_tick_suppressed) -- as a position
-        among jd's green INT args only, mirroring
-        _pe_suppress_greenref_index above but for guard_pc_index instead of
-        guard_ref_index (also uniform across every program of one driver).
-        Returns -1 -- "no pc green identified", see warmstate.py -- when
-        there is no offline-PE linked program, no guard_pc_index, or the
-        guarded green is not int-kind.
-        """
+        """Position of "the pc" green among jd's INT greens, or -1."""
         metadata = jd.mainjitcode.pe_metadata
         if metadata is None:
             return -1
@@ -1070,31 +1038,11 @@ class WarmRunnerDesc(object):
                         x = getattr(e, attrname)[count]
                         x = specialize_value(ARGTYPE, x)
                         args = args + (x,)
-                    # A ContinueRunningNormallyNoTick (subclass, checked
-                    # first) is a pe_bailout_point re-entry: it must be
-                    # exactly as counter-invisible as the blackhole run it
-                    # shortcuts.  state.pe_suppress_ticks marks the whole
-                    # re-entered tail as that window; within it,
-                    # pe_tick_suppressed() (warmstate.py) decides per
-                    # greenkey whether ticking it would duplicate a residual
-                    # loop a linked program already provides -- not simply
-                    # every greenkey in the window (measured: that delays
-                    # unrelated methods, e.g. quicksort), and not only the
-                    # bailing method's own greenkey either (measured: that
-                    # lets OTHER linked methods' mid-pc keys in the tail
-                    # duplicate loops, e.g. towers). It is a
-                    # WarmEnterState-level flag, not scoped to this call, so
-                    # nested portal calls made from within the replay are in
-                    # the window too -- intentional, the whole re-entered
-                    # tail is one bailout's bookkeeping-invisible shortcut.
-                    # It is cleared in the 'finally' below on every exit
-                    # from this replay, including via the 'continue' on a
-                    # further JitException, so it can never leak into an
-                    # unrelated later portal entry.
-                    # ponytail: single-threaded assumption (a global flag
-                    # on the warmstate, not a per-call one); revisit if the
-                    # portal runner ever becomes re-entrant across threads.
-                    no_tick = isinstance(e, jitexc.ContinueRunningNormallyNoTick)
+                    # ContinueRunningNormallyNoTick: a pe_bailout_point
+                    # re-entry, must stay as counter-invisible as the
+                    # blackhole run it shortcuts (see pe_tick_suppressed).
+                    no_tick = isinstance(
+                        e, jitexc.ContinueRunningNormallyNoTick)
                     if no_tick:
                         state.pe_suppress_ticks = True
                     try:

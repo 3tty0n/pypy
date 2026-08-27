@@ -1101,26 +1101,14 @@ class BlackholeInterpreter(object):
                 self.bhimpl_float_return(x)
             assert False
 
-    # pe_bailout_point is a no-op while tracing (see opimpl_pe_bailout_point
-    # in pyjitpl.py). In the blackhole interpreter it lets a residual
-    # (offline PE) jitcode bail out cheaply at a block boundary instead of
-    # being interpreted all the way to the next real merge point. It is
-    # almost bhimpl_jit_merge_point, except that the last-level bailout
-    # (the common case: falling off the end of blackholing straight back
-    # to the real interpreter) must be exactly as counter-invisible as the
-    # blackhole run it shortcuts -- so it raises the no-tick variant,
-    # which the portal_runner catch site in warmspot.py recognizes and
-    # replays without ticking any warmup counters.
+    # Like bhimpl_jit_merge_point, but the last-level bailout must stay as
+    # counter-invisible as the blackhole run it shortcuts, hence no-tick.
     @arguments("self", "i", "I", "R", "F", "I", "R", "F")
     def bhimpl_pe_bailout_point(self, jdindex, *args):
         if self.nextblackholeinterp is None:    # we are the last level
             raise jitexc.ContinueRunningNormallyNoTick(*args)
         else:
-            # This occurs when we reach 'pe_bailout_point' in the portal
-            # function called by recursion (an inlined level). Unlike the
-            # last-level case above, this nested-level bailout still
-            # ticks like a normal jit_merge_point: it is a known,
-            # already-measured second-order effect, out of scope here.
+            # Nested-level bailout: ticks normally, unlike the last level.
             sd = self.builder.metainterp_sd
             result_type = sd.jitdrivers_sd[jdindex].result_type
             if result_type == 'v':

@@ -62,12 +62,7 @@ FASTPATHS_SAME_BOXES = {
     "ge": "history.CONST_TRUE",
 }
 
-# [generic, residual]: how many jitcode instructions the meta-interpreter
-# ran while tracing.  ``ops`` counts only what execute_and_record saw, which
-# leaves out exactly the work a residual program adds -- constant loads,
-# register copies, labels and liveness records.
-# A holder instance, not a list: a prebuilt list seeded at translation time
-# folds to its literal contents, so every read would report the seed.
+# Holder, not a list: a prebuilt list folds to its translation-time seed.
 class _PEInsnCounts(object):
     generic = 0
     portal = 0
@@ -92,9 +87,7 @@ class MIFrame(object):
         assert isinstance(jitcode, JitCode)
         self.jitcode = jitcode
         self.bytecode = jitcode.code
-        # Resolved once here rather than on every goto: which position, if
-        # any, this frame should read as an offline-linked loop's back edge.
-        # -1 never equals a real target, so the check below costs one compare.
+        # -1 (never a real target) if this jitcode has no linked loop.
         self.pe_loop_header = jitcode.pe_loop_header_position()
         # this is not None for frames that are recursive portal calls
         self.greenkey = greenkey
@@ -1152,7 +1145,8 @@ class MIFrame(object):
                     if f.greenkey is not None and f.jitcode.jitdriver_sd:
                         loc = f.jitcode.jitdriver_sd.warmstate.get_location_str(
                             f.greenkey)
-                debug_print("force quasi-immut", mutatefielddescr.repr_of_descr(),
+                debug_print("force quasi-immut",
+                            mutatefielddescr.repr_of_descr(),
                             "in", self.jitcode.name, "portal", loc)
             debug_stop("jit-quasiimmut-abort")
             do_force_quasi_immutable(self.metainterp.cpu, box.getref_base(),
@@ -1426,11 +1420,6 @@ class MIFrame(object):
         warmrunnerstate = targetjitdriver_sd.warmstate
         assembler_call = False
         if warmrunnerstate.inlining:
-            # can_inline_callable(), not a size threshold, decides call
-            # vs. inline: always-inline and always-call callees interleave
-            # in size, so no single cutoff separates them. It goes
-            # permanently False for a greenkey once dont_trace_here() has
-            # fired for it (mark_linked_callees_dont_trace(), on abort).
             portal_code = targetjitdriver_sd.mainjitcode
             metadata = portal_code.pe_metadata
             program = None
@@ -1440,27 +1429,16 @@ class MIFrame(object):
             if program is not None:
                 ptoken = self.metainterp.get_procedure_token(
                     greenboxes, targetjitdriver_sd)
-            # A loop-less (pure-recursion, no backward jump) callee compiles
-            # as an "entry bridge": ResumeFromInterpDescr.compile_and_attach
-            # (compile.py) attaches a real, callable procedure_token to the
-            # cell, but never sets its target_tokens -- that list is loop
-            # metadata for retracing/bridging into a LABEL, which an entry
-            # bridge doesn't have.  has_compiled_targets() (which checks
-            # target_tokens) is right for its other callers, who need an
-            # actual loop to jump back into, but wrong here: what matters
-            # for CALL_ASSEMBLER is only that a procedure_token exists --
-            # send_loop_to_backend() already ran and set its
-            # compiled_loop_token before attach_procedure_to_interp() made
-            # the cell reachable, for both loops and entry bridges alike.
-            # pe_call_threshold: a compiled callee program at least this
-            # large is called rather than re-inlined -- when it has loops
-            # of its own, or when this trace is a guard bridge.  Inlining
-            # into a loop/entry body costs one tracing of the callee, into
-            # bridges one per bridge of the caller (html5lib: +190); a
-            # loop-bearing callee brings its loops along wherever it goes
-            # (eparse: +35% warmup).  A loop-less callee inlined into a
-            # body keeps its frame virtual, which CALL_ASSEMBLER forces
-            # (raytrace: +24% steady).  Threshold 0 means always call.
+            # A loop-less callee compiles as an "entry bridge": it gets a
+            # procedure_token but no target_tokens (loop-jump metadata),
+            # so has_compiled_targets() is wrong here; a procedure_token
+            # existing is enough for CALL_ASSEMBLER.
+            # pe_call_threshold: call rather than re-inline a compiled
+            # callee at least this large, when it has its own loops or
+            # this trace is a guard bridge (inlining a loop-bearing
+            # callee brings its loops along everywhere it's inlined;
+            # inlining into bridges costs once per bridge).  0 = always
+            # call.
             threshold = warmrunnerstate.pe_call_threshold
             in_bridge = isinstance(self.metainterp.resumekey,
                                    compile.ResumeGuardDescr)
@@ -1470,11 +1448,6 @@ class MIFrame(object):
             already_compiled = ptoken is not None and (
                 big or not warmrunnerstate.can_inline_callable(greenboxes))
             if already_compiled:
-                # the linked program already has compiled machine code:
-                # call it via CALL_ASSEMBLER instead of re-inlining/
-                # re-tracing the whole recursion tree from this sibling
-                # root (avoids compiling several overlapping copies of the
-                # same recursion tree).
                 if have_debug_prints():
                     debug_start("jit-pe-asmcall")
                     loc = targetjitdriver_sd.warmstate.get_location_str(
@@ -1483,10 +1456,7 @@ class MIFrame(object):
                                program.code_size)
                     debug_stop("jit-pe-asmcall")
             elif big:
-                # A big callee program not compiled yet: inlining it here
-                # would only pay its tracing cost into this trace; have it
-                # traced from its own entry instead and call it (a temporary
-                # callback until then), as for any dont_trace_here callee.
+                # Not compiled yet: trace it from its own entry instead.
                 warmrunnerstate.dont_trace_here(greenboxes)
             elif warmrunnerstate.can_inline_callable(greenboxes):
                 # We've found a potentially inlinable function; now we need to
@@ -1497,7 +1467,8 @@ class MIFrame(object):
                 count = 0
                 for f in self.metainterp.framestack:
                     if f.jitcode is not portal_code:
-                        if metadata is None or not metadata.is_linked_jitcode(f.jitcode):
+                        if (metadata is None or
+                                not metadata.is_linked_jitcode(f.jitcode)):
                             continue
                     gk = f.greenkey
                     if gk is None:
@@ -1524,11 +1495,7 @@ class MIFrame(object):
                     return self.metainterp.perform_call(portal_code, allboxes,
                                 greenkey=greenboxes)
                 else:
-                    # program matched, but either the cell has no
-                    # procedure_token at all yet (neither a loop nor an
-                    # entry bridge has been compiled for it), or it does
-                    # but the program is smaller than pe_call_threshold:
-                    # inline its residual jitcode into this trace.
+                    # A linked program below threshold: inline it.
                     if have_debug_prints():
                         debug_start("jit-pe-asmcall")
                         loc = targetjitdriver_sd.warmstate.get_location_str(
@@ -1740,15 +1707,7 @@ class MIFrame(object):
     @arguments("int", "boxes3", "jitcode_position", "boxes3", "orgpc")
     def opimpl_pe_bailout_point(self, jdindex, greenboxes,
                                 jcposition, redboxes, orgpc):
-        # Complete no-op while tracing.  pe_bailout_point exists only so
-        # that the *blackhole* interpreter has a cheap place to bail out
-        # of a residual (offline PE) jitcode at every block boundary,
-        # instead of running all the way to the next real jit_merge_point
-        # (which, in a residual jitcode, may be a whole method away).
-        # Unlike opimpl_jit_merge_point above, it never closes or merges a
-        # loop and never triggers a recursive portal call here -- see
-        # bhimpl_pe_bailout_point in blackhole.py for the part of its
-        # behaviour that actually does something.
+        # No-op while tracing; see bhimpl_pe_bailout_point in blackhole.py.
         pass
 
     def debug_merge_point(self, jitdriver_sd, jd_index, portal_call_depth, current_call_id, greenkey):
@@ -2595,11 +2554,7 @@ def get_pe_trace_start_position(jitcode):
     if metadata is None:
         return 0
     if metadata.is_linked_jitcode(jitcode):
-        # A linked JitCode has a small entry wrapper at bytecode position 0
-        # which loads late-static constants and moves portal arguments into
-        # the registers expected by the first specialized block.  Starting at
-        # that block's label would bypass those moves and leave registers
-        # uninitialized.  Backedges still target the block label directly.
+        # Entry wrapper at position 0 sets up late-static constants/args.
         return 0
     entry_pc = metadata.entry_pc
     if not metadata.is_loop_header(entry_pc):
@@ -2670,10 +2625,8 @@ class MetaInterp(object):
         if jitcode.jitdriver_sd:
             self.portal_call_depth += 1
             self.call_ids.append(self.current_call_id)
-            # A linked jitcode's frame is inlined code for the same SOM
-            # activation the interpreter's own portal frame already
-            # tracks; skip the debug-only ENTER_PORTAL_FRAME to avoid
-            # double frame bookkeeping.
+            # A linked jitcode's frame shares its portal's already-tracked
+            # activation; skip the debug-only ENTER_PORTAL_FRAME.
             if greenkey is not None and not jitcode.pe_is_linked:
                 unique_id = jitcode.jitdriver_sd.warmstate.get_unique_id(
                     greenkey)
@@ -2788,17 +2741,10 @@ class MetaInterp(object):
             lltype.cast_opaque_ptr(llmemory.GCREF, excvalue))
 
     def pe_recover_in_trace(self):
-        """A guest exception escaped the trace's root linked program.
-
-        A linked program stands in for the whole portal, so the portal's
-        own handler search never ran.  Instead of leaving the trace with
-        the exception (after which the interpreter would have to force the
-        virtualizable to search), continue tracing into the interpreter's
-        recovery function, which searches and calls the portal at the
-        handler's pc; pe_tail_enter_root turns that call into re-entering
-        the root there, at this same level -- so the search is part of the
-        trace, as it is for the generic portal.
-        """
+        """A guest exception escaped the trace's root linked program:
+        continue tracing into the interpreter's handler-search function
+        instead of leaving the trace (pe_tail_enter_root re-enters the
+        root at the handler's pc once it calls the portal back)."""
         jd = self.jitdriver_sd
         jitcode = jd.pe_recover_jitcode
         if jitcode is None or jd.virtualizable_info is None:
@@ -2817,13 +2763,8 @@ class MetaInterp(object):
         return True
 
     def pe_resuming_root(self, targetjitdriver_sd, redboxes):
-        """Is this a call of the portal on the trace's own virtualizable?
-
-        Only pe_resume makes one (a frame cannot otherwise re-enter its
-        own portal while it runs), and it is never a nested call: the
-        root continues at the handler's pc.  The handler search itself,
-        and a nested frame's own recovery, call the portal on other frames.
-        """
+        """Is this pe_resume calling the portal on the trace's own
+        virtualizable (the root continuing at the handler's pc)?"""
         jd = self.jitdriver_sd
         if jd.pe_resume_jitcode is None or not self.framestack:
             return False
@@ -3177,7 +3118,8 @@ class MetaInterp(object):
                         "from_start", from_start, "length", length)
             if self.current_merge_points:
                 jd_sd = self.jitdriver_sd
-                greenkey = self.current_merge_points[0][0][:jd_sd.num_green_args]
+                greenkey = self.current_merge_points[0][0][
+                    :jd_sd.num_green_args]
                 loc = jd_sd.warmstate.get_location_str(greenkey)
                 debug_print("abort too long greenkey", loc)
             debug_stop("jit-segment-decision")
