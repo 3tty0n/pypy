@@ -693,6 +693,13 @@ def _operand(jitcode, kind, index):
     return "$f%d" % (index - jitcode.num_regs_f())
 
 
+def _pad5(n):
+    s = str(n)
+    while len(s) < 5:
+        s = " " + s
+    return s
+
+
 def _dump_jitcode(jitcode, metainterp_sd):
     from rpython.rlib.debug import debug_print
     from rpython.jit.metainterp.blackhole import signedord
@@ -713,10 +720,11 @@ def _dump_jitcode(jitcode, metainterp_sd):
         if opcode == metainterp_sd.op_live:
             offset = ord(code[pos]) | (ord(code[pos + 1]) << 8)
             pos += 2
-            debug_print("%5d: -live- @%d" % (start, offset))
+            debug_print("%s: -live- @%d" % (_pad5(start), offset))
             continue
         key = names[opcode]
         slash = key.find('/')
+        assert slash >= 0
         name = key[:slash]
         argcodes = key[slash + 1:]
         parts = []
@@ -759,4 +767,4 @@ def _dump_jitcode(jitcode, metainterp_sd):
             else:
                 parts.append("?" + c)
             i += 1
-        debug_print("%5d: %s %s" % (start, name, " ".join(parts)))
+        debug_print("%s: %s %s" % (_pad5(start), name, " ".join(parts)))
