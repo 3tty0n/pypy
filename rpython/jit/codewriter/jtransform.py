@@ -85,8 +85,7 @@ class Transformer(object):
                 return
             renamings[var] = var_or_const
             if isinstance(var_or_const, Constant):
-                # HoleConstant is a sentinel, not real data -- don't cast it,
-                # re-type it instead so it stays patchable later.
+                # HoleConstant is a sentinel: re-type it, don't cast it.
                 from rpython.translator.backendopt.jitcode_emitter import (
                     HoleConstant)
                 if isinstance(var_or_const, HoleConstant):
@@ -1720,8 +1719,7 @@ class Transformer(object):
         return ops + [op3, op1, op2]
 
     def handle_jit_marker__pe_bailout_point(self, op, jitdriver):
-        # No promote_greens/-live-: unlike jit_merge_point, this takes no
-        # action while tracing, so reds may already be Constants here.
+        # Unlike jit_merge_point, no action while tracing: reds may be Consts.
         assert self.portal_jd is not None, (
             "'pe_bailout_point' in non-portal graph!")
         assert jitdriver is self.portal_jd.jitdriver, (

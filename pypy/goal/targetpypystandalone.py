@@ -378,9 +378,8 @@ class PyPyTarget(object):
         from pypy.module.pypyjit.policy import PyPyJitPolicy
         from pypy.module.pypyjit.hooks import pypy_hooks
 
-        # PYPY_PE_REPORT lists, on stdout, the opcodes the partial evaluator
-        # could not build a residual template for.  It installs nothing: the
-        # point is to learn what is specializable before wiring cogen up.
+        # PYPY_PE_REPORT: report which opcodes lack a residual template,
+        # without installing anything.
         if os.environ.get('PYPY_PE_REPORT'):
             from pypy.interpreter import pe_offline
 
@@ -398,8 +397,7 @@ class PyPyTarget(object):
 
             driver.translator._pe_linked_setup = report
 
-        # PYPY_PE_COGEN wires runtime cogen: on a trace-start miss the portal
-        # generates a residual program for the live code object.
+        # PYPY_PE_COGEN: generate a residual program on a trace-start miss.
         elif os.environ.get('PYPY_PE_COGEN'):
             from pypy.interpreter import pe_offline
             def install(codewriter, jitdriver_sd, translator):

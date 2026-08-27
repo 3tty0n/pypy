@@ -100,7 +100,6 @@ class Assembler(object):
 
     def setup(self, name):
         self.code = []
-        # Split by kind: a dict keyed by mixed int/ref/float isn't RPython.
         self.constants_dict_i = {}    # int value -> index
         # rd_hash asserts on a null ref, so it's tracked separately below.
         self.constants_dict_r = new_ref_dict()
@@ -135,8 +134,7 @@ class Assembler(object):
                                      allow_short=allow_short)
 
     def emit_const_value(self, value, concretetype, kind, allow_short=False):
-        # Pre-cast value: a cast like adr2int rewraps each call, so a
-        # post-cast key would miss real repeats.
+        # Pre-cast: a post-cast key would miss repeats (adr2int rewraps).
         dedup_key = value
         if kind == 'int':
             TYPE = concretetype
@@ -335,7 +333,6 @@ class Assembler(object):
 
     def _encode_liveness(self, live_i, live_r, live_f):
         from rpython.jit.codewriter.liveness import encode_offset, encode_liveness
-        # frozenset() isn't RPython-legal; sorted+joined chars sub for it.
         sorted_i = _sorted_chars(live_i)
         sorted_r = _sorted_chars(live_r)
         sorted_f = _sorted_chars(live_f)
@@ -371,8 +368,7 @@ class Assembler(object):
             descr.attach(as_dict)
 
     def check_result(self):
-        # AssemblerError, not assert: a large method can hit this, and
-        # a caller may want to catch and decline rather than abort.
+        # AssemblerError, not assert: a caller may catch and decline.
         if self.count_regs['int'] + len(self.constants_i) > 256:
             raise AssemblerError("too many int registers/constants")
         if self.count_regs['ref'] + len(self.constants_r) > 256:
@@ -381,8 +377,7 @@ class Assembler(object):
             raise AssemblerError("too many float registers/constants")
 
     def make_jitcode(self, jitcode):
-        # Fixed-size copy: constants_i/r/f's ListItem is shared across
-        # every JitCode, so one resized list taints them all.
+        # Fixed-size copy: a resized constants list taints every JitCode.
         jitcode.setup(''.join(self.code),
                       _fixed_size_copy(self.constants_i, JitCode._empty_i),
                       _fixed_size_copy(self.constants_r, JitCode._empty_r),
@@ -423,7 +418,6 @@ class Assembler(object):
 # Allowing it anywhere causes the number of instruction variants to
 # expode, growing past 256.  So we list here only the most common
 # instructions where the 'c' variant might be useful.
-# dict.fromkeys, not set(): no RPython set type for a prebuilt module global.
 USE_C_FORM = dict.fromkeys([
     'copystrcontent',
     'getarrayitem_gc_pure_i',
