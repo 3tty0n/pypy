@@ -1,11 +1,4 @@
-"""Differential test: compute_liveness_native's bitmap-backed algorithm
-must produce byte-relevant-identical output to the old dict-keyed "rerun
-full list until no label grows" algorithm it replaced.
-
-Keeps a self-contained copy of the OLD algorithm (not reusing anything
-from native_pipeline.py's fixpoint code) so a future edit to the new
-algorithm can't silently drag this comparison along with it.
-"""
+"""Differential test: bitmap liveness must match the old dict-keyed algo."""
 
 import random
 
@@ -16,11 +9,7 @@ from rpython.translator.backendopt.native_pipeline import (
     NativeSwitchDictDescr, _remove_repeated_live_native)
 
 
-# ____________________________________________________________
-# Self-contained copy of the algorithm being replaced (pre-worklist port
-# of codewriter/liveness.py): rerun one full backward pass over the
-# WHOLE insn list, rewriting every '-live-' insn every pass, until no
-# label2alive set grows anymore.
+# Self-contained copy: an edit to the new algorithm can't drag this along.
 
 def _old_follow_label(label_id, label2alive, alive):
     alive_at_point = label2alive.get(label_id)
@@ -89,14 +78,7 @@ def old_compute_liveness_native(insns):
     return passes
 
 
-# ____________________________________________________________
-# Synthetic-program builder: a tiny DSL so test cases read as segment
-# lists instead of hand-written NativeInsn soup.
-#
-# ops: ('label', name) ('def', regname) ('use', regname)
-#      ('live', [('reg', name) | ('label', name), ...])
-#      ('goto', name) ('switch', regname, [(key, name), ...])
-#      ('return', [regname]?)
+# Synthetic-program builder: a tiny op-list DSL for segment-list tests.
 
 def _get_reg(reg_cache, name):
     reg = reg_cache.get(name)
@@ -146,8 +128,7 @@ def _make_insn(op, reg_cache, label_cache):
 
 
 def build_program(segments):
-    """segments: list of list-of-ops. Every segment gets its own leading
-    '---', mirroring emit_native's placement of each block/fragment."""
+    """Every segment gets its own leading '---', like emit_native does."""
     reg_cache = {}
     label_cache = {}
     insns = []
@@ -158,11 +139,7 @@ def build_program(segments):
     return insns
 
 
-# ____________________________________________________________
-# Structural comparison: what actually has to match for byte identity
-# (see native_pipeline.py's compute_liveness_native docstring) -- (kind,
-# index) content of registers and label_id of labels, not object nid,
-# which is meaningless across two independently-built programs.
+# Structural comparison by (kind, index)/label_id, not meaningless nid.
 
 def _operand_key(x):
     if isinstance(x, NReg):
@@ -209,10 +186,6 @@ def _check(segments):
     return old_insns, new_insns
 
 
-# ____________________________________________________________
-# Hand-built shapes: diamond, loop (inter- and intra-segment), switch,
-# barriers, and a plain straight-line chain.
-
 def test_straight_chain():
     _check([
         [("label", "a"), ("def", "x")],
@@ -234,8 +207,7 @@ def test_diamond():
 
 
 def test_loop_across_segments():
-    """Back-edge crossing a '---' boundary -- the classic one-hop-per-old-
-    pass scenario."""
+    """Back-edge crossing a '---' boundary."""
     _check([
         [("label", "header"), ("live", [("reg", "acc")]), ("goto", "body")],
         [("label", "body"), ("def", "tmp"), ("use", "tmp"),
@@ -245,8 +217,7 @@ def test_loop_across_segments():
 
 
 def test_loop_inside_one_segment():
-    """Back-edge with no '---' in between -- one segment must revisit
-    itself via the worklist's self-reenqueue path to converge."""
+    """Back-edge with no '---' in between; one segment revisits itself."""
     _check([
         [("label", "L1"), ("use", "a"), ("goto", "L2"),
          ("label", "L2"), ("use", "b"), ("goto", "L1")],
@@ -267,8 +238,7 @@ def test_switch_multi_target():
 
 
 def test_repeated_barriers_no_flow_across():
-    """Segments never leak liveness through '---' by textual adjacency --
-    only explicit label edges may."""
+    """Segments never leak liveness across '---' except via labels."""
     _check([
         [("def", "x"), ("use", "x")],
         [("def", "y"), ("use", "y")],
@@ -277,7 +247,6 @@ def test_repeated_barriers_no_flow_across():
 
 
 def test_forced_live_register_never_used_elsewhere():
-    """A '-live-' can force a register alive that nothing else reads."""
     _check([
         [("label", "a"), ("def", "lonely"),
          ("live", [("reg", "lonely")]), ("goto", "b")],
@@ -296,9 +265,7 @@ def test_diamond_with_nested_loop():
     ])
 
 
-# ____________________________________________________________
-# Randomized differential fuzzing: many small programs with branchy/loopy
-# label graphs, forward and backward edges, mixed goto/switch/-live-.
+# Randomized differential fuzzing: branchy/loopy label graphs.
 
 def _random_segments(rng, num_segments, num_regs):
     names = ["r%d" % i for i in range(num_regs)]
@@ -319,10 +286,10 @@ def _random_segments(rng, num_segments, num_regs):
             ops.append(("live", live_operands))
         kind = rng.random()
         if kind < 0.4:
-            # goto: may jump forward or backward -- both matter.
             ops.append(("goto", rng.choice(labels)))
         elif kind < 0.7:
-            targets = [(k, rng.choice(labels)) for k in range(rng.randint(1, 3))]
+            n = rng.randint(1, 3)
+            targets = [(k, rng.choice(labels)) for k in range(n)]
             ops.append(("switch", rng.choice(names), targets))
         else:
             ops.append(("return",))
@@ -339,16 +306,10 @@ def test_random_differential():
         _check(segments)
 
 
-# ____________________________________________________________
-# Scaling sanity check: a chain of ~200 labels, each depending on the
-# previous one via a backward (lower-index) reference -- the shape that
-# forces the old algorithm to need one full-list pass per hop.
+# Scaling check: a chain forcing the old algorithm one pass per hop.
 
 def _make_chain_segments(k):
-    # 'live' before any 'def' of the same register: backward-scanning a
-    # 'def' kills what a later-in-list (earlier-processed) 'live' just
-    # forced alive, so the def must not sit between the label and the
-    # live-point or label2alive[L0] would stay empty.
+    # 'live' before 'def': a backward scan would otherwise kill L0's set.
     segments = [[("label", "L0"), ("live", [("reg", "base")])]]
     for i in range(1, k):
         segments.append([
@@ -364,15 +325,13 @@ def _make_chain_segments(k):
 
 
 def test_old_algorithm_passes_scale_with_chain_length():
-    """Not a timing assert: counts old full-list passes directly, showing
-    they grow with chain depth (the O(B) problem this task fixes)."""
+    """Counts old full-list passes, showing they grow with chain depth."""
     passes_by_k = {}
     for k in (10, 40, 80):
         segments = _make_chain_segments(k)
         insns = build_program(segments)
         passes = old_compute_liveness_native(insns)
         passes_by_k[k] = passes
-    # each extra hop needs (at most) one extra old-style pass
     assert passes_by_k[40] > passes_by_k[10]
     assert passes_by_k[80] > passes_by_k[40]
     # roughly linear in chain length, not O(1)/O(log)
@@ -380,16 +339,7 @@ def test_old_algorithm_passes_scale_with_chain_length():
 
 
 def test_new_round_counts_scale_with_chain_length():
-    """'rounds' no longer means the same thing as the old algorithm's pass
-    count: the segment worklist (native_pipeline.py's _converge_liveness_
-    native) reprocesses individual segments, not the whole insn list, so
-    a 'round' is one segment (re)processing, and there is no reason for
-    that count to match the old whole-list-pass count one for one (see
-    old_compute_liveness_native above for that algorithm). What must
-    still hold, the same shape as
-    test_old_algorithm_passes_scale_with_chain_length below: more chain
-    depth means more reprocessing, not a constant.
-    """
+    """A 'round' is one segment reprocessing; must grow with depth."""
     rounds_by_k = {}
     for k in (10, 40, 80):
         segments = _make_chain_segments(k)
@@ -400,16 +350,7 @@ def test_new_round_counts_scale_with_chain_length():
 
 
 def test_distinct_nids_sharing_kind_index_stay_byte_safe():
-    """Regression for the hazard the bitmap redesign had to avoid: two
-    DIFFERENT NReg objects (distinct nid) that happen to share (kind,
-    index) -- exactly what native_fragments.py's per-fragment register
-    numbering and emit_native's fresh-per-placement scratch/prologue
-    registers produce throughout a real program. The bitmap must key by
-    nid (keeping them distinct through the computation, like the dict
-    algorithm), but the assembled bytes only care about the resulting
-    (kind, index) *set*, so both objects appearing in one -live- set
-    must still compare byte-safe.
-    """
+    """Two distinct NReg objects sharing (kind, index) must stay byte-safe."""
     def build():
         a = NReg("int", 0)   # distinct nid, same (kind, index) as b
         b = NReg("int", 0)
@@ -429,5 +370,4 @@ def test_distinct_nids_sharing_kind_index_stay_byte_safe():
 
 
 def test_chain_still_byte_identical_to_old():
-    """The scaling shape itself must still produce identical output."""
     _check(_make_chain_segments(30))

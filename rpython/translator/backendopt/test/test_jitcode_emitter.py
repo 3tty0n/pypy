@@ -42,8 +42,7 @@ def test_concatenated_fragments_assemble_into_one_jitcode():
     program, emitter, jitcode, entry_positions = emit(code)
 
     assert set(entry_positions) == set(program.blocks)
-    # The entry block leads, so no prologue goto sits on the entry position --
-    # the metainterp reads a jump there as a back edge.
+    # The entry block leads: a jump there would read as a back edge.
     assert entry_positions[program.entry_pc] == 0
 
     dump = jitcode.dump()
@@ -302,14 +301,7 @@ def test_precompile_fragments_skips_untemplated_opcodes():
 
 
 def test_emitting_for_a_portal_requires_merge_point_arguments():
-    """The invariant the PySOM path depends on.
-
-    Without a jit_merge_point the metainterp has to recognise the loop's back
-    edge by position, and read a -live- record immediately before it -- which
-    cannot be placed, because the assembler hoists a label above a -live- that
-    follows it.  Better to say so than to emit a program that installs and then
-    crashes on its first guard.
-    """
+    """Without jit_merge_point_args, a -live- can't precede the back edge."""
     import py
 
     code = chr(OP_DEC_JUMP) + chr(0) + chr(OP_HALT) + chr(0)
@@ -389,7 +381,7 @@ def test_the_interpreter_decides_what_is_worth_linking():
 
 
 def test_the_merge_point_binds_the_driver_to_its_function():
-    """The declaration reaches the evaluator from the call site, as JitDriver's does."""
+    """The declaration reaches the evaluator from the call site."""
     from rpython.rlib.pe import PEDriver
 
     driver = PEDriver(static="opcode", split="pc", min_size=2)

@@ -12,9 +12,7 @@ from rpython.translator.backendopt.native_pipeline import (
 
 
 def emit_and_assemble_native_unoptimised(*args, **kwds):
-    """The gate checks that this pipeline lowers a program exactly as the
-    translation-time one does, which is about the lowering; what the runtime
-    path folds afterwards has its own test."""
+    """The gate checks lowering only; folding has its own test."""
     kwds["optimise"] = False
     return emit_and_assemble_native(*args, **kwds)
 from rpython.translator.backendopt.test.test_partialeval_template_lowering \
@@ -59,8 +57,9 @@ def test_toy_program_byte_identical():
     original_jitcode, original_positions = emitter.emit(program, "orig")
 
     native_table = build_native_table(emitter._fragments)
-    native_jitcode, native_positions, _asm = emit_and_assemble_native_unoptimised(
-        native_table, program, "native", has_merge_points=False)
+    native_jitcode, native_positions, _asm = \
+        emit_and_assemble_native_unoptimised(
+            native_table, program, "native", has_merge_points=False)
 
     assert native_jitcode.code == original_jitcode.code
     assert native_jitcode.constants_i == original_jitcode.constants_i
@@ -101,7 +100,8 @@ def test_toy_program_with_shared_calldescr_byte_identical():
     extension = GeneratingExtension.from_step_function(
         translator, step, [OP_ADD, OP_HALT], byte_pair_decoder)
     program = extension.generate(code)
-    codewriter = CodeWriter(FakeCPU(translator.rtyper), [FakeJitDriverSD(graph)])
+    codewriter = CodeWriter(
+        FakeCPU(translator.rtyper), [FakeJitDriverSD(graph)])
     codewriter.find_all_graphs(NoInlinePolicy())
     emitter = ProgramEmitter(codewriter, None, "opcode", ("pc",),
                              ("pc", "oparg", "code"), ("value",))
@@ -110,8 +110,9 @@ def test_toy_program_with_shared_calldescr_byte_identical():
     original_jitcode, original_positions = emitter.emit(program, "orig-add")
 
     native_table = build_native_table(emitter._fragments)
-    native_jitcode, native_positions, _asm = emit_and_assemble_native_unoptimised(
-        native_table, program, "native-add", has_merge_points=False)
+    native_jitcode, native_positions, _asm = \
+        emit_and_assemble_native_unoptimised(
+            native_table, program, "native-add", has_merge_points=False)
 
     assert native_jitcode.code == original_jitcode.code
     assert native_jitcode.constants_i == original_jitcode.constants_i
@@ -137,7 +138,7 @@ def test_stamp_descr_indices_covers_fragment_only_descrs_before_any_assemble():
         if opcode == OP_ADD:
             return pc + 2, helper(value, oparg)
         if opcode == OP_SUB:
-            # Both operands are late-static; RPython cannot fold this away.
+            # Both operands late-static; RPython cannot fold this away.
             return pc + 2, oparg - 5
         return -1, value
 
@@ -155,8 +156,7 @@ def test_stamp_descr_indices_covers_fragment_only_descrs_before_any_assemble():
         translator, step, [OP_ADD, OP_SUB, OP_HALT], byte_pair_decoder)
     program = extension.generate(code)
     jitdriver_sd = FakeJitDriverSD(graph)
-    # handle_jit_marker__pe_bailout_point needs jitdriver.active/.greens
-    # and jitdriver_sd.index.
+    # handle_jit_marker__pe_bailout_point needs .active/.greens/.index.
     class _FakeJitDriver(object):
         active = True
         greens = []
@@ -274,7 +274,8 @@ def test_repeated_helper_call_constants_dedup():
     extension = GeneratingExtension.from_step_function(
         translator, step, [OP_ADD, OP_HALT], byte_pair_decoder)
     program = extension.generate(code)
-    codewriter = CodeWriter(FakeCPU(translator.rtyper), [FakeJitDriverSD(graph)])
+    codewriter = CodeWriter(
+        FakeCPU(translator.rtyper), [FakeJitDriverSD(graph)])
     codewriter.find_all_graphs(NoInlinePolicy())
     emitter = ProgramEmitter(codewriter, None, "opcode", ("pc",),
                              ("pc", "oparg", "code"), ("value",))
@@ -283,8 +284,9 @@ def test_repeated_helper_call_constants_dedup():
     original_jitcode, original_positions = emitter.emit(program, "orig-add-N")
 
     native_table = build_native_table(emitter._fragments)
-    native_jitcode, native_positions, _asm = emit_and_assemble_native_unoptimised(
-        native_table, program, "native-add-N", has_merge_points=False)
+    native_jitcode, native_positions, _asm = \
+        emit_and_assemble_native_unoptimised(
+            native_table, program, "native-add-N", has_merge_points=False)
 
     assert len(original_jitcode.constants_i) == 2
     assert len(native_jitcode.constants_i) == 2
@@ -337,8 +339,9 @@ def test_tla_countdown_byte_identical():
         original_jitcode, original_positions = emitter.emit(program, "orig-tla")
 
         native_table = build_native_table(emitter._fragments)
-        native_jitcode, native_positions, _asm = emit_and_assemble_native_unoptimised(
-            native_table, program, "native-tla", has_merge_points=True)
+        native_jitcode, native_positions, _asm = \
+            emit_and_assemble_native_unoptimised(
+                native_table, program, "native-tla", has_merge_points=True)
 
         captured["original"] = original_jitcode
         captured["original_positions"] = original_positions
@@ -405,8 +408,9 @@ def test_switch_byte_identical():
     original_jitcode, original_positions = emitter.emit(program, "orig-switch")
 
     native_table = build_native_table(emitter._fragments)
-    native_jitcode, native_positions, _asm = emit_and_assemble_native_unoptimised(
-        native_table, program, "native-switch", has_merge_points=False)
+    native_jitcode, native_positions, _asm = \
+        emit_and_assemble_native_unoptimised(
+            native_table, program, "native-switch", has_merge_points=False)
 
     assert native_jitcode.code == original_jitcode.code
     assert native_jitcode.constants_i == original_jitcode.constants_i
@@ -420,9 +424,8 @@ def test_switch_byte_identical():
     assert not hasattr(switchdict, "dict")
 
 
-# late_jitcode .index uniqueness comes from a module-global counter.
-
 def test_register_late_jitcode_twice_via_readonly_native_assembler():
+    """late_jitcode .index uniqueness comes from a module-global counter."""
     from rpython.jit.codewriter.jitcode import (
         register_late_jitcode, get_late_jitcode, set_late_jitcode_base,
         _late_jitcodes_by_index)
@@ -564,21 +567,8 @@ def test_emit_moves_native_order_independent():
                     (shape_name, names, dest, got, want))
 
 
-# ____________________________________________________________
-# Rung A: pycode as a ref-valued hole.
-#
-# A hole bound to the code object itself (cast to a GCREF) rather than to
-# anything the decoder works out per instruction -- see
-# GeneratingExtension.ref_hole_names.  The two things that matter: the
-# stamped-in value must be a well-typed null pointer, not the int
-# HOLE_SENTINEL (jtransform would choke on a Ptr-typed Constant holding an
-# int), and the patched-in constant must reach the assembled jitcode's ref
-# constant pool as the concrete instance -- that's what lets the
-# meta-tracer's ConstPtr pure-folding fire on it at trace time.
-
 def test_operand_argcode_options_and_patch_hole_native_handle_ref_kind():
-    """Unit-level: NHole/_patch_hole_native's ref-kind branch, isolated
-    from the graph/annotator machinery the integration test below drives."""
+    """Unit-level: NHole/_patch_hole_native's ref-kind branch."""
     from rpython.rtyper.lltypesystem import lltype, llmemory
     from rpython.translator.backendopt.native_fragments import NHole, NRefConst
     from rpython.translator.backendopt.native_pipeline import (
@@ -598,8 +588,7 @@ def test_operand_argcode_options_and_patch_hole_native_handle_ref_kind():
 
 
 class RefHoleObj(object):
-    """Stands in for PyCode: an ordinary instance a code-independent hole
-    binds to, not a value the decoder reads out of the bytecode stream."""
+    """Stands in for PyCode: a code-independent hole binds to it directly."""
 
     def __init__(self, bytecode, tag):
         self.bytecode = bytecode
@@ -627,10 +616,7 @@ def interpret_one_ref(opcode, oparg, pc, value, obj):
         if value > 0:
             return oparg, value - 1
         return pc + 2, value
-    # A real use of ``obj`` as a setfield_gc, not a call (the toy codewriter
-    # setup below has no CallControl) and not "is None"/"is obj" (the
-    # rtyper folds either away for a can_be_None=False argument before the
-    # codewriter ever sees an operand to hole-patch).
+    # A real use of obj (setfield_gc), not a call or an is-None check.
     _REF_SINK.last = obj
     return -1, value
 
@@ -669,6 +655,5 @@ def test_ref_hole_reaches_native_constant_pool_as_the_bound_instance():
 
     expected_ref = cast_instance_to_gcref(code)
     assert expected_ref in native_jitcode.constants_r
-    # HOLE_SENTINEL is int-only; a Ptr-typed hole must never carry it,
-    # patched or not.
+    # A Ptr-typed hole must never carry the int HOLE_SENTINEL, ever.
     assert str(HOLE_SENTINEL) not in native_jitcode.dump()

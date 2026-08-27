@@ -1,27 +1,14 @@
-"""Assemble each residual template once, and emit a program by
-concatenating and patching the resulting fragments -- avoids re-running
-the codewriter over a whole-program graph for every generated program.
-
-A fragment is the instruction list the flattener produces for one
-template: its boundary values arrive in the lowest registers of each
-kind (``GraphFlattener.enforce_input_args``) and leave in the exit
-records, and its late-static values are ``HoleConstant`` placeholders
-patched in per placement.
-"""
+"""Assemble each residual template once; emit a program by concatenation."""
 
 from rpython.flowspace.model import Constant
 from rpython.rtyper.lltypesystem import lltype
 
-#: A value no real late-static operand is likely to take, so an unpatched
-#: placeholder shows up as an obviously wrong number.
+# An unlikely value, so an unpatched placeholder is obviously wrong.
 HOLE_SENTINEL = 0x5E7717E1
 
 
 def _boundary_value_origins(graph):
-    """Like partialeval_template's _variable_origins, but also sees
-    through a same-block setfield/getfield round trip and through
-    cast_pointer/same_as.
-    """
+    """Like _variable_origins, also sees through getfield/setfield/same_as."""
     identity_ops = ("cast_pointer", "same_as")
     origins = dict((var, var) for var in graph.startblock.inputargs)
     changed = True
@@ -54,14 +41,10 @@ def _boundary_value_origins(graph):
 
 
 class HoleConstant(Constant):
-    """A Constant standing in for a late-static value until a program
-    supplies it; behaves as an ordinary Constant through transformation,
-    register allocation and flattening.
-    """
+    """A Constant standing in for a late-static value until patched in."""
 
     def __init__(self, name, concretetype):
-        # A GC/raw pointer needs a well-typed placeholder, or jtransform
-        # sees a Constant whose .value doesn't match its concretetype.
+        # A well-typed placeholder, or jtransform sees a mismatched value.
         if isinstance(concretetype, lltype.Ptr):
             value = lltype.nullptr(concretetype.TO)
         else:
@@ -74,9 +57,7 @@ class HoleConstant(Constant):
 
 
 class FragmentExit(object):
-    """One way out of a fragment; ``operands`` holds, per boundary name,
-    the ssarepr operand carrying that value where the fragment leaves off.
-    """
+    """One way out of a fragment; operands map boundary name to value."""
 
     def __init__(self, index, operands, terminator):
         self.index = index
@@ -96,11 +77,7 @@ class TemplateFragment(object):
 
 
 class FragmentCompiler(object):
-    """Runs the codewriter once per template, producing relocatable
-    fragments. Each template is reshaped so every exit becomes a plain
-    ``return <exit index>`` -- a shape the flattener handles, and a mark
-    the concatenator can turn into a jump.
-    """
+    """Runs the codewriter once per template; each exit becomes a return."""
 
     def __init__(self, codewriter, portal_jd, static_name, hole_names,
                  boundary_names, jit_merge_point_args=(), null_names=()):
@@ -110,8 +87,7 @@ class FragmentCompiler(object):
         self.hole_names = tuple(hole_names)
         self.boundary_names = tuple(boundary_names)
         self.jit_merge_point_args = tuple(jit_merge_point_args)
-        # Names declared invariant for the whole portal, since they can't
-        # be inferred from one template.
+        # Names invariant for the whole portal, unlike one template's own.
         self.null_names = tuple(null_names)
 
     def compile(self, template, bindings={}, merge_point=False):
@@ -135,27 +111,17 @@ class FragmentCompiler(object):
             self.boundary_names, (), (), self.jit_merge_point_args)
         helper.portal_jd = self.portal_jd
         if merge_point and self.jit_merge_point_args:
-            # A real merge point: without it the metainterp must spot the
-            # back edge by position, whose -live- cannot be placed (the
-            # assembler hoists a label above a -live- that follows it).
+            # A real merge point; the metainterp locates loops by it.
             helper._remove_runtime_loop_markers(graph)
             helper._insert_merge_point(graph)
         elif self.jit_merge_point_args:
-            # Every other block boundary gets a pe_bailout_point instead:
-            # same greens+reds, but a no-op while tracing (see
-            # opimpl_pe_bailout_point) -- lets blackhole bail out of this
-            # jitcode one block at a time.
+            # A bailout point: a no-op while tracing, blackhole can resume here.
             helper._insert_bailout_point(graph)
-        # After the merge point, so its greens are the bound values; a
-        # merge point on an unbound pc would name every instruction alike.
-        # Reds must not be constants (the jitdriver rejects that), so a
-        # late-static red gets assigned into its register instead.
+        # After the merge point: its greens must be the bound values.
         reds = self._bound_reds(named, bindings) if merge_point else ()
         replace_uses(graph, self._placeholders(
             template, named, bindings, skip=reds))
-        # After both: _insert_merge_point rebuilds the name-to-argument
-        # map from the signature, and the portal fills entry registers in
-        # its own order, not the step function's.
+        # After both: _insert_merge_point rebuilds the argument map.
         ordered = self._reorder_arguments(graph, named)
 
         transitions = _find_split_transitions(graph)
@@ -168,8 +134,7 @@ class FragmentCompiler(object):
                              % (template.key,))
 
         if all(finishing):
-            # After _remove_result_tuple nothing else uses the result, and
-            # a value no exit consumes gets no register.
+            # A value no exit consumes gets no register.
             exit_block = Block([self._like(transitions[0].fields["item1"])])
         else:
             exit_block = Block([self._signed()])
@@ -211,8 +176,7 @@ class FragmentCompiler(object):
                                 self._prologue(ordered, reds))
 
     def _thread_boundary_values(self, graph, named):
-        """Without this, an unused-here boundary name has no live copy in
-        a later block, and the register allocator can reuse its color."""
+        """Keeps an unused boundary name live so its color can't be reused."""
         terminal = (graph.returnblock, graph.exceptblock)
         extra = {graph.startblock: named}
         for name in self.boundary_names:
@@ -244,8 +208,7 @@ class FragmentCompiler(object):
     def _align(self, template, count):
         terminators = template.terminators
         if len(terminators) == 1 and count > 1:
-            # RTyping can keep equivalent syntactic exits that the
-            # symbolic template already canonicalised into one terminator.
+            # Syntactic exits the symbolic template already merged.
             terminators = terminators * count
         if len(terminators) != count:
             raise ValueError(
@@ -258,8 +221,6 @@ class FragmentCompiler(object):
         fresh = Variable()
         fresh.concretetype = var.concretetype
         return fresh
-
-    # ------------------------------------------------------------------
 
     def _signed(self):
         from rpython.flowspace.model import Variable
@@ -276,8 +237,7 @@ class FragmentCompiler(object):
         return [name for name in reds if name in bindings and name in named]
 
     def _prologue(self, ordered, reds):
-        """Only fixes the register here; ProgramEmitter._place fills the
-        value in from block.bindings."""
+        """Fixes the register; ProgramEmitter._place fills the value in."""
         from rpython.jit.metainterp.history import getkind
         counts = {}
         places = {}
@@ -291,9 +251,7 @@ class FragmentCompiler(object):
                 for name in reds if name in places]
 
     def _placeholders(self, template, named, bindings, skip=()):
-        """Fixes the static key; every other late-static name gets a
-        hole, not bindings' value -- one fragment is shared by every
-        instance of the opcode."""
+        """Fixes the static key; every other late-static name gets a hole."""
         replacements = {}
         if self.static_name in named:
             var = named[self.static_name]
@@ -308,24 +266,12 @@ class FragmentCompiler(object):
         return replacements
 
     def _boundary_values(self, helper, graph, transition, original_order):
-        """Which value carries each boundary name where this exit leaves
-        off.
-
-        An exit tuple can omit a boundary name whose value is unchanged
-        (see _thread_boundary_values), with no marker saying so, so a
-        naive positional zip against boundary_names would misassign every
-        later name once an earlier one is omitted. Instead match each
-        tuple item's origin against a boundary name's start value; an
-        unmatched item is fresh, consumed in order against unmatched names.
-        """
+        """Which value carries each boundary name where this exit leaves off."""
         carried = helper._available_carried_values(graph, transition.block)
         dynamic = helper._runtime_values(transition)
         named = helper._named_start_arguments(graph)
 
-        # Origin-matching by identity misreads a shift-register boundary
-        # (e.g. SOM's s0->s1->s2 stack cache): an old-s0-now-s1 item's
-        # origin is s0's, wrongly read as "s0, unchanged". When nothing
-        # is elided, zip dynamic straight against original_order instead.
+        # An omitted tuple item is matched by origin, not position.
         ordered = [name for name in original_order if name in named
                   and name in self.boundary_names]
         if len(dynamic) == len(ordered):
@@ -389,15 +335,11 @@ class FragmentCompiler(object):
             try:
                 result[name] = (kind, regallocs[kind].getcolor(var))
             except KeyError:
-                # Untouched all the way through: still in its entry register.
                 result[name] = entry.get(name)
         return result
 
     def _reorder_arguments(self, graph, named):
-        """Boundary arguments first, in the order the portal supplies
-        them; everything else is already a constant, so its position no
-        longer matters. Returns the (name, variable) pairs in new order.
-        """
+        """Boundary arguments first, then jit_merge_point_args, then rest."""
         from rpython.flowspace.argument import Signature
 
         ordered = [(name, named[name]) for name in self.boundary_names
@@ -409,17 +351,14 @@ class FragmentCompiler(object):
                        zip(graph.signature[0], graph.startblock.inputargs)
                        if name not in taken)
         graph.startblock.inputargs = [var for _name, var in ordered]
-        # A fresh Signature, not an in-place edit: copygraph(shallowvars=
-        # True) aliases the same Signature across every compile() call for
-        # one template, so mutating it would corrupt the other fragments.
+        # A fresh Signature: copygraph(shallowvars=True) shares the old one.
         graph.signature = Signature(
             [name for name, _var in ordered],
             graph.signature.varargname, graph.signature.kwargname)
         return ordered
 
     def _entry_registers(self, ordered):
-        """Where each boundary value arrives -- enforce_input_args puts
-        start arguments in the lowest registers of each kind, in order."""
+        """Where each boundary value arrives, per enforce_input_args."""
         from rpython.jit.metainterp.history import getkind
         counts = {}
         result = {}
@@ -435,11 +374,7 @@ class FragmentCompiler(object):
 
 
 class ProgramEmitter(object):
-    """Emits a generated program by concatenating fragments. No register
-    renaming is needed between them: boundary values live in the
-    registers enforce_input_args pinned them to. Only the exits are
-    rewritten, from ``return <index>`` into moves plus a jump.
-    """
+    """Emits a program by concatenating fragments, exits into jumps."""
 
     def __init__(self, codewriter, portal_jd, static_name, split_names,
                  hole_names, boundary_names, jit_merge_point_args=(),
@@ -453,8 +388,7 @@ class ProgramEmitter(object):
         self._fragments = {}
 
     def fragment_for(self, block, merge_point=False):
-        # late-static values don't enter the key: the fragment carries
-        # them as holes, patched in per block by _place/_localise.
+        # Late-static values are holes, patched per block by _place.
         key = (block.key, merge_point)
         if key not in self._fragments:
             self._fragments[key] = self.compiler.compile(
@@ -462,13 +396,7 @@ class ProgramEmitter(object):
         return self._fragments[key]
 
     def precompile_fragments(self, templates, state_names=()):
-        """Compile every opcode's fragment(s) before any program exists.
-
-        split_names (typically "pc") must be holed here too: baking a
-        dummy pc in as a real constant would still assemble and even run
-        correctly for the one block matching it, but every other
-        placement of the shared fragment would carry it wrong.
-        """
+        """Compile every opcode's fragment(s) before any program exists."""
         bindings = dict.fromkeys(self.compiler.hole_names, 0)
         bindings.update(dict.fromkeys(self.split_names, 0))
         bindings.update(dict.fromkeys(state_names, 0))
@@ -482,12 +410,7 @@ class ProgramEmitter(object):
                         template, bindings, merge_point)
 
     def native_table(self):
-        """{opcode_key: (native_no_merge, native_merge)}.
-
-        Does not stamp descr indices: pe_linked_setup runs before
-        codewriter.make_jitcodes(), so assembler.descrs is still empty
-        here -- see stamp_descr_indices instead.
-        """
+        """{opcode_key: (native_no_merge, native_merge)}."""
         from rpython.translator.backendopt.native_fragments import (
             build_native_table)
         return build_native_table(self._fragments)
@@ -512,20 +435,15 @@ class ProgramEmitter(object):
                          for pc, block in program.blocks.items())
         num_regs = self._widest(fragments.values())
         scratch = dict((kind, count) for kind, count in num_regs.items())
-
-        # One more register per kind than any fragment used, as scratch
-        # for breaking cycles in the parallel moves between fragments.
+        # One extra register per kind, as scratch for the parallel moves.
         counts = dict((kind, scratch[kind] + 1) for kind in scratch)
 
         ssarepr = SSARepr(name)
-        # The entry block goes first, not behind a prologue goto: that
-        # goto would target the entry position, which the metainterp
-        # takes for a back edge, closing an empty loop at trace start.
+        # Entry block first: a prologue goto here would read as a back edge.
         order = [program.entry_pc] + sorted(
             pc for pc in program.blocks if pc != program.entry_pc)
         for index, pc in enumerate(order):
-            # Every entry is a jump, never a fall-through, so liveness
-            # must not carry anything across the boundary.
+            # Every entry is a jump, so liveness must not cross it.
             ssarepr.insns.append(("---",))
             ssarepr.insns.append((Label(("block", pc)),))
             if (self.compiler.jit_merge_point_args
@@ -543,20 +461,8 @@ class ProgramEmitter(object):
             for pc in program.blocks)
         return jitcode, entry_positions
 
-    # ------------------------------------------------------------------
-
     def _initialise_scratch(self, ssarepr, fragments, counts):
-        """Give every register above the calling convention a defined
-        value.
-
-        Only needed where a merge point snapshots mid-program:
-        compute_liveness over-approximates around a loop, so a register a
-        fragment writes before reading can still come out live at the
-        loop's entry, and here block boundaries assign only the calling
-        convention, so an over-approximated live set can name a register
-        no path has written. These values are dead by construction, so
-        only that they hold something matters, not what.
-        """
+        """Defines scratch regs: loop liveness can call one live unwritten."""
         from rpython.flowspace.model import Constant
         from rpython.rtyper.lltypesystem import llmemory, lltype
 
@@ -587,7 +493,7 @@ class ProgramEmitter(object):
         return Register(kind, index)
 
     def _place(self, ssarepr, program, pc, fragments, scratch):
-        """Copy a fragment in, rewriting its exits to jump to successors."""
+        """Copies a fragment in, rewriting its exits into jumps."""
         from rpython.jit.codewriter.flatten import Label, TLabel
 
         from rpython.flowspace.model import Constant
@@ -612,12 +518,10 @@ class ProgramEmitter(object):
                 continue
             exit = fragment.exits[exit_index]
             target = targets[exit_index]
-            # Into the successor's own entry registers: two fragments
-            # allocate independently.
+            # Into the successor's own registers: each allocates alone.
             self._emit_moves(ssarepr, exit.operands,
                              fragments[target].boundary_entry, scratch)
-            # No -live- before the goto: it generates no guard, so an
-            # extra one would only widen the fragments' own live sets.
+            # No -live- before the goto: it generates no guard.
             ssarepr.insns.append(("goto", TLabel(("block", target))))
 
     def _exit_index(self, insn):
@@ -628,13 +532,7 @@ class ProgramEmitter(object):
         return None
 
     def _localise(self, insn, pc, bindings):
-        """Copy one fragment insn in for this placement: relabel, and
-        patch every HoleConstant, including one hidden inside a
-        jit_merge_point/pe_bailout_point green/red ListOfKind.
-
-        A marker's own "pc" green means this block's leading pc, not
-        bindings["pc"] (a Continue exit's *next* pc).
-        """
+        """Relabels one insn, patching every HoleConstant, even in a list."""
         from rpython.flowspace.model import Constant
         from rpython.jit.codewriter.flatten import Label, TLabel, ListOfKind
         from rpython.jit.codewriter.jitcode import SwitchDictDescr
@@ -654,8 +552,7 @@ class ProgramEmitter(object):
                     if isinstance(x, HoleConstant) else x
                     for x in item.content]))
             elif isinstance(item, SwitchDictDescr):
-                # Shared with every other placement of this fragment, so
-                # it must be copied rather than renamed in place.
+                # Shared with every placement, so copied, not renamed.
                 fresh = SwitchDictDescr()
                 fresh._labels = [(key, TLabel(("in", pc, label.name)))
                                  for key, label in item._labels]
@@ -671,9 +568,7 @@ class ProgramEmitter(object):
         return Constant(bindings[hole.hole_name], hole.concretetype)
 
     def _emit_moves(self, ssarepr, sources, destinations, scratch):
-        """Place each boundary value in the register its successor reads,
-        as a parallel move: a destination still somebody's source goes
-        through scratch, so a rotation can't lose a value."""
+        """A parallel move: a source/destination cycle breaks via scratch."""
         from rpython.flowspace.model import Constant
         from rpython.rtyper.lltypesystem import llmemory, lltype
 
@@ -711,7 +606,6 @@ class ProgramEmitter(object):
                 pending.remove(move)
                 progressed = True
             if not progressed:
-                # A cycle: break it by parking one source in scratch.
                 kind, index, source = pending[0]
                 park = self._register(kind, scratch[kind])
                 emitted.append((kind, scratch[kind], source))
@@ -723,15 +617,7 @@ class ProgramEmitter(object):
 
 
 def stamp_descr_indices(codewriter, native_table):
-    """Stamp pe_descr_index on every descr, once assembler.descrs is
-    final. Call only after codewriter.make_jitcodes().
-
-    Two passes: stamp what's already in assembler.descrs, then walk
-    native_table's own fragments for any NDescr the first pass missed
-    (calldescrof isn't guaranteed to cache) and append + stamp those too.
-    NativeSwitchDictDescr operands are skipped: never prebuilt, so never
-    stamped -- write_insn still grows the shared list for those.
-    """
+    """Stamps pe_descr_index on every descr, after make_jitcodes()."""
     from rpython.translator.backendopt.native_fragments import NDescr
     from rpython.translator.backendopt.native_pipeline import (
         NativeSwitchDictDescr)
@@ -757,15 +643,12 @@ def stamp_descr_indices(codewriter, native_table):
                         descrs.append(d)
                         found_only_in_fragments += 1
     if found_only_in_fragments:
-        # Plain print: this runs at translation-build time, not inside
-        # the translated binary, so debug_print doesn't apply.
+        # Plain print: this runs at translation-build time, not translated.
         print "[offline-pe] stamped %d descr(s) only a fragment " \
               "referenced (no ordinary jitcode did)" % found_only_in_fragments
 
 
-# Insns emit_native can produce outside any fragment's own insns, so not
-# discoverable by walking native_table. Must track _place_native/
-# _emit_moves_native/_initialise_scratch_native if those change.
+# Insns emit_native can add outside any fragment's own insns.
 _EMIT_NATIVE_CONNECTIVE_TISSUE = [
     "goto/L",
     "int_copy/i>i", "int_copy/c>i",
@@ -775,13 +658,7 @@ _EMIT_NATIVE_CONNECTIVE_TISSUE = [
 
 
 def register_native_insn_coverage(codewriter, native_table):
-    """Register every (opname, argcodes) a runtime_cogen program's
-    readonly NativeAssembler could need, in codewriter.assembler.insns.
-
-    Must run after make_jitcodes(), before MetaInterpStaticData.
-    finish_setup: BlackholeInterpBuilder/opcode_implementations both take
-    a one-time snapshot of this table the moment finish_setup runs.
-    """
+    """Registers every (opname, argcodes) a readonly NativeAssembler needs."""
     from rpython.jit.codewriter.assembler import USE_C_FORM
     from rpython.translator.backendopt.native_pipeline import (
         native_insn_key_options)
