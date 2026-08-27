@@ -50,6 +50,7 @@ Backend:        1       0.000525
 Blackhole:      2       0.000300
 Blackhole callee: 1     0.000100
 bridge model:	C=2.500000 us	B=30.000000 ns	break-even(100)=6.000000
+bridge attempts:	0.100000 s	2000 rec ops	50.000000 us/op
 PE cogen overhead: 4       0.000400
 PE cogen scan:  2       0.000100
 PE cogen install: 1       0.000250

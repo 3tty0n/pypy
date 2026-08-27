@@ -9,7 +9,7 @@ from rpython.jit.metainterp.jitexc import JitException
 from rpython.rlib.jit import Counters
 
 
-JITPROF_LINES = Counters.ncounters + 9
+JITPROF_LINES = Counters.ncounters + 10
 # TOTAL, calls, two PE instruction counts, three PE cogen outcomes
 _CPU_LINES = 4       # the last 4 lines are stored on the cpu
 
@@ -44,6 +44,12 @@ class EmptyProfiler(BaseProfiler):
         pass
 
     def end_portal_call(self, insns):
+        pass
+
+    def start_bridge_attempt(self):
+        pass
+
+    def end_bridge_attempt(self):
         pass
 
     def bridge_break_even(self, tail_ops):
@@ -113,6 +119,13 @@ class Profiler(BaseProfiler):
     bh_excl_insns = None
     bh_call_t0 = 0.0
     bh_call_insns0 = 0
+    # Wall time and recorded ops of tracing-from-a-guard (bridge attempts,
+    # including their optimizing and backend work): the compile cost the
+    # bridge model charges, kept apart from loop tracing.
+    bridge_time = 0.0
+    bridge_rec_ops = 0
+    bridge_t0 = 0.0
+    bridge_rec_ops0 = 0
 
     def start(self):
         self.starttime = self.timer()
@@ -192,6 +205,15 @@ class Profiler(BaseProfiler):
             self.bh_excl_time[-1] += self.t1 - t0
             self.bh_excl_insns[-1] += insns - insns0
 
+    def start_bridge_attempt(self):
+        self.bridge_t0 = self.timer()
+        self.bridge_rec_ops0 = self.counters[Counters.RECORDED_OPS]
+
+    def end_bridge_attempt(self):
+        self.bridge_time += self.timer() - self.bridge_t0
+        self.bridge_rec_ops += (self.counters[Counters.RECORDED_OPS] -
+                                self.bridge_rec_ops0)
+
     def blackhole_cost_model(self):
         """(C, B): seconds per resume and per blackholed insn; (-1, -1)
         until enough resumes were seen to fit them."""
@@ -225,13 +247,18 @@ class Profiler(BaseProfiler):
         rec_ops = self.counters[Counters.RECORDED_OPS]
         if opt_ops <= 0 or rec_ops <= 0:
             return -1.0
-        compile_time = (self.times[Counters.TRACING] +
-                        self.times[Counters.OPTIMIZING] +
-                        self.times[Counters.BACKEND])
+        # Per recorded op, from bridge attempts only once a few exist;
+        # loop tracing (unrolling, two optimizer passes) costs more per op.
+        if self.bridge_rec_ops >= 1000:
+            t = self.bridge_time / self.bridge_rec_ops
+        else:
+            compile_time = (self.times[Counters.TRACING] +
+                            self.times[Counters.OPTIMIZING] +
+                            self.times[Counters.BACKEND])
+            t = compile_time / rec_ops
         # Blackhole insns and recorded ops share a unit (jitcode insns);
         # optimized ops are fewer by the measured ratio.
         tail_rec = tail_ops * (float(rec_ops) / opt_ops)
-        t = compile_time / rec_ops
         return (t * tail_rec) / (b * tail_rec + c)
 
     def start_pe_cogen(self):  self._start(Counters.PE_COGEN)
@@ -289,6 +316,11 @@ class Profiler(BaseProfiler):
         c, b = self.blackhole_cost_model()
         debug_print("bridge model:\tC=%f us\tB=%f ns\tbreak-even(100)=%f" % (
             c * 1e6, b * 1e9, self.bridge_break_even(100)))
+        t_bridge = 0.0
+        if self.bridge_rec_ops:
+            t_bridge = self.bridge_time / self.bridge_rec_ops * 1e6
+        debug_print("bridge attempts:\t%f s\t%d rec ops\t%f us/op" % (
+            self.bridge_time, self.bridge_rec_ops, t_bridge))
         self._print_line_time("PE cogen overhead", cnt[Counters.PE_COGEN],
                               tim[Counters.PE_COGEN])
         self._print_line_time("PE cogen scan", cnt[Counters.PE_COGEN_SCAN],

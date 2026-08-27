@@ -1856,21 +1856,21 @@ def resume_in_blackhole(metainterp_sd, jitdriver_sd, resumedescr, deadframe,
                         all_virtuals=None):
     from rpython.jit.metainterp.resume import blackhole_from_resumedata
     #debug_start('jit-blackhole')
-    blackholeinterp = blackhole_from_resumedata(
-        metainterp_sd.blackholeinterpbuilder,
-        metainterp_sd.jitcodes,
-        jitdriver_sd,
-        resumedescr,
-        deadframe,
-        all_virtuals)
-
-    current_exc = blackholeinterp._prepare_resume_from_failure(deadframe)
-
+    # Timed from here: decoding the resume data is part of what a guard
+    # failure costs without a bridge, and it does not shrink with the tail.
     profiler = metainterp_sd.profiler
     stats = metainterp_sd.blackholeinterpbuilder.stats
     profiler.start_blackhole()
     insns = stats.insns
     try:
+        blackholeinterp = blackhole_from_resumedata(
+            metainterp_sd.blackholeinterpbuilder,
+            metainterp_sd.jitcodes,
+            jitdriver_sd,
+            resumedescr,
+            deadframe,
+            all_virtuals)
+        current_exc = blackholeinterp._prepare_resume_from_failure(deadframe)
         _run_forever(blackholeinterp, current_exc)
     finally:
         profiler.end_blackhole(stats.insns - insns)

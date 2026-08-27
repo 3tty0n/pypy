@@ -19,6 +19,8 @@ REGEXES = [
     (('bridge_model_c', 'bridge_model_b', 'bridge_model_be'),
      '^bridge model:\s+C=([-\d.]+) us\s+B=([-\d.]+) ns\s+'
      'break-even\(100\)=([-\d.]+)$'),
+    (('bridge_attempt_time', 'bridge_attempt_ops', 'bridge_attempt_us'),
+     '^bridge attempts:\s+([\d.]+) s\s+(\d+) rec ops\s+([\d.]+) us/op$'),
     (('pe_cogen_no', 'pe_cogen_overhead_time'),
      '^PE cogen overhead:\s+([\d.]+)\s+([\d.]+)$'),
     (('pe_cogen_scan_no', 'pe_cogen_scan_time'),
@@ -82,6 +84,9 @@ class OutputInfo(object):
     blackhole_time = 0.0
     blackhole_call_no = 0
     blackhole_call_time = 0.0
+    bridge_attempt_time = 0.0
+    bridge_attempt_ops = 0
+    bridge_attempt_us = 0.0
     bridge_model_c = 0.0
     bridge_model_b = 0.0
     bridge_model_be = 0.0
