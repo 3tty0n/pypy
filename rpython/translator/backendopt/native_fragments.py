@@ -1,25 +1,23 @@
-"""fragment_to_native converts a translation-time TemplateFragment into a
-NativeFragment/NativeInsn IR that is RPython-typed and runtime-legal.
-"""
+"""Converts a translation-time TemplateFragment into a runtime-legal,
+RPython-typed NativeFragment/NativeInsn IR."""
 
 from rpython.jit.codewriter.flatten import (
-    Register, Label, TLabel, ListOfKind, IndirectCallTargets, KINDS)
+    Register, Label, TLabel, ListOfKind, IndirectCallTargets)
 from rpython.jit.codewriter.jitcode import SwitchDictDescr
 from rpython.jit.metainterp.history import AbstractDescr, getkind
 from rpython.translator.backendopt.jitcode_emitter import HoleConstant
 
 
 class NOperand(object):
-    """Base of the tagged operand hierarchy; never dispatch on flowspace/
-    codewriter translation-time classes at the runtime-read path."""
+    pass
 
 
 class _Counter(object):
     def __init__(self):
         self.value = 0
 
-# Shared counter: translation-time and runtime nid's must never collide,
-# since compute_liveness_native keys "alive" by nid, not object identity.
+# Program-wide: compute_liveness_native keys "alive" by nid, so
+# translation-time and runtime ids must never collide.
 _nreg_id_counter = _Counter()
 
 
@@ -30,14 +28,12 @@ def _next_nreg_id():
 
 
 class NReg(NOperand):
-    """Duck-types Register (kind, index) so Assembler.emit_reg/count_reg
-    work unmodified.  nid: RPython can't key a set/dict by object identity
-    at the runtime-read path, so compute_liveness_native uses nid instead.
+    """Duck-types Register (kind, index) for Assembler.emit_reg/count_reg.
+
+    nid: RPython can't key a dict by identity, so liveness uses nid.
     """
-    #: Index into the current program's compact liveness registry, stamped
-    #: by _register_nid_native.  A field, not a dict lookup: the liveness
-    #: fixpoint reads it once per operand per pass, which is where most of
-    #: a residual program's assembly time went.
+    # Index into the current program's compact liveness registry; a field
+    # (not a dict lookup) because the liveness fixpoint reads it constantly.
     compact = -1
 
     def __init__(self, kind, index):
@@ -50,9 +46,7 @@ class NReg(NOperand):
 
 
 class NIntConst(NOperand):
-    """int, or a Symbolic (AddressAsInt/ComputedIntSymbolic; RPython-legal
-    as SomeInteger()).  Resolved once; reuse verbatim to keep dedup working.
-    """
+    """int, or a Symbolic (AddressAsInt/ComputedIntSymbolic)."""
     def __init__(self, ivalue):
         self.ivalue = ivalue
 
@@ -63,13 +57,11 @@ class NRefConst(NOperand):
 
 
 class NFloatConst(NOperand):
-    """A float boundary with no source falls back to an int-kind
-    NIntConst(0), not NFloatConst(0) -- mirrors a legacy quirk.
+    """A float boundary with no source falls back to NIntConst(0), not
+    NFloatConst(0) -- mirrors a legacy quirk.
 
-    Nothing constructs one, so the class-level default is what gives the
-    classdef its attribute: an interpreter whose residual code has float
-    boundaries makes the assembler's isinstance branch reachable, and
-    reading .value off an attribute-less classdef blocks annotation.
+    Class-level default: a classdef with no float boundary anywhere would
+    otherwise have no attribute for the annotator to see.
     """
     value = 0.0
 
@@ -78,10 +70,8 @@ class NFloatConst(NOperand):
 
 
 def _const_operand_for(x, const_cache=None):
-    """const_cache must be program-wide, not per-fragment: a resolved
-    AddressAsInt isn't hashable, so id()-based dedup needs the *same*
-    cached object, not merely an equal one (mirrors emit_resolved_const).
-    """
+    # const_cache is program-wide: an AddressAsInt isn't hashable, so
+    # id()-based dedup needs the same cached object, not merely an equal one.
     from rpython.rtyper.lltypesystem import lltype, llmemory, rffi
     from rpython.jit.codewriter import longlong
     from rpython.jit.metainterp.support import adr2int
@@ -90,8 +80,8 @@ def _const_operand_for(x, const_cache=None):
 
     cache_key = None
     if const_cache is not None:
-        # lltype pointer objects raise TypeError on hash(); fall back to
-        # id() -- sound since the rtyper interns one object per pointer.
+        # lltype pointers raise TypeError on hash(); fall back to id(),
+        # sound since the rtyper interns one object per pointer.
         try:
             hash(x.value)
             cache_key = (x.value, x.concretetype)
@@ -127,7 +117,6 @@ def _const_operand_for(x, const_cache=None):
             value = lltype.cast_primitive(lltype.Signed, value)
             if type(value) is r_int:
                 value = int(value)
-        # else: Symbolic stays as-is -- legal wherever Signed int is.
         result = NIntConst(value)
     else:
         raise NotImplementedError(
@@ -168,13 +157,8 @@ class NDescr(NOperand):
 
 
 class NSwitchDictOperand(NOperand):
-    """Not a direct SwitchDictDescr: a shared fragment's descr must not be
-    mutated by two different placements -- emit_native rebuilds it fresh.
-
-    Class-level defaults: an interpreter whose residual code has no switch
-    never constructs one, and the isinstance branch that reads these would
-    then look at a classdef with no attributes at all.
-    """
+    """Not a SwitchDictDescr directly: a shared fragment's descr must not
+    be mutated by two placements, so emit_native rebuilds it fresh."""
     keys = []
     label_ids = []
 
@@ -195,10 +179,7 @@ class NIndirectCallTargets(NOperand):
 
 
 class NativeInsn(object):
-    """opcode '---'/'-live-'/'@label' are magic, pipeline-special-cased
-    (barrier/liveness-point/label-def).  'result' is its own field, not
-    embedded in operands.
-    """
+    """opcode '---'/'-live-'/'@label' are pipeline-special-cased."""
     def __init__(self, opcode, operands, result=None):
         self.opcode = opcode
         self.operands = operands
@@ -212,8 +193,6 @@ class NativeInsn(object):
 class NativeFragmentExit(object):
     def __init__(self, index, operands, terminator):
         self.index = index
-        # name -> (kind, index) tuple, or None; copied verbatim, since
-        # FragmentExit.operands never holds a raw Register/Constant here.
         self.operands = operands
         self.terminator = terminator
 
@@ -231,16 +210,12 @@ class NativeFragment(object):
 
 
 class _Converter(object):
-    """Cache one NReg per (kind, index) per-fragment, not program-wide:
-    liveness keys "alive" by identity, so the caching scope must be exact
-    -- too narrow never cancels a register, too wide cancels it too eagerly.
-    """
+    """One NReg per (kind, index) per fragment, not program-wide: liveness
+    keys "alive" by identity, so the caching scope has to be exact."""
 
     def __init__(self, const_cache=None):
         self._label_ids = {}
         self._registers = {}
-        # const_cache is shared program-wide; _registers/_label_ids are
-        # per-fragment -- constants dedup across fragments, registers don't.
         self._const_cache = const_cache
 
     def label_id(self, name):
@@ -288,8 +263,8 @@ class _Converter(object):
         if isinstance(x, TLabel):
             return NTLabel(self.label_id(x.name))
         if isinstance(x, ListOfKind):
-            return NListOfKind(x.kind,
-                               [self.convert_operand(item) for item in x.content])
+            return NListOfKind(
+                x.kind, [self.convert_operand(item) for item in x.content])
         if isinstance(x, SwitchDictDescr):
             keys = [key for key, _label in x._labels]
             label_ids = [self.label_id(label.name) for _key, label in x._labels]
@@ -298,8 +273,8 @@ class _Converter(object):
             return NDescr(x)
         if isinstance(x, IndirectCallTargets):
             return NIndirectCallTargets(x.lst)
-        # Constant checked last: HoleConstant is itself a Constant
-        # subclass, so it must be (and already is, above) checked first.
+        # HoleConstant is itself a Constant subclass, so it must be (and
+        # already is, above) checked before this.
         from rpython.flowspace.model import Constant
         if isinstance(x, Constant):
             return _const_operand_for(x, self._const_cache)
@@ -318,8 +293,8 @@ def fragment_to_native(fragment, merge_point=False, const_cache=None):
 
 
 def build_native_table(fragments):
-    """table[key] = (no_merge, merge); either slot is None when that
-    merge-point variant was never compiled (see native_fragment_for)."""
+    """table[key] = (no_merge, merge); a slot is None when that variant
+    was never compiled (see native_fragment_for)."""
     table = {}
     const_cache = {}
     for (key, merge_point), fragment in fragments.items():
@@ -334,9 +309,8 @@ def build_native_table(fragments):
 
 
 # ____________________________________________________________
-# Runtime boundary: the data classes above (+ native_fragment_for below)
-# are read at runtime, so must stay RPython-legal; _Converter and the
-# conversion functions above run only at translation time and are exempt.
+# Below this line runs at runtime and must stay RPython-legal; _Converter
+# and the conversion functions above run only at translation time.
 
 def native_fragment_for(native_table, key, merge_point):
     no_merge, merge = native_table[key]
