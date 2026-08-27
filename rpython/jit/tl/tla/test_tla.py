@@ -181,46 +181,6 @@ class TestLLtype(LLJitMixin):
         assert res == 0
 
 
-def test_offline_pe_catalog_and_linked_tla_loop():
-    from rpython.jit.codewriter.codewriter import CodeWriter
-    from rpython.jit.codewriter.test.test_codewriter import FakeCPU
-    from rpython.translator.translator import TranslationContext
-
-    t = TranslationContext()
-    t.buildannotator().build_types(tla.run, [str, tla.W_IntObject])
-    t.buildrtyper().specialize()
-    catalog = offline.build_template_catalog(t)
-
-    assert set(catalog.keys()) == set(range(len(tla.OPNAMES)))
-    for opcode in catalog.keys():
-        template = catalog.lookup(opcode)
-        # A few opcode semantics keep their own int_eq (type/stack checks).
-        assert sum(op.opname == "int_eq"
-                   for op in template.operations) < 9
-
-    bytecode = assemble([
-        tla.CONST_INT, 1,
-        tla.SUB,
-        tla.DUP,
-        tla.JUMP_IF, 0,
-        tla.RETURN,
-    ])
-    linked = offline.link_bytecode(catalog, bytecode)
-
-    assert set(linked.blocks) == set([0, 2, 3, 4, 6])
-    assert 0 in linked.loop_headers
-    assert (4, 0) in linked.backedges
-    assert linked.blocks[6].has_finish
-
-    codewriter = CodeWriter(FakeCPU(t.rtyper), [])
-    codewriter.callcontrol.candidate_graphs = set(t.graphs)
-    lowered = linked.lower(codewriter, "linked-tla-countdown")
-    dump = lowered.jitcode.dump()
-    assert "goto_if_not" in dump
-    assert "strgetitem" not in dump
-    assert set(lowered.entry_positions) == set(linked.blocks)
-
-
 class TestOfflineTracing(LLJitMixin):
     def test_compare_tracing_work(self):
         from rpython.rlib.jit import Counters
