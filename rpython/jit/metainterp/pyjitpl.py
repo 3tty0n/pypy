@@ -87,7 +87,6 @@ class MIFrame(object):
         assert isinstance(jitcode, JitCode)
         self.jitcode = jitcode
         self.bytecode = jitcode.code
-        # -1 (never a real target) if this jitcode has no linked loop.
         self.pe_loop_header = jitcode.pe_loop_header_position()
         # this is not None for frames that are recursive portal calls
         self.greenkey = greenkey
@@ -213,8 +212,7 @@ class MIFrame(object):
         if not we_are_translated():
             assert pc in self.jitcode._startpoints
         offset = decode_offset(self.jitcode.code, pc + 1)
-        # If set, 'offset' is relative to own_liveness_info, not the
-        # global liveness_info string.
+        # 'offset' may be relative to own_liveness_info, not global.
         own_liveness_info = self.jitcode.own_liveness_info
         if own_liveness_info is not None:
             all_liveness = own_liveness_info
@@ -1429,16 +1427,8 @@ class MIFrame(object):
             if program is not None:
                 ptoken = self.metainterp.get_procedure_token(
                     greenboxes, targetjitdriver_sd)
-            # A loop-less callee compiles as an "entry bridge": it gets a
-            # procedure_token but no target_tokens (loop-jump metadata),
-            # so has_compiled_targets() is wrong here; a procedure_token
-            # existing is enough for CALL_ASSEMBLER.
-            # pe_call_threshold: call rather than re-inline a compiled
-            # callee at least this large, when it has its own loops or
-            # this trace is a guard bridge (inlining a loop-bearing
-            # callee brings its loops along everywhere it's inlined;
-            # inlining into bridges costs once per bridge).  0 = always
-            # call.
+            # An entry bridge has a procedure_token but no target_tokens.
+            # pe_call_threshold: call instead of inline at/above this size.
             threshold = warmrunnerstate.pe_call_threshold
             in_bridge = isinstance(self.metainterp.resumekey,
                                    compile.ResumeGuardDescr)
@@ -1506,15 +1496,12 @@ class MIFrame(object):
                             debug_print("inline: token too small", loc,
                                        program.code_size)
                         debug_stop("jit-pe-asmcall")
-                    # Same argument layout as initialize_state_from_start,
-                    # built the same way so the two cannot diverge.
+                    # Same layout as initialize_state_from_start.
                     call_boxes = program.build_call_boxes(allboxes)
                     f = self.metainterp.newframe(program.jitcode,
                                 greenkey=greenboxes)
                     f.setup_call(call_boxes)
-                    # setup_call() defaults pc to 0, which is right for a
-                    # program entered at its own start; a program linked
-                    # for a later merge point needs its real entry pc.
+                    # setup_call() defaults pc to 0; override if linked.
                     f.pc = program.start_position(allboxes)
                     raise ChangeFrame
             assembler_call = True
@@ -1942,9 +1929,7 @@ class MIFrame(object):
 
     @arguments("box")
     def opimpl_virtual_ref_finish_escaped(self, box):
-        # As opimpl_virtual_ref_finish, but the object goes along: the
-        # optimizer stores it as vref.forced, which forces it only if the
-        # vref is not virtual any more, i.e. escaped.
+        # Like opimpl_virtual_ref_finish, but keeps the object as forced.
         metainterp = self.metainterp
         vrefbox = metainterp.virtualref_boxes.pop()
         lastbox = metainterp.virtualref_boxes.pop()
@@ -2014,8 +1999,7 @@ class MIFrame(object):
             return resbox
 
     def run_one_step(self):
-        # See _pe_insn_counts: [generic, residual] jitcode instructions the
-        # meta-interpreter executed while tracing.
+        # Tallies jitcode instructions executed into _pe_insn_counts.
         # Execute the frame forward.  This method contains a loop that leaves
         # whenever the 'opcode_implementations' (which is one of the 'opimpl_'
         # methods) raises ChangeFrame.  This is the case when the current frame
@@ -2422,8 +2406,7 @@ class MetaInterpStaticData(object):
         self.globaldata = MetaInterpGlobalData(self)
 
     def register_late_jitcode(self, jitcode, codewriter):
-        """Untranslated-only: rebinds opcode tables via setattr on a
-        SomePBC, which real RPython annotation rejects."""
+        """Untranslated-only: rebinds opcode tables for a late jitcode."""
         asm = codewriter.assembler
         self.setup_insns(asm.insns)
         self.blackholeinterpbuilder.setup_insns(asm.insns)
@@ -2625,8 +2608,7 @@ class MetaInterp(object):
         if jitcode.jitdriver_sd:
             self.portal_call_depth += 1
             self.call_ids.append(self.current_call_id)
-            # A linked jitcode's frame shares its portal's already-tracked
-            # activation; skip the debug-only ENTER_PORTAL_FRAME.
+            # Linked jitcode shares its portal's tracked activation.
             if greenkey is not None and not jitcode.pe_is_linked:
                 unique_id = jitcode.jitdriver_sd.warmstate.get_unique_id(
                     greenkey)
@@ -2661,8 +2643,7 @@ class MetaInterp(object):
         jitcode = frame.jitcode
         if jitcode.jitdriver_sd:
             self.portal_call_depth -= 1
-            # Mirrors the newframe() skip above: don't emit the matching
-            # LEAVE_PORTAL_FRAME for a residual/linked jitcode's frame.
+            # Mirrors the newframe() skip above.
             if leave_portal_frame and not jitcode.pe_is_linked:
                 self.leave_portal_frame(jitcode.jitdriver_sd.index)
             self.call_ids.pop()
@@ -2741,10 +2722,7 @@ class MetaInterp(object):
             lltype.cast_opaque_ptr(llmemory.GCREF, excvalue))
 
     def pe_recover_in_trace(self):
-        """A guest exception escaped the trace's root linked program:
-        continue tracing into the interpreter's handler-search function
-        instead of leaving the trace (pe_tail_enter_root re-enters the
-        root at the handler's pc once it calls the portal back)."""
+        """Guest exception escaped root linked program: keep tracing it."""
         jd = self.jitdriver_sd
         jitcode = jd.pe_recover_jitcode
         if jitcode is None or jd.virtualizable_info is None:
@@ -2763,24 +2741,20 @@ class MetaInterp(object):
         return True
 
     def pe_resuming_root(self, targetjitdriver_sd, redboxes):
-        """Is this pe_resume calling the portal on the trace's own
-        virtualizable (the root continuing at the handler's pc)?"""
+        """Is this pe_resume re-entering the portal on its own virtualizable?"""
         jd = self.jitdriver_sd
         if jd.pe_resume_jitcode is None or not self.framestack:
             return False
         if targetjitdriver_sd is not jd or jd.virtualizable_info is None:
             return False
-        # By value: in a bridge the frame's register and the virtualizable
-        # box can be distinct boxes for the same object.
+        # By value: the vbox and virtualizable box may differ in a bridge.
         vbox = redboxes[jd.index_of_virtualizable]
         if vbox.getref_base() != self.virtualizable_boxes[-1].getref_base():
             return False
         return True
 
     def pe_tail_enter_root(self, original_boxes):
-        """The resume function's call of the portal: not a nested call
-        (the callee is the trace's own virtualizable frame) but the root
-        continuing at the handler's pc."""
+        """The resume function's call of the portal re-enters the root."""
         while self.framestack:
             self.popframe()
         f, program, metadata = self.pe_enter_root(original_boxes)
@@ -2791,9 +2765,7 @@ class MetaInterp(object):
         debug_stop("pe-resume")
 
     def pe_enter_root(self, original_boxes):
-        """The trace's bottom frame for the portal called with these
-        greens+reds: the linked program for them, entered at the matching
-        position, or the generic portal."""
+        """Trace's bottom frame: linked program, or generic portal."""
         mainjitcode = self.jitdriver_sd.mainjitcode
         metadata = mainjitcode.pe_metadata
         jitcode = mainjitcode
@@ -2807,14 +2779,10 @@ class MetaInterp(object):
         f = self.newframe(jitcode)
         f.setup_call(call_boxes)
         if program is not None and program.guard_pc_index >= 0:
-            # Enter at the instruction the portal came in on, which is not
-            # always the one the program was generated from.
             f.pc = program.start_position(original_boxes)
         elif jitcode is mainjitcode and metadata is not None and \
                 metadata.has_linked_programs():
-            # Linked programs exist, but none was built for this code object
-            # and entry pc.  Their entry positions index the linked JitCodes,
-            # so they are meaningless here: enter the generic portal.
+            # No program for this code+pc: enter the generic portal.
             f.pc = 0
         else:
             f.pc = get_pe_trace_start_position(jitcode)

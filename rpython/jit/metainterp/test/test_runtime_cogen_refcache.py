@@ -75,7 +75,7 @@ class TestRefCacheGenerateForLiveCode(LLJitMixin):
             interp_w, [N], listops=True, pe_linked_setup=install)
         assert pe_result == baseline
 
-    def test_late_trigger_ssarepr_path_executes_and_matches_the_plain_interpreter(self):
+    def test_late_trigger_ssarepr_path_matches_interpreter(self):
         """SSARepr back end: the crash's own traceback runs through this."""
         from rpython.rlib.nonconst import NonConstant
 
@@ -110,8 +110,10 @@ class TestRefCacheGenerateForLiveCode(LLJitMixin):
                     extension, linker, codewriter, bytecode, GUARD, gcref,
                     emitter=emitter)
                 if program is not None:
-                    staticdata = jitdriver_sd.warmstate.warmrunnerdesc.metainterp_sd
-                    staticdata.register_late_jitcode(program.jitcode, codewriter)
+                    warmrunnerdesc = jitdriver_sd.warmstate.warmrunnerdesc
+                    staticdata = warmrunnerdesc.metainterp_sd
+                    staticdata.register_late_jitcode(
+                        program.jitcode, codewriter)
                 return program
 
             mainjitcode = linker.mainjitcode(codewriter)
@@ -126,7 +128,7 @@ class TestRefCacheGenerateForLiveCode(LLJitMixin):
         assert pe_result == baseline
         assert counter[0] >= 1
 
-    def test_late_trigger_native_path_executes_and_matches_the_plain_interpreter(self):
+    def test_late_trigger_native_path_matches_interpreter(self):
         """Same as above, native_fragments.py/native_pipeline.py back end."""
         from rpython.rlib.nonconst import NonConstant
 
@@ -162,8 +164,10 @@ class TestRefCacheGenerateForLiveCode(LLJitMixin):
                     extension, linker, codewriter, bytecode, GUARD, gcref,
                     native_table=native_table)
                 if program is not None:
-                    staticdata = jitdriver_sd.warmstate.warmrunnerdesc.metainterp_sd
-                    staticdata.register_late_jitcode(program.jitcode, codewriter)
+                    warmrunnerdesc = jitdriver_sd.warmstate.warmrunnerdesc
+                    staticdata = warmrunnerdesc.metainterp_sd
+                    staticdata.register_late_jitcode(
+                        program.jitcode, codewriter)
                 return program
 
             mainjitcode = linker.mainjitcode(codewriter)

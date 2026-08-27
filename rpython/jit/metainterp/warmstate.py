@@ -236,23 +236,9 @@ class WarmEnterState(object):
         "NOT_RPYTHON"
         self.warmrunnerdesc = warmrunnerdesc
         self.jitdriver_sd = jitdriver_sd
-        # Set around a pe_bailout_point re-entry replay by the
-        # portal_runner catch site in warmspot.py (see there for the
-        # full lifetime story). While set, maybe_compile_and_run() below
-        # must not tick warmup counters or make compile decisions for a
-        # greenkey that pe_tick_suppressed() (below) judges to duplicate a
-        # loop a linked program already provides.
+        # Set by the portal_runner catch site around a bailout replay.
         self.pe_suppress_ticks = False
-        # Position, among jd's green REF args and green INT args
-        # respectively, of the greens pe_tick_suppressed() reads as "the
-        # method" and "the pc" to compare against each linked program's
-        # guard_ref / legit_entry_pcs. -1 in either means no such green
-        # could be identified (no offline-PE linked program, or a driver
-        # missing a green of that kind), so nothing is ever suppressed.
-        # Filled in by WarmRunnerDesc._pe_suppress_greenref_index /
-        # _pe_suppress_greenint_index once the offline-PE linking metadata
-        # exists (see warmspot.py); -1 is also the correct value for tests
-        # that construct a WarmEnterState directly and never touch it.
+        # Index of "the method"/"the pc" green among REF/INT greens, or -1.
         self.pe_suppress_greenref_index = -1
         self.pe_suppress_greenint_index = -1
         if warmrunnerdesc is not None:       # for tests
@@ -390,8 +376,7 @@ class WarmEnterState(object):
         vinfo = jitdriver_sd.virtualizable_info
         index_of_virtualizable = jitdriver_sd.index_of_virtualizable
         num_green_args = jitdriver_sd.num_green_args
-        # (position, TYPE) of every green REF/INT arg: unrolled so the
-        # greens below can be picked with a compile-time-constant index.
+        # Unrolled so greens are picked with a constant index.
         green_ref_args = unrolling_iterable(
             [(i, TYPE) for i, TYPE in enumerate(jitdriver_sd._green_args_spec)
              if history.getkind(TYPE) == 'ref'])
@@ -421,9 +406,6 @@ class WarmEnterState(object):
 
         def pe_tick_suppressed(greenargs):
             # Only runs inside a pe_bailout_point replay tail (rare).
-            # jitdriver_sd.mainjitcode.pe_metadata is read fresh here
-            # (not cached at NOT_RPYTHON setup time) because linking
-            # happens later, in WarmRunnerDesc.finish() (warmspot.py).
             if not self.pe_suppress_ticks:
                 return False
             method_ref, pc = pe_method_and_pc(greenargs)
@@ -432,8 +414,7 @@ class WarmEnterState(object):
             metadata = jitdriver_sd.mainjitcode.pe_metadata
             if metadata is None:
                 return False
-            # Suppress iff a linked program was bound to this method AND
-            # pc is not one of ITS legitimate trace starts/leave pcs.
+            # Suppress iff bound to this method and pc is not legit/leave.
             for program in metadata.linked_programs:
                 if program.guard_ref and program.guard_ref == method_ref:
                     suppressed = not (program.is_legit_entry_pc(pc) or
@@ -446,9 +427,7 @@ class WarmEnterState(object):
             return False
 
         def pe_entry_increment(greenargs, increment_threshold):
-            # A portal entry at a linked program's leave pc continues a
-            # residual exit: count it at the bridge's eagerness instead
-            # of the function-entry threshold.
+            # A leave-pc portal entry counts at bridge eagerness.
             if increment_threshold != self.increment_function_threshold:
                 return increment_threshold
             method_ref, pc = pe_method_and_pc(greenargs)
@@ -569,7 +548,6 @@ class WarmEnterState(object):
                 # not found.
                 if pe_tick_suppressed(greenargs):
                     return
-                # increment the counter
                 if jitcounter.tick(hash, increment_threshold):
                     bound_reached(hash, None, *args)
                 return
@@ -583,8 +561,7 @@ class WarmEnterState(object):
                     return
                 if pe_tick_suppressed(greenargs):
                     return
-                # attached by compile_tmp_callback().  A not-yet-traced
-                # dont_trace_here function is traced right away.
+                # A not-yet-traced dont_trace_here function traces now.
                 if (cell.flags & JC_DONT_TRACE_HERE and
                         not cell.flags & JC_TRACING_OCCURRED):
                     bound_reached(hash, cell, *args)

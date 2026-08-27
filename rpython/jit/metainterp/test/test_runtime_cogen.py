@@ -159,7 +159,7 @@ class TestGenerateForLiveCode(LLJitMixin):
             assert precompiled._covers(pc)
         assert precompiled.is_legit_entry_pc(0)
 
-    def test_generate_for_live_code_executes_and_matches_the_plain_interpreter(self):
+    def test_generate_for_live_code_matches_interpreter(self):
         """Runs meta_interp for real and checks the traced result against
         a plain, non-generated interpretation of the same bytecode."""
         from rpython.jit.metainterp.warmspot import get_stats
@@ -189,7 +189,7 @@ class TestGenerateForLiveCode(LLJitMixin):
         assert pe_result == baseline
         assert get_stats().pe_metadata_count > 0
 
-    def test_lookup_miss_triggers_runtime_cogen_with_no_program_preinstalled(self):
+    def test_lookup_miss_triggers_cogen_no_program_preinstalled(self):
         """Lookup miss on an empty PEJitCodeMetadata triggers runtime_cogen
         and re-lookup after that hits the cache instead."""
         from rpython.jit.metainterp.history import ConstInt, ConstPtr
@@ -252,7 +252,7 @@ class TestGenerateForLiveCode(LLJitMixin):
         assert get_stats().pe_metadata_count > 0
         assert get_stats().pe_metadata_count > 0
 
-    def test_late_trigger_after_finish_setup_executes_and_matches_the_plain_interpreter(self):
+    def test_late_trigger_after_finish_setup_matches_interpreter(self):
         """First live trace triggers runtime_cogen after finish_setup
         already froze liveness_info/.index; needs register_late_jitcode."""
         from rpython.jit.metainterp.warmspot import get_stats
@@ -296,10 +296,11 @@ class TestGenerateForLiveCode(LLJitMixin):
                     extension, linker, codewriter, bytecode, GUARD, gcref,
                     emitter=emitter)
                 if program is not None:
-                    # Needs its own index/extended liveness_info: it was
-                    # assembled after finish_setup already ran.
-                    staticdata = jitdriver_sd.warmstate.warmrunnerdesc.metainterp_sd
-                    staticdata.register_late_jitcode(program.jitcode, codewriter)
+                    # Assembled after finish_setup; needs own index/liveness.
+                    warmrunnerdesc = jitdriver_sd.warmstate.warmrunnerdesc
+                    staticdata = warmrunnerdesc.metainterp_sd
+                    staticdata.register_late_jitcode(
+                        program.jitcode, codewriter)
                     late_jitcode_box.append(program.jitcode)
                 return program
 
@@ -332,7 +333,7 @@ class TestGenerateForLiveCode(LLJitMixin):
             "guard should fail and resume through its liveness for real")
         assert get_stats().pe_metadata_count > 0
 
-    def test_late_trigger_native_path_executes_and_matches_the_plain_interpreter(self):
+    def test_late_trigger_native_path_matches_interpreter(self):
         """Late trigger via generate_for_live_code's native_table path.
         Needs register_native_insn_coverage run first, or NativeAssembler
         silently declines and no linked program is ever produced."""
@@ -383,7 +384,8 @@ class TestGenerateForLiveCode(LLJitMixin):
                     assert program.jitcode.own_liveness_info is not None
                     from rpython.jit.codewriter.jitcode import (
                         register_late_jitcode, set_late_jitcode_base)
-                    staticdata = jitdriver_sd.warmstate.warmrunnerdesc.metainterp_sd
+                    warmrunnerdesc = jitdriver_sd.warmstate.warmrunnerdesc
+                    staticdata = warmrunnerdesc.metainterp_sd
                     set_late_jitcode_base(len(staticdata.jitcodes))
                     register_late_jitcode(
                         program.jitcode, program.jitcode.own_liveness_info)

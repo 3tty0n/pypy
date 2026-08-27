@@ -281,7 +281,8 @@ def test_must_compile_uses_bridge_model_when_more_eager():
 def test_stamp_guard_tails():
     from rpython.jit.metainterp.compile import (stamp_guard_tails,
                                                ResumeGuardDescr)
-    from rpython.jit.metainterp.resoperation import ResOperation, rop, InputArgInt
+    from rpython.jit.metainterp.resoperation import (
+        ResOperation, rop, InputArgInt)
     from rpython.jit.metainterp.history import ConstInt
     i0 = InputArgInt()
     d1, d2 = ResumeGuardDescr(), ResumeGuardDescr()

@@ -375,8 +375,7 @@ class RecursiveTests:
         TRACE_LIMIT = 20
         res = self.meta_interp(loop, [100], enable_opts='', inline=True, trace_limit=TRACE_LIMIT)
         self.check_max_trace_length(TRACE_LIMIT)
-        # Each aborted bridge doubles the failures before the next try
-        # (AbstractResumeGuardDescr.note_aborted_bridge): 4, not 9.
+        # Each aborted bridge doubles required failures: 4, not 9.
         self.check_aborted_count(4)
         self.check_enter_count_at_most(30)
 
@@ -607,18 +606,7 @@ class RecursiveTests:
         self.check_history(call_assembler_n=1)
 
     def test_pe_linked_recursive_call_uses_assembler_when_compiled(self):
-        # A linked-program callee (metadata.linked_program_for() matches)
-        # that already has compiled code must be called via CALL_ASSEMBLER
-        # at the recursive-call site itself, instead of being inlined (which
-        # would push a frame for it and immediately hit the *separate*,
-        # pre-existing "nested loop reaches its own merge point a second
-        # time -> bail to assembler_call" logic in opimpl_jit_merge_point).
-        # If _opimpl_recursive_call's compiled-target check is bypassed or
-        # dead, this test still passes call_assembler_n=1 (that older
-        # mechanism papers over it) but enter_portal_frame/debug_merge_point
-        # stop being 0/1: portal(1) gets entered and its own merge point
-        # traced once before the escape.  Comment out the "already_compiled"
-        # short-circuit in _opimpl_recursive_call to see it flip.
+        # A compiled linked-program callee must call assembler, not inline.
         driver = JitDriver(greens=['codeno'], reds=['i'],
                            get_printable_location=lambda codeno: str(codeno))
 
@@ -632,45 +620,22 @@ class RecursiveTests:
                 i += 1
 
         def install_pe_metadata(mainjitcode):
-            # A trivial self-link: portal's own mainjitcode, linked for
-            # "any" code object (guard_pc_index/guard_ref_index left at -1
-            # so matches() always succeeds), with an identity argument
-            # mapping (codeno, i) -> (codeno, i).  By the time codeno=2
-            # recurses into codeno=1, codeno=1 has already compiled its own
-            # loop via ordinary warmup (as in test_directly_call_assembler),
-            # so the callee greenkey has a real, non-fake compiled target.
+            # Trivial self-link: any code object, identity arg mapping.
             from rpython.jit.codewriter.jitcode import PEJitCodeMetadata
             metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
             metadata.attach_linked_jitcode(mainjitcode, [0, 1], [])
             mainjitcode.pe_metadata = metadata
 
-        # pe_call_threshold defaults to 1024 bytes; this synthetic linked
-        # program is tiny, so pin the threshold to 0 (always call) --
-        # otherwise the size check alone would send this to the inline
-        # path regardless of whether a token exists, which is not what
-        # this test is checking.
+        # Tiny synthetic program: force threshold 0 (always call).
         self.meta_interp(portal, [2], inline=True,
                          pe_jitcode_setup=install_pe_metadata,
                          pe_call_threshold=0)
-        # 2, not 1: the trace unrolls one extra iteration of codeno=2's own
-        # loop before closing, each iteration contributing one merge point
-        # for codeno=2 -- but *never* one for codeno=1, which is what this
-        # test is really checking.
+        # 2 merge points for codeno=2's own loop, none for codeno=1.
         self.check_history(call_assembler_n=1, enter_portal_frame=0,
                            leave_portal_frame=0, debug_merge_point=2)
 
     def test_pe_linked_loopless_callee_uses_assembler_when_compiled(self):
-        # Same idea as test_pe_linked_recursive_call_uses_assembler_when_
-        # compiled above, but for a callee with NO loop at all (no backward
-        # jump): compile.py's ResumeFromInterpDescr.compile_and_attach --
-        # the "entry bridge" path taken by a trace that FINISHes instead of
-        # jumping back to itself -- attaches a real, callable
-        # procedure_token to the cell (attach_procedure_to_interp) but
-        # never sets its target_tokens, which is loop-retrace metadata an
-        # entry bridge has no use for.  has_compiled_targets() (checking
-        # target_tokens) is therefore always False for such a callee, and
-        # _opimpl_recursive_call must not use it to decide "is there
-        # compiled code to call" -- ptoken is not None is the right check.
+        # As above, but for a loop-less ("entry bridge") linked callee.
         from rpython.jit.metainterp import pyjitpl
         from rpython.jit.metainterp.history import ConstInt
         driver = JitDriver(greens=['codeno'], reds=['n'],
@@ -683,10 +648,7 @@ class RecursiveTests:
             return n
 
         def main(n):
-            # Warm codeno=1 up on its own first (threshold is 3), so it is
-            # already compiled -- as a loop-less entry bridge, since it
-            # never jumps back to its own merge point -- before codeno=2
-            # is ever traced and recurses into it.
+            # Warm codeno=1 (loop-less entry bridge) before codeno=2 recurses.
             i = 0
             while i < 5:
                 portal(1, i)
@@ -703,14 +665,11 @@ class RecursiveTests:
             metadata.attach_linked_jitcode(mainjitcode, [0, 1], [])
             mainjitcode.pe_metadata = metadata
 
-        # pin the threshold to 0 (always call) -- see the comment in
-        # test_pe_linked_recursive_call_uses_assembler_when_compiled above.
         self.meta_interp(main, [0], inline=True,
                          pe_jitcode_setup=install_pe_metadata,
                          pe_call_threshold=0)
 
-        # (a) settle H1 vs H2: does the cell get a procedure_token at all
-        # for a loop-less callee, and does it have target_tokens?
+        # A loop-less callee gets a token but no target_tokens.
         jd = pyjitpl._warmrunnerdesc.jitdrivers_sd[0]
         cell = jd.warmstate.JitCell.get_jit_cell_at_key([ConstInt(1)])
         assert cell is not None
@@ -719,23 +678,12 @@ class RecursiveTests:
         assert not token.target_tokens      # ... but never has target_tokens
         assert token.compiled_loop_token is not None   # ... and is callable
 
-        # (b) the second trace (codeno=2 recursing into the by-then-
-        # compiled codeno=1) must call assembler, not inline codeno=1's
-        # body.  If the compiled-target check is bypassed or reverts to
-        # has_compiled_targets(), portal(1)'s own merge point gets entered
-        # and traced once before the (separate, pre-existing) nested-loop
-        # escape logic bails to assembler_call -- showing up here as
-        # enter_portal_frame=1 and an extra debug_merge_point for '1'.
+        # Must call assembler, not inline codeno=1's body.
         self.check_history(call_assembler_i=1, enter_portal_frame=0,
                            debug_merge_point=1)
 
     def test_pe_call_threshold_forces_inline_even_when_compiled(self):
-        # The other direction of test_pe_linked_loopless_callee_uses_
-        # assembler_when_compiled: a token exists (same setup), but the
-        # threshold is set higher than the linked program's code_size, so
-        # _opimpl_recursive_call must inline anyway instead of calling
-        # assembler -- proving the size check is load-bearing, not just
-        # "ptoken is not None" with the size compared but ignored.
+        # A high threshold must force inline despite an existing token.
         driver = JitDriver(greens=['codeno'], reds=['n'],
                            get_printable_location=lambda codeno: str(codeno))
 
@@ -765,12 +713,7 @@ class RecursiveTests:
         self.meta_interp(main, [0], inline=True,
                          pe_jitcode_setup=install_pe_metadata,
                          pe_call_threshold=999999999)
-        # codeno=1's token exists (same as the sibling test above) but its
-        # residual jitcode is nowhere near 999999999 bytes, so this must
-        # take the inline-then-escape route: portal(1)'s own merge point
-        # gets entered once, unlike the threshold=0 test above.
-        # enter_portal_frame=0: newframe() skips it for a linked jitcode's
-        # frame (inlined code for the portal's own activation).
+        # Inlines then escapes: one merge point for codeno=1.
         self.check_history(call_assembler_i=1, enter_portal_frame=0,
                            debug_merge_point=2)
 
