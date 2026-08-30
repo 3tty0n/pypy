@@ -381,35 +381,35 @@ class PyPyTarget(object):
         # PYPY_PE_REPORT: report which opcodes lack a residual template,
         # without installing anything.
         if os.environ.get('PYPY_PE_REPORT'):
-            from pypy.interpreter import pe_offline
+            from pypy.interpreter import pe_cogen
 
             def report(codewriter, jitdriver_sd, translator):
                 if jitdriver_sd.jitdriver.name != 'pypyjit':
                     return None
-                extension = pe_offline.build_generating_extension(translator)
+                extension = pe_cogen.build_generating_extension(translator)
                 print '[pe] templates: %d, unsupported: %d' % (
                     len(extension.templates), len(extension.unsupported))
-                pe_offline.report_unsupported(extension, sys.stdout)
-                pe_offline.report_unresolvable(extension, sys.stdout)
-                pe_offline.report_template_size(extension, sys.stdout)
-                pe_offline.report_break_template(extension, sys.stdout)
+                pe_cogen.report_unsupported(extension, sys.stdout)
+                pe_cogen.report_unresolvable(extension, sys.stdout)
+                pe_cogen.report_template_size(extension, sys.stdout)
+                pe_cogen.report_break_template(extension, sys.stdout)
                 return None
 
             driver.translator._pe_linked_setup = report
 
         # PYPY_PE_COGEN: generate a residual program on a trace-start miss.
         elif os.environ.get('PYPY_PE_COGEN'):
-            from pypy.interpreter import pe_offline
+            from pypy.interpreter import pe_cogen
             def install(codewriter, jitdriver_sd, translator):
                 if jitdriver_sd.jitdriver.name != 'pypyjit':
                     return None
-                return pe_offline.install_runtime_cogen(
+                return pe_cogen.install_runtime_cogen(
                     codewriter, jitdriver_sd, translator)
 
             driver.translator._pe_linked_setup = install
             # apply_jit reads _pe_jitcode_setup before _pe_linked_setup runs.
             driver.translator._pe_jitcode_setup = (
-                pe_offline.stamp_after_make_jitcodes)
+                pe_cogen.stamp_after_make_jitcodes)
 
         return PyPyJitPolicy(pypy_hooks)
 

@@ -307,10 +307,10 @@ class WarmRunnerDesc(object):
             for jd in self.jitdrivers_sd:
                 pe_jitcode_setup(jd.mainjitcode)
         for jd in self.jitdrivers_sd:
-            jd.warmstate.pe_suppress_greenref_index = (
-                self._pe_suppress_greenref_index(jd))
-            jd.warmstate.pe_suppress_greenint_index = (
-                self._pe_suppress_greenint_index(jd))
+            jd.warmstate.pe_ref_green_pos = (
+                self._pe_ref_green_pos(jd))
+            jd.warmstate.pe_pc_green_pos = (
+                self._pe_pc_green_pos(jd))
         self.metainterp_sd.jitcodes = jitcodes
         from rpython.jit.codewriter.jitcode import set_late_jitcode_base
         set_late_jitcode_base(len(jitcodes))
@@ -717,31 +717,31 @@ class WarmRunnerDesc(object):
         jd._PTR_ASSEMBLER_HELPER_FUNCTYPE = lltype.Ptr(lltype.FuncType(
             [llmemory.GCREF, llmemory.GCREF], ASMRESTYPE))
 
-    def _pe_suppress_greenref_index(self, jd):
+    def _pe_ref_green_pos(self, jd):
         """Position of "the method" green among jd's REF greens, or -1."""
         metadata = jd.mainjitcode.pe_metadata
         if metadata is None:
             return -1
         if metadata.linked_programs:
-            ref_index = metadata.linked_programs[0].guard_ref_index
+            ref_index = metadata.linked_programs[0].match_ref_index
         else:
             # Runtime cogen: programs arrive later, the layout is fixed now.
-            ref_index = metadata.guard_ref_index
+            ref_index = metadata.match_ref_index
         green_types = jd._green_args_spec
         if ref_index < 0 or history.getkind(green_types[ref_index]) != 'ref':
             return -1
         return len([T for T in green_types[:ref_index]
                     if history.getkind(T) == 'ref'])
 
-    def _pe_suppress_greenint_index(self, jd):
+    def _pe_pc_green_pos(self, jd):
         """Position of "the pc" green among jd's INT greens, or -1."""
         metadata = jd.mainjitcode.pe_metadata
         if metadata is None:
             return -1
         if metadata.linked_programs:
-            pc_index = metadata.linked_programs[0].guard_pc_index
+            pc_index = metadata.linked_programs[0].match_pc_index
         else:
-            pc_index = metadata.guard_pc_index
+            pc_index = metadata.match_pc_index
         green_types = jd._green_args_spec
         if pc_index < 0 or history.getkind(green_types[pc_index]) != 'int':
             return -1

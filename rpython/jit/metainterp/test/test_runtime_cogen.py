@@ -149,13 +149,13 @@ class TestGenerateForLiveCode(LLJitMixin):
         assert precompiled.jitcode.constants_i == ordinary.jitcode.constants_i
 
         ref = captured["ref"]
-        assert precompiled.guard_ref == ref
-        assert precompiled.guard_pc_index == GUARD[0]
-        assert precompiled.guard_ref_index == GUARD[1]
+        assert precompiled.match_ref == ref
+        assert precompiled.match_pc_index == GUARD[0]
+        assert precompiled.match_ref_index == GUARD[1]
         assert precompiled.matches_ref(ref)
         other_ref = lltype.nullptr(llmemory.GCREF.TO)
         assert not precompiled.matches_ref(other_ref)
-        for pc in precompiled.guard_pcs:
+        for pc in precompiled.match_pcs:
             assert precompiled._covers(pc)
         assert precompiled.is_legit_entry_pc(0)
 
@@ -229,7 +229,7 @@ class TestGenerateForLiveCode(LLJitMixin):
 
             mainjitcode = linker.mainjitcode(codewriter)
             metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
-            metadata.guard_ref_index = GUARD[1]
+            metadata.match_ref_index = GUARD[1]
             metadata.runtime_cogen = runtime_cogen
             mainjitcode.pe_metadata = metadata
 
@@ -306,7 +306,7 @@ class TestGenerateForLiveCode(LLJitMixin):
 
             mainjitcode = linker.mainjitcode(codewriter)
             metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
-            metadata.guard_ref_index = GUARD[1]
+            metadata.match_ref_index = GUARD[1]
             metadata.runtime_cogen = runtime_cogen
             mainjitcode.pe_metadata = metadata
             return None
@@ -395,7 +395,7 @@ class TestGenerateForLiveCode(LLJitMixin):
 
             mainjitcode = linker.mainjitcode(codewriter)
             metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
-            metadata.guard_ref_index = GUARD[1]
+            metadata.match_ref_index = GUARD[1]
             metadata.runtime_cogen = runtime_cogen
             mainjitcode.pe_metadata = metadata
             return None
@@ -489,7 +489,7 @@ def test_cogen_threshold_defers_generation_and_caching():
     jitcode = JitCode("threshold-test")
     jitcode.setup()
     program = PELinkedProgram(jitcode, [], [])
-    program.guard_ref = ref
+    program.match_ref = ref
 
     calls = [0]
 
@@ -498,7 +498,7 @@ def test_cogen_threshold_defers_generation_and_caching():
         return program
 
     metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
-    metadata.guard_ref_index = 1
+    metadata.match_ref_index = 1
     metadata.runtime_cogen = runtime_cogen
     metadata.cogen_threshold = 2
 
@@ -526,7 +526,7 @@ def test_cogen_threshold_zero_generates_on_first_miss():
     jitcode = JitCode("threshold-zero-test")
     jitcode.setup()
     program = PELinkedProgram(jitcode, [], [])
-    program.guard_ref = ref
+    program.match_ref = ref
 
     calls = [0]
 
@@ -535,7 +535,7 @@ def test_cogen_threshold_zero_generates_on_first_miss():
         return program
 
     metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
-    metadata.guard_ref_index = 1
+    metadata.match_ref_index = 1
     metadata.runtime_cogen = runtime_cogen
     assert metadata.cogen_threshold == 0
 
@@ -557,7 +557,7 @@ def test_cogen_real_decline_is_still_cached_once_threshold_reached():
         return None
 
     metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
-    metadata.guard_ref_index = 1
+    metadata.match_ref_index = 1
     metadata.runtime_cogen = runtime_cogen
     metadata.cogen_threshold = 1
 
@@ -581,7 +581,7 @@ def test_cogen_threshold_read_from_env_on_first_miss():
     jitcode = JitCode("threshold-env-test")
     jitcode.setup()
     program = PELinkedProgram(jitcode, [], [])
-    program.guard_ref = ref
+    program.match_ref = ref
 
     calls = [0]
 
@@ -590,7 +590,7 @@ def test_cogen_threshold_read_from_env_on_first_miss():
         return program
 
     metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
-    metadata.guard_ref_index = 1
+    metadata.match_ref_index = 1
     metadata.runtime_cogen = runtime_cogen
     metadata.threshold_env_var = "TEST_COGEN_THRESHOLD"
 

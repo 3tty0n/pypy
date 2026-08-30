@@ -118,7 +118,7 @@ class TestRefCacheGenerateForLiveCode(LLJitMixin):
 
             mainjitcode = linker.mainjitcode(codewriter)
             metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
-            metadata.guard_ref_index = GUARD[1]
+            metadata.match_ref_index = GUARD[1]
             metadata.runtime_cogen = runtime_cogen
             mainjitcode.pe_metadata = metadata
             return None
@@ -172,7 +172,7 @@ class TestRefCacheGenerateForLiveCode(LLJitMixin):
 
             mainjitcode = linker.mainjitcode(codewriter)
             metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
-            metadata.guard_ref_index = GUARD[1]
+            metadata.match_ref_index = GUARD[1]
             metadata.runtime_cogen = runtime_cogen
             mainjitcode.pe_metadata = metadata
             return None

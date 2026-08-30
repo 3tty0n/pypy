@@ -297,6 +297,7 @@ class Profiler(BaseProfiler):
         tail_rec = tail_ops * (float(rec_ops) / opt_ops)
         return (t * tail_rec) / (b * tail_rec + c)
 
+    # --- PE runtime-cogen timers (the rest of this file is generic) ---
     def start_pe_cogen(self):  self._start(Counters.PE_COGEN)
     def end_pe_cogen(self):    self._end  (Counters.PE_COGEN)
 
@@ -305,6 +306,7 @@ class Profiler(BaseProfiler):
 
     def start_pe_cogen_install(self): self._start(Counters.PE_COGEN_INSTALL)
     def end_pe_cogen_install(self):   self._end  (Counters.PE_COGEN_INSTALL)
+    # --- end PE runtime-cogen timers ---
 
     def count(self, kind, inc=1):
         self.counters[kind] += inc
@@ -335,6 +337,25 @@ class Profiler(BaseProfiler):
             self._print_stats()
         debug_stop("jit-summary")
 
+    # --- PE runtime-cogen stats (the rest of this file is generic) ---
+    def _print_pe_stats(self, cnt, tim):
+        from rpython.jit.metainterp.pyjitpl import _pe_insn_counts
+        from rpython.jit.codewriter.jitcode import _cogen_counters
+        self._print_line_time("PE cogen overhead", cnt[Counters.PE_COGEN],
+                              tim[Counters.PE_COGEN])
+        self._print_line_time("PE cogen scan", cnt[Counters.PE_COGEN_SCAN],
+                              tim[Counters.PE_COGEN_SCAN])
+        self._print_line_time("PE cogen install",
+                              cnt[Counters.PE_COGEN_INSTALL],
+                              tim[Counters.PE_COGEN_INSTALL])
+        self._print_intline("pe cogen generated", _cogen_counters.generated)
+        self._print_intline("pe cogen declined", _cogen_counters.declined)
+        self._print_intline("pe cogen deferred", _cogen_counters.deferred)
+        self._print_intline("pe insns generic", _pe_insn_counts.generic)
+        self._print_intline("pe insns portal", _pe_insn_counts.portal)
+        self._print_intline("pe insns residual", _pe_insn_counts.residual)
+    # --- end PE runtime-cogen stats ---
+
     def _print_stats(self):
         cnt = self.counters
         tim = self.times
@@ -362,23 +383,9 @@ class Profiler(BaseProfiler):
             t_bridge = self.bridge_time / self.bridge_rec_ops * 1e6
         debug_print("bridge attempts:\t%f s\t%d rec ops\t%f us/op" % (
             self.bridge_time, self.bridge_rec_ops, t_bridge))
-        self._print_line_time("PE cogen overhead", cnt[Counters.PE_COGEN],
-                              tim[Counters.PE_COGEN])
-        self._print_line_time("PE cogen scan", cnt[Counters.PE_COGEN_SCAN],
-                              tim[Counters.PE_COGEN_SCAN])
-        self._print_line_time("PE cogen install",
-                              cnt[Counters.PE_COGEN_INSTALL],
-                              tim[Counters.PE_COGEN_INSTALL])
+        self._print_pe_stats(cnt, tim)
         line = "TOTAL:      \t\t%f" % (self.tk - self.starttime, )
         debug_print(line)
-        from rpython.jit.metainterp.pyjitpl import _pe_insn_counts
-        from rpython.jit.codewriter.jitcode import _cogen_counters
-        self._print_intline("pe cogen generated", _cogen_counters.generated)
-        self._print_intline("pe cogen declined", _cogen_counters.declined)
-        self._print_intline("pe cogen deferred", _cogen_counters.deferred)
-        self._print_intline("pe insns generic", _pe_insn_counts.generic)
-        self._print_intline("pe insns portal", _pe_insn_counts.portal)
-        self._print_intline("pe insns residual", _pe_insn_counts.residual)
         self._print_intline("ops", cnt[Counters.OPS])
         self._print_intline("heapcached ops", cnt[Counters.HEAPCACHED_OPS])
         self._print_intline("recorded ops", cnt[Counters.RECORDED_OPS])

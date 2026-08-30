@@ -239,8 +239,8 @@ class WarmEnterState(object):
         # Set by the portal_runner catch site around a bailout replay.
         self.pe_suppress_ticks = False
         # Index of "the method"/"the pc" green among REF/INT greens, or -1.
-        self.pe_suppress_greenref_index = -1
-        self.pe_suppress_greenint_index = -1
+        self.pe_ref_green_pos = -1
+        self.pe_pc_green_pos = -1
         if warmrunnerdesc is not None:       # for tests
             self.cpu = warmrunnerdesc.cpu
         try:
@@ -385,8 +385,8 @@ class WarmEnterState(object):
              if history.getkind(TYPE) == 'int'])
 
         def pe_method_and_pc(greenargs):
-            wanted_ref = self.pe_suppress_greenref_index
-            wanted_pc = self.pe_suppress_greenint_index
+            wanted_ref = self.pe_ref_green_pos
+            wanted_pc = self.pe_pc_green_pos
             method_ref = lltype.nullptr(llmemory.GCREF.TO)
             pc = 0
             if wanted_ref < 0 or wanted_pc < 0:
@@ -416,7 +416,7 @@ class WarmEnterState(object):
                 return False
             # Suppress iff bound to this method and pc is not legit/leave.
             for program in metadata.linked_programs:
-                if program.guard_ref and program.guard_ref == method_ref:
+                if program.match_ref and program.match_ref == method_ref:
                     suppressed = not (program.is_legit_entry_pc(pc) or
                                       program.is_leave_pc(pc))
                     if suppressed:

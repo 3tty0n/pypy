@@ -524,9 +524,9 @@ class MIFrame(object):
     def opimpl_goto(self, target):
         self.pc = target
         if target == self.pe_loop_header:
-            self.reached_offline_loop_header()
+            self.reached_pe_loop_header()
 
-    def reached_offline_loop_header(self):
+    def reached_pe_loop_header(self):
         boxes = self.metainterp.pe_portal_boxes
         num_green = self.metainterp.jitdriver_sd.num_green_args
         self.metainterp.reached_loop_header(
@@ -2025,7 +2025,7 @@ class MIFrame(object):
                               (ord(bytecode[pc + 2]) << 8))
                     self.pc = pc
                     if target == self.pe_loop_header:
-                        self.reached_offline_loop_header()
+                        self.reached_pe_loop_header()
                     pc = target
                     self.pc = target
                     continue
@@ -2532,7 +2532,7 @@ class MetaInterpGlobalData(object):
 # ____________________________________________________________
 
 def get_pe_trace_start_position(jitcode):
-    """Return an offline-selected loop entry, or the regular portal entry."""
+    """Return a runtime-linked loop entry, or the regular portal entry."""
     metadata = jitcode.pe_metadata
     if metadata is None:
         return 0
@@ -2764,9 +2764,8 @@ class MetaInterp(object):
                         "program" if program is not None else "generic")
         debug_stop("pe-resume")
 
-    def pe_enter_root(self, original_boxes):
-        """Trace's bottom frame: linked program, or generic portal."""
-        mainjitcode = self.jitdriver_sd.mainjitcode
+    def _pe_select_program(self, mainjitcode, original_boxes):
+        """Pick the linked program (or the generic portal) to enter."""
         metadata = mainjitcode.pe_metadata
         jitcode = mainjitcode
         call_boxes = original_boxes
@@ -2776,16 +2775,28 @@ class MetaInterp(object):
         if program is not None:
             jitcode = program.jitcode
             call_boxes = program.build_call_boxes(original_boxes)
-        f = self.newframe(jitcode)
-        f.setup_call(call_boxes)
-        if program is not None and program.guard_pc_index >= 0:
-            f.pc = program.start_position(original_boxes)
-        elif jitcode is mainjitcode and metadata is not None and \
+        return jitcode, call_boxes, program, metadata
+
+    def _pe_root_entry_pc(self, mainjitcode, jitcode, program, metadata,
+                          original_boxes):
+        """Where the new bottom frame's pc should start."""
+        if program is not None and program.match_pc_index >= 0:
+            return program.start_position(original_boxes)
+        if jitcode is mainjitcode and metadata is not None and \
                 metadata.has_linked_programs():
             # No program for this code+pc: enter the generic portal.
-            f.pc = 0
-        else:
-            f.pc = get_pe_trace_start_position(jitcode)
+            return 0
+        return get_pe_trace_start_position(jitcode)
+
+    def pe_enter_root(self, original_boxes):
+        """Trace's bottom frame: linked program, or generic portal."""
+        mainjitcode = self.jitdriver_sd.mainjitcode
+        jitcode, call_boxes, program, metadata = self._pe_select_program(
+            mainjitcode, original_boxes)
+        f = self.newframe(jitcode)
+        f.setup_call(call_boxes)
+        f.pc = self._pe_root_entry_pc(
+            mainjitcode, jitcode, program, metadata, original_boxes)
         return f, program, metadata
 
     def check_recursion_invariant(self):

@@ -78,7 +78,7 @@ def _signed_pcs(pcs):
 
 
 class PELinkedProgram(object):
-    """One offline-linked JitCode, and the portal entry it stands for."""
+    """One runtime-linked JitCode, and the portal entry it stands for."""
 
     def __init__(self, jitcode, argument_sources, argument_constants):
         self.jitcode = jitcode
@@ -86,23 +86,23 @@ class PELinkedProgram(object):
         # Lists, not tuples: RPython can't unify tuples of differing length.
         self.argument_sources = list(argument_sources)
         self.argument_constants = list(argument_constants)
-        self.guard_pc_index = -1
-        self.guard_pcs = []
-        self.guard_ref_index = -1
-        self.guard_ref = lltype.nullptr(llmemory.GCREF.TO)
-        # Valid trace-start subset of guard_pcs: loop headers + entry pc.
+        self.match_pc_index = -1
+        self.match_pcs = []
+        self.match_ref_index = -1
+        self.match_ref = lltype.nullptr(llmemory.GCREF.TO)
+        # Valid trace-start subset of match_pcs: loop headers + entry pc.
         self.legit_entry_pcs = []
         self.leave_pcs = []
         # Loop-less programs are leaves: CALL_ASSEMBLER would force virtuals.
         self.has_loops = False
-        self.guard_match = _never_matches
+        self.matcher = _never_matches
 
-    def set_guard(self, pc_index, pcs, ref_index, legit_entry_pcs,
-                  has_loops, leave_pcs=[]):
+    def set_matcher(self, pc_index, pcs, ref_index, legit_entry_pcs,
+                     has_loops, leave_pcs=[]):
         self.has_loops = has_loops
-        self.guard_pc_index = pc_index
-        self.guard_pcs = _signed_pcs(pcs)
-        self.guard_ref_index = ref_index
+        self.match_pc_index = pc_index
+        self.match_pcs = _signed_pcs(pcs)
+        self.match_ref_index = ref_index
         self.legit_entry_pcs = _signed_pcs(legit_entry_pcs)
         self.leave_pcs = _signed_pcs(leave_pcs)
 
@@ -110,13 +110,13 @@ class PELinkedProgram(object):
         return _pc_in(self.leave_pcs, pc)
 
     def _covers(self, pc):
-        return _pc_in(self.guard_pcs, pc)
+        return _pc_in(self.match_pcs, pc)
 
     def is_legit_entry_pc(self, pc):
         return _pc_in(self.legit_entry_pcs, pc)
 
     def start_position(self, boxes):
-        index = self.guard_pc_index
+        index = self.match_pc_index
         if index < 0:
             return 0
         metadata = self.jitcode.pe_metadata
@@ -138,29 +138,29 @@ class PELinkedProgram(object):
         return call_boxes
 
     def matches(self, boxes):
-        index = self.guard_pc_index
+        index = self.match_pc_index
         if index >= 0 and not self._covers(boxes[index].getint()):
             return False
-        index = self.guard_ref_index
+        index = self.match_ref_index
         if index < 0:
             return True
         return self.matches_ref(boxes[index].getref_base())
 
     def matches_ref(self, actual):
         """Ref-only half of matches(): does this program own 'actual'?"""
-        if self.guard_ref_index < 0:
+        if self.match_ref_index < 0:
             return True
-        expected = self.guard_ref
+        expected = self.match_ref
         if not expected:
-            if not self.guard_match(actual):
+            if not self.matcher(actual):
                 return False
-            self.guard_ref = actual
+            self.match_ref = actual
             return True
         return actual == expected
 
 
 class PEJitCodeMetadata(object):
-    """RPython-friendly offline PE facts attached to a JitCode."""
+    """RPython-friendly runtime-cogen facts attached to a JitCode."""
 
     def __init__(self, entry_pc, block_pcs, loop_headers, backedge_sources,
                  backedge_targets, entry_pcs, entry_positions):
@@ -187,8 +187,8 @@ class PEJitCodeMetadata(object):
         self._threshold_env_read = False
         # f(gcref) -> program or None; called once per ref.
         self.runtime_cogen = None
-        self.guard_ref_index = -1
-        self.guard_pc_index = -1
+        self.match_ref_index = -1
+        self.match_pc_index = -1
         # soft_decline: True means retry later instead of caching None.
         self.soft_decline = False
 
@@ -213,10 +213,10 @@ class PEJitCodeMetadata(object):
         """The program linked for the code object the portal is entering."""
         programs = self.linked_programs
         ref_index = -1
-        if programs and programs[0].guard_ref_index >= 0:
-            ref_index = programs[0].guard_ref_index
+        if programs and programs[0].match_ref_index >= 0:
+            ref_index = programs[0].match_ref_index
         elif not programs and self.runtime_cogen is not None:
-            ref_index = self.guard_ref_index
+            ref_index = self.match_ref_index
         if ref_index >= 0:
             ref = boxes[ref_index].getref_base()
             if ref:
@@ -238,7 +238,7 @@ class PEJitCodeMetadata(object):
                     cache[ref] = program
                 if program is None:
                     return None
-                index = program.guard_pc_index
+                index = program.match_pc_index
                 if index >= 0 and not program._covers(boxes[index].getint()):
                     return None
                 return program
@@ -255,7 +255,7 @@ class PEJitCodeMetadata(object):
         if cache is not None and ref in cache:
             return cache[ref]
         for program in self.linked_programs:
-            if program.guard_ref and program.guard_ref == ref:
+            if program.match_ref and program.match_ref == ref:
                 return program
         return None
 
@@ -311,7 +311,7 @@ class PEJitCodeMetadata(object):
         debug_start("pe-cogen")
         try:
             program = self.runtime_cogen(ref)
-            if program is None or program.guard_ref != ref:
+            if program is None or program.match_ref != ref:
                 program = None
             if program is None and self.soft_decline:
                 self._defer_ref(ref)
@@ -462,7 +462,7 @@ class JitCode(AbstractDescr):
         return labelvalue
 
     def pe_loop_header_position(self):
-        """Where a jump means an offline-linked loop's back edge, or -1."""
+        """Where a jump means a runtime-linked loop's back edge, or -1."""
         metadata = self.pe_metadata
         if (metadata is None or not metadata.owns_linked_jitcode
                 or metadata.has_merge_points):

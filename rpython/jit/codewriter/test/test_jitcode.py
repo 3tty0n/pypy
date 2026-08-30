@@ -33,63 +33,63 @@ def _make_program(ref_index, pc_index=-1, pcs=None):
     jitcode = JitCode("callee")
     jitcode.setup(code='')
     program = PELinkedProgram(jitcode, [], [])
-    program.set_guard(pc_index, pcs or [], ref_index, pcs or [], False)
+    program.set_matcher(pc_index, pcs or [], ref_index, pcs or [], False)
     return program
 
 
 def _counting_matcher(expected_ref):
-    # Stands in for the real guard_match (a full bytecode compare): records
+    # Stands in for the real matcher (a full bytecode compare): records
     # every call so the tests can assert the cache stops it from re-running.
     calls = []
-    def guard_match(actual):
+    def matcher(actual):
         calls.append(actual)
         return actual == expected_ref
-    guard_match.calls = calls
-    return guard_match
+    matcher.calls = calls
+    return matcher
 
 
-def test_linked_program_for_caches_ref_and_skips_guard_match_on_hit():
+def test_linked_program_for_caches_ref_and_skips_matcher_on_hit():
     ref_a = _new_ref()
     metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
     decoy1 = _make_program(ref_index=0)
     decoy2 = _make_program(ref_index=0)
     match = _make_program(ref_index=0)
-    decoy1.guard_match = _counting_matcher(lltype.nullptr(llmemory.GCREF.TO))
-    decoy2.guard_match = _counting_matcher(lltype.nullptr(llmemory.GCREF.TO))
-    match.guard_match = _counting_matcher(ref_a)
+    decoy1.matcher = _counting_matcher(lltype.nullptr(llmemory.GCREF.TO))
+    decoy2.matcher = _counting_matcher(lltype.nullptr(llmemory.GCREF.TO))
+    match.matcher = _counting_matcher(ref_a)
     metadata.linked_programs = [decoy1, decoy2, match]
 
     boxes = [ConstPtr(ref_a)]
     assert metadata.linked_program_for(boxes) is match
-    assert len(decoy1.guard_match.calls) == 1
-    assert len(decoy2.guard_match.calls) == 1
-    assert len(match.guard_match.calls) == 1
+    assert len(decoy1.matcher.calls) == 1
+    assert len(decoy2.matcher.calls) == 1
+    assert len(match.matcher.calls) == 1
 
-    # second lookup, same ref: cache hit, no guard_match re-invoked at all
+    # second lookup, same ref: cache hit, no matcher re-invoked at all
     assert metadata.linked_program_for(boxes) is match
-    assert len(decoy1.guard_match.calls) == 1
-    assert len(decoy2.guard_match.calls) == 1
-    assert len(match.guard_match.calls) == 1
+    assert len(decoy1.matcher.calls) == 1
+    assert len(decoy2.matcher.calls) == 1
+    assert len(match.matcher.calls) == 1
 
 
 def test_linked_program_for_pc_only_failure_not_cached_as_none():
     ref_a = _new_ref()
     metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
     program = _make_program(ref_index=0, pc_index=1, pcs=[10])
-    program.guard_match = _counting_matcher(ref_a)
+    program.matcher = _counting_matcher(ref_a)
     metadata.linked_programs = [program]
 
     # ref matches but this call's pc isn't covered -> None, but the ref
     # must still get cached to *this* program, not to "no match".
     boxes_uncovered = [ConstPtr(ref_a), ConstInt(999)]
     assert metadata.linked_program_for(boxes_uncovered) is None
-    assert len(program.guard_match.calls) == 1
+    assert len(program.matcher.calls) == 1
 
     # same ref, now with a covered pc: must find the program from cache,
-    # without re-running guard_match.
+    # without re-running matcher.
     boxes_covered = [ConstPtr(ref_a), ConstInt(10)]
     assert metadata.linked_program_for(boxes_covered) is program
-    assert len(program.guard_match.calls) == 1
+    assert len(program.matcher.calls) == 1
 
 
 def test_linked_program_for_non_matching_ref_caches_none():
@@ -97,17 +97,17 @@ def test_linked_program_for_non_matching_ref_caches_none():
     ref_b = _new_ref()
     metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
     program = _make_program(ref_index=0)
-    program.guard_match = _counting_matcher(ref_a)
+    program.matcher = _counting_matcher(ref_a)
     metadata.linked_programs = [program]
 
     boxes = [ConstPtr(ref_b)]
     assert metadata.linked_program_for(boxes) is None
-    assert len(program.guard_match.calls) == 1
+    assert len(program.matcher.calls) == 1
 
-    # second lookup, same non-matching ref: cache hit on None, guard_match
+    # second lookup, same non-matching ref: cache hit on None, matcher
     # not re-run.
     assert metadata.linked_program_for(boxes) is None
-    assert len(program.guard_match.calls) == 1
+    assert len(program.matcher.calls) == 1
 
 
 def _counting_runtime_cogen(program_for_ref):
@@ -123,7 +123,7 @@ def test_runtime_cogen_not_invoked_when_ref_resolved_by_existing_program():
     ref_a = _new_ref()
     metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
     program = _make_program(ref_index=0)
-    program.guard_match = _counting_matcher(ref_a)
+    program.matcher = _counting_matcher(ref_a)
     metadata.linked_programs = [program]
     metadata.runtime_cogen = _counting_runtime_cogen(lambda ref: None)
 
@@ -136,7 +136,7 @@ def test_runtime_cogen_invoked_once_and_decline_is_cached():
     ref_a = _new_ref()
     metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
     decoy = _make_program(ref_index=0)
-    decoy.guard_match = _counting_matcher(lltype.nullptr(llmemory.GCREF.TO))
+    decoy.matcher = _counting_matcher(lltype.nullptr(llmemory.GCREF.TO))
     metadata.linked_programs = [decoy]
     metadata.runtime_cogen = _counting_runtime_cogen(lambda ref: None)
 
@@ -152,9 +152,9 @@ def test_runtime_cogen_success_is_cached_and_returned():
     ref_a = _new_ref()
     metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
     metadata.linked_programs = []
-    metadata.guard_ref_index = 0
+    metadata.match_ref_index = 0
     generated = _make_program(ref_index=0)
-    generated.guard_ref = ref_a
+    generated.match_ref = ref_a
 
     def program_for_ref(ref):
         metadata.linked_programs = [generated]
@@ -173,9 +173,9 @@ def test_runtime_cogen_pc_only_miss_after_generation_still_caches_program():
     ref_a = _new_ref()
     metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
     metadata.linked_programs = []
-    metadata.guard_ref_index = 0
+    metadata.match_ref_index = 0
     generated = _make_program(ref_index=0, pc_index=1, pcs=[10])
-    generated.guard_ref = ref_a
+    generated.match_ref = ref_a
 
     def program_for_ref(ref):
         metadata.linked_programs = [generated]
@@ -196,9 +196,9 @@ def test_runtime_cogen_returning_wrong_ref_is_treated_as_decline():
     ref_b = _new_ref()
     metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
     metadata.linked_programs = []
-    metadata.guard_ref_index = 0
+    metadata.match_ref_index = 0
     generated = _make_program(ref_index=0)
-    generated.guard_ref = ref_b
+    generated.match_ref = ref_b
 
     metadata.runtime_cogen = _counting_runtime_cogen(lambda ref: generated)
 
@@ -213,9 +213,9 @@ def test_soft_decline_is_not_cached_and_retries_with_backoff():
     ref_a = _new_ref()
     metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
     metadata.linked_programs = []
-    metadata.guard_ref_index = 0
+    metadata.match_ref_index = 0
     generated = _make_program(ref_index=0)
-    generated.guard_ref = ref_a
+    generated.match_ref = ref_a
 
     calls = []
 
@@ -247,7 +247,7 @@ def test_soft_decline_is_not_cached_and_retries_with_backoff():
 def test_soft_decline_backoff_scales_from_cogen_threshold():
     ref_a = _new_ref()
     metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
-    metadata.guard_ref_index = 0
+    metadata.match_ref_index = 0
     metadata.cogen_threshold = 3
     calls = []
 
@@ -278,11 +278,11 @@ def test_is_linked_jitcode_uses_flag_set_by_attach():
 
 def test_leave_pcs_and_installed_program():
     program = _make_program(0, pc_index=1, pcs=[0, 10])
-    program.set_guard(1, [0, 10], 0, [0], True, [20, 30])
+    program.set_matcher(1, [0, 10], 0, [0], True, [20, 30])
     assert program.is_leave_pc(20) and program.is_leave_pc(30)
     assert not program.is_leave_pc(10)
     ref = _new_ref()
-    program.guard_ref = ref
+    program.match_ref = ref
     metadata = PEJitCodeMetadata(0, [], [], [], [], [], [])
     metadata.linked_programs.append(program)
     assert metadata.installed_program_for_ref(ref) is program

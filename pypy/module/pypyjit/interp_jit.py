@@ -100,7 +100,7 @@ class __extend__(PyFrame):
             return self.popvalue()
 
     def jump_absolute(self, jumpto, ec):
-        """True when a trace hook moved the pc; it is then in last_instr."""
+        """See PyFrame.jump_absolute for the return-value contract."""
         moved = False
         if we_are_jitted():
             #
