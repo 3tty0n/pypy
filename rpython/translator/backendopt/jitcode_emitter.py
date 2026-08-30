@@ -80,22 +80,50 @@ class FragmentCompiler(object):
     """Runs the codewriter once per template; each exit becomes a return."""
 
     def __init__(self, codewriter, portal_jd, static_name, hole_names,
-                 boundary_names, jit_merge_point_args=(), null_names=()):
+                 runtime_names, jit_merge_point_args=(), null_names=()):
         self.codewriter = codewriter
         self.portal_jd = portal_jd
         self.static_name = static_name
         self.hole_names = tuple(hole_names)
-        self.boundary_names = tuple(boundary_names)
+        self.runtime_names = tuple(runtime_names)
         self.jit_merge_point_args = tuple(jit_merge_point_args)
         # Names invariant for the whole portal, unlike one template's own.
         self.null_names = tuple(null_names)
 
     def compile(self, template, bindings={}, merge_point=False):
-        from rpython.flowspace.model import Block, Link, copygraph
         from rpython.jit.codewriter.flatten import flatten_graph, KINDS
         from rpython.jit.codewriter.jtransform import transform_graph
         from rpython.jit.codewriter.regalloc import perform_register_allocation
-        from rpython.rtyper.lltypesystem import lltype
+
+        (graph, helper, named, original_order, ordered, reds, transitions,
+         terminators, finishing, exit_block) = self._prepare_graph(
+            template, bindings, merge_point)
+        tails = self._lower_exits(
+            helper, graph, named, original_order, transitions, finishing,
+            exit_block)
+
+        callcontrol = self.codewriter.callcontrol
+        transform_graph(graph, self.codewriter.cpu, callcontrol, self.portal_jd)
+        regallocs = dict((kind, perform_register_allocation(graph, kind))
+                         for kind in KINDS)
+        ssarepr = flatten_graph(graph, regallocs, cpu=callcontrol.cpu)
+
+        entry = self._entry_registers(ordered)
+        exits = []
+        for index, tail in enumerate(tails):
+            exits.append(FragmentExit(
+                index, self._tail_registers(regallocs, tail, entry),
+                terminators[index]))
+        num_regs = dict(
+            (kind, max(regallocs[kind]._coloring.values()) + 1
+             if regallocs[kind]._coloring else 0)
+            for kind in KINDS)
+        return TemplateFragment(ssarepr.insns, exits, num_regs, entry,
+                                self._prologue(ordered, reds))
+
+    def _prepare_graph(self, template, bindings, merge_point):
+        """Copy the residual graph and thread/patch its boundary values."""
+        from rpython.flowspace.model import Block, copygraph
         from rpython.translator.backendopt.partialeval import (
             _find_split_transitions, replace_uses)
         from rpython.translator.backendopt.partialeval_template import (
@@ -108,7 +136,7 @@ class FragmentCompiler(object):
         self._thread_boundary_values(graph, named)
         replace_uses(graph, self._placeholders(template, named, bindings))
         helper = LinkedResidualLowerer(
-            self.boundary_names, (), (), self.jit_merge_point_args)
+            self.runtime_names, (), (), self.jit_merge_point_args)
         helper.portal_jd = self.portal_jd
         if merge_point and self.jit_merge_point_args:
             # A real merge point; the metainterp locates loops by it.
@@ -140,6 +168,13 @@ class FragmentCompiler(object):
             exit_block = Block([self._signed()])
         exit_block.operations = ()
         exit_block.exits = ()
+        return (graph, helper, named, original_order, ordered, reds,
+               transitions, terminators, finishing, exit_block)
+
+    def _lower_exits(self, helper, graph, named, original_order, transitions,
+                     finishing, exit_block):
+        """Wires every split transition into the shared exit block's tails."""
+        from rpython.flowspace.model import Link
 
         tails = []
         for index, transition in enumerate(transitions):
@@ -155,31 +190,13 @@ class FragmentCompiler(object):
             transition.block.recloseblock(Link(args, tail))
             tails.append(tail)
         graph.returnblock = exit_block
-
-        callcontrol = self.codewriter.callcontrol
-        transform_graph(graph, self.codewriter.cpu, callcontrol, self.portal_jd)
-        regallocs = dict((kind, perform_register_allocation(graph, kind))
-                         for kind in KINDS)
-        ssarepr = flatten_graph(graph, regallocs, cpu=callcontrol.cpu)
-
-        entry = self._entry_registers(ordered)
-        exits = []
-        for index, tail in enumerate(tails):
-            exits.append(FragmentExit(
-                index, self._tail_registers(regallocs, tail, entry),
-                terminators[index]))
-        num_regs = dict(
-            (kind, max(regallocs[kind]._coloring.values()) + 1
-             if regallocs[kind]._coloring else 0)
-            for kind in KINDS)
-        return TemplateFragment(ssarepr.insns, exits, num_regs, entry,
-                                self._prologue(ordered, reds))
+        return tails
 
     def _thread_boundary_values(self, graph, named):
         """Keeps an unused boundary name live so its color can't be reused."""
         terminal = (graph.returnblock, graph.exceptblock)
         extra = {graph.startblock: named}
-        for name in self.boundary_names:
+        for name in self.runtime_names:
             var = named.get(name)
             if var is None:
                 continue
@@ -273,7 +290,7 @@ class FragmentCompiler(object):
 
         # An omitted tuple item is matched by origin, not position.
         ordered = [name for name in original_order if name in named
-                  and name in self.boundary_names]
+                  and name in self.runtime_names]
         if len(dynamic) == len(ordered):
             return dict(zip(ordered, dynamic))
 
@@ -283,7 +300,7 @@ class FragmentCompiler(object):
         for item in dynamic:
             item_origin = origins.get(item, item)
             matched = None
-            for name in self.boundary_names:
+            for name in self.runtime_names:
                 if name not in named or name in unchanged_names:
                     continue
                 start_var = named[name]
@@ -297,7 +314,7 @@ class FragmentCompiler(object):
 
         fresh = iter(fresh)
         values = {}
-        for name in self.boundary_names:
+        for name in self.runtime_names:
             if name not in named:
                 continue
             if name in unchanged_names or name in self.null_names:
@@ -315,7 +332,7 @@ class FragmentCompiler(object):
 
         args = []
         inputargs = []
-        for name in self.boundary_names:
+        for name in self.runtime_names:
             var = named[name]
             value = values.get(name)
             args.append(var if value is None else value)
@@ -330,7 +347,7 @@ class FragmentCompiler(object):
         if tail is None:
             return {}
         result = {}
-        for name, var in zip(self.boundary_names, tail.inputargs):
+        for name, var in zip(self.runtime_names, tail.inputargs):
             kind = getkind(var.concretetype)
             try:
                 result[name] = (kind, regallocs[kind].getcolor(var))
@@ -342,10 +359,10 @@ class FragmentCompiler(object):
         """Boundary arguments first, then jit_merge_point_args, then rest."""
         from rpython.flowspace.argument import Signature
 
-        ordered = [(name, named[name]) for name in self.boundary_names
+        ordered = [(name, named[name]) for name in self.runtime_names
                    if name in named]
         ordered += [(name, named[name]) for name in self.jit_merge_point_args
-                    if name in named and name not in self.boundary_names]
+                    if name in named and name not in self.runtime_names]
         taken = set(name for name, _var in ordered)
         ordered.extend((name, var) for name, var in
                        zip(graph.signature[0], graph.startblock.inputargs)
@@ -368,7 +385,7 @@ class FragmentCompiler(object):
                 continue
             index = counts.get(kind, 0)
             counts[kind] = index + 1
-            if name in self.boundary_names:
+            if name in self.runtime_names:
                 result[name] = (kind, index)
         return result
 
@@ -377,14 +394,14 @@ class ProgramEmitter(object):
     """Emits a program by concatenating fragments, exits into jumps."""
 
     def __init__(self, codewriter, portal_jd, static_name, split_names,
-                 hole_names, boundary_names, jit_merge_point_args=(),
+                 hole_names, runtime_names, jit_merge_point_args=(),
                  null_names=()):
         self.compiler = FragmentCompiler(
-            codewriter, portal_jd, static_name, hole_names, boundary_names,
+            codewriter, portal_jd, static_name, hole_names, runtime_names,
             jit_merge_point_args, null_names)
         self.codewriter = codewriter
         self.split_names = tuple(split_names)
-        self.boundary_names = tuple(boundary_names)
+        self.runtime_names = tuple(runtime_names)
         self._fragments = {}
 
     def fragment_for(self, block, merge_point=False):

@@ -364,6 +364,32 @@ class LinkedResidualProgram(object):
         self.loop_headers = loop_headers
         return self
 
+    def guard_entries(self, entry_positions):
+        """(legit_entries, entries, leave_pcs), sorted, for a portal guard."""
+        legit_set = {}
+        for pc in self.loop_headers:
+            legit_set[pc] = True
+        legit_set[self.entry_pc] = True
+        legit_entries = []
+        for pc in legit_set:
+            if pc not in self.leave_pcs:
+                legit_entries.append(pc)
+        sort_ints(legit_entries)
+        entries = legit_entries
+        if not uses_compact_entries(self):
+            entries = []
+            for pc in entry_positions:
+                if pc in self.leave_pcs:
+                    continue
+                # Entering a program at an except handler's pc miscompiles.
+                if pc in self.handler_pcs:
+                    continue
+                entries.append(pc)
+            sort_ints(entries)
+        leave_pcs = list(self.leave_pcs)
+        sort_ints(leave_pcs)
+        return legit_entries, entries, leave_pcs
+
     def attach_to_jitcode(self, jitcode, entry_positions=None):
         """Preserve offline CFG facts for the meta-interpreter."""
         from rpython.jit.codewriter.jitcode import PEJitCodeMetadata

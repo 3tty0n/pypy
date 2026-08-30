@@ -91,7 +91,6 @@ class GeneratingExtension(object):
         pending = [(entry_pc, entry_state.copy())]
         self.last_blocked = (-1, -1)
         self.decline_reason = None
-        leave_blocks = 0
         leave_pcs = {}
         handler_pcs = {}
 
@@ -104,57 +103,22 @@ class GeneratingExtension(object):
                         "state" % (pc,))
                 continue
 
-            key, bindings = self.decoder(code, pc)
-            if key not in self.templates:
-                # Fall back to the leave template rather than declining.
-                if self.leave_key < 0 or self.leave_key not in self.templates:
-                    self.last_blocked = (intmask(pc), key)
-                    return None
-                key = self.leave_key
-                leave_blocks += 1
-                leave_pcs[intmask(pc)] = True
-            template = self.templates[key]
-
-            bindings = bindings.copy()
-            bindings[self.static_name] = key
-            bindings.update(state)
-            block = LinkedTemplateBlock(pc, key, template, bindings,
-                                        ref_bindings)
-            block.state = state
+            block = self._decode_block(code, pc, state, ref_bindings, leave_pcs)
+            if block is None:
+                return None
             blocks[pc] = block
 
-            terminators = template.terminators
-            targets_by_index = template.resolve_targets(bindings)
-            states_by_index = template.resolve_state(bindings)
-            for index in range(len(terminators)):
-                terminator = terminators[index]
-                targets = targets_by_index[index]
-                next_state = states_by_index[index]
-                if isinstance(terminator, Finish):
-                    block.has_finish = True
-                    continue
-                for target in targets:
-                    debug_print("pe-cogen-scan edge", intmask(pc), "key",
-                                key, "->", intmask(target))
-                    if target not in block.successors:
-                        block.successors.append(target)
-                    if target not in blocks:
-                        pending.append((target, next_state))
-            if key in self.handler_edges:
-                pc_name, offset_name = self.handler_edges[key]
-                target = bindings[pc_name] + bindings[offset_name]
-                debug_print("pe-cogen-scan handler edge", intmask(pc),
-                            "->", intmask(target))
-                handler_pcs[intmask(target)] = True
-                if target not in block.successors:
-                    block.successors.append(target)
-                if target not in blocks:
-                    pending.append((target, state))
+            self._enqueue_successors(
+                pc, block.key, block.template, block.bindings, block,
+                pending, blocks)
+            self._enqueue_handler_edge(
+                pc, block.key, block.bindings, state, block, pending, blocks,
+                handler_pcs)
 
         program = LinkedResidualProgram(entry_pc, blocks, state_names)
         program.leave_pcs = leave_pcs
         program.handler_pcs = handler_pcs
-        program.leave_blocks = leave_blocks
+        program.leave_blocks = len(leave_pcs)
         program = program.analyze_loops()
         # After loop analysis so a policy can ask about loop headers.
         if self.policy is not None and not self.policy(program, code):
@@ -162,6 +126,59 @@ class GeneratingExtension(object):
                 "declined by policy (%d blocks)" % len(program.blocks))
             return None
         return program
+
+    def _decode_block(self, code, pc, state, ref_bindings, leave_pcs):
+        """Decode and bind one pc into a block; None signals a decline."""
+        key, bindings = self.decoder(code, pc)
+        if key not in self.templates:
+            # Fall back to the leave template rather than declining.
+            if self.leave_key < 0 or self.leave_key not in self.templates:
+                self.last_blocked = (intmask(pc), key)
+                return None
+            key = self.leave_key
+            leave_pcs[intmask(pc)] = True
+        template = self.templates[key]
+
+        bindings = bindings.copy()
+        bindings[self.static_name] = key
+        bindings.update(state)
+        block = LinkedTemplateBlock(pc, key, template, bindings, ref_bindings)
+        block.state = state
+        return block
+
+    def _enqueue_successors(self, pc, key, template, bindings, block,
+                            pending, blocks):
+        terminators = template.terminators
+        targets_by_index = template.resolve_targets(bindings)
+        states_by_index = template.resolve_state(bindings)
+        for index in range(len(terminators)):
+            terminator = terminators[index]
+            targets = targets_by_index[index]
+            next_state = states_by_index[index]
+            if isinstance(terminator, Finish):
+                block.has_finish = True
+                continue
+            for target in targets:
+                debug_print("pe-cogen-scan edge", intmask(pc), "key",
+                            key, "->", intmask(target))
+                if target not in block.successors:
+                    block.successors.append(target)
+                if target not in blocks:
+                    pending.append((target, next_state))
+
+    def _enqueue_handler_edge(self, pc, key, bindings, state, block,
+                              pending, blocks, handler_pcs):
+        if key not in self.handler_edges:
+            return
+        pc_name, offset_name = self.handler_edges[key]
+        target = bindings[pc_name] + bindings[offset_name]
+        debug_print("pe-cogen-scan handler edge", intmask(pc),
+                    "->", intmask(target))
+        handler_pcs[intmask(target)] = True
+        if target not in block.successors:
+            block.successors.append(target)
+        if target not in blocks:
+            pending.append((target, state))
 
     def report(self, name_of=None):
         """Which instructions specialized, and why the rest did not."""

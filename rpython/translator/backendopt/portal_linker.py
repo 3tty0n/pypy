@@ -21,15 +21,8 @@ class PortalLinker(object):
                emitter=None, native_table=None):
         """Compile ``program`` and register it on the portal."""
         mainjitcode = self.mainjitcode(codewriter)
-        if whole_graph:
-            lowered = program.lower(
-                codewriter, self.name, portal_jd=self.jitdriver_sd,
-                runtime_names=self.runtime_names, null_names=self.null_names,
-                jit_merge_point_args=self.jit_merge_point_args)
-        elif native_table is not None:
-            lowered = self._emit_native(codewriter, program, native_table)
-        else:
-            lowered = self._emit(codewriter, program, emitter=emitter)
+        lowered = self._lower(
+            codewriter, program, whole_graph, native_table, emitter)
         lowered.jitcode.jitdriver_sd = self.jitdriver_sd
 
         # The first program to arrive creates the metadata others register in.
@@ -38,34 +31,7 @@ class PortalLinker(object):
         linked_program = mainjitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, list(self.portal_sources), [])
         if guard is not None:
-            from rpython.translator.backendopt.partialeval_template import (
-                sort_ints, uses_compact_entries)
-            legit_set = {}
-            for pc in program.loop_headers:
-                legit_set[pc] = True
-            legit_set[program.entry_pc] = True
-            legit_entries = []
-            for pc in legit_set:
-                if pc not in program.leave_pcs:
-                    legit_entries.append(pc)
-            sort_ints(legit_entries)
-            entries = legit_entries
-            if not uses_compact_entries(program):
-                entries = []
-                for pc in lowered.entry_positions:
-                    if pc in program.leave_pcs:
-                        continue
-                    # Entering a program at an except handler's pc miscompiles.
-                    if pc in program.handler_pcs:
-                        continue
-                    entries.append(pc)
-                sort_ints(entries)
-            leave_pcs = list(program.leave_pcs)
-            sort_ints(leave_pcs)
-            linked_program.set_guard(guard[0], entries, guard[1],
-                                     legit_entries,
-                                     len(program.loop_headers) > 0,
-                                     leave_pcs)
+            self._attach_guard(linked_program, program, lowered, guard)
         lowered.jitcode.pe_metadata.attach_linked_jitcode(
             lowered.jitcode, [], [])
         lowered.jitcode.pe_metadata.has_merge_points = bool(
@@ -73,6 +39,28 @@ class PortalLinker(object):
         lowered.linked_program = linked_program
         self._dump(lowered)
         return lowered
+
+    def _lower(self, codewriter, program, whole_graph, native_table, emitter):
+        """Pick one of the three lowering strategies and run it."""
+        if whole_graph:
+            return self._lower_whole_graph(codewriter, program)
+        if native_table is not None:
+            return self._emit_native(codewriter, program, native_table)
+        return self._emit(codewriter, program, emitter=emitter)
+
+    def _lower_whole_graph(self, codewriter, program):
+        return program.lower(
+            codewriter, self.name, portal_jd=self.jitdriver_sd,
+            runtime_names=self.runtime_names, null_names=self.null_names,
+            jit_merge_point_args=self.jit_merge_point_args)
+
+    def _attach_guard(self, linked_program, program, lowered, guard):
+        legit_entries, entries, leave_pcs = program.guard_entries(
+            lowered.entry_positions)
+        linked_program.set_matcher(guard[0], entries, guard[1],
+                                 legit_entries,
+                                 len(program.loop_headers) > 0,
+                                 leave_pcs)
 
     def _dump(self, lowered):
         """Write the JitCode listing where PE_DUMP_JITCODE asks for it."""
@@ -118,7 +106,7 @@ class PortalLinker(object):
             emitter = ProgramEmitter(
                 codewriter, self.jitdriver_sd, self.static_name,
                 split_names=self.split_names, hole_names=self.hole_names,
-                boundary_names=self.runtime_names,
+                runtime_names=self.runtime_names,
                 jit_merge_point_args=self.jit_merge_point_args,
                 null_names=self.null_names)
         jitcode, entry_positions = emitter.emit(program, self.name)

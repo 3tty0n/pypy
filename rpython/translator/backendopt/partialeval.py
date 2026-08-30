@@ -1,3 +1,4 @@
+"""Offline PE: specialize and connect residual graphs for PE entry points."""
 from rpython.flowspace.model import (c_last_exception, checkgraph, copygraph,
                                      Constant, Link, Variable)
 from rpython.rlib.objectmodel import compute_hash
@@ -16,6 +17,44 @@ def find_pe_entrypoints(translator):
             result.append(graph)
 
     return result
+
+
+def _pe_argument_names(graph):
+    static_names = graph.func._pe_static_args_
+    split_names = getattr(graph.func, "_pe_split_args_", ())
+    return static_names, split_names
+
+
+def partial_evaluate(translator, static_program):
+    """Specialize and install all declared PE entry points."""
+    graphs = find_pe_entrypoints(translator)
+    pe = PartialEvaluator(translator)
+    installed = []
+
+    for graph in graphs:
+        if graph in static_program:
+            entry = static_program[graph]
+        elif graph.func in static_program:
+            entry = static_program[graph.func]
+        else:
+            raise ValueError("missing PE values for graph %r" % (graph,))
+
+        if isinstance(entry, tuple):
+            static_env, split_env = entry
+        else:
+            static_env, split_env = entry, {}
+
+        _, split_names = _pe_argument_names(graph)
+        if split_names:
+            installed_graph = pe.install_split_graph(
+                graph, static_env, split_env)
+        else:
+            installed_graph = pe.install_graph(graph, static_env)
+        simplify.cleanup_graph(installed_graph)
+        checkgraph(installed_graph)
+        installed.append(installed_graph)
+    return installed
+
 
 def replace_uses(graph, replacements):
     for block in graph.iterblocks():
@@ -116,12 +155,6 @@ def fold_static_calls(translator, graph):
 
 def specialize_entry_point(translator, graph, static_values):
     return PartialEvaluator(translator).specialize(graph, static_values, {})
-
-
-def _pe_argument_names(graph):
-    static_names = graph.func._pe_static_args_
-    split_names = getattr(graph.func, "_pe_split_args_", ())
-    return static_names, split_names
 
 
 def _argument_values(graph, declared, values, kind):
@@ -290,6 +323,7 @@ class PartialEvaluator(object):
         return graph
 
 
+# Thin forwarders onto PartialEvaluator, kept for existing test call sites.
 def specialize_variant(pe, graph, static_values, split_values):
     return pe.specialize(graph, static_values, split_values)
 
@@ -491,33 +525,3 @@ def _specialize_copied_graph(translator, graph, residual, indexed_values):
     constant_fold_graph(residual)
     simplify.cleanup_graph(residual)
     checkgraph(residual)
-
-def partial_evaluate(translator, static_program):
-    """Specialize and install all declared PE entry points."""
-    graphs = find_pe_entrypoints(translator)
-    pe = PartialEvaluator(translator)
-    installed = []
-
-    for graph in graphs:
-        if graph in static_program:
-            entry = static_program[graph]
-        elif graph.func in static_program:
-            entry = static_program[graph.func]
-        else:
-            raise ValueError("missing PE values for graph %r" % (graph,))
-
-        if isinstance(entry, tuple):
-            static_env, split_env = entry
-        else:
-            static_env, split_env = entry, {}
-
-        _, split_names = _pe_argument_names(graph)
-        if split_names:
-            installed_graph = pe.install_split_graph(
-                graph, static_env, split_env)
-        else:
-            installed_graph = pe.install_graph(graph, static_env)
-        simplify.cleanup_graph(installed_graph)
-        checkgraph(installed_graph)
-        installed.append(installed_graph)
-    return installed

@@ -38,5 +38,5 @@ def generate_for_live_code(extension, linker, codewriter, code, guard, ref,
         debug_stop("pe-cogen-install")
         if profiler is not None:
             profiler.end_pe_cogen_install()
-    lowered.linked_program.guard_ref = ref
+    lowered.linked_program.match_ref = ref
     return lowered.linked_program

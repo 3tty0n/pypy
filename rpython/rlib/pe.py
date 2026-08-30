@@ -1,12 +1,7 @@
-"""Scalar shadow file for array slots whose indices are late-static."""
+"""PE annotation API (PEDriver) plus a scalar shadow file for late-static slots."""
 
 from rpython.rtyper.extregistry import ExtRegistryEntry
 from rpython.rlib.objectmodel import always_inline, specialize
-
-FILE_SIZE = 3
-
-#: Slot numbers at or above this live in the array rather than the file.
-OUT_OF_FILE = FILE_SIZE
 
 
 def _names(value):
@@ -14,108 +9,6 @@ def _names(value):
     if isinstance(value, str):
         return tuple(value.split())
     return tuple(value)
-
-
-def value_file(array, scalars, late_static):
-    """Declare an array whose late-static accesses are held in scalars.
-
-    late_static names must be split args, so slot numbers fold to
-    constants; pass the result to PEDriver's value_file."""
-    return (array, _names(scalars), _names(late_static))
-
-
-def check_value_file(func):
-    """Raise if a declared value file cannot be held in scalars."""
-    declaration = getattr(func, "_pe_value_file_", None)
-    if declaration is None:
-        return None
-    array, scalars, late_static = declaration
-    split = getattr(func, "_pe_split_args_", ())
-    for name in late_static:
-        if name not in split:
-            raise ValueError(
-                "%r declares %r as late-static for its value file, but the "
-                "split arguments are %r -- an index that is not known at link "
-                "time leaves the file's tests in the residual code"
-                % (func, name, split))
-    if len(scalars) != FILE_SIZE:
-        raise ValueError(
-            "%r declares %d value-file slots, but this module implements %d"
-            % (func, len(scalars), FILE_SIZE))
-    argnames = func.func_code.co_varnames[:func.func_code.co_argcount]
-    for name in (array,) + tuple(scalars) + tuple(late_static):
-        if name not in argnames:
-            raise ValueError(
-                "%r declares value-file name %r, which is not one of its "
-                "arguments %r" % (func, name, argnames))
-    return declaration
-
-
-@specialize.arg(0)
-@always_inline
-def read(slot, index, array, v0, v1, v2):
-    """The value in slot (a constant), falling back to array[index]."""
-    if slot == 0:
-        return v0
-    if slot == 1:
-        return v1
-    if slot == 2:
-        return v2
-    return array[index]
-
-
-@specialize.arg(0)
-@always_inline
-def write(slot, index, value, array, v0, v1, v2):
-    """Store value in slot (a constant), or array[index]; returns the file."""
-    if slot == 0:
-        return value, v1, v2
-    if slot == 1:
-        return v0, value, v2
-    if slot == 2:
-        return v0, v1, value
-    array[index] = value
-    return v0, v1, v2
-
-
-@always_inline
-def shift_in(value, evict_index, array, v0, v1, v2):
-    """Move the file up by one, value entering at slot 0.
-
-    A negative evict_index means the file is not yet full: nothing evicted."""
-    if evict_index >= 0:
-        array[evict_index] = v2
-    return value, v0, v1
-
-
-@always_inline
-def shift_out(fill_index, array, v0, v1, v2):
-    """Move the file down by one, dropping slot 0.
-
-    A negative fill_index means nothing left to read; slot becomes empty."""
-    if fill_index >= 0:
-        return v1, v2, array[fill_index]
-    return v1, v2, None
-
-
-@always_inline
-def spill(array, i0, i1, i2, v0, v1, v2):
-    """Write the file back to array; a negative index skips that slot."""
-    if i0 >= 0:
-        array[i0] = v0
-    if i1 >= 0:
-        array[i1] = v1
-    if i2 >= 0:
-        array[i2] = v2
-
-
-@always_inline
-def refill(array, i0, i1, i2):
-    """Reload the file, after a callee may have rewritten the array."""
-    v0 = array[i0] if i0 >= 0 else None
-    v1 = array[i1] if i1 >= 0 else None
-    v2 = array[i2] if i2 >= 0 else None
-    return v0, v1, v2
 
 
 class PEDriver(object):
@@ -221,3 +114,118 @@ def residualize(func):
     leaving the interpreter's own call to it untouched."""
     func._pe_residualize_ = True
     return func
+
+
+# Below: the scalar shadow file, a runtime-only helper for value_file=.
+# It holds up to FILE_SIZE late-static array slots in scalars instead of
+# the array, so a residual read/write of a late-static index needs no
+# array access. read/write/shift_in/shift_out/spill/refill run inlined
+# in the translated interpreter; value_file/check_value_file are
+# translation-time declaration helpers for PEDriver's value_file kwarg.
+
+FILE_SIZE = 3
+
+#: Slot numbers at or above this live in the array rather than the file.
+OUT_OF_FILE = FILE_SIZE
+
+
+def value_file(array, scalars, late_static):
+    """Declare an array whose late-static accesses are held in scalars.
+
+    late_static names must be split args, so slot numbers fold to
+    constants; pass the result to PEDriver's value_file."""
+    return (array, _names(scalars), _names(late_static))
+
+
+def check_value_file(func):
+    """Raise if a declared value file cannot be held in scalars."""
+    declaration = getattr(func, "_pe_value_file_", None)
+    if declaration is None:
+        return None
+    array, scalars, late_static = declaration
+    split = getattr(func, "_pe_split_args_", ())
+    for name in late_static:
+        if name not in split:
+            raise ValueError(
+                "%r declares %r as late-static for its value file, but the "
+                "split arguments are %r -- an index that is not known at link "
+                "time leaves the file's tests in the residual code"
+                % (func, name, split))
+    if len(scalars) != FILE_SIZE:
+        raise ValueError(
+            "%r declares %d value-file slots, but this module implements %d"
+            % (func, len(scalars), FILE_SIZE))
+    argnames = func.func_code.co_varnames[:func.func_code.co_argcount]
+    for name in (array,) + tuple(scalars) + tuple(late_static):
+        if name not in argnames:
+            raise ValueError(
+                "%r declares value-file name %r, which is not one of its "
+                "arguments %r" % (func, name, argnames))
+    return declaration
+
+
+@specialize.arg(0)
+@always_inline
+def read(slot, index, array, v0, v1, v2):
+    """The value in slot (a constant), falling back to array[index]."""
+    if slot == 0:
+        return v0
+    if slot == 1:
+        return v1
+    if slot == 2:
+        return v2
+    return array[index]
+
+
+@specialize.arg(0)
+@always_inline
+def write(slot, index, value, array, v0, v1, v2):
+    """Store value in slot (a constant), or array[index]; returns the file."""
+    if slot == 0:
+        return value, v1, v2
+    if slot == 1:
+        return v0, value, v2
+    if slot == 2:
+        return v0, v1, value
+    array[index] = value
+    return v0, v1, v2
+
+
+@always_inline
+def shift_in(value, evict_index, array, v0, v1, v2):
+    """Move the file up by one, value entering at slot 0.
+
+    A negative evict_index means the file is not yet full: nothing evicted."""
+    if evict_index >= 0:
+        array[evict_index] = v2
+    return value, v0, v1
+
+
+@always_inline
+def shift_out(fill_index, array, v0, v1, v2):
+    """Move the file down by one, dropping slot 0.
+
+    A negative fill_index means nothing left to read; slot becomes empty."""
+    if fill_index >= 0:
+        return v1, v2, array[fill_index]
+    return v1, v2, None
+
+
+@always_inline
+def spill(array, i0, i1, i2, v0, v1, v2):
+    """Write the file back to array; a negative index skips that slot."""
+    if i0 >= 0:
+        array[i0] = v0
+    if i1 >= 0:
+        array[i1] = v1
+    if i2 >= 0:
+        array[i2] = v2
+
+
+@always_inline
+def refill(array, i0, i1, i2):
+    """Reload the file, after a callee may have rewritten the array."""
+    v0 = array[i0] if i0 >= 0 else None
+    v1 = array[i1] if i1 >= 0 else None
+    v2 = array[i2] if i2 >= 0 else None
+    return v0, v1, v2

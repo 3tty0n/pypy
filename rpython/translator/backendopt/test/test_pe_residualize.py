@@ -4,7 +4,7 @@ from rpython.translator.translator import TranslationContext, graphof
 from rpython.translator.backendopt.partialeval import PartialEvaluator
 from rpython.rlib import pe
 
-from pypy.interpreter.pe_offline import inline_residualized
+from pypy.interpreter.pe_cogen import inline_residualized
 
 OP_HELPER = 0
 OP_PLAIN = 1

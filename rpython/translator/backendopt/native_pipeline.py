@@ -29,6 +29,44 @@ def _fragment_label_id(pc, local_label_id):
     return intmask(pc) * _LOCAL_LABEL_SPACE + local_label_id
 
 
+def emit_and_assemble_native(native_table, program, name,
+                             has_merge_points=False, assembler=None,
+                             optimise=True):
+    """emit_native -> compute_liveness_native -> fold -> assemble."""
+    from rpython.rlib.debug import debug_start, debug_stop
+    debug_start("pe-cogen-emit")
+    ssarepr, counts = emit_native(native_table, program, name, has_merge_points)
+    debug_stop("pe-cogen-emit")
+    debug_start("pe-cogen-live")
+    compute_liveness_native(ssarepr.insns)
+    debug_stop("pe-cogen-live")
+    if optimise and _fold_enabled():
+        # optimise=False for the equivalence gate: it checks lowering only.
+        debug_start("pe-cogen-fold")
+        ssarepr.insns = fold_constant_loads(ssarepr.insns)
+        if have_debug_prints():
+            debug_print(
+                "pe-cogen-fold folded=%d blocked-crossing=%d "
+                "blocked-live=%d blocked-argcode=%d" % (
+                    _folded_loads.folded, _folded_loads.blocked_crossing,
+                    _folded_loads.blocked_live, _folded_loads.blocked_argcode))
+        _folded_loads.blocked_crossing = 0
+        _folded_loads.blocked_live = 0
+        _folded_loads.blocked_argcode = 0
+        debug_stop("pe-cogen-fold")
+    _log_insn_mix(ssarepr, program)
+    if assembler is None:
+        assembler = NativeAssembler()
+    jitcode = JitCode(name, fnaddr=llmemory.NULL)
+    debug_start("pe-cogen-asm")
+    assembler.assemble(ssarepr, jitcode, counts)
+    debug_stop("pe-cogen-asm")
+    entry_positions = {}
+    for pc in program.blocks:
+        entry_positions[pc] = assembler.label_positions[_block_label_id(pc)]
+    return jitcode, entry_positions, assembler
+
+
 class NativeSwitchDictDescr(SwitchDictDescr):
     """Uses ._native_labels (plain int ids), not ._labels (TLabels)."""
     _native_labels = []
@@ -831,70 +869,23 @@ class NativeAssembler(Assembler):
         allow_short = (insn.opcode in USE_C_FORM)
         for x in insn.operands:
             if isinstance(x, NReg):
-                self.emit_reg(x)
+                self._write_reg_operand(x)
             elif isinstance(x, NIntConst):
-                self.emit_resolved_const(x.ivalue, "int",
-                                         allow_short=allow_short)
+                self._write_int_const_operand(x, allow_short)
             elif isinstance(x, NRefConst):
-                self.emit_resolved_const(x.value, "ref")
+                self._write_ref_const_operand(x)
             elif isinstance(x, NFloatConst):
-                self.emit_resolved_const(x.value, "float")
+                self._write_float_const_operand(x)
             elif isinstance(x, NTLabel):
-                self.alllabels[len(self.code)] = True
-                self.tlabel_positions.append((x.label_id, len(self.code)))
-                self.code.append("temp 1")
-                self.code.append("temp 2")
+                self._write_tlabel_operand(x)
             elif isinstance(x, NListOfKind):
-                lst = x.items
-                if len(lst) > 255:
-                    raise AssemblerError("list too long!")
-                self.code.append(chr(len(lst)))
-                for item in lst:
-                    if isinstance(item, NReg):
-                        assert x.kind == item.kind
-                        self.emit_reg(item)
-                    elif isinstance(item, NIntConst):
-                        assert x.kind == "int"
-                        self.emit_resolved_const(item.ivalue, "int")
-                    elif isinstance(item, NRefConst):
-                        assert x.kind == "ref"
-                        self.emit_resolved_const(item.value, "ref")
-                    elif isinstance(item, NFloatConst):
-                        assert x.kind == "float"
-                        self.emit_resolved_const(item.value, "float")
-                    else:
-                        raise NotImplementedError(
-                            "found an operand of an unexpected type in "
-                            "NListOfKind()")
+                self._write_list_of_kind_operand(x)
             elif isinstance(x, NDescr):
-                d = x.descr
-                if isinstance(d, NativeSwitchDictDescr):
-                    if d not in self._descr_dict:
-                        self._descr_dict[d] = len(self.descrs)
-                        self.descrs.append(d)
-                    self.native_switchdictdescrs.append(d)
-                    num = self._descr_dict[d]
-                elif self._readonly:
-                    num = d.pe_descr_index   # -1: uncovered, decline program
-                    if num < 0:
-                        debug_print("runtime cogen: descr not covered by "
-                                   "precompiled fragments")
-                        raise AssemblerError(
-                            "descr not covered by precompiled fragments")
-                else:
-                    if d not in self._descr_dict:
-                        self._descr_dict[d] = len(self.descrs)
-                        self.descrs.append(d)
-                    num = self._descr_dict[d]
-                assert 0 <= num <= 0xFFFF, "too many AbstractDescrs!"
-                self.code.append(chr(num & 0xFF))
-                self.code.append(chr(num >> 8))
+                self._write_descr_operand(x)
             elif isinstance(x, NIndirectCallTargets):
-                for target in x.lst:
-                    self.indirectcalltargets[target] = True
+                self._write_indirect_call_targets_operand(x)
             elif isinstance(x, NHole):
-                raise AssertionError(
-                    "unpatched hole %s reached the assembler" % (x.name,))
+                self._write_hole_operand(x)
             else:
                 raise NotImplementedError(x)
             letters = _operand_argcode_options(x, allow_short)
@@ -915,6 +906,79 @@ class NativeAssembler(Assembler):
         num = self._insn_number(key)
         self.code[startposition] = chr(num)
         self.startpoints[startposition] = True
+
+    def _write_reg_operand(self, x):
+        self.emit_reg(x)
+
+    def _write_int_const_operand(self, x, allow_short):
+        self.emit_resolved_const(x.ivalue, "int", allow_short=allow_short)
+
+    def _write_ref_const_operand(self, x):
+        self.emit_resolved_const(x.value, "ref")
+
+    def _write_float_const_operand(self, x):
+        self.emit_resolved_const(x.value, "float")
+
+    def _write_tlabel_operand(self, x):
+        self.alllabels[len(self.code)] = True
+        self.tlabel_positions.append((x.label_id, len(self.code)))
+        self.code.append("temp 1")
+        self.code.append("temp 2")
+
+    def _write_list_of_kind_operand(self, x):
+        lst = x.items
+        if len(lst) > 255:
+            raise AssemblerError("list too long!")
+        self.code.append(chr(len(lst)))
+        for item in lst:
+            if isinstance(item, NReg):
+                assert x.kind == item.kind
+                self.emit_reg(item)
+            elif isinstance(item, NIntConst):
+                assert x.kind == "int"
+                self.emit_resolved_const(item.ivalue, "int")
+            elif isinstance(item, NRefConst):
+                assert x.kind == "ref"
+                self.emit_resolved_const(item.value, "ref")
+            elif isinstance(item, NFloatConst):
+                assert x.kind == "float"
+                self.emit_resolved_const(item.value, "float")
+            else:
+                raise NotImplementedError(
+                    "found an operand of an unexpected type in "
+                    "NListOfKind()")
+
+    def _write_descr_operand(self, x):
+        d = x.descr
+        if isinstance(d, NativeSwitchDictDescr):
+            if d not in self._descr_dict:
+                self._descr_dict[d] = len(self.descrs)
+                self.descrs.append(d)
+            self.native_switchdictdescrs.append(d)
+            num = self._descr_dict[d]
+        elif self._readonly:
+            num = d.pe_descr_index   # -1: uncovered, decline program
+            if num < 0:
+                debug_print("runtime cogen: descr not covered by "
+                           "precompiled fragments")
+                raise AssemblerError(
+                    "descr not covered by precompiled fragments")
+        else:
+            if d not in self._descr_dict:
+                self._descr_dict[d] = len(self.descrs)
+                self.descrs.append(d)
+            num = self._descr_dict[d]
+        assert 0 <= num <= 0xFFFF, "too many AbstractDescrs!"
+        self.code.append(chr(num & 0xFF))
+        self.code.append(chr(num >> 8))
+
+    def _write_indirect_call_targets_operand(self, x):
+        for target in x.lst:
+            self.indirectcalltargets[target] = True
+
+    def _write_hole_operand(self, x):
+        raise AssertionError(
+            "unpatched hole %s reached the assembler" % (x.name,))
 
     def _insn_number(self, key):
         """In readonly mode, a miss declines the whole program."""
@@ -1096,40 +1160,3 @@ def fold_constant_loads(insns):
             result.append(insns[position])
     return result
 
-
-def emit_and_assemble_native(native_table, program, name,
-                             has_merge_points=False, assembler=None,
-                             optimise=True):
-    """emit_native -> compute_liveness_native -> fold -> assemble."""
-    from rpython.rlib.debug import debug_start, debug_stop
-    debug_start("pe-cogen-emit")
-    ssarepr, counts = emit_native(native_table, program, name, has_merge_points)
-    debug_stop("pe-cogen-emit")
-    debug_start("pe-cogen-live")
-    compute_liveness_native(ssarepr.insns)
-    debug_stop("pe-cogen-live")
-    if optimise and _fold_enabled():
-        # optimise=False for the equivalence gate: it checks lowering only.
-        debug_start("pe-cogen-fold")
-        ssarepr.insns = fold_constant_loads(ssarepr.insns)
-        if have_debug_prints():
-            debug_print(
-                "pe-cogen-fold folded=%d blocked-crossing=%d "
-                "blocked-live=%d blocked-argcode=%d" % (
-                    _folded_loads.folded, _folded_loads.blocked_crossing,
-                    _folded_loads.blocked_live, _folded_loads.blocked_argcode))
-        _folded_loads.blocked_crossing = 0
-        _folded_loads.blocked_live = 0
-        _folded_loads.blocked_argcode = 0
-        debug_stop("pe-cogen-fold")
-    _log_insn_mix(ssarepr, program)
-    if assembler is None:
-        assembler = NativeAssembler()
-    jitcode = JitCode(name, fnaddr=llmemory.NULL)
-    debug_start("pe-cogen-asm")
-    assembler.assemble(ssarepr, jitcode, counts)
-    debug_stop("pe-cogen-asm")
-    entry_positions = {}
-    for pc in program.blocks:
-        entry_positions[pc] = assembler.label_positions[_block_label_id(pc)]
-    return jitcode, entry_positions, assembler
