@@ -238,6 +238,8 @@ class WarmEnterState(object):
         self.jitdriver_sd = jitdriver_sd
         # Set by the portal_runner catch site around a bailout replay.
         self.pe_suppress_ticks = False
+        # Guard that sent us to the next portal entry, if any.
+        self.pe_pending_guard = None
         # Index of "the method"/"the pc" green among REF/INT greens, or -1.
         self.pe_ref_green_pos = -1
         self.pe_pc_green_pos = -1
@@ -363,6 +365,22 @@ class WarmEnterState(object):
             old_token.record_jump_to(procedure_token)
 
     # ----------
+
+    def pe_credit_bailout_guard(self, cell, suppressed):
+        """We are at a portal entry only because a guard failed and its
+        bailout replayed to here.  Bridging that guard covers this pc, so
+        credit it and do not heat a fresh loop.  One-shot: the next entry,
+        nested portal included, counts normally again."""
+        descr = self.pe_pending_guard
+        if descr is None:
+            return False
+        self.pe_pending_guard = None
+        if suppressed:
+            return False     # this entry would not have ticked anyway
+        if cell is not None and cell.get_procedure_token() is not None:
+            return False     # already compiled here, nothing to duplicate
+        descr.pe_force_compile = True
+        return True
 
     def make_entry_point(self):
         "NOT_RPYTHON"
@@ -545,7 +563,11 @@ class WarmEnterState(object):
                 if isinstance(cell, JitCell) and cell.comparekey(*greenargs):
                     break    # found
                 cell = cell.next
-            else:
+            if self.pe_pending_guard is not None:
+                if self.pe_credit_bailout_guard(
+                        cell, pe_tick_suppressed(greenargs)):
+                    return
+            if cell is None:
                 # not found.
                 if pe_tick_suppressed(greenargs):
                     return

@@ -700,7 +700,8 @@ class ResumeDescr(AbstractFailDescr):
         return self
 
 class AbstractResumeGuardDescr(ResumeDescr):
-    _attrs_ = ('status', 'abort_count', 'tail_ops', 'fail_count')
+    _attrs_ = ('status', 'abort_count', 'tail_ops', 'fail_count',
+               'pe_force_compile')
 
     status = r_uint(0)
     tail_ops = 0
@@ -708,6 +709,9 @@ class AbstractResumeGuardDescr(ResumeDescr):
     abort_count = 0
     ABORT_COUNT_MAX = 16
     fail_count = 0
+    # Set when a bailout from this guard re-entered the portal: the next
+    # failure bridges instead of letting the portal heat a fresh loop.
+    pe_force_compile = False
 
     ST_BUSY_FLAG    = 0x01     # if set, busy tracing from the guard
     ST_TYPE_MASK    = 0x06     # mask for the type (TY_xxx)
@@ -734,11 +738,19 @@ class AbstractResumeGuardDescr(ResumeDescr):
                 self.done_compiling()
         else:
             from rpython.jit.metainterp.blackhole import resume_in_blackhole
-            if isinstance(self, ResumeGuardCopiedDescr):
-                resume_in_blackhole(metainterp_sd, jitdriver_sd, self.prev, deadframe)
-            else:
-                assert isinstance(self, ResumeGuardDescr)
-                resume_in_blackhole(metainterp_sd, jitdriver_sd, self, deadframe)
+            try:
+                if isinstance(self, ResumeGuardCopiedDescr):
+                    resume_in_blackhole(metainterp_sd, jitdriver_sd,
+                                        self.prev, deadframe)
+                else:
+                    assert isinstance(self, ResumeGuardDescr)
+                    resume_in_blackhole(metainterp_sd, jitdriver_sd,
+                                        self, deadframe)
+            except jitexc.ContinueRunningNormallyNoTick as e:
+                # The bailout re-enters the portal: tell the portal that
+                # this entry is ours, so it credits us instead of tracing.
+                jitdriver_sd.warmstate.pe_pending_guard = self
+                raise e
         assert 0, "unreachable"
 
     def _trace_and_compile_from_bridge(self, deadframe, metainterp_sd,
@@ -764,6 +776,10 @@ class AbstractResumeGuardDescr(ResumeDescr):
         jitcounter = metainterp_sd.warmrunnerdesc.jitcounter
         self.fail_count += 1
         metainterp_sd.profiler.note_guard_failure(self.fail_count)
+        #
+        if self.pe_force_compile and not (self.status & self.ST_BUSY_FLAG):
+            self.pe_force_compile = False
+            return True
         #
         if self.status & (self.ST_BUSY_FLAG | self.ST_TYPE_MASK) == 0:
             # common case: this is not a guard_value, and we are not
