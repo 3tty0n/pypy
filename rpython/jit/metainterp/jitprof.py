@@ -71,6 +71,9 @@ class EmptyProfiler(BaseProfiler):
     def bridge_pays_off(self, count, tail_ops):
         return False
 
+    def end_fail_stretch(self):
+        pass
+
     def end_backend(self):
         pass
 
@@ -135,7 +138,8 @@ class LinearFit(object):
         b = (n * self.sxt - self.sx * self.st) / denom
         c = (self.st - b * self.sx) / n
         if b <= 0.0 or c <= 0.0:
-            return -1.0, -1.0
+            # No usable slope: cost is flat, use the mean.
+            return self.st / n, 0.0
         return c, b
 
 
@@ -154,6 +158,12 @@ class Profiler(BaseProfiler):
     # bridge time per attempt = a + b * rec ops; see bridge_break_even().
     bh_fit = None
     bridge_fit = None
+    # A guard failure costs the blackhole run plus the interpreter stretch
+    # until compiled code is entered again; the sample closes there.
+    fail_pending = False
+    fail_elapsed = 0.0
+    fail_insns = 0.0
+    fail_t_end = 0.0
     # Per active resume (innermost last): time and insns spent in portal
     # calls made from the blackhole, excluded from that resume's sample.
     bh_excl_time = None
@@ -233,7 +243,18 @@ class Profiler(BaseProfiler):
         insns -= self.bh_excl_insns.pop()
         if elapsed <= 0.0 or insns < 0:
             return
-        self.bh_fit.add(float(insns), elapsed)
+        self.end_fail_stretch()
+        self.fail_pending = True
+        self.fail_elapsed = elapsed
+        self.fail_insns = float(insns)
+        self.fail_t_end = self.t1
+
+    def end_fail_stretch(self):
+        if not self.fail_pending:
+            return
+        self.fail_pending = False
+        stretch = self.timer() - self.fail_t_end
+        self.bh_fit.add(self.fail_insns, self.fail_elapsed + stretch)
 
     def start_decode(self):
         self._start(Counters.BLACKHOLE_DECODE)
@@ -311,7 +332,7 @@ class Profiler(BaseProfiler):
         if tail_rec < 0.0:
             return -1.0
         a, t = self.bridge_fit.fit()
-        if t > 0.0:
+        if a > 0.0:
             return a + t * tail_rec
         # Before enough bridges exist: per op from loop compiles, no fixed
         # part (unrolling and two optimizer passes cost more per op).
@@ -332,15 +353,25 @@ class Profiler(BaseProfiler):
 
     def expected_remaining_failures(self, count):
         """Lower bound on how often a guard that failed 'count' times will
-        fail again, from the survivor histogram; -1 without data."""
+        fail again; -1 without data. Kaplan-Meier over the log2 buckets:
+        guards bridged in a bucket are censored there, not dead."""
         k = self._bucket(count)
-        survivors = self.fail_hist[k]
-        if survivors == 0:
+        if self.fail_hist[k] == 0:
             return -1.0
+        survival = 1.0
         total = 0.0
-        for j in range(k + 1, self.HIST_BUCKETS):
-            total += self.fail_hist[j] * float(1 << (j - 1))
-        return total / survivors
+        for j in range(k, self.HIST_BUCKETS - 1):
+            at_risk = self.fail_hist[j] - self.bridge_hist[j]
+            if at_risk <= 0:
+                break
+            p = self.fail_hist[j + 1] / float(at_risk)
+            if p > 1.0:
+                p = 1.0
+            survival *= p
+            if survival == 0.0:
+                break
+            total += survival * float(1 << j)
+        return total
 
     def bridge_pays_off(self, count, tail_ops):
         """Survivor rule: bridge when the failures still expected cost more

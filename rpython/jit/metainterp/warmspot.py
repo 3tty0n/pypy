@@ -1000,6 +1000,7 @@ class WarmRunnerDesc(object):
         result_kind = history.getkind(RESULT)
         assert result_kind.startswith(jd.result_type)
         state = jd.warmstate
+        profiler = self.metainterp_sd.profiler
         maybe_compile_and_run = jd._maybe_compile_and_run_fn
         EnterJitAssembler = jd._EnterJitAssembler
 
@@ -1019,6 +1020,7 @@ class WarmRunnerDesc(object):
                                                   portal_ptr)(*args)
             except jitexc.JitException as e:
                 result = handle_jitexception(e)
+                profiler.end_fail_stretch()
                 if result_kind != 'void':
                     result = specialize_value(RESULT, result)
                 return result

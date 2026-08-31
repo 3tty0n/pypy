@@ -467,6 +467,7 @@ class WarmEnterState(object):
         def execute_assembler(loop_token, *args):
             # Call the backend to run the 'looptoken' with the given
             # input args.
+            metainterp_sd.profiler.end_fail_stretch()
 
             # If we have a virtualizable, we have to clear its
             # state, to make sure we enter with vable_token being NONE

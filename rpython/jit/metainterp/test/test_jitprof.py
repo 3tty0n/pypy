@@ -145,8 +145,10 @@ def test_blackhole_cost_model_fit():
     # each resume: 2us fixed + 30ns per insn, exactly linear
     for insns in range(100, 100 + 16 * 50, 50):
         p.start_blackhole()
-        clock[0] += 2e-6 + 30e-9 * insns
+        clock[0] += 1e-6 + 30e-9 * insns
         p.end_blackhole(insns)
+        clock[0] += 1e-6          # interpreter stretch before compiled code
+        p.end_fail_stretch()
     c, b = p.blackhole_cost_model()
     assert abs(c - 2e-6) < 1e-9
     assert abs(b - 30e-9) < 1e-12
@@ -197,6 +199,7 @@ def test_survivor_rule():
         p.start_blackhole()
         clock[0] += 1e-6 + 10e-9 * insns
         p.end_blackhole(insns)
+        p.end_fail_stretch()
         p.start_bridge_attempt()
         p.counters[Counters.RECORDED_OPS] += insns
         clock[0] += 100e-6 + 1e-6 * insns
@@ -213,7 +216,21 @@ def test_survivor_rule():
     assert p.expected_remaining_failures(1) == 12.0 / 8
     assert p.expected_remaining_failures(4) == 4.0 / 2
     assert p.expected_remaining_failures(8) == 0.0
+    # bridged guards are censored, not dead: 2 of the 4 at bucket 1 were
+    # bridged there, so reaching 4 is 2/2 certain from bucket 1
+    p.bridge_hist[1] = 2
+    assert p.expected_remaining_failures(2) == 1.0 * 2 + 0.5 * 4
+    p.bridge_hist[1] = 0
     assert not p.bridge_pays_off(1, 10)         # 1.5 * 1.1us < 110us
-    p.fail_hist[10] = 8                          # every guard reaches 1024
-    assert p.expected_remaining_failures(1) > 500
+    p.fail_hist[0:11] = [8] * 11                 # every guard reaches 1024
+    assert p.expected_remaining_failures(1) == 1023.0
     assert p.bridge_pays_off(1, 10)
+
+
+def test_linear_fit_flat_falls_back_to_mean():
+    from rpython.jit.metainterp.jitprof import LinearFit
+    f = LinearFit()
+    for x in range(16):
+        f.add(float(x), 2e-6)
+    c, b = f.fit()
+    assert abs(c - 2e-6) < 1e-12 and b == 0.0
