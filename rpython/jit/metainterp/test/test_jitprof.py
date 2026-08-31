@@ -215,6 +215,8 @@ def test_survivor_rule():
     # from 1 failure up to a horizon of 8: 4*1 + 2*2 + 1*4 over 8 guards,
     # and 1 of the 8 reaches the horizon
     assert p.failures_until(1, 8) == (12.0 / 8, 1.0 / 8)
+    # horizon 12 sits in bucket 3: its one guard fails 4 more times there
+    assert p.failures_until(1, 12) == (16.0 / 8, 1.0 / 8)
     assert p.failures_until(8, 8) == (0.0, 0.0)
     assert not p.bridge_pays_off(1, 10, 8)      # 1 * 1.1us < 110us * 7/8
     p.fail_hist[0:11] = [8] * 11                 # every guard reaches 1024

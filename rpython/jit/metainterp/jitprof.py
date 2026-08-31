@@ -364,6 +364,8 @@ class Profiler(BaseProfiler):
         saved = 0.0
         for j in range(k, kh):
             saved += self.fail_hist[j + 1] * float(1 << j)
+        # Guards reaching the horizon's bucket fail on until the horizon.
+        saved += self.fail_hist[kh] * float(horizon - (1 << kh))
         return saved / at_k, self.fail_hist[kh] / float(at_k)
 
     def bridge_pays_off(self, count, tail_ops, horizon):
