@@ -25,9 +25,9 @@ REGEXES = [
      'break-even\(100\)=([-\d.]+)$'),
     (('bridge_attempt_time', 'bridge_attempt_ops', 'bridge_attempt_us'),
      '^bridge attempts:\s+([\d.]+) s\s+(\d+) rec ops\s+([\d.]+) us/op$'),
-    (('survivor_a', 'survivor_b', 'survivor_rem32'),
+    (('survivor_a', 'survivor_b', 'survivor_saved', 'survivor_reach'),
      '^survivor:\s+a=([-\d.]+) us\s+b=([-\d.]+) us/op\s+'
-     'E\[rem\|32\]=([-\d.]+)$'),
+     'saved\(32\.\.200\)=([-\d.]+)\s+reach=([-\d.]+)$'),
     (('pe_cogen_no', 'pe_cogen_overhead_time'),
      '^PE cogen overhead:\s+([\d.]+)\s+([\d.]+)$'),
     (('pe_cogen_scan_no', 'pe_cogen_scan_time'),

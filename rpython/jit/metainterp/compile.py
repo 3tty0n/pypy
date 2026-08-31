@@ -820,8 +820,9 @@ class AbstractResumeGuardDescr(ResumeDescr):
             model_increment = 1.0 / failures
             if model_increment > increment:
                 increment = model_increment
+        horizon = int(1.0 / increment)
         if metainterp_sd.profiler.bridge_pays_off(self.fail_count,
-                                                  self.tail_ops):
+                                                  self.tail_ops, horizon):
             increment = 1.0
         if self.abort_count:
             increment = increment / float(1 << self.abort_count)

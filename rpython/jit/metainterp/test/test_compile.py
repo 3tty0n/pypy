@@ -199,7 +199,7 @@ def test_must_compile_uses_pe_eagerness_for_residual_roots():
             def bridge_break_even(tail_ops):
                 return -1.0
             @staticmethod
-            def bridge_pays_off(count, tail_ops):
+            def bridge_pays_off(count, tail_ops, horizon):
                 return False
     descr = ResumeGuardDescr()
     descr.status = 0
@@ -235,7 +235,7 @@ def test_must_compile_backs_off_after_aborted_bridges():
             def bridge_break_even(tail_ops):
                 return -1.0
             @staticmethod
-            def bridge_pays_off(count, tail_ops):
+            def bridge_pays_off(count, tail_ops, horizon):
                 return False
     descr = ResumeGuardDescr()
     descr.status = 0
@@ -276,7 +276,7 @@ def test_must_compile_uses_bridge_model_when_more_eager():
             def bridge_break_even(tail_ops):
                 return {10: 4.0, 1000: 400.0, 5: 0.2}[tail_ops]
             @staticmethod
-            def bridge_pays_off(count, tail_ops):
+            def bridge_pays_off(count, tail_ops, horizon):
                 return False
     descr = ResumeGuardDescr()
     descr.status = 0

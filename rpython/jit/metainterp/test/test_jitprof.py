@@ -209,22 +209,18 @@ def test_survivor_rule():
     assert abs(a - 100e-6) < 1e-9 and abs(b - 1e-6) < 1e-9
     assert abs(p.bridge_cost(10) - 110e-6) < 1e-9
     assert abs(p.failure_cost(10) - 1.1e-6) < 1e-12
-    assert p.expected_remaining_failures(1) == -1.0
+    assert p.failures_until(1, 200) == (0.0, 0.0)
     # 8 guards reach 1 failure, 4 reach 2, 2 reach 4, 1 reaches 8
     p.fail_hist[0:4] = [8, 4, 2, 1]
-    # from 1 failure: 4*1 + 2*2 + 1*4 over 8 survivors
-    assert p.expected_remaining_failures(1) == 12.0 / 8
-    assert p.expected_remaining_failures(4) == 4.0 / 2
-    assert p.expected_remaining_failures(8) == 0.0
-    # bridged guards are censored, not dead: 2 of the 4 at bucket 1 were
-    # bridged there, so reaching 4 is 2/2 certain from bucket 1
-    p.bridge_hist[1] = 2
-    assert p.expected_remaining_failures(2) == 1.0 * 2 + 0.5 * 4
-    p.bridge_hist[1] = 0
-    assert not p.bridge_pays_off(1, 10)         # 1.5 * 1.1us < 110us
+    # from 1 failure up to a horizon of 8: 4*1 + 2*2 + 1*4 over 8 guards,
+    # and 1 of the 8 reaches the horizon
+    assert p.failures_until(1, 8) == (12.0 / 8, 1.0 / 8)
+    assert p.failures_until(8, 8) == (0.0, 0.0)
+    assert not p.bridge_pays_off(1, 10, 8)      # 1 * 1.1us < 110us * 7/8
     p.fail_hist[0:11] = [8] * 11                 # every guard reaches 1024
-    assert p.expected_remaining_failures(1) == 1023.0
-    assert p.bridge_pays_off(1, 10)
+    assert p.failures_until(1, 1024) == (1023.0, 1.0)
+    assert p.bridge_pays_off(1, 10, 1024)       # nothing risked, much saved
+    assert not p.bridge_pays_off(1, 10, 1)      # already past the horizon
 
 
 def test_linear_fit_flat_falls_back_to_mean():

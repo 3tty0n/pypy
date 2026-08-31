@@ -68,7 +68,7 @@ class EmptyProfiler(BaseProfiler):
     def bridge_break_even(self, tail_ops):
         return -1.0
 
-    def bridge_pays_off(self, count, tail_ops):
+    def bridge_pays_off(self, count, tail_ops, horizon):
         return False
 
     def end_fail_stretch(self):
@@ -351,36 +351,30 @@ class Profiler(BaseProfiler):
             return -1.0
         return self.bridge_cost(tail_ops) / fail
 
-    def expected_remaining_failures(self, count):
-        """Lower bound on how often a guard that failed 'count' times will
-        fail again; -1 without data. Kaplan-Meier over the log2 buckets:
-        guards bridged in a bucket are censored there, not dead."""
+    def failures_until(self, count, horizon):
+        """(saved, reach): failures a guard at 'count' is expected to
+        make before 'horizon', and its probability of getting there.
+        Only the observed part of the histogram is used: no extrapolation
+        past the base eagerness, so over-bridging feeds back negatively."""
         k = self._bucket(count)
-        if self.fail_hist[k] == 0:
-            return -1.0
-        survival = 1.0
-        total = 0.0
-        for j in range(k, self.HIST_BUCKETS - 1):
-            at_risk = self.fail_hist[j] - self.bridge_hist[j]
-            if at_risk <= 0:
-                break
-            p = self.fail_hist[j + 1] / float(at_risk)
-            if p > 1.0:
-                p = 1.0
-            survival *= p
-            if survival == 0.0:
-                break
-            total += survival * float(1 << j)
-        return total
+        kh = self._bucket(horizon)
+        at_k = self.fail_hist[k]
+        if kh <= k or at_k == 0:
+            return 0.0, 0.0
+        saved = 0.0
+        for j in range(k, kh):
+            saved += self.fail_hist[j + 1] * float(1 << j)
+        return saved / at_k, self.fail_hist[kh] / float(at_k)
 
-    def bridge_pays_off(self, count, tail_ops):
-        """Survivor rule: bridge when the failures still expected cost more
-        than compiling the bridge now."""
-        remaining = self.expected_remaining_failures(count)
+    def bridge_pays_off(self, count, tail_ops, horizon):
+        """Survivor rule: bridge now rather than at 'horizon' failures when
+        the failures saved outweigh the bridge cost risked on a guard that
+        would have died before the horizon."""
+        saved, reach = self.failures_until(count, horizon)
         fail = self.failure_cost(tail_ops)
-        if remaining <= 0.0 or fail <= 0.0:
+        if saved <= 0.0 or fail <= 0.0:
             return False
-        return remaining * fail > self.bridge_cost(tail_ops)
+        return saved * fail > self.bridge_cost(tail_ops) * (1.0 - reach)
 
     # --- PE runtime-cogen timers (the rest of this file is generic) ---
     def start_pe_cogen(self):  self._start(Counters.PE_COGEN)
@@ -469,8 +463,9 @@ class Profiler(BaseProfiler):
         debug_print("bridge attempts:\t%f s\t%d rec ops\t%f us/op" % (
             self.bridge_time, self.bridge_rec_ops, t_bridge))
         a, t = self.bridge_fit.fit()
-        debug_print("survivor:\ta=%f us\tb=%f us/op\tE[rem|32]=%f" % (
-            a * 1e6, t * 1e6, self.expected_remaining_failures(32)))
+        saved, reach = self.failures_until(32, 200)
+        debug_print("survivor:\ta=%f us\tb=%f us/op\tsaved(32..200)=%f"
+                    "\treach=%f" % (a * 1e6, t * 1e6, saved, reach))
         self._print_pe_stats(cnt, tim)
         line = "TOTAL:      \t\t%f" % (self.tk - self.starttime, )
         debug_print(line)
