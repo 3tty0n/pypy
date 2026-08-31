@@ -701,7 +701,7 @@ class ResumeDescr(AbstractFailDescr):
 
 class AbstractResumeGuardDescr(ResumeDescr):
     _attrs_ = ('status', 'abort_count', 'tail_ops', 'fail_count',
-               'pe_force_compile')
+               'fails_since_tick', 'pe_force_compile')
 
     status = r_uint(0)
     tail_ops = 0
@@ -709,6 +709,7 @@ class AbstractResumeGuardDescr(ResumeDescr):
     abort_count = 0
     ABORT_COUNT_MAX = 16
     fail_count = 0
+    fails_since_tick = 0
     # Set when a bailout from this guard re-entered the portal: the next
     # failure bridges instead of letting the portal heat a fresh loop.
     pe_force_compile = False
@@ -778,11 +779,15 @@ class AbstractResumeGuardDescr(ResumeDescr):
             return True
         #
         if self.status & (self.ST_BUSY_FLAG | self.ST_TYPE_MASK) == 0:
-            # common case: this is not a guard_value, and we are not
-            # already busy tracing.  The rest of self.status stores a
-            # valid per-guard index in the jitcounter.
-            hash = self.status
-            assert hash == (self.status & self.ST_SHIFT_MASK)
+            # common case: not a guard_value and not busy tracing.  Decide
+            # on the exact per-guard count: the shared jitcounter decays
+            # and evicts, so its "N failures" took thousands in practice.
+            increment = self._tick_increment(metainterp_sd, jitdriver_sd)
+            self.fails_since_tick += 1
+            if self.fails_since_tick * increment < 1.0:
+                return False
+            self.fails_since_tick = 0
+            return True
         #
         # do we have the BUSY flag?  If so, we're tracing right now, e.g. in an
         # outer invocation of the same function, so don't trace again for now.

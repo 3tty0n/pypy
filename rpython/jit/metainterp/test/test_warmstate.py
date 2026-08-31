@@ -231,7 +231,7 @@ def test_pe_bailout_credits_guard_instead_of_new_loop():
     descr.rd_loop_token.pe_origin = True
     # first failure: too lazy to bridge, so we blackhole and bail out
     assert not descr.must_compile(None, SD, JD)
-    assert ticks == [1.0 / 200]
+    assert descr.fails_since_tick == 1
     # handle_fail's catch site names the guard for the next portal entry
     state.pe_pending_guard = descr
     # that entry must not heat a fresh loop; the guard gets the credit
@@ -240,10 +240,9 @@ def test_pe_bailout_credits_guard_instead_of_new_loop():
     assert descr.pe_force_compile
     # a nested portal entry right afterwards counts normally again
     assert not state.pe_credit_bailout_guard(None, False)
-    # and the next failure of that guard bridges, without ticking
-    del ticks[:]
+    # and the next failure of that guard bridges, without counting
     assert descr.must_compile(None, SD, JD)
-    assert ticks == []
+    assert descr.fails_since_tick == 1
     assert not descr.pe_force_compile
 
 
