@@ -9,7 +9,7 @@ from rpython.jit.metainterp.jitexc import JitException
 from rpython.rlib.jit import Counters
 
 
-JITPROF_LINES = Counters.ncounters + 12  # TOTAL, calls, PE/bridge stats
+JITPROF_LINES = Counters.ncounters + 13  # TOTAL, calls, PE/bridge stats
 _CPU_LINES = 4       # the last 4 lines are stored on the cpu
 
 class BaseProfiler(object):
@@ -68,6 +68,9 @@ class EmptyProfiler(BaseProfiler):
     def bridge_break_even(self, tail_ops):
         return -1.0
 
+    def bridge_pays_off(self, count, tail_ops):
+        return False
+
     def end_backend(self):
         pass
 
@@ -107,6 +110,35 @@ class EmptyProfiler(BaseProfiler):
     def get_times(self, num):
         return 0.0
 
+class LinearFit(object):
+    MIN_SAMPLES = 16
+
+    def __init__(self):
+        self.n = 0
+        self.sx = self.sxx = self.st = self.sxt = 0.0
+
+    def add(self, x, t):
+        self.n += 1
+        self.sx += x
+        self.sxx += x * x
+        self.st += t
+        self.sxt += x * t
+
+    def fit(self):
+        """(c, b) of t = c + b * x, or (-1, -1) until fitted."""
+        n = self.n
+        if n < self.MIN_SAMPLES:
+            return -1.0, -1.0
+        denom = n * self.sxx - self.sx * self.sx
+        if denom <= 0.0:
+            return -1.0, -1.0
+        b = (n * self.sxt - self.sx * self.st) / denom
+        c = (self.st - b * self.sx) / n
+        if b <= 0.0 or c <= 0.0:
+            return -1.0, -1.0
+        return c, b
+
+
 class Profiler(BaseProfiler):
     initialized = False
     timer = staticmethod(time.time)
@@ -118,14 +150,10 @@ class Profiler(BaseProfiler):
     current = None
     cpu = None
 
-    # Least-squares fit of blackhole time per resume = C + B * insns;
-    # see bridge_break_even().
-    bh_n = 0
-    bh_sum_m = 0.0
-    bh_sum_mm = 0.0
-    bh_sum_t = 0.0
-    bh_sum_mt = 0.0
-    BH_MIN_SAMPLES = 16
+    # Least-squares fits: blackhole time per resume = C + B * insns and
+    # bridge time per attempt = a + b * rec ops; see bridge_break_even().
+    bh_fit = None
+    bridge_fit = None
     # Per active resume (innermost last): time and insns spent in portal
     # calls made from the blackhole, excluded from that resume's sample.
     bh_excl_time = None
@@ -153,6 +181,8 @@ class Profiler(BaseProfiler):
         self.calls = 0
         self.fail_hist = [0] * self.HIST_BUCKETS
         self.bridge_hist = [0] * self.HIST_BUCKETS
+        self.bh_fit = LinearFit()
+        self.bridge_fit = LinearFit()
         self.current = []
 
     def finish(self):
@@ -203,12 +233,7 @@ class Profiler(BaseProfiler):
         insns -= self.bh_excl_insns.pop()
         if elapsed <= 0.0 or insns < 0:
             return
-        m = float(insns)
-        self.bh_n += 1
-        self.bh_sum_m += m
-        self.bh_sum_mm += m * m
-        self.bh_sum_t += elapsed
-        self.bh_sum_mt += m * elapsed
+        self.bh_fit.add(float(insns), elapsed)
 
     def start_decode(self):
         self._start(Counters.BLACKHOLE_DECODE)
@@ -256,46 +281,75 @@ class Profiler(BaseProfiler):
                                     self.bridge_rec_ops0)
         self.bridge_time += self.last_bridge_time
         self.bridge_rec_ops += self.last_bridge_rec_ops
+        self.bridge_fit.add(float(self.last_bridge_rec_ops),
+                            self.last_bridge_time)
 
     def blackhole_cost_model(self):
         """(C, B): seconds per resume and per blackholed insn; (-1, -1)
         until enough resumes were seen to fit them."""
-        n = self.bh_n
-        if n < self.BH_MIN_SAMPLES:
-            return -1.0, -1.0
-        denom = n * self.bh_sum_mm - self.bh_sum_m * self.bh_sum_m
-        if denom <= 0.0:
-            return -1.0, -1.0
-        b = (n * self.bh_sum_mt - self.bh_sum_m * self.bh_sum_t) / denom
-        c = (self.bh_sum_t - b * self.bh_sum_m) / n
-        if b <= 0.0 or c <= 0.0:
-            return -1.0, -1.0
-        return c, b
+        return self.bh_fit.fit()
+
+    def _tail_rec_ops(self, tail_ops):
+        # Optimized ops are fewer than recorded ones by the measured ratio.
+        opt_ops = self.counters[Counters.OPT_OPS]
+        rec_ops = self.counters[Counters.RECORDED_OPS]
+        if opt_ops <= 0 or rec_ops <= 0:
+            return -1.0
+        return tail_ops * (float(rec_ops) / opt_ops)
+
+    def failure_cost(self, tail_ops):
+        """Seconds one guard failure costs when blackholed, or -1."""
+        c, b = self.blackhole_cost_model()
+        tail_rec = self._tail_rec_ops(tail_ops)
+        if b < 0.0 or tail_rec < 0.0:
+            return -1.0
+        return c + b * tail_rec
+
+    def bridge_cost(self, tail_ops):
+        """Seconds to trace and compile a bridge over tail_ops, or -1."""
+        tail_rec = self._tail_rec_ops(tail_ops)
+        if tail_rec < 0.0:
+            return -1.0
+        a, t = self.bridge_fit.fit()
+        if t > 0.0:
+            return a + t * tail_rec
+        # Before enough bridges exist: per op from loop compiles, no fixed
+        # part (unrolling and two optimizer passes cost more per op).
+        rec_ops = self.counters[Counters.RECORDED_OPS]
+        compile_time = (self.times[Counters.TRACING] +
+                        self.times[Counters.OPTIMIZING] +
+                        self.times[Counters.BACKEND])
+        return compile_time / rec_ops * tail_rec
 
     def bridge_break_even(self, tail_ops):
         """Guard failures at which a bridge over 'tail_ops' optimized ops
         pays back its trace+compile cost vs. blackholing on each failure.
         Returns -1.0 until the blackhole model is fitted."""
-        c, b = self.blackhole_cost_model()
-        if b < 0.0:
+        fail = self.failure_cost(tail_ops)
+        if fail < 0.0:
             return -1.0
-        opt_ops = self.counters[Counters.OPT_OPS]
-        rec_ops = self.counters[Counters.RECORDED_OPS]
-        if opt_ops <= 0 or rec_ops <= 0:
+        return self.bridge_cost(tail_ops) / fail
+
+    def expected_remaining_failures(self, count):
+        """Lower bound on how often a guard that failed 'count' times will
+        fail again, from the survivor histogram; -1 without data."""
+        k = self._bucket(count)
+        survivors = self.fail_hist[k]
+        if survivors == 0:
             return -1.0
-        # Per recorded op, from bridge attempts only once a few exist;
-        # loop tracing (unrolling, two optimizer passes) costs more per op.
-        if self.bridge_rec_ops >= 1000:
-            t = self.bridge_time / self.bridge_rec_ops
-        else:
-            compile_time = (self.times[Counters.TRACING] +
-                            self.times[Counters.OPTIMIZING] +
-                            self.times[Counters.BACKEND])
-            t = compile_time / rec_ops
-        # Blackhole insns and recorded ops share a unit (jitcode insns);
-        # optimized ops are fewer by the measured ratio.
-        tail_rec = tail_ops * (float(rec_ops) / opt_ops)
-        return (t * tail_rec) / (b * tail_rec + c)
+        total = 0.0
+        for j in range(k + 1, self.HIST_BUCKETS):
+            total += self.fail_hist[j] * float(1 << (j - 1))
+        return total / survivors
+
+    def bridge_pays_off(self, count, tail_ops):
+        """Survivor rule: bridge when the failures still expected cost more
+        than compiling the bridge now."""
+        remaining = self.expected_remaining_failures(count)
+        fail = self.failure_cost(tail_ops)
+        if remaining <= 0.0 or fail <= 0.0:
+            return False
+        return remaining * fail > self.bridge_cost(tail_ops)
 
     # --- PE runtime-cogen timers (the rest of this file is generic) ---
     def start_pe_cogen(self):  self._start(Counters.PE_COGEN)
@@ -383,6 +437,9 @@ class Profiler(BaseProfiler):
             t_bridge = self.bridge_time / self.bridge_rec_ops * 1e6
         debug_print("bridge attempts:\t%f s\t%d rec ops\t%f us/op" % (
             self.bridge_time, self.bridge_rec_ops, t_bridge))
+        a, t = self.bridge_fit.fit()
+        debug_print("survivor:\ta=%f us\tb=%f us/op\tE[rem|32]=%f" % (
+            a * 1e6, t * 1e6, self.expected_remaining_failures(32)))
         self._print_pe_stats(cnt, tim)
         line = "TOTAL:      \t\t%f" % (self.tk - self.starttime, )
         debug_print(line)

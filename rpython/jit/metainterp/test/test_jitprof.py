@@ -181,3 +181,39 @@ def test_failure_histograms():
     assert prof.fail_hist[:5] == [1, 1, 1, 1, 0]
     assert prof.bridge_hist[:4] == [1, 0, 0, 1]
     assert prof._hist(prof.fail_hist) == "1 1 1 1"
+
+
+def test_survivor_rule():
+    from rpython.jit.metainterp.jitprof import Profiler
+    from rpython.rlib.jit import Counters
+    p = Profiler()
+    clock = [0.0]
+    p.timer = lambda: clock[0]
+    p.start()
+    p.counters[Counters.RECORDED_OPS] = 1000
+    p.counters[Counters.OPT_OPS] = 1000
+    # blackhole: 1us fixed + 10ns per insn; bridge: 100us + 1us per op
+    for insns in range(100, 100 + 16 * 50, 50):
+        p.start_blackhole()
+        clock[0] += 1e-6 + 10e-9 * insns
+        p.end_blackhole(insns)
+        p.start_bridge_attempt()
+        p.counters[Counters.RECORDED_OPS] += insns
+        clock[0] += 100e-6 + 1e-6 * insns
+        p.end_bridge_attempt()
+    p.counters[Counters.RECORDED_OPS] = 1000
+    a, b = p.bridge_fit.fit()
+    assert abs(a - 100e-6) < 1e-9 and abs(b - 1e-6) < 1e-9
+    assert abs(p.bridge_cost(10) - 110e-6) < 1e-9
+    assert abs(p.failure_cost(10) - 1.1e-6) < 1e-12
+    assert p.expected_remaining_failures(1) == -1.0
+    # 8 guards reach 1 failure, 4 reach 2, 2 reach 4, 1 reaches 8
+    p.fail_hist[0:4] = [8, 4, 2, 1]
+    # from 1 failure: 4*1 + 2*2 + 1*4 over 8 survivors
+    assert p.expected_remaining_failures(1) == 12.0 / 8
+    assert p.expected_remaining_failures(4) == 4.0 / 2
+    assert p.expected_remaining_failures(8) == 0.0
+    assert not p.bridge_pays_off(1, 10)         # 1.5 * 1.1us < 110us
+    p.fail_hist[10] = 8                          # every guard reaches 1024
+    assert p.expected_remaining_failures(1) > 500
+    assert p.bridge_pays_off(1, 10)

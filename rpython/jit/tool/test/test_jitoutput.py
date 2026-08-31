@@ -55,16 +55,17 @@ guard failures >=2^k:	5 3 1
 bridges at 2^k:	0 0 1
 bridge model:	C=2.500000 us	B=30.000000 ns	break-even(100)=6.000000
 bridge attempts:	0.100000 s	2000 rec ops	50.000000 us/op
+survivor:	a=-1.000000 us	b=-1.000000 us/op	E[rem|32]=-1.000000
 PE cogen overhead: 4       0.000400
 PE cogen scan:  2       0.000100
 PE cogen install: 1       0.000250
-TOTAL:                  0.025532
 pe cogen generated:     1
 pe cogen declined:      1
 pe cogen deferred:      2
 pe insns generic:       10
 pe insns portal:        5
 pe insns residual:      20
+TOTAL:                  0.025532
 ops:                    2
 heapcached ops:         111
 recorded ops:           6
