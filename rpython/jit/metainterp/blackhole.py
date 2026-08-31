@@ -1865,7 +1865,7 @@ def resume_in_blackhole(metainterp_sd, jitdriver_sd, resumedescr, deadframe,
         current_exc = blackholeinterp._prepare_resume_from_failure(deadframe)
         _run_forever(blackholeinterp, current_exc)
     finally:
-        profiler.end_blackhole(stats.insns - insns)
+        profiler.end_blackhole(stats.insns - insns, resumedescr.tail_ops)
 resume_in_blackhole._dont_inline_ = True
 
 def convert_and_run_from_pyjitpl(metainterp, raising_exception=False):
@@ -1896,5 +1896,5 @@ def convert_and_run_from_pyjitpl(metainterp, raising_exception=False):
     try:
         _run_forever(firstbh, current_exc)
     finally:
-        profiler.end_blackhole(stats.insns - insns)
+        profiler.end_blackhole(stats.insns - insns, -1)
 convert_and_run_from_pyjitpl._dont_inline_ = True

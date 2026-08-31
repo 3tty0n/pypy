@@ -38,7 +38,7 @@ class EmptyProfiler(BaseProfiler):
     def start_blackhole(self):
         pass
 
-    def end_blackhole(self, insns):
+    def end_blackhole(self, insns, tail_ops):
         pass
 
     def start_decode(self):
@@ -154,15 +154,15 @@ class Profiler(BaseProfiler):
     current = None
     cpu = None
 
-    # Least-squares fits: blackhole time per resume = C + B * insns and
-    # bridge time per attempt = a + b * rec ops; see bridge_break_even().
+    # Least-squares fits: guard failure cost = C + B * tail ops and bridge
+    # time per attempt = a + b * rec ops; see bridge_break_even().
     bh_fit = None
     bridge_fit = None
     # A guard failure costs the blackhole run plus the interpreter stretch
     # until compiled code is entered again; the sample closes there.
     fail_pending = False
     fail_elapsed = 0.0
-    fail_insns = 0.0
+    fail_tail_ops = 0.0
     fail_t_end = 0.0
     # Per active resume (innermost last): time and insns spent in portal
     # calls made from the blackhole, excluded from that resume's sample.
@@ -236,17 +236,19 @@ class Profiler(BaseProfiler):
         self.bh_excl_time.append(0.0)
         self.bh_excl_insns.append(0)
 
-    def end_blackhole(self, insns):
+    def end_blackhole(self, insns, tail_ops):
+        # tail_ops: optimized ops after the failed guard (-1: unknown);
+        # the interpreter stretch that follows scales with it.
         t0 = self.t1
         self._end(Counters.BLACKHOLE)
         elapsed = self.t1 - t0 - self.bh_excl_time.pop()
-        insns -= self.bh_excl_insns.pop()
-        if elapsed <= 0.0 or insns < 0:
+        self.bh_excl_insns.pop()
+        if elapsed <= 0.0 or tail_ops < 0:
             return
         self.end_fail_stretch()
         self.fail_pending = True
         self.fail_elapsed = elapsed
-        self.fail_insns = float(insns)
+        self.fail_tail_ops = float(tail_ops)
         self.fail_t_end = self.t1
 
     def end_fail_stretch(self):
@@ -254,7 +256,7 @@ class Profiler(BaseProfiler):
             return
         self.fail_pending = False
         stretch = self.timer() - self.fail_t_end
-        self.bh_fit.add(self.fail_insns, self.fail_elapsed + stretch)
+        self.bh_fit.add(self.fail_tail_ops, self.fail_elapsed + stretch)
 
     def start_decode(self):
         self._start(Counters.BLACKHOLE_DECODE)
@@ -306,8 +308,9 @@ class Profiler(BaseProfiler):
                             self.last_bridge_time)
 
     def blackhole_cost_model(self):
-        """(C, B): seconds per resume and per blackholed insn; (-1, -1)
-        until enough resumes were seen to fit them."""
+        """(C, B): seconds per guard failure and per optimized op of its
+        tail, measured until compiled code is entered again; (-1, -1)
+        until enough failures were seen to fit them."""
         return self.bh_fit.fit()
 
     def _tail_rec_ops(self, tail_ops):
@@ -319,12 +322,11 @@ class Profiler(BaseProfiler):
         return tail_ops * (float(rec_ops) / opt_ops)
 
     def failure_cost(self, tail_ops):
-        """Seconds one guard failure costs when blackholed, or -1."""
+        """Seconds one guard failure costs without a bridge, or -1."""
         c, b = self.blackhole_cost_model()
-        tail_rec = self._tail_rec_ops(tail_ops)
-        if b < 0.0 or tail_rec < 0.0:
+        if b < 0.0:
             return -1.0
-        return c + b * tail_rec
+        return c + b * tail_ops
 
     def bridge_cost(self, tail_ops):
         """Seconds to trace and compile a bridge over tail_ops, or -1."""

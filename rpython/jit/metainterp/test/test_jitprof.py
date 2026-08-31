@@ -142,12 +142,12 @@ def test_blackhole_cost_model_fit():
     clock = [0.0]
     p.timer = lambda: clock[0]
     p.start()
-    # each resume: 2us fixed + 30ns per insn, exactly linear
-    for insns in range(100, 100 + 16 * 50, 50):
+    # each failure: 1us blackhole + 1us stretch + 30ns per tail op
+    for tail in range(100, 100 + 16 * 50, 50):
         p.start_blackhole()
-        clock[0] += 1e-6 + 30e-9 * insns
-        p.end_blackhole(insns)
-        clock[0] += 1e-6          # interpreter stretch before compiled code
+        clock[0] += 1e-6
+        p.end_blackhole(7, tail)
+        clock[0] += 1e-6 + 30e-9 * tail   # interpreter stretch to compiled
         p.end_fail_stretch()
     c, b = p.blackhole_cost_model()
     assert abs(c - 2e-6) < 1e-9
@@ -156,10 +156,10 @@ def test_blackhole_cost_model_fit():
     p.counters[Counters.RECORDED_OPS] = 2000
     p.counters[Counters.OPT_OPS] = 1000
     p.times[Counters.TRACING] = 2000 * 1e-6
-    short = p.bridge_break_even(10)      # 20 rec ops: 20us / (0.6us + 2us)
-    long = p.bridge_break_even(1000)     # 2000 rec ops: 2ms / (60us + 2us)
-    assert abs(short - 20.0 / 2.6) < 1e-6
-    assert abs(long - 2000.0 / 62.0) < 1e-6
+    short = p.bridge_break_even(10)      # 20 rec ops: 20us / (0.3us + 2us)
+    long = p.bridge_break_even(1000)     # 2000 rec ops: 2ms / (30us + 2us)
+    assert abs(short - 20.0 / 2.3) < 1e-6
+    assert abs(long - 2000.0 / 32.0) < 1e-6
     assert short < long
 
 
@@ -194,11 +194,11 @@ def test_survivor_rule():
     p.start()
     p.counters[Counters.RECORDED_OPS] = 1000
     p.counters[Counters.OPT_OPS] = 1000
-    # blackhole: 1us fixed + 10ns per insn; bridge: 100us + 1us per op
+    # failure: 1us fixed + 10ns per tail op; bridge: 100us + 1us per op
     for insns in range(100, 100 + 16 * 50, 50):
         p.start_blackhole()
         clock[0] += 1e-6 + 10e-9 * insns
-        p.end_blackhole(insns)
+        p.end_blackhole(3, insns)
         p.end_fail_stretch()
         p.start_bridge_attempt()
         p.counters[Counters.RECORDED_OPS] += insns
