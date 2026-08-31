@@ -772,6 +772,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
         jitcounter = metainterp_sd.warmrunnerdesc.jitcounter
         self.fail_count += 1
         metainterp_sd.profiler.note_guard_failure(self.fail_count)
+        if self.fail_count == 4096:
+            self._log_hot_guard(metainterp_sd, jitdriver_sd)
         #
         if self.pe_force_compile and not (self.status & self.ST_BUSY_FLAG):
             # A bailout already credited this guard with the next entry.
@@ -826,6 +828,17 @@ class AbstractResumeGuardDescr(ResumeDescr):
         #
         return jitcounter.tick(hash, self._tick_increment(metainterp_sd,
                                                           jitdriver_sd))
+
+    def _log_hot_guard(self, metainterp_sd, jitdriver_sd):
+        debug_start("jit-guard-hot")
+        debug_print("status", intmask(self.status),
+                    "tail_ops", self.tail_ops,
+                    "pe_origin", int(self.rd_loop_token.pe_origin),
+                    "aborts", self.abort_count,
+                    "since_tick", self.fails_since_tick,
+                    "inc_ppm", int(self._tick_increment(
+                        metainterp_sd, jitdriver_sd) * 1000000.0))
+        debug_stop("jit-guard-hot")
 
     def _tick_increment(self, metainterp_sd, jitdriver_sd):
         """How much one failure heats this guard's counter: 1.0 bridges
