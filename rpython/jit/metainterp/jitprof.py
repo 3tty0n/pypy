@@ -2,6 +2,7 @@
 """ A small helper module for profiling JIT
 """
 
+import math
 import time
 from rpython.rlib.debug import debug_print, debug_start, debug_stop
 from rpython.rlib.debug import have_debug_prints
@@ -133,19 +134,25 @@ class LinearFit(object):
         self.st += t
         self.sxt += x * t
 
+    def fitted(self):
+        return (self.n >= self.MIN_SAMPLES and
+                self.n * self.sxx - self.sx * self.sx > 0.0)
+
+    def raw_fit(self):
+        """(c, b) of t = c + b * x; only meaningful once fitted()."""
+        n = self.n
+        denom = n * self.sxx - self.sx * self.sx
+        b = (n * self.sxt - self.sx * self.st) / denom
+        return (self.st - b * self.sx) / n, b
+
     def fit(self):
         """(c, b) of t = c + b * x, or (-1, -1) until fitted."""
-        n = self.n
-        if n < self.MIN_SAMPLES:
+        if not self.fitted():
             return -1.0, -1.0
-        denom = n * self.sxx - self.sx * self.sx
-        if denom <= 0.0:
-            return -1.0, -1.0
-        b = (n * self.sxt - self.sx * self.st) / denom
-        c = (self.st - b * self.sx) / n
+        c, b = self.raw_fit()
         if b <= 0.0 or c <= 0.0:
             # No usable slope: cost is flat, use the mean.
-            return self.st / n, 0.0
+            return self.st / self.n, 0.0
         return c, b
 
 
@@ -161,7 +168,8 @@ class Profiler(BaseProfiler):
     cpu = None
 
     # Least-squares fits: guard failure cost = C + B * tail ops and bridge
-    # time per attempt = a + b * rec ops; see bridge_break_even().
+    # time per attempt = A * (rec ops + 1) ** B, fitted in log-log space
+    # because that cost is superlinear; see bridge_break_even().
     bh_fit = None
     bridge_fit = None
     # A guard failure costs the blackhole run plus the interpreter stretch
@@ -337,8 +345,9 @@ class Profiler(BaseProfiler):
                                     self.bridge_rec_ops0)
         self.bridge_time += self.last_bridge_time
         self.bridge_rec_ops += self.last_bridge_rec_ops
-        self.bridge_fit.add(float(self.last_bridge_rec_ops),
-                            self.last_bridge_time)
+        if self.last_bridge_time > 0.0:
+            self.bridge_fit.add(math.log(self.last_bridge_rec_ops + 1.0),
+                                math.log(self.last_bridge_time))
 
     def blackhole_cost_model(self):
         """(C, B): seconds per guard failure and per optimized op of its
@@ -366,9 +375,9 @@ class Profiler(BaseProfiler):
         tail_rec = self._tail_rec_ops(tail_ops)
         if tail_rec < 0.0:
             return -1.0
-        a, t = self.bridge_fit.fit()
-        if a > 0.0:
-            return a + t * tail_rec
+        if self.bridge_fit.fitted():
+            c, b = self.bridge_fit.raw_fit()
+            return math.exp(c + b * math.log(tail_rec + 1.0))
         # Before enough bridges exist: per op from loop compiles, no fixed
         # part (unrolling and two optimizer passes cost more per op).
         rec_ops = self.counters[Counters.RECORDED_OPS]
@@ -499,10 +508,13 @@ class Profiler(BaseProfiler):
             t_bridge = self.bridge_time / self.bridge_rec_ops * 1e6
         debug_print("bridge attempts:\t%f s\t%d rec ops\t%f us/op" % (
             self.bridge_time, self.bridge_rec_ops, t_bridge))
-        a, t = self.bridge_fit.fit()
+        a = t = -1.0
+        if self.bridge_fit.fitted():
+            c, t = self.bridge_fit.raw_fit()
+            a = math.exp(c) * 1e6
         saved, reach = self.failures_until(32, 200)
-        debug_print("survivor:\ta=%f us\tb=%f us/op\tsaved(32..200)=%f"
-                    "\treach=%f" % (a * 1e6, t * 1e6, saved, reach))
+        debug_print("survivor:\ta=%f us\tb=%f exp\tsaved(32..200)=%f"
+                    "\treach=%f" % (a, t, saved, reach))
         self._print_pe_stats(cnt, tim)
         line = "TOTAL:      \t\t%f" % (self.tk - self.starttime, )
         debug_print(line)

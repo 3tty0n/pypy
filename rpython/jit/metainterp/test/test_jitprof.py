@@ -1,4 +1,5 @@
 
+import math
 import py
 from rpython.jit.metainterp.warmspot import ll_meta_interp
 from rpython.rlib.jit import JitDriver, dont_look_inside, elidable, Counters
@@ -194,7 +195,7 @@ def test_survivor_rule():
     p.start()
     p.counters[Counters.RECORDED_OPS] = 1000
     p.counters[Counters.OPT_OPS] = 1000
-    # failure: 1us fixed + 10ns per tail op; bridge: 100us + 1us per op
+    # failure: 1us fixed + 10ns per tail op; bridge: 1us per op + 1
     for insns in range(100, 100 + 16 * 50, 50):
         p.start_blackhole()
         clock[0] += 1e-6 + 10e-9 * insns
@@ -202,12 +203,12 @@ def test_survivor_rule():
         p.end_fail_stretch()
         p.start_bridge_attempt()
         p.counters[Counters.RECORDED_OPS] += insns
-        clock[0] += 100e-6 + 1e-6 * insns
+        clock[0] += 1e-6 * (insns + 1)
         p.end_bridge_attempt()
     p.counters[Counters.RECORDED_OPS] = 1000
-    a, b = p.bridge_fit.fit()
-    assert abs(a - 100e-6) < 1e-9 and abs(b - 1e-6) < 1e-9
-    assert abs(p.bridge_cost(10) - 110e-6) < 1e-9
+    c, b = p.bridge_fit.raw_fit()
+    assert abs(math.exp(c) - 1e-6) < 1e-12 and abs(b - 1.0) < 1e-9
+    assert abs(p.bridge_cost(10) - 11e-6) < 1e-9
     assert abs(p.failure_cost(10) - 1.1e-6) < 1e-12
     assert p.failures_until(1, 200) == (0.0, 0.0)
     # 8 guards reach 1 failure, 4 reach 2, 2 reach 4, 1 reaches 8
@@ -218,11 +219,30 @@ def test_survivor_rule():
     # horizon 12 sits in bucket 3: its one guard fails 4 more times there
     assert p.failures_until(1, 12) == (16.0 / 8, 1.0 / 8)
     assert p.failures_until(8, 8) == (0.0, 0.0)
-    assert not p.bridge_pays_off(1, 10, 8)      # 1 * 1.1us < 110us * 7/8
+    assert not p.bridge_pays_off(1, 10, 8)      # 1 * 1.1us < 11us * 7/8
     p.fail_hist[0:11] = [8] * 11                 # every guard reaches 1024
     assert p.failures_until(1, 1024) == (1023.0, 1.0)
     assert p.bridge_pays_off(1, 10, 1024)       # nothing risked, much saved
     assert not p.bridge_pays_off(1, 10, 1)      # already past the horizon
+
+
+def test_bridge_cost_follows_convex_samples():
+    from rpython.jit.metainterp.jitprof import Profiler
+    from rpython.rlib.jit import Counters
+    p = Profiler()
+    clock = [0.0]
+    p.timer = lambda: clock[0]
+    p.start()
+    p.counters[Counters.OPT_OPS] = 1
+    # convex: 16us for tiny bridges, up to 700us for 400-op ones
+    for ops in [2, 3, 5, 8] * 2 + [40, 60, 100, 150, 250, 400] * 2:
+        p.start_bridge_attempt()
+        p.counters[Counters.RECORDED_OPS] += ops
+        clock[0] += 12e-6 * math.sqrt(ops)
+        p.end_bridge_attempt()
+    p.counters[Counters.RECORDED_OPS] = 1
+    assert p.bridge_cost(4) < 40e-6         # small: near the 16-24us samples
+    assert p.bridge_cost(400) > 150e-6      # large: not dragged down
 
 
 def test_linear_fit_flat_falls_back_to_mean():
