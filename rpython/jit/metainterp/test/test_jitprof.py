@@ -232,3 +232,46 @@ def test_linear_fit_flat_falls_back_to_mean():
         f.add(float(x), 2e-6)
     c, b = f.fit()
     assert abs(c - 2e-6) < 1e-12 and b == 0.0
+
+
+def test_fail_stretch_spans_nested_portal_calls():
+    from rpython.jit.metainterp.jitprof import Profiler
+    p = Profiler()
+    clock = [0.0]
+    p.timer = lambda: clock[0]
+    p.start()
+    p.enter_portal()             # the frame the guard fails in
+    p.start_blackhole()
+    clock[0] += 1e-6
+    p.end_blackhole(7, 100)
+    clock[0] += 1e-6             # interpreted tail
+    p.enter_portal()             # a call the tail makes
+    clock[0] += 10e-6
+    p.end_fail_stretch()         # it enters compiled code: not the end
+    assert p.fail_pending
+    p.leave_portal()
+    clock[0] += 1e-6             # rest of the tail, still interpreted
+    p.end_fail_stretch()
+    p.leave_portal()
+    assert p.bh_fit.n == 1
+    assert abs(p.bh_fit.st - 3e-6) < 1e-12    # 10us callee excluded
+
+
+def test_fail_stretch_ends_when_failing_frame_returns():
+    from rpython.jit.metainterp.jitprof import Profiler
+    p = Profiler()
+    clock = [0.0]
+    p.timer = lambda: clock[0]
+    p.start()
+    p.enter_portal()
+    p.enter_portal()
+    p.start_blackhole()
+    clock[0] += 1e-6
+    p.end_blackhole(7, 100)
+    clock[0] += 2e-6
+    p.leave_portal()             # returns to a compiled caller
+    assert not p.fail_pending
+    assert p.bh_fit.n == 1
+    assert abs(p.bh_fit.st - 3e-6) < 1e-12
+    p.leave_portal()
+    assert p.portal_depth == 0

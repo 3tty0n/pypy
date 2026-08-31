@@ -1005,25 +1005,29 @@ class WarmRunnerDesc(object):
         EnterJitAssembler = jd._EnterJitAssembler
 
         def ll_portal_runner(*args):
+            profiler.enter_portal()
             try:
-                # maybe enter from the function's start.
-                maybe_compile_and_run(
-                    state.increment_function_threshold, *args)
-                #
-                # then run the normal portal function, i.e. the
-                # interpreter's main loop.  It might enter the jit
-                # via maybe_enter_jit(), which typically ends with
-                # handle_fail() being called, which raises on the
-                # following exceptions --- catched here, because we
-                # want to interrupt the whole interpreter loop.
-                return support.maybe_on_top_of_llinterp(rtyper,
-                                                  portal_ptr)(*args)
-            except jitexc.JitException as e:
-                result = handle_jitexception(e)
-                profiler.end_fail_stretch()
-                if result_kind != 'void':
-                    result = specialize_value(RESULT, result)
-                return result
+                try:
+                    # maybe enter from the function's start.
+                    maybe_compile_and_run(
+                        state.increment_function_threshold, *args)
+                    #
+                    # then run the normal portal function, i.e. the
+                    # interpreter's main loop.  It might enter the jit
+                    # via maybe_enter_jit(), which typically ends with
+                    # handle_fail() being called, which raises on the
+                    # following exceptions --- catched here, because we
+                    # want to interrupt the whole interpreter loop.
+                    return support.maybe_on_top_of_llinterp(rtyper,
+                                                      portal_ptr)(*args)
+                except jitexc.JitException as e:
+                    result = handle_jitexception(e)
+                    profiler.end_fail_stretch()
+                    if result_kind != 'void':
+                        result = specialize_value(RESULT, result)
+                    return result
+            finally:
+                profiler.leave_portal()
 
         def handle_jitexception(e):
             # XXX there are too many exceptions all around...

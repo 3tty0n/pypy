@@ -74,6 +74,12 @@ class EmptyProfiler(BaseProfiler):
     def end_fail_stretch(self):
         pass
 
+    def enter_portal(self):
+        pass
+
+    def leave_portal(self):
+        pass
+
     def end_backend(self):
         pass
 
@@ -164,6 +170,13 @@ class Profiler(BaseProfiler):
     fail_elapsed = 0.0
     fail_tail_ops = 0.0
     fail_t_end = 0.0
+    # Portal-call nesting: the stretch belongs to the frame the guard
+    # failed in, and calls it makes cost the same with or without a
+    # bridge, so only that frame ends it and their time is excluded.
+    portal_depth = 0
+    fail_depth = 0
+    fail_excl = 0.0
+    fail_excl_t0 = 0.0
     # Per active resume (innermost last): time and insns spent in portal
     # calls made from the blackhole, excluded from that resume's sample.
     bh_excl_time = None
@@ -250,13 +263,33 @@ class Profiler(BaseProfiler):
         self.fail_elapsed = elapsed
         self.fail_tail_ops = float(tail_ops)
         self.fail_t_end = self.t1
+        self.fail_depth = self.portal_depth
+        self.fail_excl = 0.0
 
     def end_fail_stretch(self):
-        if not self.fail_pending:
+        if not self.fail_pending or self.portal_depth > self.fail_depth:
             return
         self.fail_pending = False
-        stretch = self.timer() - self.fail_t_end
+        stretch = self.timer() - self.fail_t_end - self.fail_excl
+        if stretch < 0.0:
+            stretch = 0.0
         self.bh_fit.add(self.fail_tail_ops, self.fail_elapsed + stretch)
+
+    def enter_portal(self):
+        depth = self.portal_depth + 1
+        self.portal_depth = depth
+        if self.fail_pending and depth == self.fail_depth + 1:
+            self.fail_excl_t0 = self.timer()
+
+    def leave_portal(self):
+        depth = self.portal_depth
+        self.portal_depth = depth - 1
+        if not self.fail_pending:
+            return
+        if depth == self.fail_depth + 1:
+            self.fail_excl += self.timer() - self.fail_excl_t0
+        elif depth <= self.fail_depth:
+            self.end_fail_stretch()
 
     def start_decode(self):
         self._start(Counters.BLACKHOLE_DECODE)
