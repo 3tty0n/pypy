@@ -734,7 +734,7 @@ class WarmRunnerDesc(object):
                     if history.getkind(T) == 'ref'])
 
     def _pe_pc_green_pos(self, jd):
-        """Position of "the pc" green among jd's INT greens, or -1."""
+        """Position of "the pc" green among jd's Signed greens, or -1."""
         metadata = jd.mainjitcode.pe_metadata
         if metadata is None:
             return -1
@@ -743,10 +743,10 @@ class WarmRunnerDesc(object):
         else:
             pc_index = metadata.match_pc_index
         green_types = jd._green_args_spec
-        if pc_index < 0 or history.getkind(green_types[pc_index]) != 'int':
+        if pc_index < 0 or green_types[pc_index] is not lltype.Signed:
             return -1
         return len([T for T in green_types[:pc_index]
-                    if history.getkind(T) == 'int'])
+                    if T is lltype.Signed])
 
     def rewrite_jitcell_accesses(self):
         jitdrivers_by_name = {}

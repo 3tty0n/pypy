@@ -382,7 +382,7 @@ class WarmEnterState(object):
              if history.getkind(TYPE) == 'ref'])
         green_int_args = unrolling_iterable(
             [(i, TYPE) for i, TYPE in enumerate(jitdriver_sd._green_args_spec)
-             if history.getkind(TYPE) == 'int'])
+             if TYPE is lltype.Signed])
 
         def pe_method_and_pc(greenargs):
             wanted_ref = self.pe_ref_green_pos
