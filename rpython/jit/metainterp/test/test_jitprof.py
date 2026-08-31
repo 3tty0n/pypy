@@ -268,7 +268,7 @@ def test_fail_stretch_spans_nested_portal_calls():
     p.enter_portal()             # a call the tail makes
     clock[0] += 10e-6
     p.end_fail_stretch()         # it enters compiled code: not the end
-    assert p.fail_pending
+    assert p.fail.pending
     p.leave_portal()
     clock[0] += 1e-6             # rest of the tail, still interpreted
     p.end_fail_stretch()
@@ -290,7 +290,7 @@ def test_fail_stretch_ends_when_failing_frame_returns():
     p.end_blackhole(7, 100)
     clock[0] += 2e-6
     p.leave_portal()             # returns to a compiled caller
-    assert not p.fail_pending
+    assert not p.fail.pending
     assert p.bh_fit.n == 1
     assert abs(p.bh_fit.st - 3e-6) < 1e-12
     p.leave_portal()

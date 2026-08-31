@@ -369,8 +369,12 @@ class WarmEnterState(object):
     def pe_credit_bailout_guard(self, cell, suppressed):
         """We are at a portal entry only because a guard failed and its
         bailout replayed to here.  Bridging that guard covers this pc, so
-        credit it and do not heat a fresh loop.  One-shot: the next entry,
-        nested portal included, counts normally again."""
+        credit it and do not heat a fresh loop.
+
+        Returns whether this entry was credited; if it was, the guard is
+        guaranteed to compile a bridge on its next failure.  One-shot in
+        either case: the next entry, nested portal included, counts
+        normally again."""
         descr = self.pe_pending_guard
         if descr is None:
             return False
@@ -564,6 +568,7 @@ class WarmEnterState(object):
                     break    # found
                 cell = cell.next
             if self.pe_pending_guard is not None:
+                # Rare: we are here only because a guard bailed out.
                 if self.pe_credit_bailout_guard(
                         cell, pe_tick_suppressed(greenargs)):
                     return

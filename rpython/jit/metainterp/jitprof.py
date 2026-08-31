@@ -156,6 +156,57 @@ class LinearFit(object):
         return c, b
 
 
+class FailStretch(object):
+    """One guard-failure sample being measured.
+
+    A failure costs the blackhole run plus the interpreter stretch that
+    follows it, up to the moment compiled code is entered again:
+
+        cost = blackhole_time + (closed_at - opened_at) - excluded
+
+    The stretch belongs to the portal frame the guard failed in.  Portal
+    calls that frame makes cost the same with or without a bridge, so
+    their time is excluded and only that frame can close the sample.
+    """
+
+    def __init__(self):
+        self.pending = False
+        self.blackhole_time = 0.0
+        self.tail_ops = 0.0
+        self.opened_at = 0.0
+        self.frame_depth = 0
+        self.excluded = 0.0
+        self.excluded_since = 0.0
+
+    def open(self, blackhole_time, tail_ops, now, frame_depth):
+        self.pending = True
+        self.blackhole_time = blackhole_time
+        self.tail_ops = tail_ops
+        self.opened_at = now
+        self.frame_depth = frame_depth
+        self.excluded = 0.0
+
+    def is_inner_call(self, depth):
+        """Is 'depth' a portal call made by the stretch we measure?"""
+        return self.pending and depth == self.frame_depth + 1
+
+    def exclude_from(self, now):
+        self.excluded_since = now
+
+    def exclude_until(self, now):
+        self.excluded += now - self.excluded_since
+
+    def close(self, now):
+        """Total seconds this failure cost, or -1.0 if none is pending."""
+        if not self.pending:
+            return -1.0
+        self.pending = False
+        stretch = now - self.opened_at - self.excluded
+        if stretch < 0.0:
+            stretch = 0.0
+        return self.blackhole_time + stretch
+
+
 class Profiler(BaseProfiler):
     initialized = False
     timer = staticmethod(time.time)
@@ -172,25 +223,13 @@ class Profiler(BaseProfiler):
     # because that cost is superlinear; see bridge_break_even().
     bh_fit = None
     bridge_fit = None
-    # A guard failure costs the blackhole run plus the interpreter stretch
-    # until compiled code is entered again; the sample closes there.
-    fail_pending = False
-    fail_elapsed = 0.0
-    fail_tail_ops = 0.0
-    fail_t_end = 0.0
-    # Portal-call nesting: the stretch belongs to the frame the guard
-    # failed in, and calls it makes cost the same with or without a
-    # bridge, so only that frame ends it and their time is excluded.
+    # The guard-failure sample currently being measured, see FailStretch.
+    fail = None
     portal_depth = 0
-    fail_depth = 0
-    fail_excl = 0.0
-    fail_excl_t0 = 0.0
-    # Per active resume (innermost last): time and insns spent in portal
-    # calls made from the blackhole, excluded from that resume's sample.
+    # Per active resume (innermost last): time spent in portal calls made
+    # from the blackhole, excluded from that resume's sample.
     bh_excl_time = None
-    bh_excl_insns = None
     bh_call_t0 = 0.0
-    bh_call_insns0 = 0
     # Wall time and recorded ops of tracing-from-a-guard (bridge attempts,
     # including their optimizing and backend work): the compile cost the
     # bridge model charges, kept apart from loop tracing.
@@ -203,6 +242,10 @@ class Profiler(BaseProfiler):
     # Survivor histogram: fail_hist[k] = guards that failed >= 2**k times;
     # bridge_hist[k] = bridges compiled from a guard at 2**k <= n < 2**k+1.
     HIST_BUCKETS = 32
+
+    def __init__(self):
+        # Portal callbacks can fire before start(): always have a sample.
+        self.fail = FailStretch()
 
     def start(self):
         self.starttime = self.timer()
@@ -253,50 +296,41 @@ class Profiler(BaseProfiler):
         self._start(Counters.BLACKHOLE)
         if self.bh_excl_time is None:
             self.bh_excl_time = []
-            self.bh_excl_insns = []
         self.bh_excl_time.append(0.0)
-        self.bh_excl_insns.append(0)
 
     def end_blackhole(self, insns, tail_ops):
-        # tail_ops: optimized ops after the failed guard (-1: unknown);
-        # the interpreter stretch that follows scales with it.
+        """Open a failure sample: the blackhole run is over, the
+        interpreter stretch it hands control to starts now.
+
+        tail_ops: optimized ops after the failed guard (-1: unknown);
+        the stretch that follows scales with it."""
         t0 = self.t1
         self._end(Counters.BLACKHOLE)
         elapsed = self.t1 - t0 - self.bh_excl_time.pop()
-        self.bh_excl_insns.pop()
         if elapsed <= 0.0 or tail_ops < 0:
             return
         self.end_fail_stretch()
-        self.fail_pending = True
-        self.fail_elapsed = elapsed
-        self.fail_tail_ops = float(tail_ops)
-        self.fail_t_end = self.t1
-        self.fail_depth = self.portal_depth
-        self.fail_excl = 0.0
+        self.fail.open(elapsed, float(tail_ops), self.t1, self.portal_depth)
 
     def end_fail_stretch(self):
-        if not self.fail_pending or self.portal_depth > self.fail_depth:
-            return
-        self.fail_pending = False
-        stretch = self.timer() - self.fail_t_end - self.fail_excl
-        if stretch < 0.0:
-            stretch = 0.0
-        self.bh_fit.add(self.fail_tail_ops, self.fail_elapsed + stretch)
+        """Close the pending sample: compiled code is entered again."""
+        fail = self.fail
+        if not fail.pending or self.portal_depth > fail.frame_depth:
+            return          # inside a call the stretch made, not its end
+        self.bh_fit.add(fail.tail_ops, fail.close(self.timer()))
 
     def enter_portal(self):
-        depth = self.portal_depth + 1
-        self.portal_depth = depth
-        if self.fail_pending and depth == self.fail_depth + 1:
-            self.fail_excl_t0 = self.timer()
+        self.portal_depth += 1
+        if self.fail.is_inner_call(self.portal_depth):
+            self.fail.exclude_from(self.timer())
 
     def leave_portal(self):
         depth = self.portal_depth
         self.portal_depth = depth - 1
-        if not self.fail_pending:
-            return
-        if depth == self.fail_depth + 1:
-            self.fail_excl += self.timer() - self.fail_excl_t0
-        elif depth <= self.fail_depth:
+        if self.fail.is_inner_call(depth):
+            self.fail.exclude_until(self.timer())
+        elif self.fail.pending and depth <= self.fail.frame_depth:
+            # returning out of the failed frame ends the stretch too
             self.end_fail_stretch()
 
     def start_decode(self):
@@ -314,6 +348,8 @@ class Profiler(BaseProfiler):
         return k
 
     def note_guard_failure(self, count):
+        # Only powers of two count, so fail_hist[k] is the number of
+        # guards that ever reached 2**k failures.
         if count & (count - 1) == 0:
             self.fail_hist[self._bucket(count)] += 1
 
@@ -325,15 +361,12 @@ class Profiler(BaseProfiler):
         # blackholing; keep it out of the enclosing resume's sample.
         self._start(Counters.BLACKHOLE_CALL)
         self.bh_call_t0 = self.t1
-        self.bh_call_insns0 = insns
 
     def end_portal_call(self, insns):
         t0 = self.bh_call_t0
-        insns0 = self.bh_call_insns0
         self._end(Counters.BLACKHOLE_CALL)
         if self.bh_excl_time:
             self.bh_excl_time[-1] += self.t1 - t0
-            self.bh_excl_insns[-1] += insns - insns0
 
     def start_bridge_attempt(self):
         self.bridge_t0 = self.timer()
@@ -413,9 +446,12 @@ class Profiler(BaseProfiler):
         return saved / at_k, self.fail_hist[kh] / float(at_k)
 
     def bridge_pays_off(self, count, tail_ops, horizon):
-        """Survivor rule: bridge now rather than at 'horizon' failures when
-        the failures saved outweigh the bridge cost risked on a guard that
-        would have died before the horizon."""
+        """Survivor rule: bridge now rather than at 'horizon' failures iff
+
+            saved * failure_cost > bridge_cost * (1 - reach)
+
+        i.e. the failures a guard at 'count' still saves outweigh the
+        compile cost risked on one that dies before the horizon."""
         saved, reach = self.failures_until(count, horizon)
         fail = self.failure_cost(tail_ops)
         if saved <= 0.0 or fail <= 0.0:
@@ -481,6 +517,26 @@ class Profiler(BaseProfiler):
         self._print_intline("pe insns residual", _pe_insn_counts.residual)
     # --- end PE runtime-cogen stats ---
 
+    def _print_bridge_model_stats(self):
+        # Parsed by rpython/jit/tool/jitoutput.py: keep the line formats.
+        debug_print("guard failures >=2^k:\t" + self._hist(self.fail_hist))
+        debug_print("bridges at 2^k:\t" + self._hist(self.bridge_hist))
+        c, b = self.blackhole_cost_model()
+        debug_print("bridge model:\tC=%f us\tB=%f ns\tbreak-even(100)=%f" % (
+            c * 1e6, b * 1e9, self.bridge_break_even(100)))
+        t_bridge = 0.0
+        if self.bridge_rec_ops:
+            t_bridge = self.bridge_time / self.bridge_rec_ops * 1e6
+        debug_print("bridge attempts:\t%f s\t%d rec ops\t%f us/op" % (
+            self.bridge_time, self.bridge_rec_ops, t_bridge))
+        a = b = -1.0
+        if self.bridge_fit.fitted():
+            c, b = self.bridge_fit.raw_fit()
+            a = math.exp(c) * 1e6
+        saved, reach = self.failures_until(32, 200)
+        debug_print("survivor:\ta=%f us\tb=%f exp\tsaved(32..200)=%f"
+                    "\treach=%f" % (a, b, saved, reach))
+
     def _print_stats(self):
         cnt = self.counters
         tim = self.times
@@ -498,23 +554,7 @@ class Profiler(BaseProfiler):
         self._print_line_time("Blackhole decode",
                               cnt[Counters.BLACKHOLE_DECODE],
                               tim[Counters.BLACKHOLE_DECODE])
-        debug_print("guard failures >=2^k:\t" + self._hist(self.fail_hist))
-        debug_print("bridges at 2^k:\t" + self._hist(self.bridge_hist))
-        c, b = self.blackhole_cost_model()
-        debug_print("bridge model:\tC=%f us\tB=%f ns\tbreak-even(100)=%f" % (
-            c * 1e6, b * 1e9, self.bridge_break_even(100)))
-        t_bridge = 0.0
-        if self.bridge_rec_ops:
-            t_bridge = self.bridge_time / self.bridge_rec_ops * 1e6
-        debug_print("bridge attempts:\t%f s\t%d rec ops\t%f us/op" % (
-            self.bridge_time, self.bridge_rec_ops, t_bridge))
-        a = t = -1.0
-        if self.bridge_fit.fitted():
-            c, t = self.bridge_fit.raw_fit()
-            a = math.exp(c) * 1e6
-        saved, reach = self.failures_until(32, 200)
-        debug_print("survivor:\ta=%f us\tb=%f exp\tsaved(32..200)=%f"
-                    "\treach=%f" % (a, t, saved, reach))
+        self._print_bridge_model_stats()
         self._print_pe_stats(cnt, tim)
         line = "TOTAL:      \t\t%f" % (self.tk - self.starttime, )
         debug_print(line)

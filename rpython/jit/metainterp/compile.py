@@ -739,13 +739,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
         else:
             from rpython.jit.metainterp.blackhole import resume_in_blackhole
             try:
-                if isinstance(self, ResumeGuardCopiedDescr):
-                    resume_in_blackhole(metainterp_sd, jitdriver_sd,
-                                        self.prev, deadframe)
-                else:
-                    assert isinstance(self, ResumeGuardDescr)
-                    resume_in_blackhole(metainterp_sd, jitdriver_sd,
-                                        self, deadframe)
+                resume_in_blackhole(metainterp_sd, jitdriver_sd,
+                                    self.get_resumestorage(), deadframe)
             except jitexc.ContinueRunningNormallyNoTick as e:
                 # The bailout re-enters the portal: tell the portal that
                 # this entry is ours, so it credits us instead of tracing.
@@ -778,6 +773,7 @@ class AbstractResumeGuardDescr(ResumeDescr):
         metainterp_sd.profiler.note_guard_failure(self.fail_count)
         #
         if self.pe_force_compile and not (self.status & self.ST_BUSY_FLAG):
+            # A bailout already credited this guard with the next entry.
             self.pe_force_compile = False
             return True
         #
@@ -823,12 +819,23 @@ class AbstractResumeGuardDescr(ResumeDescr):
             hash = r_uint(current_object_addr_as_int(self) * 777767777 +
                           intval * 1442968193)
         #
+        return jitcounter.tick(hash, self._tick_increment(metainterp_sd,
+                                                          jitdriver_sd))
+
+    def _tick_increment(self, metainterp_sd, jitdriver_sd):
+        """How much one failure heats this guard's counter: 1.0 bridges
+        right away, 1/N after N failures.  It starts at the jitdriver's
+        eagerness parameter, rises to the measured break-even rate once
+        the cost model has one, jumps to 1.0 when the survivor rule says
+        waiting loses more than bridging risks, and is halved once per
+        bridge already aborted from this guard."""
+        profiler = metainterp_sd.profiler
         warmstate = jitdriver_sd.warmstate
         if self.rd_loop_token.pe_origin:
             increment = warmstate.increment_pe_trace_eagerness
         else:
             increment = warmstate.increment_trace_eagerness
-        failures = metainterp_sd.profiler.bridge_break_even(self.tail_ops)
+        failures = profiler.bridge_break_even(self.tail_ops)
         if failures > 0.0:
             # Measured model available: never lazier than the parameter.
             if failures < 1.0:
@@ -837,12 +844,11 @@ class AbstractResumeGuardDescr(ResumeDescr):
             if model_increment > increment:
                 increment = model_increment
         horizon = int(1.0 / increment)
-        if metainterp_sd.profiler.bridge_pays_off(self.fail_count,
-                                                  self.tail_ops, horizon):
+        if profiler.bridge_pays_off(self.fail_count, self.tail_ops, horizon):
             increment = 1.0
         if self.abort_count:
             increment = increment / float(1 << self.abort_count)
-        return jitcounter.tick(hash, increment)
+        return increment
 
     def note_aborted_bridge(self):
         if self.abort_count < self.ABORT_COUNT_MAX:

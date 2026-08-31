@@ -1059,6 +1059,7 @@ class WarmRunnerDesc(object):
                     finally:
                         if no_tick:
                             state.pe_suppress_ticks = False
+                            # Unclaimed credit must not outlive the replay.
                             state.pe_pending_guard = None
                     if result_kind != 'void':
                         result = unspecialize_value(result)
