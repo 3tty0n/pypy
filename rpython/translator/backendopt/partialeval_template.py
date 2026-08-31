@@ -1,7 +1,6 @@
 """Intermediate representation for offline-generated residual templates."""
 
 from rpython.flowspace.model import Constant
-from rpython.rlib.objectmodel import specialize
 from rpython.rlib.rarithmetic import intmask, r_uint
 from rpython.rtyper.lltypesystem.lloperation import llop
 
@@ -867,7 +866,6 @@ class LinkedResidualLowerer(object):
         return jitcode, entry_positions
 
 
-@specialize.argtype(0)
 def _insertion_sort(items):
     # Not items.sort(): RPython lists have no .sort() method at all.
     index = 1
@@ -879,6 +877,7 @@ def _insertion_sort(items):
             gap -= 1
         items[gap + 1] = key
         index += 1
+_insertion_sort._annspecialcase_ = 'specialize:arglistitemtype(0)'
 
 
 def sort_ints(items):
