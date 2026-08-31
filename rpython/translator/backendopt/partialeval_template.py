@@ -866,7 +866,7 @@ class LinkedResidualLowerer(object):
         return jitcode, entry_positions
 
 
-def _insertion_sort(items):
+def sort_ints(items):
     # Not items.sort(): RPython lists have no .sort() method at all.
     index = 1
     while index < len(items):
@@ -877,17 +877,19 @@ def _insertion_sort(items):
             gap -= 1
         items[gap + 1] = key
         index += 1
-_insertion_sort._annspecialcase_ = 'specialize:arglistitemtype(0)'
-
-
-def sort_ints(items):
-    """In-place insertion sort of a list of ints."""
-    _insertion_sort(items)
 
 
 def sort_strings(items):
-    """In-place insertion sort of a list of strings."""
-    _insertion_sort(items)
+    # Same as sort_ints; RPython cannot share one body across item types.
+    index = 1
+    while index < len(items):
+        key = items[index]
+        gap = index - 1
+        while gap >= 0 and items[gap] > key:
+            items[gap + 1] = items[gap]
+            gap -= 1
+        items[gap + 1] = key
+        index += 1
 
 
 def _pair_less(a, b):
