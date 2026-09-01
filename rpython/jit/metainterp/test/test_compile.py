@@ -206,7 +206,7 @@ def test_must_compile_uses_pe_eagerness_for_residual_roots():
     for pe_origin in (False, True):
         descr.rd_loop_token = CompiledLoopToken.__new__(CompiledLoopToken)
         descr.rd_loop_token.pe_origin = pe_origin
-        seen.append(descr._tick_increment(SD, JD))
+        seen.append(descr._tick_increment(SD, JD, 1))
     assert seen == [1, 2]
 
 
@@ -240,11 +240,11 @@ def test_must_compile_backs_off_after_aborted_bridges():
     descr = ResumeGuardDescr()
     descr.status = 0
     descr.rd_loop_token = CompiledLoopToken.__new__(CompiledLoopToken)
-    seen.append(descr._tick_increment(SD, JD))
+    seen.append(descr._tick_increment(SD, JD, 1))
     descr.note_aborted_bridge()
-    seen.append(descr._tick_increment(SD, JD))
+    seen.append(descr._tick_increment(SD, JD, 1))
     descr.note_aborted_bridge()
-    seen.append(descr._tick_increment(SD, JD))
+    seen.append(descr._tick_increment(SD, JD, 1))
     assert seen == [1.0, 0.5, 0.25]
     for i in range(100):
         descr.note_aborted_bridge()
@@ -283,7 +283,7 @@ def test_must_compile_uses_bridge_model_when_more_eager():
     descr.rd_loop_token = CompiledLoopToken.__new__(CompiledLoopToken)
     for tail in (10, 1000, 5):
         descr.tail_ops = tail
-        seen.append(descr._tick_increment(SD, JD))
+        seen.append(descr._tick_increment(SD, JD, 1))
     assert seen == [0.25, 1.0 / 200, 1.0]
 
 

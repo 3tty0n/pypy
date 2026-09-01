@@ -701,7 +701,7 @@ class ResumeDescr(AbstractFailDescr):
 
 class AbstractResumeGuardDescr(ResumeDescr):
     _attrs_ = ('status', 'abort_count', 'tail_ops', 'fail_count',
-               'fails_since_tick', 'pe_force_compile')
+               'fails_since_tick', 'pe_force_compile', 'value_counts')
 
     status = r_uint(0)
     tail_ops = 0
@@ -710,6 +710,7 @@ class AbstractResumeGuardDescr(ResumeDescr):
     ABORT_COUNT_MAX = 16
     fail_count = 0
     fails_since_tick = 0
+    value_counts = None
     # Set when a bailout from this guard re-entered the portal: the next
     # failure bridges instead of letting the portal heat a fresh loop.
     pe_force_compile = False
@@ -769,11 +770,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
         return self.status & self.ST_SHIFT_MASK
 
     def must_compile(self, deadframe, metainterp_sd, jitdriver_sd):
-        jitcounter = metainterp_sd.warmrunnerdesc.jitcounter
         self.fail_count += 1
         metainterp_sd.profiler.note_guard_failure(self.fail_count)
-        if self.fail_count == 4096:
-            self._log_hot_guard(metainterp_sd, jitdriver_sd)
         #
         if self.pe_force_compile and not (self.status & self.ST_BUSY_FLAG):
             # A bailout already credited this guard with the next entry.
@@ -784,7 +782,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
             # common case: not a guard_value and not busy tracing.  Decide
             # on the exact per-guard count: the shared jitcounter decays
             # and evicts, so its "N failures" took thousands in practice.
-            increment = self._tick_increment(metainterp_sd, jitdriver_sd)
+            increment = self._tick_increment(metainterp_sd, jitdriver_sd,
+                                             self.fail_count)
             self.fails_since_tick += 1
             if self.fails_since_tick * increment < 1.0:
                 return False
@@ -797,8 +796,6 @@ class AbstractResumeGuardDescr(ResumeDescr):
             return False
         #
         else:    # we have a GUARD_VALUE that fails.
-            from rpython.rlib.objectmodel import current_object_addr_as_int
-
             index = intmask(self.status >> self.ST_SHIFT)
             typetag = intmask(self.status & self.ST_TYPE_MASK)
 
@@ -823,24 +820,17 @@ class AbstractResumeGuardDescr(ResumeDescr):
                     intval = llmemory.cast_adr_to_int(
                         llmemory.cast_int_to_adr(intval), "forced")
 
-            hash = r_uint(current_object_addr_as_int(self) * 777767777 +
-                          intval * 1442968193)
-        #
-        return jitcounter.tick(hash, self._tick_increment(metainterp_sd,
-                                                          jitdriver_sd))
+            # Exact per-value count: the shared jitcounter evicts entries,
+            # so a polymorphic guard_value never reached its eagerness.
+            if self.value_counts is None:
+                self.value_counts = {}
+            count = self.value_counts.get(intval, 0) + 1
+            self.value_counts[intval] = count
+            increment = self._tick_increment(metainterp_sd, jitdriver_sd,
+                                             count)
+            return count * increment >= 1.0
 
-    def _log_hot_guard(self, metainterp_sd, jitdriver_sd):
-        debug_start("jit-guard-hot")
-        debug_print("status", intmask(self.status),
-                    "tail_ops", self.tail_ops,
-                    "pe_origin", int(self.rd_loop_token.pe_origin),
-                    "aborts", self.abort_count,
-                    "since_tick", self.fails_since_tick,
-                    "inc_ppm", int(self._tick_increment(
-                        metainterp_sd, jitdriver_sd) * 1000000.0))
-        debug_stop("jit-guard-hot")
-
-    def _tick_increment(self, metainterp_sd, jitdriver_sd):
+    def _tick_increment(self, metainterp_sd, jitdriver_sd, count):
         """How much one failure heats this guard's counter: 1.0 bridges
         right away, 1/N after N failures.  It starts at the jitdriver's
         eagerness parameter, rises to the measured break-even rate once
@@ -862,7 +852,7 @@ class AbstractResumeGuardDescr(ResumeDescr):
             if model_increment > increment:
                 increment = model_increment
         horizon = int(1.0 / increment)
-        if profiler.bridge_pays_off(self.fail_count, self.tail_ops, horizon):
+        if profiler.bridge_pays_off(count, self.tail_ops, horizon):
             increment = 1.0
         if self.abort_count:
             increment = increment / float(1 << self.abort_count)
@@ -878,9 +868,9 @@ class AbstractResumeGuardDescr(ResumeDescr):
 
     def done_compiling(self):
         # done tracing and compiling from this guard.  Note that if the
-        # bridge has not been successfully compiled, the jitcounter for
-        # it was reset to 0 already by jitcounter.tick() and not
-        # incremented at all as long as ST_BUSY_FLAG was set.
+        # bridge has not been successfully compiled, fails_since_tick was
+        # reset to 0 already by must_compile() and not incremented at all
+        # as long as ST_BUSY_FLAG was set.
         self.status &= ~self.ST_BUSY_FLAG
 
     def compile_and_attach(self, metainterp, new_loop, orig_inputargs):
