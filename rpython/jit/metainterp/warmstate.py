@@ -553,6 +553,8 @@ class WarmEnterState(object):
             """
             if increment_threshold == 0:
                 return # jit is off
+            # A bridge would end here too: the failure sample stops.
+            metainterp_sd.profiler.end_fail_stretch()
             # Look for the cell corresponding to the current greenargs.
             # Search for the JitCell that is of the correct subclass of
             # BaseJitCell, and that stores a key that compares equal.
