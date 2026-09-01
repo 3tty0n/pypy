@@ -1480,7 +1480,11 @@ class MIFrame(object):
                     if have_debug_prints():
                         loc = targetjitdriver_sd.warmstate.get_location_str(greenboxes)
                         debug_print("recursive function (not inlined):", loc)
-                    warmrunnerstate.dont_trace_here(greenboxes)
+                    # Only a callee without its own loop must be traced
+                    # separately; one that has it stays inlinable, so a
+                    # later bridge can still inline a shallow subtree.
+                    if not warmrunnerstate.has_own_loop(greenboxes):
+                        warmrunnerstate.dont_trace_here(greenboxes)
                 elif program is None:
                     return self.metainterp.perform_call(portal_code, allboxes,
                                 greenkey=greenboxes)

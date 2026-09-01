@@ -771,6 +771,12 @@ class WarmEnterState(object):
             return True
         self.can_inline_callable = can_inline_callable
 
+        def has_own_loop(greenkey):
+            cell = JitCell.get_jitcell(*unwrap_greenkey(greenkey))
+            return (cell is not None and not cell.flags & JC_TEMPORARY
+                    and cell.get_procedure_token() is not None)
+        self.has_own_loop = has_own_loop
+
         def dont_trace_here(greenkey):
             # Set greenkey as somewhere that tracing should not occur into;
             # notice that, as per the description of JC_DONT_TRACE_HERE earlier,
