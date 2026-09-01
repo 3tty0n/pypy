@@ -4,10 +4,25 @@
 
 import math
 import time
+from rpython.rlib import rtimer
 from rpython.rlib.debug import debug_print, debug_start, debug_stop
 from rpython.rlib.debug import have_debug_prints
+from rpython.rlib.objectmodel import we_are_translated
 from rpython.jit.metainterp.jitexc import JitException
 from rpython.rlib.jit import Counters
+
+
+def timer():
+    """Seconds of thread CPU time where the platform offers it.
+
+    read_timestamp() is clock_gettime(CLOCK_THREAD_CPUTIME_ID) exactly
+    when its unit is nanoseconds; on the other platforms it is a cycle
+    or performance counter of an unrelated scale, so use wall time
+    there.  Being descheduled is not compile cost.
+    """
+    if we_are_translated() and rtimer.get_timestamp_unit() == rtimer.UNIT_NS:
+        return float(rtimer.read_timestamp()) * 1e-9
+    return time.time()
 
 
 JITPROF_LINES = Counters.ncounters + 13  # TOTAL, calls, PE/bridge stats
@@ -212,7 +227,7 @@ class FailStretch(object):
 
 class Profiler(BaseProfiler):
     initialized = False
-    timer = staticmethod(time.time)
+    timer = staticmethod(timer)
     starttime = 0
     t1 = 0
     times = None
