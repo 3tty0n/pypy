@@ -991,8 +991,8 @@ class GcRewriterAssembler(object):
         # XXX should check if the boxes are used later; but we just assume
         # they aren't for now
         start = 0
-        if operations[0].getopnum() == rop.INCREMENT_DEBUG_COUNTER:
-            start = 1
+        while operations[start].getopnum() == rop.INCREMENT_DEBUG_COUNTER:
+            start += 1
         if len(operations) >= start + 3:
             if (operations[start+0].getopnum() == rop.SAVE_EXC_CLASS and
                 operations[start+1].getopnum() == rop.SAVE_EXCEPTION and

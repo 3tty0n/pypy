@@ -1,6 +1,6 @@
-
 """ A small helper module for profiling JIT
 """
+import weakref
 
 import math
 import time
@@ -52,6 +52,9 @@ class EmptyProfiler(BaseProfiler):
         pass
 
     def note_bridge_at(self, count):
+        pass
+
+    def note_bridge(self, descr):
         pass
 
     def start_portal_call(self, insns):
@@ -259,6 +262,7 @@ class Profiler(BaseProfiler):
         self.calls = 0
         self.fail_hist = [0] * self.HIST_BUCKETS
         self.bridge_hist = [0] * self.HIST_BUCKETS
+        self.bridged = []
         self.bh_fit = LinearFit()
         self.bridge_fit = LinearFit()
         self.current = []
@@ -363,6 +367,28 @@ class Profiler(BaseProfiler):
 
     def note_bridge_at(self, count):
         self.bridge_hist[self._bucket(count)] += 1
+
+    @staticmethod
+    def note_milestones(lo, hi, hist):
+        """Credit hist with every 2**k in (lo, hi]."""
+        k = 0
+        while (1 << k) <= hi and k < Profiler.HIST_BUCKETS - 1:
+            if (1 << k) > lo:
+                hist[k] += 1
+            k += 1
+
+    def note_bridge(self, descr):
+        """A bridge was attached: sweep every bridged guard so entries
+        into bridges keep feeding the histograms.  O(bridges) per bridge."""
+        self.note_bridge_at(descr.fail_count)
+        self.bridged.append(weakref.ref(descr))
+        alive = []
+        for ref in self.bridged:
+            d = ref()
+            if d is not None:
+                d.credit_bridge_entries(self)
+                alive.append(ref)
+        self.bridged = alive
 
     def start_portal_call(self, insns):
         # A callee frame run from the blackhole: real execution, not

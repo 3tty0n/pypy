@@ -1,5 +1,5 @@
 import weakref
-from rpython.rtyper.lltypesystem import lltype, llmemory
+from rpython.rtyper.lltypesystem import lltype, llmemory, rffi
 from rpython.rtyper.annlowlevel import (
     cast_instance_to_gcref, cast_gcref_to_instance)
 from rpython.rlib.objectmodel import we_are_translated
@@ -700,9 +700,34 @@ class ResumeDescr(AbstractFailDescr):
     def clone(self):
         return self
 
+class BridgeEntries(object):
+    """Entries into the bridges of one guard (or of one guard_value
+    value): each is a failure the bridge replaced, so the survivor
+    histograms keep counting it instead of seeing the guard die."""
+
+    def __init__(self, credited):
+        self.counter = lltype.malloc(rffi.CArray(lltype.Signed), 1,
+                                     flavor='raw', track_allocation=False)
+        self.counter[0] = 0
+        self.credited = credited
+
+    def increment_op(self):
+        adr = rffi.cast(lltype.Signed, self.counter)
+        return ResOperation(rop.INCREMENT_DEBUG_COUNTER, [ConstInt(adr)])
+
+    def credit(self, direct, hist):
+        """Record the 2**k milestones crossed since the last sweep, with
+        'direct' the failures the guard counted itself."""
+        total = direct + self.counter[0]
+        Profiler.note_milestones(self.credited, total, hist)
+        self.credited = total
+        return total
+
+
 class AbstractResumeGuardDescr(ResumeDescr):
     _attrs_ = ('status', 'abort_count', 'tail_ops', 'fail_count',
-               'fails_since_tick', 'value_counts', 'value_hist')
+               'fails_since_tick', 'value_counts', 'value_hist',
+               'entries', 'value_entries', 'bridge_value')
 
     status = r_uint(0)
     tail_ops = 0
@@ -713,6 +738,9 @@ class AbstractResumeGuardDescr(ResumeDescr):
     fails_since_tick = 0
     value_counts = None
     value_hist = None
+    entries = None
+    value_entries = None
+    bridge_value = 0
 
     ST_BUSY_FLAG    = 0x01     # if set, busy tracing from the guard
     ST_TYPE_MASK    = 0x06     # mask for the type (TY_xxx)
@@ -764,7 +792,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
 
     def must_compile(self, deadframe, metainterp_sd, jitdriver_sd):
         self.fail_count += 1
-        metainterp_sd.profiler.note_guard_failure(self.fail_count)
+        if self.entries is None:
+            metainterp_sd.profiler.note_guard_failure(self.fail_count)
         #
         if self.status & (self.ST_BUSY_FLAG | self.ST_TYPE_MASK) == 0:
             # common case: not a guard_value and not busy tracing.  Decide
@@ -815,7 +844,9 @@ class AbstractResumeGuardDescr(ResumeDescr):
                 self.value_hist = [0] * Profiler.HIST_BUCKETS
             count = self.value_counts.get(intval, 0) + 1
             self.value_counts[intval] = count
-            if count & (count - 1) == 0:
+            self.bridge_value = intval
+            if count & (count - 1) == 0 and (self.value_entries is None
+                    or intval not in self.value_entries):
                 self.value_hist[Profiler._bucket(count)] += 1
             increment = self._tick_increment(metainterp_sd, jitdriver_sd,
                                              count, self.value_hist)
@@ -879,12 +910,41 @@ class AbstractResumeGuardDescr(ResumeDescr):
             self._debug_subinputargs = new_loop.inputargs
             self._debug_suboperations = new_loop.operations
         propagate_original_jitcell_token(new_loop)
+        operations = [self.bridge_entries().increment_op()]
+        operations.extend(new_loop.operations)
         send_bridge_to_backend(metainterp.jitdriver_sd, metainterp.staticdata,
-                               self, inputargs, new_loop.operations,
+                               self, inputargs, operations,
                                new_loop.original_jitcell_token,
                                metainterp.box_names_memo)
-        metainterp.staticdata.profiler.note_bridge_at(self.fail_count)
+        metainterp.staticdata.profiler.note_bridge(self)
         record_loop_or_bridge(metainterp.staticdata, new_loop)
+
+    def bridge_entries(self):
+        if self.entries is None:
+            self.entries = BridgeEntries(self.fail_count)
+        if not self.status & self.ST_TYPE_MASK:
+            return self.entries
+        if self.value_entries is None:
+            self.value_entries = {}
+        entries = self.value_entries.get(self.bridge_value, None)
+        if entries is None:
+            entries = BridgeEntries(self.value_counts[self.bridge_value])
+            self.value_entries[self.bridge_value] = entries
+        return entries
+
+    def credit_bridge_entries(self, profiler):
+        """Sweep: count this guard's bridge entries as failures."""
+        total = 0
+        if self.value_entries is not None:
+            for intval, entries in self.value_entries.iteritems():
+                entries.credit(self.value_counts[intval], self.value_hist)
+                total += entries.counter[0]
+        else:
+            total = self.entries.counter[0]
+        credited = self.entries.credited
+        self.entries.credited = self.fail_count + total
+        Profiler.note_milestones(credited, self.fail_count + total,
+                                 profiler.fail_hist)
 
     def make_a_counter_per_value(self, guard_value_op, index):
         assert guard_value_op.getopnum() == rop.GUARD_VALUE
@@ -906,7 +966,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
             self.status = hash & self.ST_SHIFT_MASK
 
 class ResumeGuardCopiedDescr(AbstractResumeGuardDescr):
-    _attrs_ = ('status', 'abort_count', 'tail_ops', 'prev')
+    _attrs_ = ('status', 'abort_count', 'tail_ops', 'prev', 'entries',
+               'value_entries', 'bridge_value')
 
     def __init__(self, prev):
         AbstractResumeGuardDescr.__init__(self)

@@ -295,3 +295,31 @@ def test_fail_stretch_ends_when_failing_frame_returns():
     assert abs(p.bh_fit.st - 3e-6) < 1e-12
     p.leave_portal()
     assert p.portal_depth == 0
+
+
+def test_bridge_entries_keep_feeding_histogram():
+    from rpython.jit.metainterp.compile import ResumeGuardDescr
+    from rpython.jit.metainterp.jitprof import Profiler
+    p = Profiler()
+    p.timer = lambda: 0.0
+    p.start()
+    d = ResumeGuardDescr()
+    d.fail_count = 3
+    d.bridge_entries().counter[0] = 10     # 13 would-be failures
+    p.note_bridge(d)
+    assert p.fail_hist[:5] == [0, 0, 1, 1, 0]   # 4 and 8 in (3, 13]
+    d.entries.counter[0] = 40
+    p.note_bridge(d)
+    assert p.fail_hist[:7] == [0, 0, 1, 1, 1, 1, 0]
+    assert p.bridge_hist[1] == 2
+    # guard_value: its value's own histogram is credited too
+    v = ResumeGuardDescr()
+    v.status = v.TY_INT
+    v.fail_count = 1
+    v.value_counts = {7: 1}
+    v.value_hist = [0] * Profiler.HIST_BUCKETS
+    v.bridge_value = 7
+    v.bridge_entries().counter[0] = 3
+    p.note_bridge(v)
+    assert v.value_hist[:3] == [0, 1, 1]        # 2 and 4 in (1, 4]
+    assert p.fail_hist[1] == 1 and p.fail_hist[2] == 2
