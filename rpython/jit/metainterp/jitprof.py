@@ -229,6 +229,7 @@ class Profiler(BaseProfiler):
     # Per active resume (innermost last): time spent in portal calls made
     # from the blackhole, excluded from that resume's sample.
     bh_excl_time = None
+    bh_started = None
     bh_call_t0 = 0.0
     # Wall time and recorded ops of tracing-from-a-guard (bridge attempts,
     # including their optimizing and backend work): the compile cost the
@@ -296,7 +297,9 @@ class Profiler(BaseProfiler):
         self._start(Counters.BLACKHOLE)
         if self.bh_excl_time is None:
             self.bh_excl_time = []
+            self.bh_started = []
         self.bh_excl_time.append(0.0)
+        self.bh_started.append(self.t1)
 
     def end_blackhole(self, insns, tail_ops):
         """Open a failure sample: the blackhole run is over, the
@@ -304,9 +307,11 @@ class Profiler(BaseProfiler):
 
         tail_ops: optimized ops after the failed guard (-1: unknown);
         the stretch that follows scales with it."""
-        t0 = self.t1
         self._end(Counters.BLACKHOLE)
-        elapsed = self.t1 - t0 - self.bh_excl_time.pop()
+        # Wall time since start_blackhole, so nested decode time counts;
+        # self.t1 alone is only the slice after the last nested timer.
+        elapsed = (self.t1 - self.bh_started.pop()
+                   - self.bh_excl_time.pop())
         if elapsed <= 0.0 or tail_ops < 0:
             return
         self.end_fail_stretch()
