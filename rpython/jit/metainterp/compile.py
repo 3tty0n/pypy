@@ -3,6 +3,7 @@ from rpython.rtyper.lltypesystem import lltype, llmemory
 from rpython.rtyper.annlowlevel import (
     cast_instance_to_gcref, cast_gcref_to_instance)
 from rpython.rlib.objectmodel import we_are_translated
+from rpython.jit.metainterp.jitprof import Profiler
 from rpython.rlib.debug import (
     debug_start, debug_stop, debug_print, have_debug_prints)
 from rpython.rlib.rarithmetic import r_uint, intmask
@@ -701,7 +702,8 @@ class ResumeDescr(AbstractFailDescr):
 
 class AbstractResumeGuardDescr(ResumeDescr):
     _attrs_ = ('status', 'abort_count', 'tail_ops', 'fail_count',
-               'fails_since_tick', 'pe_force_compile', 'value_counts')
+               'fails_since_tick', 'pe_force_compile', 'value_counts',
+               'value_hist')
 
     status = r_uint(0)
     tail_ops = 0
@@ -711,6 +713,7 @@ class AbstractResumeGuardDescr(ResumeDescr):
     fail_count = 0
     fails_since_tick = 0
     value_counts = None
+    value_hist = None
     # Set when a bailout from this guard re-entered the portal: the next
     # failure bridges instead of letting the portal heat a fresh loop.
     pe_force_compile = False
@@ -783,7 +786,7 @@ class AbstractResumeGuardDescr(ResumeDescr):
             # on the exact per-guard count: the shared jitcounter decays
             # and evicts, so its "N failures" took thousands in practice.
             increment = self._tick_increment(metainterp_sd, jitdriver_sd,
-                                             self.fail_count)
+                                             self.fail_count, None)
             self.fails_since_tick += 1
             if self.fails_since_tick * increment < 1.0:
                 return False
@@ -824,13 +827,16 @@ class AbstractResumeGuardDescr(ResumeDescr):
             # so a polymorphic guard_value never reached its eagerness.
             if self.value_counts is None:
                 self.value_counts = {}
+                self.value_hist = [0] * Profiler.HIST_BUCKETS
             count = self.value_counts.get(intval, 0) + 1
             self.value_counts[intval] = count
+            if count & (count - 1) == 0:
+                self.value_hist[Profiler._bucket(count)] += 1
             increment = self._tick_increment(metainterp_sd, jitdriver_sd,
-                                             count)
+                                             count, self.value_hist)
             return count * increment >= 1.0
 
-    def _tick_increment(self, metainterp_sd, jitdriver_sd, count):
+    def _tick_increment(self, metainterp_sd, jitdriver_sd, count, hist):
         """How much one failure heats this guard's counter: 1.0 bridges
         right away, 1/N after N failures.  It starts at the jitdriver's
         eagerness parameter, rises to the measured break-even rate once
@@ -852,7 +858,12 @@ class AbstractResumeGuardDescr(ResumeDescr):
             if model_increment > increment:
                 increment = model_increment
         horizon = int(1.0 / increment)
-        if profiler.bridge_pays_off(count, self.tail_ops, horizon):
+        if hist is None:
+            pays = profiler.bridge_pays_off(count, self.tail_ops, horizon)
+        else:
+            pays = profiler.bridge_pays_off_hist(count, self.tail_ops,
+                                                 horizon, hist)
+        if pays:
             increment = 1.0
         if self.abort_count:
             increment = increment / float(1 << self.abort_count)

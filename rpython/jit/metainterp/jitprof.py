@@ -72,6 +72,9 @@ class EmptyProfiler(BaseProfiler):
     def bridge_pays_off(self, count, tail_ops, horizon):
         return False
 
+    def bridge_pays_off_hist(self, count, tail_ops, horizon, hist):
+        return False
+
     def end_fail_stretch(self):
         pass
 
@@ -434,30 +437,41 @@ class Profiler(BaseProfiler):
         return self.bridge_cost(tail_ops) / fail
 
     def failures_until(self, count, horizon):
+        return self.failures_until_hist(count, horizon, self.fail_hist)
+
+    def failures_until_hist(self, count, horizon, hist):
         """(saved, reach): failures a guard at 'count' is expected to
-        make before 'horizon', and its probability of getting there.
+        make before 'horizon', and its probability of getting there,
+        from a histogram of guards (or values) that reached 2**k.
         Only the observed part of the histogram is used: no extrapolation
         past the base eagerness, so over-bridging feeds back negatively."""
         k = self._bucket(count)
         kh = self._bucket(horizon)
-        at_k = self.fail_hist[k]
+        at_k = hist[k]
         if kh <= k or at_k == 0:
             return 0.0, 0.0
         saved = 0.0
         for j in range(k, kh):
-            saved += self.fail_hist[j + 1] * float(1 << j)
+            saved += hist[j + 1] * float(1 << j)
         # Guards reaching the horizon's bucket fail on until the horizon.
-        saved += self.fail_hist[kh] * float(horizon - (1 << kh))
-        return saved / at_k, self.fail_hist[kh] / float(at_k)
+        saved += hist[kh] * float(horizon - (1 << kh))
+        return saved / at_k, hist[kh] / float(at_k)
 
     def bridge_pays_off(self, count, tail_ops, horizon):
+        """Survivor rule over all guards, see bridge_pays_off_hist."""
+        return self.bridge_pays_off_hist(count, tail_ops, horizon,
+                                         self.fail_hist)
+
+    def bridge_pays_off_hist(self, count, tail_ops, horizon, hist):
         """Survivor rule: bridge now rather than at 'horizon' failures iff
 
             saved * failure_cost > bridge_cost * (1 - reach)
 
         i.e. the failures a guard at 'count' still saves outweigh the
-        compile cost risked on one that dies before the horizon."""
-        saved, reach = self.failures_until(count, horizon)
+        compile cost risked on one that dies before the horizon.  A
+        guard_value passes its own per-value histogram: values seen
+        once (fresh objects) must not inherit other guards' survival."""
+        saved, reach = self.failures_until_hist(count, horizon, hist)
         fail = self.failure_cost(tail_ops)
         if saved <= 0.0 or fail <= 0.0:
             return False
