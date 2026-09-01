@@ -143,24 +143,24 @@ def test_blackhole_cost_model_fit():
     clock = [0.0]
     p.timer = lambda: clock[0]
     p.start()
-    # each failure: 1us blackhole + 1us stretch + 30ns per tail op
+    # each failure: 1us blackhole, then a stretch making 2us*sqrt(tail+1)
     for tail in range(100, 100 + 16 * 50, 50):
         p.start_blackhole()
         clock[0] += 1e-6
         p.end_blackhole(7, tail)
-        clock[0] += 1e-6 + 30e-9 * tail   # interpreter stretch to compiled
+        clock[0] += 2e-6 * (tail + 1) ** 0.5 - 1e-6
         p.end_fail_stretch()
     c, b = p.blackhole_cost_model()
     assert abs(c - 2e-6) < 1e-9
-    assert abs(b - 30e-9) < 1e-12
+    assert abs(b - 0.5) < 1e-6
     # compile cost: 1us per recorded op, 2 recorded ops per opt op
     p.counters[Counters.RECORDED_OPS] = 2000
     p.counters[Counters.OPT_OPS] = 1000
     p.times[Counters.TRACING] = 2000 * 1e-6
-    short = p.bridge_break_even(10)      # 20 rec ops: 20us / (0.3us + 2us)
-    long = p.bridge_break_even(1000)     # 2000 rec ops: 2ms / (30us + 2us)
-    assert abs(short - 20.0 / 2.3) < 1e-6
-    assert abs(long - 2000.0 / 32.0) < 1e-6
+    short = p.bridge_break_even(10)      # 20 rec ops: 20us / failure(10)
+    long = p.bridge_break_even(1000)     # 2000 rec ops: 2ms / failure(1000)
+    assert abs(short - 20.0 / (2 * 11 ** 0.5)) < 1e-6
+    assert abs(long - 2000.0 / (2 * 1001 ** 0.5)) < 1e-6
     assert short < long
 
 
@@ -195,10 +195,10 @@ def test_survivor_rule():
     p.start()
     p.counters[Counters.RECORDED_OPS] = 1000
     p.counters[Counters.OPT_OPS] = 1000
-    # failure: 1us fixed + 10ns per tail op; bridge: 1us per op + 1
+    # failure: 0.1us per tail op + 1; bridge: 1us per op + 1
     for insns in range(100, 100 + 16 * 50, 50):
         p.start_blackhole()
-        clock[0] += 1e-6 + 10e-9 * insns
+        clock[0] += 1e-7 * (insns + 1)
         p.end_blackhole(3, insns)
         p.end_fail_stretch()
         p.start_bridge_attempt()
@@ -274,7 +274,7 @@ def test_fail_stretch_spans_nested_portal_calls():
     p.end_fail_stretch()
     p.leave_portal()
     assert p.bh_fit.n == 1
-    assert abs(p.bh_fit.st - 3e-6) < 1e-12    # 10us callee excluded
+    assert abs(math.exp(p.bh_fit.st) - 3e-6) < 1e-12    # 10us callee excluded
 
 
 def test_fail_stretch_ends_when_failing_frame_returns():
@@ -292,6 +292,6 @@ def test_fail_stretch_ends_when_failing_frame_returns():
     p.leave_portal()             # returns to a compiled caller
     assert not p.fail.pending
     assert p.bh_fit.n == 1
-    assert abs(p.bh_fit.st - 3e-6) < 1e-12
+    assert abs(math.exp(p.bh_fit.st) - 3e-6) < 1e-12
     p.leave_portal()
     assert p.portal_depth == 0
