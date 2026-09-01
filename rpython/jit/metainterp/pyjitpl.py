@@ -3115,9 +3115,6 @@ class MetaInterp(object):
             if greenkey_of_huge_function is not None:
                 jd_sd.warmstate.disable_noninlinable_function(
                     greenkey_of_huge_function)
-                if self.recursing_into_root(greenkey_of_huge_function):
-                    jd_sd.warmstate.disable_unrolling(
-                        greenkey_of_huge_function)
                 self.aborted_tracing_jitdriver = jd_sd
                 self.aborted_tracing_greenkey = greenkey_of_huge_function
                 if self.current_merge_points:
@@ -3125,9 +3122,11 @@ class MetaInterp(object):
                     greenkey = self.current_merge_points[0][0][:jd_sd.num_green_args]
                     warmrunnerstate.JitCell.trace_next_iteration(greenkey)
             else:
-                if self.root_greenkey is not None:
-                    warmrunnerstate.disable_unrolling(self.root_greenkey)
                 self.prepare_trace_segmenting()
+            # A loop retries unboundedly, so its own recursion must stop
+            # unrolling; a bridge's guard already backs off per abort.
+            if self.current_merge_points and self.root_greenkey is not None:
+                warmrunnerstate.disable_unrolling(self.root_greenkey)
             raise SwitchToBlackhole(Counters.ABORT_TOO_LONG)
 
     def prepare_trace_segmenting(self):
