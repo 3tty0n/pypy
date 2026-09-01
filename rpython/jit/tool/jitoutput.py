@@ -21,7 +21,7 @@ REGEXES = [
     (('guard_fail_hist',), '^guard failures >=2\^k:\s*(.*)$'),
     (('bridge_at_hist',), '^bridges at 2\^k:\s*(.*)$'),
     (('bridge_model_c', 'bridge_model_b', 'bridge_model_be'),
-     '^bridge model:\s+C=([-\d.]+) us\s+B=([-\d.]+) exp\s+'
+     '^bridge model:\s+C=([-\d.]+) us\s+B=([-\d.]+) ns\s+'
      'break-even\(100\)=([-\d.]+)$'),
     (('bridge_attempt_time', 'bridge_attempt_ops', 'bridge_attempt_us'),
      '^bridge attempts:\s+([\d.]+) s\s+(\d+) rec ops\s+([\d.]+) us/op$'),

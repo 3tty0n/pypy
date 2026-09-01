@@ -322,11 +322,7 @@ class Profiler(BaseProfiler):
         fail = self.fail
         if not fail.pending or self.portal_depth > fail.frame_depth:
             return          # inside a call the stretch made, not its end
-        cost = fail.close(self.timer())
-        if cost > 0.0:
-            # Log space, like bridge_fit: the interpreter stretch has a
-            # heavy tail and a mean fit runs away on it.
-            self.bh_fit.add(math.log(fail.tail_ops + 1.0), math.log(cost))
+        self.bh_fit.add(fail.tail_ops, fail.close(self.timer()))
 
     def enter_portal(self):
         self.portal_depth += 1
@@ -392,13 +388,10 @@ class Profiler(BaseProfiler):
                                 math.log(self.last_bridge_time))
 
     def blackhole_cost_model(self):
-        """(C, B): one guard failure costs C * (tail_ops + 1) ** B
-        seconds until compiled code is entered again; (-1, -1) until
-        enough failures were seen to fit them."""
-        if not self.bh_fit.fitted():
-            return (-1.0, -1.0)
-        c, b = self.bh_fit.raw_fit()
-        return (math.exp(c), b)
+        """(C, B): seconds per guard failure and per optimized op of its
+        tail, measured until compiled code is entered again; (-1, -1)
+        until enough failures were seen to fit them."""
+        return self.bh_fit.fit()
 
     def _tail_rec_ops(self, tail_ops):
         # Optimized ops are fewer than recorded ones by the measured ratio.
@@ -411,9 +404,9 @@ class Profiler(BaseProfiler):
     def failure_cost(self, tail_ops):
         """Seconds one guard failure costs without a bridge, or -1."""
         c, b = self.blackhole_cost_model()
-        if c < 0.0:
+        if b < 0.0:
             return -1.0
-        return c * math.exp(b * math.log(tail_ops + 1.0))
+        return c + b * tail_ops
 
     def bridge_cost(self, tail_ops):
         """Seconds to trace and compile a bridge over tail_ops, or -1."""
@@ -534,8 +527,8 @@ class Profiler(BaseProfiler):
         debug_print("guard failures >=2^k:\t" + self._hist(self.fail_hist))
         debug_print("bridges at 2^k:\t" + self._hist(self.bridge_hist))
         c, b = self.blackhole_cost_model()
-        debug_print("bridge model:\tC=%f us\tB=%f exp\tbreak-even(100)=%f" % (
-            c * 1e6, b, self.bridge_break_even(100)))
+        debug_print("bridge model:\tC=%f us\tB=%f ns\tbreak-even(100)=%f" % (
+            c * 1e6, b * 1e9, self.bridge_break_even(100)))
         t_bridge = 0.0
         if self.bridge_rec_ops:
             t_bridge = self.bridge_time / self.bridge_rec_ops * 1e6

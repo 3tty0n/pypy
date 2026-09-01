@@ -53,7 +53,7 @@ Blackhole callee: 1     0.000100
 Blackhole decode: 2     0.000050
 guard failures >=2^k:	5 3 1
 bridges at 2^k:	0 0 1
-bridge model:	C=2.500000 us	B=0.500000 exp	break-even(100)=6.000000
+bridge model:	C=2.500000 us	B=30.000000 ns	break-even(100)=6.000000
 bridge attempts:	0.100000 s	2000 rec ops	50.000000 us/op
 survivor:	a=-1.000000 us	b=-1.000000 exp	saved(32..200)=0.000000	reach=0.000000
 PE cogen overhead: 4       0.000400
