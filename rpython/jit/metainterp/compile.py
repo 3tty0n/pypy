@@ -712,8 +712,7 @@ def _attempt_horizon(increment):
 
 class AbstractResumeGuardDescr(ResumeDescr):
     _attrs_ = ('status', 'abort_count', 'tail_ops', 'fail_count',
-               'fails_since_tick', 'pe_force_compile', 'value_counts',
-               'value_hist')
+               'fails_since_tick', 'value_counts', 'value_hist')
 
     status = r_uint(0)
     tail_ops = 0
@@ -724,9 +723,6 @@ class AbstractResumeGuardDescr(ResumeDescr):
     fails_since_tick = 0
     value_counts = None
     value_hist = None
-    # Set when a bailout from this guard re-entered the portal: the next
-    # failure bridges instead of letting the portal heat a fresh loop.
-    pe_force_compile = False
 
     ST_BUSY_FLAG    = 0x01     # if set, busy tracing from the guard
     ST_TYPE_MASK    = 0x06     # mask for the type (TY_xxx)
@@ -753,14 +749,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
                 self.done_compiling()
         else:
             from rpython.jit.metainterp.blackhole import resume_in_blackhole
-            try:
-                resume_in_blackhole(metainterp_sd, jitdriver_sd,
-                                    self.get_resumestorage(), deadframe)
-            except jitexc.ContinueRunningNormallyNoTick as e:
-                # The bailout re-enters the portal: tell the portal that
-                # this entry is ours, so it credits us instead of tracing.
-                jitdriver_sd.warmstate.pe_pending_guard = self
-                raise e
+            resume_in_blackhole(metainterp_sd, jitdriver_sd,
+                                self.get_resumestorage(), deadframe)
         assert 0, "unreachable"
 
     def _trace_and_compile_from_bridge(self, deadframe, metainterp_sd,
@@ -785,11 +775,6 @@ class AbstractResumeGuardDescr(ResumeDescr):
     def must_compile(self, deadframe, metainterp_sd, jitdriver_sd):
         self.fail_count += 1
         metainterp_sd.profiler.note_guard_failure(self.fail_count)
-        #
-        if self.pe_force_compile and not (self.status & self.ST_BUSY_FLAG):
-            # A bailout already credited this guard with the next entry.
-            self.pe_force_compile = False
-            return True
         #
         if self.status & (self.ST_BUSY_FLAG | self.ST_TYPE_MASK) == 0:
             # common case: not a guard_value and not busy tracing.  Decide
