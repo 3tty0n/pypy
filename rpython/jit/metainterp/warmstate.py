@@ -133,6 +133,7 @@ JC_DONT_TRACE_HERE = 0x02
 JC_TEMPORARY       = 0x04
 JC_TRACING_OCCURRED= 0x08
 JC_FORCE_FINISH    = 0x10
+JC_DONT_UNROLL     = 0x20
 
 class BaseJitCell(object):
     """Subclasses of BaseJitCell are used in tandem with the single
@@ -342,6 +343,10 @@ class WarmEnterState(object):
         if value < 0:
             raise ValueError
         self.pe_call_threshold = value
+
+    def disable_unrolling(self, greenkey):
+        cell = self.JitCell.ensure_jit_cell_at_key(greenkey)
+        cell.flags |= JC_DONT_UNROLL
 
     def disable_noninlinable_function(self, greenkey):
         cell = self.JitCell.ensure_jit_cell_at_key(greenkey)
@@ -770,6 +775,14 @@ class WarmEnterState(object):
                 return False
             return True
         self.can_inline_callable = can_inline_callable
+
+        def can_unroll_callable(greenkey):
+            greenargs = unwrap_greenkey(greenkey)
+            if can_never_inline(*greenargs):
+                return False
+            cell = JitCell.get_jitcell(*greenargs)
+            return cell is None or not cell.flags & JC_DONT_UNROLL
+        self.can_unroll_callable = can_unroll_callable
 
         def has_own_loop(greenkey):
             cell = JitCell.get_jitcell(*unwrap_greenkey(greenkey))

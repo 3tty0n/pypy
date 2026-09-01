@@ -1448,7 +1448,9 @@ class MIFrame(object):
             elif big:
                 # Not compiled yet: trace it from its own entry instead.
                 warmrunnerstate.dont_trace_here(greenboxes)
-            elif warmrunnerstate.can_inline_callable(greenboxes):
+            elif (warmrunnerstate.can_inline_callable(greenboxes) or
+                  (self.metainterp.recursing_into_root(greenboxes) and
+                   warmrunnerstate.can_unroll_callable(greenboxes))):
                 # We've found a potentially inlinable function; now we need to
                 # see if it's already on the stack. In other words: are we about
                 # to enter recursion? If so, we don't want to inline the
@@ -2551,6 +2553,7 @@ def get_pe_trace_start_position(jitcode):
 
 class MetaInterp(object):
     portal_call_depth = 0
+    root_greenkey = None
     cancel_count = 0
     exported_state = None
     last_exc_box = None
@@ -3112,6 +3115,9 @@ class MetaInterp(object):
             if greenkey_of_huge_function is not None:
                 jd_sd.warmstate.disable_noninlinable_function(
                     greenkey_of_huge_function)
+                if self.recursing_into_root(greenkey_of_huge_function):
+                    jd_sd.warmstate.disable_unrolling(
+                        greenkey_of_huge_function)
                 self.aborted_tracing_jitdriver = jd_sd
                 self.aborted_tracing_greenkey = greenkey_of_huge_function
                 if self.current_merge_points:
@@ -3119,6 +3125,8 @@ class MetaInterp(object):
                     greenkey = self.current_merge_points[0][0][:jd_sd.num_green_args]
                     warmrunnerstate.JitCell.trace_next_iteration(greenkey)
             else:
+                if self.root_greenkey is not None:
+                    warmrunnerstate.disable_unrolling(self.root_greenkey)
                 self.prepare_trace_segmenting()
             raise SwitchToBlackhole(Counters.ABORT_TOO_LONG)
 
@@ -3214,6 +3222,7 @@ class MetaInterp(object):
         self.resumekey_original_loop_token = resumedescr.rd_loop_token.loop_token_wref()
         if self.resumekey_original_loop_token is None:
             raise compile.giveup() # should be rare
+        self.root_greenkey = self.resumekey_original_loop_token.greenkey
         self.staticdata.try_to_free_some_loops()
         self.create_history(resume.get_max_num_inputargs(key))
         try:
@@ -3592,6 +3601,18 @@ class MetaInterp(object):
             self._fill_original_boxes(jitdriver_sd, original_boxes,
                                       position + 1, *args[1:])
 
+    def recursing_into_root(self, greenboxes):
+        """Is this a call back into the function this trace belongs to?
+        Inlining disabled after a too-long trace elsewhere does not apply
+        to such self-recursion: the unroll budget bounds it."""
+        root = self.root_greenkey
+        if root is None or len(root) != len(greenboxes):
+            return False
+        for i in range(len(root)):
+            if not root[i].same_constant(greenboxes[i]):
+                return False
+        return True
+
     def initialize_state_from_start(self, original_boxes):
         # ----- make a new frame -----
         self.portal_call_depth = -1 # always one portal around
@@ -3608,6 +3629,7 @@ class MetaInterp(object):
         num_red = self.jitdriver_sd.num_red_args
         portal_arg_count = num_green + num_red
         self.pe_portal_boxes = original_boxes[:portal_arg_count]
+        self.root_greenkey = original_boxes[:num_green]
         self.initialize_withgreenfields(original_boxes)
         self.initialize_virtualizable(original_boxes)
         debug_start("jit-segment-decision")

@@ -167,10 +167,11 @@ def create_empty_loop(metainterp, name_prefix=''):
     return loop
 
 
-def make_jitcell_token(jitdriver_sd, pe_origin=False):
+def make_jitcell_token(jitdriver_sd, pe_origin=False, greenkey=None):
     jitcell_token = JitCellToken()
     jitcell_token.outermost_jitdriver_sd = jitdriver_sd
     jitcell_token.pe_origin = pe_origin
+    jitcell_token.greenkey = greenkey
     return jitcell_token
 
 def record_loop_or_bridge(metainterp_sd, loop):
@@ -224,7 +225,7 @@ def compile_simple_loop(metainterp, greenkey, trace, runtime_args, enable_opts,
     jitdriver_sd = metainterp.jitdriver_sd
     metainterp_sd = metainterp.staticdata
     jitcell_token = make_jitcell_token(jitdriver_sd,
-                                       metainterp.pe_root_linked)
+                                       metainterp.pe_root_linked, greenkey)
     call_pure_results = metainterp.call_pure_results
     data = SimpleCompileData(trace, call_pure_results=call_pure_results,
                              enable_opts=enable_opts)
@@ -271,7 +272,7 @@ def compile_loop(metainterp, greenkey, start, inputargs, jumpargs,
     #
     enable_opts = jitdriver_sd.warmstate.enable_opts
     jitcell_token = make_jitcell_token(jitdriver_sd,
-                                       metainterp.pe_root_linked)
+                                       metainterp.pe_root_linked, greenkey)
     cut_at = history.get_trace_position()
     history.record(rop.JUMP, jumpargs, None, descr=jitcell_token)
     if start != (0, 0, 0, 0, 0):
@@ -1148,7 +1149,7 @@ class ResumeFromInterpDescr(ResumeDescr):
         metainterp_sd = metainterp.staticdata
         jitdriver_sd = metainterp.jitdriver_sd
         new_loop.original_jitcell_token = jitcell_token = make_jitcell_token(
-            jitdriver_sd, metainterp.pe_root_linked)
+            jitdriver_sd, metainterp.pe_root_linked, self.original_greenkey)
         propagate_original_jitcell_token(new_loop)
         send_loop_to_backend(self.original_greenkey, metainterp.jitdriver_sd,
                              metainterp_sd, new_loop, "entry bridge",
