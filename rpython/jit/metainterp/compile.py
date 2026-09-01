@@ -700,16 +700,6 @@ class ResumeDescr(AbstractFailDescr):
     def clone(self):
         return self
 
-def _attempt_horizon(increment):
-    """Failures at which a bridge is attempted: 1/increment rounded up
-    to a power of two, the grid the survivor histogram buckets use."""
-    horizon = 1
-    while (horizon * increment < 1.0 and
-           horizon < (1 << (Profiler.HIST_BUCKETS - 2))):
-        horizon *= 2
-    return horizon
-
-
 class AbstractResumeGuardDescr(ResumeDescr):
     _attrs_ = ('status', 'abort_count', 'tail_ops', 'fail_count',
                'fails_since_tick', 'value_counts', 'value_hist')
@@ -783,7 +773,7 @@ class AbstractResumeGuardDescr(ResumeDescr):
             increment = self._tick_increment(metainterp_sd, jitdriver_sd,
                                              self.fail_count, None)
             self.fails_since_tick += 1
-            if self.fails_since_tick < _attempt_horizon(increment):
+            if self.fails_since_tick * increment < 1.0:
                 return False
             self.fails_since_tick = 0
             return True
@@ -829,14 +819,11 @@ class AbstractResumeGuardDescr(ResumeDescr):
                 self.value_hist[Profiler._bucket(count)] += 1
             increment = self._tick_increment(metainterp_sd, jitdriver_sd,
                                              count, self.value_hist)
-            return count >= _attempt_horizon(increment)
+            return count * increment >= 1.0
 
     def _tick_increment(self, metainterp_sd, jitdriver_sd, count, hist):
         """How much one failure heats this guard's counter: 1.0 bridges
-        right away, 1/N after N failures.  Callers turn it into a
-        power-of-two attempt point (see _attempt_horizon), so decisions
-        happen at 2**k failures and small changes in the fitted costs
-        rarely move the attempt.  It starts at the jitdriver's
+        right away, 1/N after N failures.  It starts at the jitdriver's
         eagerness parameter, rises to the measured break-even rate once
         the cost model has one, jumps to 1.0 when the survivor rule says
         waiting loses more than bridging risks, and is halved once per
