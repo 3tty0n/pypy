@@ -215,9 +215,7 @@ class FailStretch(object):
 
 class Profiler(BaseProfiler):
     initialized = False
-    # Process CPU time: the cost model must not see other processes'
-    # load or paging stalls as blackhole or compile cost.
-    timer = staticmethod(time.clock)
+    timer = staticmethod(time.time)
     starttime = 0
     t1 = 0
     times = None
