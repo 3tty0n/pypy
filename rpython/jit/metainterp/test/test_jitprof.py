@@ -17,6 +17,7 @@ class FakeProfiler(Profiler):
     def timer(self):
         self.counter += 1
         return self.counter - 1
+    walltimer = timer
 
     def _start(self, event):
         Profiler._start(self, event)
@@ -55,14 +56,10 @@ class TestProfile(ProfilerMixin):
             ~ Counters.OPTIMIZING,
             Counters.BACKEND,
             ~ Counters.BACKEND,
-            Counters.BLACKHOLE,
-            Counters.BLACKHOLE_DECODE,
-            ~ Counters.BLACKHOLE_DECODE,
-            ~ Counters.BLACKHOLE,
             ~ Counters.TRACING,
             ]
         assert profiler.events == expected
-        assert profiler.times == [5, 2, 1, 2, 0, 1, 0, 0, 0]
+        assert profiler.times == [9, 2, 1, 3, 0, 1, 0, 0, 0]
         py.test.skip("disabled until unrolling")
         assert profiler.counters == [1, 1, 3, 3, 2, 15, 2, 0, 0, 0, 0,
                                      0, 0, 0, 0, 0, 0, 0]
@@ -141,7 +138,7 @@ def test_blackhole_cost_model_fit():
     from rpython.rlib.jit import Counters
     p = Profiler()
     clock = [0.0]
-    p.timer = lambda: clock[0]
+    p.timer = p.walltimer = lambda: clock[0]
     p.start()
     # each failure: 1us blackhole + 1us stretch + 30ns per tail op
     for tail in range(100, 100 + 16 * 50, 50):
@@ -167,7 +164,7 @@ def test_blackhole_cost_model_fit():
 def test_blackhole_cost_model_needs_samples():
     from rpython.jit.metainterp.jitprof import Profiler
     p = Profiler()
-    p.timer = lambda: 0.0
+    p.timer = p.walltimer = lambda: 0.0
     p.start()
     assert p.blackhole_cost_model() == (-1.0, -1.0)
     assert p.bridge_break_even(10) == -1.0
@@ -191,7 +188,7 @@ def test_survivor_rule():
     from rpython.rlib.jit import Counters
     p = Profiler()
     clock = [0.0]
-    p.timer = lambda: clock[0]
+    p.timer = p.walltimer = lambda: clock[0]
     p.start()
     p.counters[Counters.RECORDED_OPS] = 1000
     p.counters[Counters.OPT_OPS] = 1000
@@ -231,7 +228,7 @@ def test_bridge_cost_follows_convex_samples():
     from rpython.rlib.jit import Counters
     p = Profiler()
     clock = [0.0]
-    p.timer = lambda: clock[0]
+    p.timer = p.walltimer = lambda: clock[0]
     p.start()
     p.counters[Counters.OPT_OPS] = 1
     # convex: 16us for tiny bridges, up to 700us for 400-op ones
@@ -258,7 +255,7 @@ def test_fail_stretch_spans_nested_portal_calls():
     from rpython.jit.metainterp.jitprof import Profiler
     p = Profiler()
     clock = [0.0]
-    p.timer = lambda: clock[0]
+    p.timer = p.walltimer = lambda: clock[0]
     p.start()
     p.enter_portal()             # the frame the guard fails in
     p.start_blackhole()
@@ -281,7 +278,7 @@ def test_fail_stretch_ends_when_failing_frame_returns():
     from rpython.jit.metainterp.jitprof import Profiler
     p = Profiler()
     clock = [0.0]
-    p.timer = lambda: clock[0]
+    p.timer = p.walltimer = lambda: clock[0]
     p.start()
     p.enter_portal()
     p.enter_portal()
@@ -301,7 +298,7 @@ def test_bridge_entries_keep_feeding_histogram():
     from rpython.jit.metainterp.compile import ResumeGuardDescr
     from rpython.jit.metainterp.jitprof import Profiler
     p = Profiler()
-    p.timer = lambda: 0.0
+    p.timer = p.walltimer = lambda: 0.0
     p.start()
     d = ResumeGuardDescr()
     d.fail_count = 3

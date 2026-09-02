@@ -168,7 +168,11 @@ class FailStretch(object):
     A failure costs the blackhole run plus the interpreter stretch that
     follows it, up to the moment compiled code is entered again:
 
-        cost = blackhole_time + (closed_at - opened_at) - excluded
+        cost = cpu(closed_at) - cpu(opened_at) - excluded
+
+    CPU time, so other processes' load and paging stalls do not count
+    as failure cost; the excluded calls are measured by the cheap wall
+    clock, which only ever over-excludes.
 
     The stretch belongs to the portal frame the guard failed in.  Portal
     calls that frame makes cost the same with or without a bridge, so
@@ -177,20 +181,18 @@ class FailStretch(object):
 
     def __init__(self):
         self.pending = False
-        self.blackhole_time = 0.0
         self.tail_ops = 0.0
         self.opened_at = 0.0
         self.frame_depth = 0
         self.excluded = 0.0
         self.excluded_since = 0.0
 
-    def open(self, blackhole_time, tail_ops, now, frame_depth):
+    def open(self, tail_ops, opened_at, excluded, frame_depth):
         self.pending = True
-        self.blackhole_time = blackhole_time
         self.tail_ops = tail_ops
-        self.opened_at = now
+        self.opened_at = opened_at
         self.frame_depth = frame_depth
-        self.excluded = 0.0
+        self.excluded = excluded
 
     def is_inner_call(self, depth):
         """Is 'depth' a portal call made by the stretch we measure?"""
@@ -207,15 +209,16 @@ class FailStretch(object):
         if not self.pending:
             return -1.0
         self.pending = False
-        stretch = now - self.opened_at - self.excluded
-        if stretch < 0.0:
-            stretch = 0.0
-        return self.blackhole_time + stretch
+        return now - self.opened_at - self.excluded
 
 
 class Profiler(BaseProfiler):
     initialized = False
-    timer = staticmethod(time.time)
+    # Process CPU time: the cost model must not see other processes'
+    # load or paging stalls as blackhole or compile cost.  Reading it
+    # is a syscall, so the per-failure hot paths use the wall clock.
+    timer = staticmethod(time.clock)
+    walltimer = staticmethod(time.time)
     starttime = 0
     t1 = 0
     times = None
@@ -236,7 +239,9 @@ class Profiler(BaseProfiler):
     # from the blackhole, excluded from that resume's sample.
     bh_excl_time = None
     bh_started = None
+    bh_cpu0 = None
     bh_call_t0 = 0.0
+    decode_t0 = 0.0
     # Wall time and recorded ops of tracing-from-a-guard (bridge attempts,
     # including their optimizing and backend work): the compile cost the
     # bridge model charges, kept apart from loop tracing.
@@ -301,12 +306,14 @@ class Profiler(BaseProfiler):
     def end_backend(self):     self._end  (Counters.BACKEND)
 
     def start_blackhole(self):
-        self._start(Counters.BLACKHOLE)
+        self.counters[Counters.BLACKHOLE] += 1
         if self.bh_excl_time is None:
             self.bh_excl_time = []
             self.bh_started = []
+            self.bh_cpu0 = []
         self.bh_excl_time.append(0.0)
-        self.bh_started.append(self.t1)
+        self.bh_cpu0.append(self.timer())
+        self.bh_started.append(self.walltimer())
 
     def end_blackhole(self, insns, tail_ops):
         """Open a failure sample: the blackhole run is over, the
@@ -314,42 +321,46 @@ class Profiler(BaseProfiler):
 
         tail_ops: optimized ops after the failed guard (-1: unknown);
         the stretch that follows scales with it."""
-        self._end(Counters.BLACKHOLE)
-        # Wall time since start_blackhole, so nested decode time counts;
-        # self.t1 alone is only the slice after the last nested timer.
-        elapsed = (self.t1 - self.bh_started.pop()
-                   - self.bh_excl_time.pop())
+        now = self.walltimer()
+        excluded = self.bh_excl_time.pop()
+        cpu0 = self.bh_cpu0.pop()
+        elapsed = now - self.bh_started.pop() - excluded
+        self.times[Counters.BLACKHOLE] += elapsed
         if elapsed <= 0.0 or tail_ops < 0:
             return
         self.end_fail_stretch()
-        self.fail.open(elapsed, float(tail_ops), self.t1, self.portal_depth)
+        self.fail.open(float(tail_ops), cpu0, excluded, self.portal_depth)
 
     def end_fail_stretch(self):
         """Close the pending sample: compiled code is entered again."""
         fail = self.fail
         if not fail.pending or self.portal_depth > fail.frame_depth:
             return          # inside a call the stretch made, not its end
-        self.bh_fit.add(fail.tail_ops, fail.close(self.timer()))
+        cost = fail.close(self.timer())
+        if cost > 0.0:      # over-excluded under load: no sample
+            self.bh_fit.add(fail.tail_ops, cost)
 
     def enter_portal(self):
         self.portal_depth += 1
         if self.fail.is_inner_call(self.portal_depth):
-            self.fail.exclude_from(self.timer())
+            self.fail.exclude_from(self.walltimer())
 
     def leave_portal(self):
         depth = self.portal_depth
         self.portal_depth = depth - 1
         if self.fail.is_inner_call(depth):
-            self.fail.exclude_until(self.timer())
+            self.fail.exclude_until(self.walltimer())
         elif self.fail.pending and depth <= self.fail.frame_depth:
             # returning out of the failed frame ends the stretch too
             self.end_fail_stretch()
 
     def start_decode(self):
-        self._start(Counters.BLACKHOLE_DECODE)
+        self.counters[Counters.BLACKHOLE_DECODE] += 1
+        self.decode_t0 = self.walltimer()
 
     def end_decode(self):
-        self._end(Counters.BLACKHOLE_DECODE)
+        self.times[Counters.BLACKHOLE_DECODE] += (self.walltimer() -
+                                                 self.decode_t0)
 
     @staticmethod
     def _bucket(count):
@@ -393,14 +404,14 @@ class Profiler(BaseProfiler):
     def start_portal_call(self, insns):
         # A callee frame run from the blackhole: real execution, not
         # blackholing; keep it out of the enclosing resume's sample.
-        self._start(Counters.BLACKHOLE_CALL)
-        self.bh_call_t0 = self.t1
+        self.counters[Counters.BLACKHOLE_CALL] += 1
+        self.bh_call_t0 = self.walltimer()
 
     def end_portal_call(self, insns):
-        t0 = self.bh_call_t0
-        self._end(Counters.BLACKHOLE_CALL)
+        elapsed = self.walltimer() - self.bh_call_t0
+        self.times[Counters.BLACKHOLE_CALL] += elapsed
         if self.bh_excl_time:
-            self.bh_excl_time[-1] += self.t1 - t0
+            self.bh_excl_time[-1] += elapsed
 
     def start_bridge_attempt(self):
         self.bridge_t0 = self.timer()
