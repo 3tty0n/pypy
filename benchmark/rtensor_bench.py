@@ -1,6 +1,6 @@
 import sys, os, time
 from rpython.rlib import jit
-from rpython.rlib import rtensor
+from rpython.rlib import rtensor, rtensor_nn
 from rpython.rlib.rtensor import (tensor_add, tensor_mul, tensor_relu,
     tensor_sum, tensor_item, tensor_force, new_tensor)
 
@@ -9,6 +9,46 @@ class Sink(object):
 sink = Sink()
 
 driver = jit.JitDriver(greens=['k', 'variant'], reds='auto')
+mlp_driver = jit.JitDriver(greens=[], reds='auto')
+
+MLP_D = 256
+
+def make_mlp_layer(d):
+    w = rtensor.zeros([d, d])
+    for i in range(d * d):
+        w.host[i] = float((i * 7) % 13 - 6) / d
+    b = rtensor.zeros([d])
+    for i in range(d):
+        b.host[i] = 0.01
+    rtensor.dev(w)
+    rtensor.dev(b)
+    return rtensor_nn.Linear(rtensor_nn.Tensor(w), rtensor_nn.Tensor(b))
+
+def make_mlp(d):
+    return rtensor_nn.MLP([make_mlp_layer(d), make_mlp_layer(d),
+                           make_mlp_layer(d)])
+
+def make_mlp_input(rows, d):
+    x = rtensor.zeros([rows, d])
+    for i in range(rows * d):
+        x.host[i] = (i % 7) - 3.0
+    rtensor.dev(x)
+    return rtensor_nn.Tensor(x)
+
+def run_mlp(n, iters):
+    rows = n // MLP_D
+    if rows <= 0:
+        rows = 1
+    mlp = make_mlp(MLP_D)
+    x = make_mlp_input(rows, MLP_D)
+    i = 0
+    while i < iters:
+        mlp_driver.jit_merge_point()
+        y = mlp.forward(x)
+        h = y
+        x = h
+        i += 1
+    return tensor_item(tensor_sum(x.t, -1))
 
 def make_inputs(n):
     w = new_tensor(n)
@@ -54,7 +94,7 @@ def run(variant, k, h, b, iters):
 
 def entry_point(argv):
     if len(argv) != 6:
-        print 'usage: rtensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..5)'
+        print 'usage: rtensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..6)'
         return 1
     mode = argv[1]
     variant = int(argv[2])
@@ -69,6 +109,25 @@ def entry_point(argv):
         jit.set_user_param(None, 'off')
     rtensor.init_device()
     sink.fd = os.open('/dev/null', os.O_WRONLY, 0)
+    if variant == 6:
+        run_mlp(n, 20)
+        t0 = time.time()
+        run_mlp(n, 20)
+        warm = time.time() - t0
+        run_mlp(n, 30)
+        run_mlp(n, 30)
+        before = rtensor.counter.n
+        launches_before = rtensor.launch_count()
+        t0 = time.time()
+        acc = run_mlp(n, iters)
+        rtensor.sync_device()
+        steady = (time.time() - t0) / iters * 1e6
+        launches = float(rtensor.launch_count() - launches_before) / iters
+        rtensor.reset_device()
+        print '%s %d %d %d %d %f %f %d %f %d %f' % (mode, variant, k, n, iters,
+            warm, steady, rtensor.counter.n, acc, rtensor.counter.n - before,
+            launches)
+        return 0
     w, b = make_inputs(n)
     t0 = time.time()
     run(variant, k, w, b, 20)

@@ -1,6 +1,6 @@
 from rpython.jit.metainterp.test.support import LLJitMixin
 from rpython.rlib.jit import JitDriver
-from rpython.rlib import rtensor
+from rpython.rlib import rtensor, rtensor_nn
 from rpython.rlib.rtensor import (tensor_add, tensor_mul, tensor_relu,
     tensor_sum, tensor_item, tensor_size, from_list)
 
@@ -392,3 +392,80 @@ def test_sum_axis_elements():
     for r in range(3):
         assert rtensor.host(r1)[r] == sum([vals[r * 4 + c] for c in range(4)])
     assert rtensor.item(rtensor.sum(x)) == sum(vals)
+
+
+B, D = 2, 3
+
+def _fill_matrix(w, rows, cols, seed):
+    for i in range(rows):
+        for j in range(cols):
+            w.host[i * cols + j] = ((seed + i * 3 - j * 2) % 5 - 2) * 0.25
+
+def _fill_bias(b, seed):
+    for j in range(D):
+        b.host[j] = 0.125 * (j + 1) + seed * 0.0625
+
+def _make_layer(seed):
+    w = rtensor.zeros([D, D])
+    b = rtensor.zeros([D])
+    _fill_matrix(w, D, D, seed)
+    _fill_bias(b, seed)
+    return rtensor_nn.Linear(rtensor_nn.Tensor(w), rtensor_nn.Tensor(b))
+
+def _make_mlp():
+    return rtensor_nn.MLP([_make_layer(1), _make_layer(2), _make_layer(3)])
+
+def _cpu_matrix(seed):
+    return [[((seed + i * 3 - j * 2) % 5 - 2) * 0.25 for j in range(D)]
+            for i in range(D)]
+
+def _cpu_bias(seed):
+    return [0.125 * (j + 1) + seed * 0.0625 for j in range(D)]
+
+def _cpu_layer(x, seed):
+    w = _cpu_matrix(seed)
+    b = _cpu_bias(seed)
+    rows = len(x)
+    y = [[0.0] * D for _ in range(rows)]
+    for i in range(rows):
+        for j in range(D):
+            acc = 0.0
+            for k in range(D):
+                acc += x[i][k] * w[k][j]
+            v = acc + b[j]
+            y[i][j] = v if v > 0.0 else 0.0
+    return y
+
+def _cpu_mlp_step(x):
+    x = _cpu_layer(x, 1)
+    x = _cpu_layer(x, 2)
+    x = _cpu_layer(x, 3)
+    return x
+
+def _cpu_expect(n):
+    x0 = [[(i - j) * 0.5 for j in range(D)] for i in range(B)]
+    y = _cpu_mlp_step(x0)
+    return sum([sum(row) for row in y]) * n
+
+
+class TestTensorNN(LLJitMixin):
+
+    def test_mlp_forward_fuses_bias_relu(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'mlp', 'acc'])
+        def f(n):
+            x0 = rtensor.zeros([B, D])
+            for i in range(B):
+                for j in range(D):
+                    x0.host[i * D + j] = (i - j) * 0.5
+            mlp = _make_mlp()
+            x = rtensor_nn.Tensor(x0)
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, mlp=mlp, acc=acc)
+                y = mlp.forward(x)
+                acc += y.sum().item()
+                n -= 1
+            return acc
+        res = self.meta_interp(f, [5])
+        assert res == _cpu_expect(5)
+        self.check_simple_loop(call_r=6)

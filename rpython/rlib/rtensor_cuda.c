@@ -2,10 +2,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dlfcn.h>
 
 #ifndef RPY_EXPORTED
 #  define RPY_EXPORTED extern __attribute__((visibility("default")))
 #endif
+
+#define RTENSOR_CUBLAS_DEFAULT \
+    "/home/yusuke/.venvs/triton/lib/python3.14/site-packages/nvidia/cu13/lib/libcublas.so.13"
+
+typedef int (*cublasCreate_v2_t)(void **handle);
+typedef int (*cublasDgemm_v2_t)(void *handle, int transa, int transb,
+    int m, int n, int k, const double *alpha, const double *A, int lda,
+    const double *B, int ldb, const double *beta, double *C, int ldc);
+
+static void *cublas_lib;
+static void *cublas_handle;
+static cublasCreate_v2_t p_cublasCreate_v2;
+static cublasDgemm_v2_t p_cublasDgemm_v2;
+static int cublas_inited;
 
 static CUcontext ctx;
 static int inited;
@@ -24,6 +39,24 @@ static int rt_init(void)
     if (cuDevicePrimaryCtxRetain(&ctx, dev) != CUDA_SUCCESS) return 0;
     if (cuCtxSetCurrent(ctx) != CUDA_SUCCESS) return 0;
     inited = 1;
+    return 1;
+}
+
+static int rt_cublas_init(void)
+{
+    const char *path;
+    if (cublas_inited) return cublas_inited > 0;
+    cublas_inited = -1;
+    if (!rt_init()) return 0;
+    path = getenv("RTENSOR_CUBLAS");
+    if (!path) path = RTENSOR_CUBLAS_DEFAULT;
+    cublas_lib = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+    if (!cublas_lib) return 0;
+    p_cublasCreate_v2 = (cublasCreate_v2_t)dlsym(cublas_lib, "cublasCreate_v2");
+    p_cublasDgemm_v2 = (cublasDgemm_v2_t)dlsym(cublas_lib, "cublasDgemm_v2");
+    if (!p_cublasCreate_v2 || !p_cublasDgemm_v2) return 0;
+    if (p_cublasCreate_v2(&cublas_handle) != 0) return 0;
+    cublas_inited = 1;
     return 1;
 }
 
@@ -143,4 +176,15 @@ RPY_EXPORTED int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
     launches++;
     return cuLaunchKernel((CUfunction)fn, blocks ? blocks : 1, 1, 1,
                           threads, 1, 1, shared, 0, params, 0) == CUDA_SUCCESS;
+}
+
+RPY_EXPORTED int rt_cuda_matmul(long a, long b, long c, long rows,
+                                long inner, long cols)
+{
+    double alpha = 1.0, beta = 0.0;
+    if (!rt_cublas_init()) return 0;
+    return p_cublasDgemm_v2(cublas_handle, 0, 0, (int)cols, (int)rows,
+                            (int)inner, &alpha, (const double *)b,
+                            (int)cols, (const double *)a, (int)inner,
+                            &beta, (double *)c, (int)cols) == 0;
 }

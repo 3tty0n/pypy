@@ -360,6 +360,54 @@ def reshape(a, shape_list):
     r.buf = a.buf
     return r
 
+def matmul_shape(a, b):
+    if tensor_ndim(a) != 2 or tensor_ndim(b) != 2:
+        raise ValueError("shape mismatch")
+    inner = tensor_shape(a, 1)
+    if inner != tensor_shape(b, 0):
+        raise ValueError("shape mismatch")
+    return tensor_shape(a, 0), tensor_shape(b, 1), inner
+
+def matmul(a, b):
+    rows, cols, inner = matmul_shape(a, b)
+    return tensor_matmul(a, b, rows, cols, inner)
+
+def matmul_cpu(a, b, rows, cols, inner):
+    ha = host(a)
+    hb = host(b)
+    shape = lltype.malloc(SHAPEARRAY, 2)
+    shape[0] = rows
+    shape[1] = cols
+    r = new_tensor(rows * cols, shape)
+    hr = r.host
+    for i in range(rows):
+        for j in range(cols):
+            acc = 0.0
+            for k in range(inner):
+                acc += ha[i * inner + k] * hb[k * cols + j]
+            hr[i * cols + j] = acc
+    return r
+
+@jit.dont_look_inside
+def tensor_matmul(a, b, rows, cols, inner):
+    if gpu_enabled():
+        dptr_a = dev(a)
+        dptr_b = dev(b)
+        if dptr_a != 0 and dptr_b != 0:
+            n = rows * cols
+            collect_if_needed(n)
+            outptr = rt_cuda_alloc(n)
+            if outptr != 0:
+                ok = rffi.cast(lltype.Signed, rt_cuda_matmul(
+                    dptr_a, dptr_b, outptr, rows, inner, cols)) != 0
+                if ok:
+                    shape = lltype.malloc(SHAPEARRAY, 2)
+                    shape[0] = rows
+                    shape[1] = cols
+                    return device_tensor(n, outptr, shape)
+                rt_cuda_free(outptr, n)
+    return matmul_cpu(a, b, rows, cols, inner)
+
 def item(a):
     return tensor_item(a)
 
@@ -536,8 +584,10 @@ RPY_EXTERN int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
                               long *outs, int nouts, int threads,
                               long elems_per_block, int shared, int nextra,
                               long cols);
+RPY_EXTERN int rt_cuda_matmul(long a, long b, long c, long rows, long inner,
+                              long cols);
 """],
-    libraries=['cuda'])
+    libraries=['cuda', 'dl'])
 rt_cuda_load = rffi.llexternal('rt_cuda_load', [rffi.CCHARP, rffi.CCHARP],
                                lltype.Signed, compilation_info=eci,
                                 releasegil=False)
@@ -567,6 +617,12 @@ rt_cuda_reset = rffi.llexternal('rt_cuda_reset', [], lltype.Void,
                                 releasegil=False)
 rt_cuda_sync = rffi.llexternal('rt_cuda_sync', [], lltype.Void,
                                compilation_info=eci,
+                                releasegil=False)
+rt_cuda_matmul = rffi.llexternal(
+    'rt_cuda_matmul',
+    [lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
+     lltype.Signed, lltype.Signed],
+    rffi.INT, compilation_info=eci,
                                 releasegil=False)
 
 def _env(name, default):

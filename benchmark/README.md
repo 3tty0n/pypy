@@ -29,6 +29,7 @@ Environment variables read at run time:
 | `RTENSOR_WARPS` | `8` | warps per program |
 | `RTENSOR_CPU` | unset | set to force the CPU evaluator (no GPU) |
 | `RTENSOR_BUDGET_MB` | `64` | live device memory above which a launch first runs a GC to recycle buffers |
+| `RTENSOR_CUBLAS` | PyTorch wheel's bundled `libcublas.so.13` | path to `libcublas.so`, dlopen'd lazily for `matmul` (variant 6) |
 | `CUDA_HOME` | `/usr/local/cuda` | CUDA include directory |
 | `TMPDIR` | `/tmp` | where `.ttir`, `.ptx`, `.meta` files are written |
 
@@ -48,7 +49,20 @@ the translator.
 | argument | values |
 |---|---|
 | `MODE` | `fused` (tensor ops fused into one kernel), `eager` (the `tensor` optimization disabled, one GPU kernel per op, JIT otherwise on), `nojit` (interpreter, one GPU kernel per op) |
-| `VARIANT` | `0` plain chain; `1` a branch `if i % 7 == 0: h = h + b` inside the fused region (a guard, no force); `2` the same branch after an explicit force of `h`, modelling a graph break; `3` a data-dependent branch `if sum(h).item() > 0` (a true force in every system); `4` the chain continued inside `try/except` with an exception raised every 5th iteration; `5` a host-side write to `/dev/null` every 50th iteration between tensor ops |
+| `VARIANT` | `0` plain chain; `1` a branch `if i % 7 == 0: h = h + b` inside the fused region (a guard, no force); `2` the same branch after an explicit force of `h`, modelling a graph break; `3` a data-dependent branch `if sum(h).item() > 0` (a true force in every system); `4` the chain continued inside `try/except` with an exception raised every 5th iteration; `5` a host-side write to `/dev/null` every 50th iteration between tensor ops; `6` an MLP forward (see below), `K` unused |
+
+`VARIANT 6` runs a 3-layer MLP forward (`rpython/rlib/rtensor_nn.py`) each
+iteration: `x` is `(B, 256)` with `B = N / 256`, each layer is `256x256`.
+Matrix multiply is delegated to cuBLAS (`rt_cuda_matmul` in
+`rpython/rlib/rtensor_cuda.c`, `nvidia-cublas`'s `cublasDgemm_v2`) as a
+non-fusible library call: it is `@jit.dont_look_inside`, so it is never part
+of a fused Triton kernel, and its tensor arguments are always forced before
+the call. The bias add and relu after each matmul stay virtual and fuse into
+one Triton launch each, so one MLP forward pass launches 3 matmuls (cuBLAS,
+not counted as Triton kernels) plus 3 fused elementwise launches (the last one
+also folds in the final `sum`). `RTENSOR_CUBLAS` overrides the path to
+`libcublas.so`; it defaults to the path where the PyTorch wheel installs it
+under `nvidia/cu13/lib`.
 | `K` | chain length |
 | `N` | tensor size |
 | `ITERS` | timed iterations |
