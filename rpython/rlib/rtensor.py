@@ -49,6 +49,7 @@ KERNEL = lltype.GcStruct('TENSOR_KERNEL', ('ninputs', lltype.Signed),
                          ('shared', lltype.Signed),
                          ('nextra', lltype.Signed),
                          ('n', lltype.Signed),
+                         ('cols', lltype.Signed),
                          ('outputs', lltype.Ptr(SHAPEARRAY)))
 KERNELPTR = lltype.Ptr(KERNEL)
 
@@ -250,6 +251,7 @@ def _empty_kernel():
     k.fn = k.sumroot = k.threads = k.shared = k.nextra = 0
     k.rowmode = 0
     k.n = 0
+    k.cols = 0
     k.outputs = lltype.malloc(SHAPEARRAY, 0)
     return k
 single_kernels = SingleKernels()
@@ -359,10 +361,12 @@ def tensor_shape(a, axis):
 
 
 class SizePolicy(object):
-    _immutable_fields_ = ['static?']
+    _immutable_fields_ = ['static?', 'static_cols?']
     def __init__(self):
         self.static = True
         self.seen = []
+        self.static_cols = True
+        self.seen_cols = []
 policy = SizePolicy()
 MAX_STATIC_SIZES = 3
 
@@ -373,6 +377,21 @@ def note_size(n):
         if len(policy.seen) > MAX_STATIC_SIZES:
             policy.static = False
     return n
+
+@jit.elidable
+def note_cols(c):
+    if c not in policy.seen_cols:
+        policy.seen_cols.append(c)
+        if len(policy.seen_cols) > MAX_STATIC_SIZES:
+            policy.static_cols = False
+    return c
+
+def cols_of(t):
+    c = tensor_shape(t, 1)
+    if policy.static_cols:
+        c = jit.promote(c)
+        note_cols(c)
+    return c
 
 def size(t):
     n = tensor_size(t)
@@ -388,10 +407,12 @@ def bcast_of(big, small, m):
         rows = tensor_shape(big, 0)
         c = tensor_shape(big, 1)
         if m == rows and tensor_ndim(small) == 2 and tensor_shape(small, 1) == 1:
+            cols_of(big)
             return BC_R_COL
         if m == c:
             return BC_R_ROW
         if m == rows:
+            cols_of(big)
             return BC_R_COL
     raise ValueError("shape mismatch")
 
@@ -430,6 +451,8 @@ def relugrad(y, g):
     return tensor_relugrad(y, g, bcast(y, g))
 
 def sum(a, axis=AXIS_ALL):
+    if axis == 1 and tensor_ndim(a) > 1:
+        cols_of(a)
     return tensor_sum(a, axis)
 
 def sub(a, b):
@@ -445,6 +468,8 @@ def sqrt(a):
     return tensor_sqrt(a)
 
 def max(a, axis=AXIS_ALL):
+    if axis == 1 and tensor_ndim(a) > 1:
+        cols_of(a)
     return tensor_maxr(a, axis)
 
 def reshape(a, shape_list):
@@ -614,6 +639,7 @@ def new_kernel(ninputs, nnodes):
     kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
     kernel.rowmode = 0
     kernel.n = 0
+    kernel.cols = 0
     kernel.outputs = lltype.malloc(SHAPEARRAY, 0)
     return kernel
 
@@ -626,11 +652,32 @@ def add_output(kernel, node):
     kernel.outputs = new
     return len(old)
 
+def next_pow2(c):
+    t = 32
+    while t < c:
+        t *= 2
+    return t
+
+def row_tile(kernel):
+    if kernel.cols > 0:
+        t = next_pow2(kernel.cols)
+        if t <= config.block:
+            return t
+    return config.block
+
+def row_warps(tile):
+    w = tile // 128
+    if w < 1:
+        return 1
+    if w > 8:
+        return 8
+    return w
+
 def kernel_key(kernel):
     rowmode = kernel_row_mode(kernel)
     parts = [str(kernel.ninputs), '0' if rowmode else str(kernel.n)]
     if rowmode:
-        parts.append('r')
+        parts.append('r%d' % row_tile(kernel))
     for i in range(len(kernel.nodes)):
         node = kernel.nodes[i]
         parts.append('%d:%d:%d:%d' % (node.opcode, node.a, node.b, node.p))
@@ -1002,7 +1049,7 @@ def to_ttir_row(kernel, name, modes):
     last = len(nodes) - 1
     if last < 0:
         return ''
-    BLOCK = config.block
+    BLOCK = row_tile(kernel)
     T = 'tensor<%dxf64>' % BLOCK
     P = 'tensor<%dx!tt.ptr<f64>>' % BLOCK
     I32 = 'tensor<%dxi32>' % BLOCK
@@ -1287,11 +1334,14 @@ def _compile_gpu(kernel):
     src = to_ttir(kernel, name)
     if not src:
         return 0
+    warps = config.num_warps
+    if kernel.rowmode and kernel.cols > 0:
+        warps = row_warps(row_tile(kernel))
     base = _env('TMPDIR', '/tmp') + '/' + name
     _write(base + '.ttir', src)
     cmd = '%s -P %s %s.ttir %s.ptx %s.meta %s %d' % (
         _env('RTENSOR_PYTHON', 'python3'), _here + '/rtensor_triton.py',
-        base, base, base, _env('RTENSOR_CC', '86'), config.num_warps)
+        base, base, base, _env('RTENSOR_CC', '86'), warps)
     if os.system(cmd) != 0:
         return 0
     words = _read(base + '.meta').strip().split(' ')
@@ -1329,7 +1379,9 @@ def launch_gpu(kernel, inputs):
     shape = inputs[big].shape
     elems = config.block
     if kernel.rowmode:
-        if c <= 0 or c > config.block or n % c != 0:
+        if c <= 0 or c > row_tile(kernel) or n % c != 0:
+            return NULLTENSOR
+        if kernel.cols > 0 and c != kernel.cols:
             return NULLTENSOR
         elems = c
     if kernel.sumroot:

@@ -337,6 +337,7 @@ def sgd_step(params, neg_lr):
 
 
 def softmax_raw(t):
+    rtensor.cols_of(t)
     m = rtensor.tensor_maxr(t, 1)
     e = rtensor.tensor_exp(rtensor.tensor_sub(t, m, rtensor.BC_R_COL))
     s = rtensor.tensor_sum(e, 1)
@@ -348,7 +349,7 @@ def softmax(x):
 
 
 def layernorm(x, gamma, beta, eps):
-    c = rtensor.tensor_shape(x.t, 1)
+    c = rtensor.cols_of(x.t)
     inv = rtensor.scalar(1.0 / c)
     epst = rtensor.scalar(eps)
     mean = rtensor.tensor_mul(rtensor.tensor_sum(x.t, 1), inv,

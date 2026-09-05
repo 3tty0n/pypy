@@ -772,9 +772,10 @@ class TestTransformer(LLJitMixin):
         res = self.meta_interp(f, [10])
         assert abs(res - expect * 10) < 1e-9
         self.check_simple_loop(call_r=1)
+        self.check_resops(guard_value=3)
         added = set(rtensor.kernel_cache.kernels) - before
         assert len(added) == 1
-        assert ',r,' in added.pop()
+        assert added.pop().split(',')[2] == 'r32'
 
     def test_layernorm_rows(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'g', 'b', 'w', 'acc'])
@@ -813,7 +814,7 @@ class TestTransformer(LLJitMixin):
         added = set(rtensor.kernel_cache.kernels) - before
         assert len(added) == 1
         key = added.pop()
-        assert ',r,' in key and key.split(',')[0] == '6'
+        assert key.split(',')[2] == 'r32' and key.split(',')[0] == '6'
 
     def test_transformer_block_forward(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'block', 'acc'])
@@ -835,9 +836,44 @@ class TestTransformer(LLJitMixin):
         before = set(rtensor.kernel_cache.kernels)
         res = self.meta_interp(f, [5])
         assert abs(res - expect) < 1e-9
-        self.check_simple_loop(call_r=17)
+        self.check_simple_loop(call_r=14)
         added = set(rtensor.kernel_cache.kernels) - before
-        assert len([k for k in added if ',r,' in k]) == 3
+        assert len([k for k in added if k.split(',')[2].startswith('r')]) == 3
+
+    def test_row_kernel_specialised_per_column_count(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'acc'])
+        def f(n, c):
+            x = rtensor.zeros([2, c])
+            for i in range(2 * c):
+                x.host[i] = (i % 5) - 2.0
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, acc=acc)
+                s = rtensor_nn.softmax(rtensor_nn.Tensor(x))
+                acc += rtensor.item(rtensor.sum(s.t))
+                n -= 1
+            return acc
+        rtensor.policy.static_cols = True
+        rtensor.policy.seen_cols = []
+        try:
+            tiles = []
+            for c in (4, 40, 5, 48, 9):
+                before = set(rtensor.kernel_cache.kernels)
+                res = self.meta_interp(f, [10, c])
+                assert abs(res - 20.0) < 1e-9
+                assert abs(f(10, c) - 20.0) < 1e-9
+                added = set(rtensor.kernel_cache.kernels) - before
+                for key in added:
+                    part = key.split(',')[2]
+                    if part.startswith('r'):
+                        tiles.append(part)
+            assert 'r32' in tiles
+            assert 'r64' in tiles
+            assert not rtensor.policy.static_cols
+            assert tiles[len(tiles) - 1] == 'r%d' % rtensor.config.block
+        finally:
+            rtensor.policy.static_cols = True
+            rtensor.policy.seen_cols = []
 
 
 def _filled(shape, base):

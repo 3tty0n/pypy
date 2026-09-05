@@ -40,13 +40,18 @@ class VTensorInfo(AbstractVirtualPtrInfo):
             return self.force_as_extra_output(op, optforce)
         leaves, opcodes, lefts, rights, params, infos = [], [], [], [], [], []
         _collect_indexed(self, leaves, opcodes, lefts, rights, params, infos)
-        n = self.opt.static_size(leaves) if self.opt is not None else 0
+        n = 0
+        cols = 0
+        if self.opt is not None:
+            n = self.opt.static_size(leaves)
+            cols = self.opt.static_cols(self.big_leaf())
         kernel = lltype.malloc(rtensor.KERNEL)
         kernel.ninputs = len(leaves)
         kernel.nodes = lltype.malloc(rtensor.NODEARRAY, len(opcodes))
         kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
         kernel.rowmode = 0
         kernel.n = n
+        kernel.cols = cols
         kernel.outputs = lltype.malloc(rtensor.SHAPEARRAY, 0)
         for i in range(len(opcodes)):
             node = kernel.nodes[i]
@@ -105,6 +110,16 @@ class VTensorInfo(AbstractVirtualPtrInfo):
             return sub.size_leaf()
         return box
 
+    def big_leaf(self):
+        if rtensor.is_reduction(self.opcode):
+            box = self.args[0]
+        else:
+            box = self.args[self.big_arg()]
+        sub = vtensor_info(box)
+        if sub is not None:
+            return sub.big_leaf()
+        return box
+
     def is_scalar(self):
         if rtensor.is_reduction(self.opcode):
             return self.param == rtensor.AXIS_ALL
@@ -133,14 +148,14 @@ def _collect_leaves(info, leaves):
         sub = vtensor_info(box)
         if sub is not None:
             _collect_leaves(sub, leaves)
-        elif not _contains(leaves, box):
+        elif _leaf_index(leaves, box) < 0:
             leaves.append(box)
 
-def _contains(leaves, box):
-    for leaf in leaves:
-        if leaf is box:
-            return True
-    return False
+def _leaf_index(leaves, box):
+    for j in range(len(leaves)):
+        if leaves[j].same_box(box):
+            return j
+    return -1
 
 def _emit_nodes(info, leaves, opcodes, lefts, rights, params, infos):
     idx = [-1, -1]
@@ -151,9 +166,7 @@ def _emit_nodes(info, leaves, opcodes, lefts, rights, params, infos):
             idx[i] = _emit_nodes(sub, leaves, opcodes, lefts, rights, params,
                                  infos)
         else:
-            for j in range(len(leaves)):
-                if leaves[j] is box:
-                    idx[i] = j
+            idx[i] = _leaf_index(leaves, box)
     opcodes.append(info.opcode)
     lefts.append(idx[0])
     rights.append(idx[1])
@@ -165,6 +178,7 @@ class OptTensor(Optimization):
 
     def setup(self):
         self.sizes = {}
+        self.cols = {}
         self.pending = []
 
     def propagate_forward(self, op):
@@ -176,6 +190,7 @@ class OptTensor(Optimization):
         for kernel in pending:
             rtensor.compile_or_reuse(kernel)
         self.sizes = {}
+        self.cols = {}
 
     def static_size(self, leaves):
         n = -1
@@ -193,6 +208,18 @@ class OptTensor(Optimization):
         if n <= 0:
             return 0
         return n
+
+    def static_cols(self, leaf):
+        box = self.cols.get(leaf, None)
+        if box is None:
+            return 0
+        box = get_box_replacement(box)
+        if not box.is_constant():
+            return 0
+        value = box.getint()
+        if value <= 0:
+            return 0
+        return value
 
     def optimize_CALL_R(self, op):
         effectinfo = op.getdescr().get_extra_info()
@@ -245,6 +272,10 @@ class OptTensor(Optimization):
                 op = self.replace_op_with(op, op.getopnum(), args=args)
             if idx == EffectInfo.OS_TENSOR_SIZE:
                 self.sizes[get_box_replacement(op.getarg(1))] = op
+            elif idx == EffectInfo.OS_TENSOR_SHAPE:
+                axis = get_box_replacement(op.getarg(2))
+                if axis.is_constant() and axis.getint() == 1:
+                    self.cols[get_box_replacement(op.getarg(1))] = op
         return self.emit(op)
     optimize_CALL_PURE_I = optimize_CALL_I
 
