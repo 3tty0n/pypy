@@ -1,5 +1,7 @@
 import os
-from rpython.rlib import jit
+from rpython.rlib import jit, rgc
+from rpython.rtyper.annlowlevel import cast_instance_to_base_ptr
+from rpython.rtyper.rclass import OBJECTPTR
 from rpython.rtyper.lltypesystem import lltype, rffi
 from rpython.translator.tool.cbuild import ExternalCompilationInfo
 
@@ -12,7 +14,8 @@ TENSOR.become(lltype.GcStruct('TENSOR', ('size', lltype.Signed),
                               ('shape', lltype.Ptr(SHAPEARRAY)),
                               ('dptr', lltype.Signed),
                               ('host', lltype.Ptr(HOSTARRAY)),
-                              ('extra', lltype.Ptr(TENSORARRAY))))
+                              ('extra', lltype.Ptr(TENSORARRAY)),
+                              ('buf', OBJECTPTR)))
 NULLTENSOR = lltype.nullptr(TENSOR)
 
 ADD, MUL, RELU, SUM = 0, 1, 2, 3
@@ -34,6 +37,19 @@ KERNEL = lltype.GcStruct('TENSOR_KERNEL', ('ninputs', lltype.Signed),
                          ('outputs', lltype.Ptr(SHAPEARRAY)))
 KERNELPTR = lltype.Ptr(KERNEL)
 
+class DeviceBuffer(object):
+    def __init__(self, dptr, n):
+        self.dptr = dptr
+        self.n = n
+
+    @rgc.must_be_light_finalizer
+    def __del__(self):
+        rt_cuda_free(self.dptr, self.n)
+
+def attach_buffer(t, dptr, n):
+    t.dptr = dptr
+    t.buf = cast_instance_to_base_ptr(DeviceBuffer(dptr, n))
+
 def _shape1(n):
     shape = lltype.malloc(SHAPEARRAY, 1)
     shape[0] = n
@@ -46,15 +62,16 @@ def new_tensor(n, shape=lltype.nullptr(SHAPEARRAY)):
     t.dptr = 0
     t.host = lltype.malloc(HOSTARRAY, n)
     t.extra = lltype.nullptr(TENSORARRAY)
+    t.buf = lltype.nullptr(OBJECTPTR.TO)
     return t
 
 def device_tensor(n, dptr, shape=lltype.nullptr(SHAPEARRAY)):
     t = lltype.malloc(TENSOR)
     t.size = n
     t.shape = shape if shape else _shape1(n)
-    t.dptr = dptr
     t.host = lltype.nullptr(HOSTARRAY)
     t.extra = lltype.nullptr(TENSORARRAY)
+    attach_buffer(t, dptr, n)
     return t
 
 def zeros(shape_list):
@@ -80,7 +97,9 @@ def host(t):
 
 def dev(t):
     if t.dptr == 0:
-        t.dptr = upload(t.host)
+        dptr = upload(t.host)
+        if dptr != 0:
+            attach_buffer(t, dptr, t.size)
     return t.dptr
 
 def eval_op(opcode, a, b):
@@ -141,6 +160,7 @@ def init_device():
     try:
         config.block = int(_env('RTENSOR_BLOCK', '4096'))
         config.num_warps = int(_env('RTENSOR_WARPS', '8'))
+        rt_cuda_set_budget(int(_env('RTENSOR_BUDGET_MB', '256')) << 20)
     except ValueError:
         pass
     for opcode in range(4):
@@ -381,9 +401,10 @@ RPY_EXTERN long rt_cuda_alloc(long n);
 RPY_EXTERN long rt_cuda_upload(double *host, long n);
 RPY_EXTERN int rt_cuda_download(long dptr, double *host, long n);
 RPY_EXTERN void rt_cuda_reset(void);
-RPY_EXTERN long rt_cuda_mark(void);
-RPY_EXTERN void rt_cuda_release_since(long mark);
-RPY_EXTERN void rt_cuda_release_range(long from, long to);
+RPY_EXTERN void rt_cuda_free(long dptr, long n);
+RPY_EXTERN void rt_cuda_set_budget(long bytes);
+RPY_EXTERN long rt_cuda_launch_count(void);
+RPY_EXTERN int rt_cuda_over_budget(void);
 RPY_EXTERN void rt_cuda_sync(void);
 RPY_EXTERN int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
                               long *outs, int nouts, int threads,
@@ -451,27 +472,33 @@ def download(dptr, hostarray):
         hostarray[i] = buf[i]
     lltype.free(buf, flavor='raw')
 
-rt_cuda_mark = rffi.llexternal('rt_cuda_mark', [], lltype.Signed,
-                               compilation_info=eci, releasegil=False)
-rt_cuda_release_since = rffi.llexternal('rt_cuda_release_since',
-                                        [lltype.Signed], lltype.Void,
-                                        compilation_info=eci, releasegil=False)
 
-rt_cuda_release_range = rffi.llexternal('rt_cuda_release_range',
-                                        [lltype.Signed, lltype.Signed], lltype.Void,
-                                        compilation_info=eci, releasegil=False)
+
+rt_cuda_free = rffi.llexternal('rt_cuda_free', [lltype.Signed, lltype.Signed],
+                               lltype.Void, compilation_info=eci,
+                               releasegil=False)
+
+rt_cuda_set_budget = rffi.llexternal('rt_cuda_set_budget', [lltype.Signed],
+                                     lltype.Void, compilation_info=eci,
+                                     releasegil=False)
+rt_cuda_over_budget = rffi.llexternal('rt_cuda_over_budget', [], rffi.INT,
+                                      compilation_info=eci, releasegil=False)
+
+rt_cuda_launch_count = rffi.llexternal('rt_cuda_launch_count', [],
+                                       lltype.Signed, compilation_info=eci,
+                                       releasegil=False)
+
+def launch_count():
+    return rt_cuda_launch_count()
 
 def reset_device():
     rt_cuda_reset()
 
-def release_range(start, stop):
-    rt_cuda_release_range(start, stop)
-
-def device_mark():
-    return rt_cuda_mark()
-
-def release_since(mark):
-    rt_cuda_release_since(mark)
+def collect_if_over_budget():
+    if rffi.cast(lltype.Signed, rt_cuda_over_budget()) != 0:
+        rgc.collect(0)
+        if rffi.cast(lltype.Signed, rt_cuda_over_budget()) != 0:
+            rgc.collect()
 
 def sync_device():
     rt_cuda_sync()
@@ -618,6 +645,7 @@ def launch_gpu(kernel, inputs):
     outlen = 1 if kernel.sumroot else n
     shape = lltype.nullptr(SHAPEARRAY) if kernel.sumroot else inputs[0].shape
     nout = 1 + len(kernel.outputs)
+    collect_if_over_budget()
     dptrs = lltype.malloc(SIGNEDARRAY, nin, flavor='raw')
     outs = lltype.malloc(SIGNEDARRAY, nout, flavor='raw')
     ok = True

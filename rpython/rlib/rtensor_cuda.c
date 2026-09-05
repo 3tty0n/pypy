@@ -12,6 +12,7 @@ static int inited;
 typedef struct { CUdeviceptr p; long n; } buf_t;
 static buf_t *allocs, *freed;
 static long nallocs, capallocs, nfreed, capfreed;
+static long live_bytes, budget_bytes = 2L << 30, launches;
 
 static int rt_init(void)
 {
@@ -64,10 +65,34 @@ RPY_EXPORTED long rt_cuda_alloc(long n)
             break;
         }
     }
-    if (!p && cuMemAlloc(&p, n * sizeof(double)) != CUDA_SUCCESS) return 0;
+    if (!p) {
+        if (cuMemAlloc(&p, n * sizeof(double)) != CUDA_SUCCESS) return 0;
+        push(&allocs, &nallocs, &capallocs, p, n);
+    }
+    live_bytes += n * sizeof(double);
     cuMemsetD8(p, 0, n * sizeof(double));
-    push(&allocs, &nallocs, &capallocs, p, n);
     return (long)p;
+}
+
+RPY_EXPORTED void rt_cuda_free(long dptr, long n)
+{
+    live_bytes -= n * sizeof(double);
+    push(&freed, &nfreed, &capfreed, (CUdeviceptr)dptr, n);
+}
+
+RPY_EXPORTED long rt_cuda_launch_count(void)
+{
+    return launches;
+}
+
+RPY_EXPORTED void rt_cuda_set_budget(long bytes)
+{
+    budget_bytes = bytes;
+}
+
+RPY_EXPORTED int rt_cuda_over_budget(void)
+{
+    return live_bytes > budget_bytes;
 }
 
 RPY_EXPORTED long rt_cuda_upload(double *host, long n)
@@ -86,31 +111,8 @@ RPY_EXPORTED void rt_cuda_reset(void)
 {
     long i;
     for (i = 0; i < nallocs; i++) cuMemFree(allocs[i].p);
-    for (i = 0; i < nfreed; i++) cuMemFree(freed[i].p);
     nallocs = nfreed = 0;
-}
-
-RPY_EXPORTED long rt_cuda_mark(void)
-{
-    return nallocs;
-}
-
-RPY_EXPORTED void rt_cuda_release_since(long mark)
-{
-    long i;
-    for (i = mark; i < nallocs; i++)
-        push(&freed, &nfreed, &capfreed, allocs[i].p, allocs[i].n);
-    if (mark < nallocs) nallocs = mark;
-}
-
-RPY_EXPORTED void rt_cuda_release_range(long from, long to)
-{
-    long i;
-    if (from < 0 || to > nallocs || from >= to) return;
-    for (i = from; i < to; i++)
-        push(&freed, &nfreed, &capfreed, allocs[i].p, allocs[i].n);
-    memmove(&allocs[from], &allocs[to], (nallocs - to) * sizeof(buf_t));
-    nallocs -= to - from;
+    live_bytes = 0;
 }
 
 RPY_EXPORTED void rt_cuda_sync(void)
@@ -132,6 +134,7 @@ RPY_EXPORTED int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
     for (i = 0; i < nouts; i++) params[k++] = &outs[i];
     params[k++] = &argn;
     for (i = 0; i < nextra; i++) params[k++] = &null;
+    launches++;
     return cuLaunchKernel((CUfunction)fn, blocks ? blocks : 1, 1, 1,
                           threads, 1, 1, shared, 0, params, 0) == CUDA_SUCCESS;
 }

@@ -2187,17 +2187,36 @@ class Transformer(object):
     # ---------
     # ll_math.sqrt_nonneg()
 
+    def _register_analyzed_helper(self, oopspecindex, oopspec_name,
+                                  argtypes, resulttype, effectinfo):
+        if self.callcontrol.callinfocollection.has_oopspec(oopspecindex):
+            return
+        c_func, TP = support.builtin_func_for_spec(self.cpu.rtyper,
+                                                   oopspec_name, argtypes,
+                                                   resulttype)
+        op = SpaceOperation('direct_call',
+                            [c_func] + [varoftype(T) for T in argtypes],
+                            varoftype(resulttype))
+        calldescr = self.callcontrol.getcalldescr(op, oopspecindex,
+                                                  effectinfo,
+                                                  calling_graph=self.graph)
+        if isinstance(c_func.value, str):
+            func = c_func.value
+        else:
+            func = ptr2int(c_func.value)
+        self.callcontrol.callinfocollection.add(oopspecindex, calldescr, func)
+
     def _handle_tensor_call(self, op, oopspec_name, args):
         from rpython.rlib import rtensor
         T = args[0].concretetype
-        self._register_extra_helper(EffectInfo.OS_TENSOR_LAUNCH,
-                                    "tensor.launch",
-                                    [rtensor.KERNELPTR, T, T, T], T,
-                                    EffectInfo.EF_ELIDABLE_OR_MEMORYERROR)
-        self._register_extra_helper(EffectInfo.OS_TENSOR_OUTPUT,
-                                    "tensor.output",
-                                    [T, lltype.Signed], T,
-                                    EffectInfo.EF_ELIDABLE_CANNOT_RAISE)
+        self._register_analyzed_helper(EffectInfo.OS_TENSOR_LAUNCH,
+                                       "tensor.launch",
+                                       [rtensor.KERNELPTR, T, T, T], T,
+                                       EffectInfo.EF_ELIDABLE_OR_MEMORYERROR)
+        self._register_analyzed_helper(EffectInfo.OS_TENSOR_OUTPUT,
+                                       "tensor.output",
+                                       [T, lltype.Signed], T,
+                                       EffectInfo.EF_ELIDABLE_CANNOT_RAISE)
         os = getattr(EffectInfo, 'OS_' + oopspec_name.replace('.', '_').upper())
         return self._handle_oopspec_call(op, args, os,
                                          EffectInfo.EF_ELIDABLE_OR_MEMORYERROR)
