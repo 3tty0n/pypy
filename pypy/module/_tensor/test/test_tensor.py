@@ -139,3 +139,58 @@ class AppTestTensor(object):
         assert abs(y.sum().item()) < 1e-9
         std = math.sqrt(2.0 / 3.0)
         assert abs(y.mul(pick).sum().item() + 1.0 / std) < 1e-4
+
+    def test_cnn_forward(self):
+        import _tensor, tensorlite, math
+        C, H, W, O, NC = 2, 4, 4, 3, 5
+        fan = C * 9
+        feat = O * (H // 2) * (W // 2)
+        wc = [float((i * 7) % 13 - 6) / fan for i in range(fan * O)]
+        wf = [float((i * 7) % 13 - 6) / feat for i in range(feat * NC)]
+        x = [float(i % 5) - 2.0 for i in range(C * H * W)]
+        cnn = tensorlite.CNN(
+            tensorlite.Conv2d(_tensor.tensor(wc).reshape([fan, O]),
+                              _tensor.tensor([0.01] * O), C, H, W),
+            tensorlite.BatchNorm2d(O),
+            tensorlite.MaxPool2d(O, H, W),
+            tensorlite.Linear(_tensor.tensor(wf).reshape([feat, NC]),
+                              _tensor.tensor([0.01] * NC)))
+        y = cnn(_tensor.tensor(x).reshape([1, C * H * W]))
+        assert y.shape == (1, NC)
+
+        def at(c, h, w):
+            if 0 <= h < H and 0 <= w < W:
+                return x[c * H * W + h * W + w]
+            return 0.0
+
+        inv = 1.0 / math.sqrt(1.0 + 1e-5)
+        planes = []
+        for o in range(O):
+            plane = []
+            for h in range(H):
+                row = []
+                for w in range(W):
+                    acc = 0.01
+                    for c in range(C):
+                        for r in range(3):
+                            for s in range(3):
+                                acc += (at(c, h + r - 1, w + s - 1) *
+                                        wc[(c * 9 + r * 3 + s) * O + o])
+                    row.append(max(acc * inv, 0.0))
+                plane.append(row)
+            planes.append(plane)
+        flat = []
+        for o in range(O):
+            for oh in range(H // 2):
+                for ow in range(W // 2):
+                    p = planes[o]
+                    flat.append(max(p[2 * oh][2 * ow], p[2 * oh][2 * ow + 1],
+                                    p[2 * oh + 1][2 * ow],
+                                    p[2 * oh + 1][2 * ow + 1]))
+        exp = 0.0
+        for j in range(NC):
+            acc = 0.01
+            for i in range(feat):
+                acc += flat[i] * wf[i * NC + j]
+            exp += max(acc, 0.0)
+        assert abs(y.sum().item() - exp) < 1e-9

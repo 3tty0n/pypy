@@ -12,6 +12,7 @@ driver = jit.JitDriver(greens=['k', 'variant'], reds='auto', is_recursive=True)
 mlp_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 train_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 block_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
+cnn_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 
 MLP_D = 256
 LR = 1e-06
@@ -117,7 +118,49 @@ def run_block(n, iters):
         i += 1
     return tensor_item(tensor_sum(x.t, -1))
 
+CNN_C, CNN_HW, CNN_O, CNN_CLS = 3, 32, 8, 10
+
+def cnn_weight(rows, cols):
+    w = rtensor.zeros([rows, cols])
+    for i in range(rows * cols):
+        w.host[i] = float((i * 7) % 13 - 6) / rows
+    rtensor.dev(w)
+    return rtensor_nn.Tensor(w)
+
+def cnn_bias(m):
+    t = rtensor.zeros([m])
+    for i in range(m):
+        t.host[i] = 0.01
+    rtensor.dev(t)
+    return rtensor_nn.Tensor(t)
+
+def make_cnn():
+    fan = CNN_C * 9
+    feat = CNN_O * (CNN_HW // 2) * (CNN_HW // 2)
+    conv = rtensor_nn.Conv2d(cnn_weight(fan, CNN_O), cnn_bias(CNN_O),
+                             CNN_C, CNN_HW, CNN_HW, CNN_O)
+    fc = rtensor_nn.Linear(cnn_weight(feat, CNN_CLS), cnn_bias(CNN_CLS))
+    return rtensor_nn.CNN(conv, rtensor_nn.BatchNorm2d(CNN_O, TB_EPS),
+                          rtensor_nn.MaxPool2d(CNN_O, CNN_HW, CNN_HW), fc)
+
+def run_cnn(n, iters):
+    pixels = CNN_C * CNN_HW * CNN_HW
+    rows = n // pixels
+    if rows <= 0:
+        rows = 1
+    cnn = make_cnn()
+    x = make_mlp_input(rows, pixels)
+    acc = 0.0
+    i = 0
+    while i < iters:
+        cnn_driver.jit_merge_point()
+        acc += cnn.forward(x).sum().item()
+        i += 1
+    return acc
+
 def run_model(variant, n, iters):
+    if variant == 9:
+        return run_cnn(n, iters)
     if variant == 7:
         return run_mlp_train(n, iters)
     if variant == 8:
@@ -168,7 +211,7 @@ def run(variant, k, h, b, iters):
 
 def entry_point(argv):
     if len(argv) != 6:
-        print 'usage: rtensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..8)'
+        print 'usage: rtensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..9)'
         return 1
     mode = argv[1]
     variant = int(argv[2])

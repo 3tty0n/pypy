@@ -95,3 +95,70 @@ class TransformerBlock(object):
             a = a.add(head(h))
         x = x.add(a)
         return x.add(self.mlp(layernorm(x, self.gamma2, self.beta2, self.eps)))
+
+
+class Conv2d(object):
+    def __init__(self, weight, bias, c, h, w):
+        self.weight = Param(weight)
+        self.bias = Param(bias)
+        self.c = c
+        self.h = h
+        self.w = w
+
+    def __call__(self, x):
+        return x.conv2d(self.weight.tensor, self.c, self.h, self.w,
+                        self.bias.tensor)
+
+
+class BatchNorm2d(object):
+    def __init__(self, c, gamma=None, beta=None, mean=None, var=None,
+                 eps=1e-5):
+        self.c = c
+        self.gamma = gamma if gamma is not None else [1.0] * c
+        self.beta = beta if beta is not None else [0.0] * c
+        self.mean = mean if mean is not None else [0.0] * c
+        self.var = var if var is not None else [1.0] * c
+        self.eps = eps
+        self.cache = {}
+
+    def _params(self, rows):
+        if rows not in self.cache:
+            import math
+            a = []
+            b = []
+            for i in range(rows):
+                ci = i % self.c
+                g = self.gamma[ci] / math.sqrt(self.var[ci] + self.eps)
+                a.append(g)
+                b.append(self.beta[ci] - self.mean[ci] * g)
+            self.cache[rows] = (_tensor.tensor(a).reshape([rows, 1]),
+                                _tensor.tensor(b).reshape([rows, 1]))
+        return self.cache[rows]
+
+    def __call__(self, x, hw):
+        rows = x.size // hw
+        scale, shift = self._params(rows)
+        y = x.reshape([rows, hw]).mul(scale).add(shift)
+        return y.reshape([rows // self.c, self.c * hw])
+
+
+class MaxPool2d(object):
+    def __init__(self, c, h, w):
+        self.c = c
+        self.h = h
+        self.w = w
+
+    def __call__(self, x):
+        return x.maxpool2(self.c, self.h, self.w)
+
+
+class CNN(object):
+    def __init__(self, conv, bn, pool, fc):
+        self.conv = conv
+        self.bn = bn
+        self.pool = pool
+        self.fc = fc
+
+    def __call__(self, x):
+        y = self.bn(self.conv(x), self.pool.h * self.pool.w)
+        return self.fc(self.pool(y.relu()))

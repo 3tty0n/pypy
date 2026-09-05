@@ -1163,3 +1163,374 @@ def launch_gpu(kernel, inputs):
     lltype.free(dptrs, flavor='raw')
     lltype.free(outs, flavor='raw')
     return result
+
+
+GA_IM2COL, GA_COL2CHW, GA_MAXPOOL = 0, 1, 2
+
+
+def _shape2(rows, cols):
+    shape = lltype.malloc(SHAPEARRAY, 2)
+    shape[0] = rows
+    shape[1] = cols
+    return shape
+
+
+def view2(a, rows, cols):
+    return view(a, _shape2(rows, cols))
+
+
+def column(rows):
+    return new_tensor(rows, _shape2(rows, 1))
+
+
+class GatherKernel(object):
+    def __init__(self, fn, threads, shared, nextra):
+        self.fn = fn
+        self.threads = threads
+        self.shared = shared
+        self.nextra = nextra
+
+
+class GatherCache(object):
+    def __init__(self):
+        self.kernels = {}
+gather_cache = GatherCache()
+
+
+class Emitter(object):
+    def __init__(self):
+        self.lines = []
+        self.k = 0
+
+    def tmp(self):
+        self.k += 1
+        return '%%t%d' % self.k
+
+    def add(self, line):
+        self.lines.append(line)
+
+
+def _gconst(e, v, ty):
+    r = e.tmp()
+    e.add('    %s = arith.constant dense<%d> : %s' % (r, v, ty))
+    return r
+
+
+def _gbin(e, op, a, b, ty):
+    r = e.tmp()
+    e.add('    %s = arith.%s %s, %s : %s' % (r, op, a, b, ty))
+    return r
+
+
+def _gcmp(e, pred, a, b, ty):
+    r = e.tmp()
+    e.add('    %s = arith.cmpi %s, %s, %s : %s' % (r, pred, a, b, ty))
+    return r
+
+
+def _gdiv(e, a, v, ty):
+    return _gbin(e, 'divsi', a, _gconst(e, v, ty), ty)
+
+
+def _gmod(e, a, v, ty):
+    return _gbin(e, 'remsi', a, _gconst(e, v, ty), ty)
+
+
+def _gmul(e, a, v, ty):
+    return _gbin(e, 'muli', a, _gconst(e, v, ty), ty)
+
+
+def _gaddc(e, a, v, ty):
+    return _gbin(e, 'addi', a, _gconst(e, v, ty), ty)
+
+
+def _gather_index(e, op, params, I64, I1):
+    off = '%offs64'
+    srcs = []
+    if op == GA_IM2COL:
+        n, c, h, w, k, pad = (params[0], params[1], params[2], params[3],
+                              params[4], params[5])
+        hw = h * w
+        kk = k * k
+        ckk = c * kk
+        row = _gdiv(e, off, ckk, I64)
+        col = _gmod(e, off, ckk, I64)
+        img = _gdiv(e, row, hw, I64)
+        pos = _gmod(e, row, hw, I64)
+        ph = _gdiv(e, pos, w, I64)
+        pw = _gmod(e, pos, w, I64)
+        ch = _gdiv(e, col, kk, I64)
+        rk = _gmod(e, col, kk, I64)
+        ih = _gaddc(e, _gbin(e, 'addi', ph, _gdiv(e, rk, k, I64), I64),
+                    -pad, I64)
+        iw = _gaddc(e, _gbin(e, 'addi', pw, _gmod(e, rk, k, I64), I64),
+                    -pad, I64)
+        zero = _gconst(e, 0, I64)
+        ok = _gbin(e, 'andi',
+                   _gbin(e, 'andi', _gcmp(e, 'sge', ih, zero, I64),
+                         _gcmp(e, 'slt', ih, _gconst(e, h, I64), I64), I1),
+                   _gbin(e, 'andi', _gcmp(e, 'sge', iw, zero, I64),
+                         _gcmp(e, 'slt', iw, _gconst(e, w, I64), I64), I1), I1)
+        base = _gbin(e, 'addi', _gmul(e, img, c * hw, I64),
+                     _gmul(e, ch, hw, I64), I64)
+        src = _gbin(e, 'addi', base,
+                    _gbin(e, 'addi', _gmul(e, ih, w, I64), iw, I64), I64)
+        srcs.append(src)
+        return srcs, ok
+    if op == GA_COL2CHW:
+        n, hw, o = params[0], params[1], params[2]
+        img = _gdiv(e, off, o * hw, I64)
+        rem = _gmod(e, off, o * hw, I64)
+        ch = _gdiv(e, rem, hw, I64)
+        pos = _gmod(e, rem, hw, I64)
+        row = _gbin(e, 'addi', _gmul(e, img, hw, I64), pos, I64)
+        srcs.append(_gbin(e, 'addi', _gmul(e, row, o, I64), ch, I64))
+        return srcs, ''
+    n, c, h, w = params[0], params[1], params[2], params[3]
+    oh = h // 2
+    ow = w // 2
+    pw = _gmod(e, off, ow, I64)
+    q = _gdiv(e, off, ow, I64)
+    ph = _gmod(e, q, oh, I64)
+    q2 = _gdiv(e, q, oh, I64)
+    ch = _gmod(e, q2, c, I64)
+    img = _gdiv(e, q2, c, I64)
+    base = _gbin(e, 'addi', _gmul(e, img, c * h * w, I64),
+                 _gmul(e, ch, h * w, I64), I64)
+    base = _gbin(e, 'addi', base, _gmul(e, ph, 2 * w, I64), I64)
+    base = _gbin(e, 'addi', base, _gmul(e, pw, 2, I64), I64)
+    srcs.append(base)
+    srcs.append(_gaddc(e, base, 1, I64))
+    srcs.append(_gaddc(e, base, w, I64))
+    srcs.append(_gaddc(e, base, w + 1, I64))
+    return srcs, ''
+
+
+def to_ttir_gather(op, params, name):
+    BLOCK = config.block
+    T = 'tensor<%dxf64>' % BLOCK
+    P = 'tensor<%dx!tt.ptr<f64>>' % BLOCK
+    I32 = 'tensor<%dxi32>' % BLOCK
+    I64 = 'tensor<%dxi64>' % BLOCK
+    I1 = 'tensor<%dxi1>' % BLOCK
+    e = Emitter()
+    e.add('module {')
+    e.add('  tt.func public @%s(%%in: !tt.ptr<f64>, %%out: !tt.ptr<f64>, '
+          '%%n: i64, %%c: i64) attributes {noinline = false} {' % name)
+    e.add('    %%zero = arith.constant dense<0.0> : %s' % T)
+    e.add('    %%bs = arith.constant %d : i32' % BLOCK)
+    e.add('    %pid = tt.get_program_id x : i32')
+    e.add('    %start = arith.muli %pid, %bs : i32')
+    e.add('    %%range = tt.make_range {end = %d : i32, start = 0 : i32} : %s'
+          % (BLOCK, I32))
+    e.add('    %%starts = tt.splat %%start : i32 -> %s' % I32)
+    e.add('    %%offs = arith.addi %%starts, %%range : %s' % I32)
+    e.add('    %%offs64 = arith.extsi %%offs : %s to %s' % (I32, I64))
+    e.add('    %%ns = tt.splat %%n : i64 -> %s' % I64)
+    e.add('    %%mask = arith.cmpi slt, %%offs64, %%ns : %s' % I64)
+    srcs, ok = _gather_index(e, op, params, I64, I1)
+    mask = '%mask'
+    if ok:
+        mask = _gbin(e, 'andi', mask, ok, I1)
+    e.add('    %%pin = tt.splat %%in : !tt.ptr<f64> -> %s' % P)
+    vals = []
+    for i in range(len(srcs)):
+        q = e.tmp()
+        e.add('    %s = tt.addptr %%pin, %s : %s, %s' % (q, srcs[i], P, I64))
+        v = e.tmp()
+        e.add('    %s = tt.load %s, %s, %%zero : %s' % (v, q, mask, P))
+        vals.append(v)
+    acc = vals[0]
+    for i in range(1, len(vals)):
+        acc = _gbin(e, 'maximumf', acc, vals[i], T)
+    e.add('    %%pout = tt.splat %%out : !tt.ptr<f64> -> %s' % P)
+    e.add('    %%qout = tt.addptr %%pout, %%offs : %s, %s' % (P, I32))
+    e.add('    tt.store %%qout, %s, %%mask : %s' % (acc, P))
+    e.add('    tt.return')
+    e.add('  }')
+    e.add('}')
+    return '\n'.join(e.lines) + '\n'
+
+
+def gather_key(op, params):
+    parts = ['g%d' % op]
+    for i in range(len(params)):
+        parts.append(str(params[i]))
+    return ','.join(parts)
+
+
+def gather_kernel(op, params):
+    key = gather_key(op, params)
+    k = gather_cache.kernels.get(key, None)
+    if k is None:
+        k = _gather_compile(op, params)
+        gather_cache.kernels[key] = k
+    return k
+
+
+def _gather_compile(op, params):
+    if not gpu_enabled():
+        return GatherKernel(0, 0, 0, 0)
+    try:
+        return _gather_compile_gpu(op, params)
+    except (OSError, ValueError, IndexError):
+        return GatherKernel(0, 0, 0, 0)
+
+
+def _gather_compile_gpu(op, params):
+    name = 'rtensor_g%d' % counter.n
+    counter.n += 1
+    src = to_ttir_gather(op, params, name)
+    base = _env('TMPDIR', '/tmp') + '/' + name
+    _write(base + '.ttir', src)
+    cmd = '%s -P %s %s.ttir %s.ptx %s.meta %s %d' % (
+        _env('RTENSOR_PYTHON', 'python3'), _here + '/rtensor_triton.py',
+        base, base, base, _env('RTENSOR_CC', '86'), config.num_warps)
+    if os.system(cmd) != 0:
+        return GatherKernel(0, 0, 0, 0)
+    words = _read(base + '.meta').strip().split(' ')
+    threads = int(words[0])
+    shared = int(words[1])
+    nextra = int(words[2])
+    ptx = _read(base + '.ptx')
+    p_ptx = rffi.str2charp(ptx)
+    p_name = rffi.str2charp(name)
+    fn = rt_cuda_load(p_ptx, p_name)
+    rffi.free_charp(p_ptx)
+    rffi.free_charp(p_name)
+    return GatherKernel(fn, threads, shared, nextra)
+
+
+def gather_gpu(op, params, x, outn, shape):
+    kernel = gather_kernel(op, params)
+    if kernel.fn == 0:
+        return NULLTENSOR
+    dptr = dev(x)
+    if dptr == 0:
+        return NULLTENSOR
+    collect_if_needed(outn)
+    ins = lltype.malloc(SIGNEDARRAY, 1, flavor='raw')
+    outs = lltype.malloc(SIGNEDARRAY, 1, flavor='raw')
+    ins[0] = dptr
+    outs[0] = rt_cuda_alloc(outn)
+    ok = outs[0] != 0
+    if ok:
+        ok = rffi.cast(lltype.Signed, rt_cuda_launch(
+            kernel.fn, ins, rffi.cast(rffi.INT, 1), outn, outs,
+            rffi.cast(rffi.INT, 1), rffi.cast(rffi.INT, kernel.threads),
+            config.block, rffi.cast(rffi.INT, kernel.shared),
+            rffi.cast(rffi.INT, kernel.nextra), 0)) != 0
+    result = NULLTENSOR
+    if ok:
+        result = device_tensor(outn, outs[0], shape)
+    lltype.free(ins, flavor='raw')
+    lltype.free(outs, flavor='raw')
+    return result
+
+
+def im2col_cpu(x, n, c, h, w, k, pad):
+    hx = host(x)
+    hw = h * w
+    chw = c * hw
+    kk = k * k
+    rows = n * hw
+    cols = c * kk
+    r = new_tensor(rows * cols, _shape2(rows, cols))
+    hr = r.host
+    for i in range(rows * cols):
+        row = i // cols
+        col = i % cols
+        img = row // hw
+        pos = row % hw
+        ih = pos // w + col % kk // k - pad
+        iw = pos % w + col % k - pad
+        v = 0.0
+        if ih >= 0 and ih < h and iw >= 0 and iw < w:
+            idx = img * chw + col // kk * hw + ih * w + iw
+            assert idx >= 0
+            v = hx[idx]
+        hr[i] = v
+    return r
+
+
+@jit.dont_look_inside
+def im2col(x, c, h, w, k, pad):
+    n = x.size // (c * h * w)
+    rows = n * h * w
+    cols = c * k * k
+    if gpu_enabled():
+        params = [n]
+        params.append(c)
+        params.append(h)
+        params.append(w)
+        params.append(k)
+        params.append(pad)
+        r = gather_gpu(GA_IM2COL, params, x, rows * cols,
+                       _shape2(rows, cols))
+        if r:
+            return r
+    return im2col_cpu(x, n, c, h, w, k, pad)
+
+
+def col2chw_cpu(y, n, hw, o):
+    hy = host(y)
+    r = new_tensor(n * o * hw, _shape2(n, o * hw))
+    hr = r.host
+    for i in range(n * o * hw):
+        img = i // (o * hw)
+        rem = i % (o * hw)
+        idx = (img * hw + rem % hw) * o + rem // hw
+        assert idx >= 0
+        hr[i] = hy[idx]
+    return r
+
+
+@jit.dont_look_inside
+def col2chw(y, n, hw, o):
+    outn = n * o * hw
+    if gpu_enabled():
+        params = [n]
+        params.append(hw)
+        params.append(o)
+        r = gather_gpu(GA_COL2CHW, params, y, outn, _shape2(n, o * hw))
+        if r:
+            return r
+    return col2chw_cpu(y, n, hw, o)
+
+
+def maxpool2_cpu(x, n, c, h, w):
+    hx = host(x)
+    oh = h // 2
+    ow = w // 2
+    outn = n * c * oh * ow
+    r = new_tensor(outn, _shape2(n, c * oh * ow))
+    hr = r.host
+    for i in range(outn):
+        q = i // ow
+        base = (i // (oh * ow) * h + q % oh * 2) * w + i % ow * 2
+        assert base >= 0
+        v = hx[base]
+        if hx[base + 1] > v:
+            v = hx[base + 1]
+        if hx[base + w] > v:
+            v = hx[base + w]
+        if hx[base + w + 1] > v:
+            v = hx[base + w + 1]
+        hr[i] = v
+    return r
+
+
+@jit.dont_look_inside
+def maxpool2(x, c, h, w):
+    n = x.size // (c * h * w)
+    outn = n * c * (h // 2) * (w // 2)
+    if gpu_enabled():
+        params = [n]
+        params.append(c)
+        params.append(h)
+        params.append(w)
+        r = gather_gpu(GA_MAXPOOL, params, x, outn,
+                       _shape2(n, c * (h // 2) * (w // 2)))
+        if r:
+            return r
+    return maxpool2_cpu(x, n, c, h, w)

@@ -49,7 +49,7 @@ the translator.
 | argument | values |
 |---|---|
 | `MODE` | `fused` (tensor ops fused into one kernel), `eager` (the `tensor` optimization disabled, one GPU kernel per op, JIT otherwise on), `nojit` (interpreter, one GPU kernel per op) |
-| `VARIANT` | `0` plain chain; `1` a branch `if i % 7 == 0: h = h + b` inside the fused region (a guard, no force); `2` the same branch after an explicit force of `h`, modelling a graph break; `3` a data-dependent branch `if sum(h).item() > 0` (a true force in every system); `4` the chain continued inside `try/except` with an exception raised every 5th iteration; `5` a host-side write to `/dev/null` every 50th iteration between tensor ops; `6` an MLP forward (see below), `K` unused; `7` the same MLP with a reverse-mode backward pass and an SGD step per iteration, `K` unused; `8` a Transformer block forward per iteration (see below), `K` unused |
+| `VARIANT` | `0` plain chain; `1` a branch `if i % 7 == 0: h = h + b` inside the fused region (a guard, no force); `2` the same branch after an explicit force of `h`, modelling a graph break; `3` a data-dependent branch `if sum(h).item() > 0` (a true force in every system); `4` the chain continued inside `try/except` with an exception raised every 5th iteration; `5` a host-side write to `/dev/null` every 50th iteration between tensor ops; `6` an MLP forward (see below), `K` unused; `7` the same MLP with a reverse-mode backward pass and an SGD step per iteration, `K` unused; `8` a Transformer block forward per iteration (see below), `K` unused; `9` a small CNN forward per iteration (see below), `K` unused |
 
 `VARIANT 6` runs a 3-layer MLP forward (`rpython/rlib/rtensor_nn.py`) each
 iteration: `x` is `(B, 256)` with `B = N / 256`, each layer is `256x256`.
@@ -75,6 +75,31 @@ matmul gradients (`dx = dy @ W^T` and `dW = x^T @ dy`) reuse `rt_cuda_matmul`
 with cuBLAS transpose flags, so no transpose kernel is needed.  The loss is
 `sum(y)` and the SGD step is `p = p + (-lr) * p.grad` with `-lr` held in a
 `(1,)` tensor, which fuses into one kernel per parameter.
+`VARIANT 9` runs a small CNN forward each iteration: `conv2d` 3x3 with
+padding 1, batchnorm in inference form, `relu`, `maxpool` 2x2, flatten and a
+linear layer to 10 classes.  The input is `(B, 3*32*32)` with `B = N / 3072`,
+the convolution has 8 output channels.  Images are stored channel-major, one
+image per row of a `(B, C*H*W)` matrix.  The convolution is
+`col2chw(im2col(x) @ Wcol)`: `im2col` builds the `(B*H*W, C*3*3)` patch matrix,
+`Wcol` is `(C*3*3, O)`, the matmul is the same cuBLAS call as variant 6, and
+`col2chw` transposes the `(B*H*W, O)` result back to channel-major
+`(B, O*H*W)`.  `im2col`, `col2chw` and `maxpool2` are hand-written Triton IR
+gather kernels (`to_ttir_gather` in `rpython/rlib/rtensor.py`) compiled through
+the same `rtensor_triton.py` path and cached per (op, geometry); the geometry
+is baked into the kernel text as constants, so they launch through the
+existing `rt_cuda_launch` shim with no extra arguments.  Like `matmul` they are
+`@jit.dont_look_inside`, so they force their arguments and are never fused.
+Batchnorm needs a per-channel broadcast, which is expressed without a new
+broadcast code: the `(B, C*H*W)` matrix is viewed as `(B*C, H*W)` and the
+folded per-channel scale and shift (`gamma/sqrt(var+eps)` and
+`beta - mean*gamma/sqrt(var+eps)`) are held in `(B*C, 1)` tensors, so the
+existing column broadcast `BC_R_COL` indexes them.  Batchnorm and the following
+`relu` therefore stay virtual and fuse into a single Triton launch, as do the
+final bias add, `relu` and `sum`.  One forward launches 3 gather kernels plus
+3 fused elementwise kernels and 2 cuBLAS matmuls.  The checksum is
+loop-carried: the same `x` is fed every iteration and `sum(y).item()` is
+accumulated, which forces every iteration.
+
 | `K` | chain length |
 | `N` | tensor size |
 | `ITERS` | timed iterations |

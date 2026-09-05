@@ -841,3 +841,192 @@ def test_column_broadcast_shapes():
         [9.0, 10.0, 11.0, 12.0]
     assert rtensor.host(rtensor.sqrt(_filled([2], 4.0)))[0] == 2.0
     assert rtensor.host(rtensor.exp(_filled([1], 0.0)))[0] == 1.0
+
+
+CN, CC, CH, CW, CO, CNCLS = 2, 3, 8, 8, 4, 10
+CEPS = 1e-05
+
+
+def _conv_weight(rows, cols):
+    return [float((i * 7) % 13 - 6) / rows for i in range(rows * cols)]
+
+
+def _conv_input(n, c, h, w):
+    return [float(i % 7) - 3.0 for i in range(n * c * h * w)]
+
+
+def _ref_im2col(x, n, c, h, w, k, pad):
+    out = []
+    for i in range(n):
+        for ph in range(h):
+            for pw in range(w):
+                for cc in range(c):
+                    for r in range(k):
+                        for s in range(k):
+                            ih = ph + r - pad
+                            iw = pw + s - pad
+                            if 0 <= ih < h and 0 <= iw < w:
+                                out.append(x[i * c * h * w + cc * h * w +
+                                             ih * w + iw])
+                            else:
+                                out.append(0.0)
+    return out
+
+
+def _ref_maxpool2(x, n, c, h, w):
+    out = []
+    for i in range(n):
+        for cc in range(c):
+            for oh in range(h // 2):
+                for ow in range(w // 2):
+                    b = i * c * h * w + cc * h * w + 2 * oh * w + 2 * ow
+                    out.append(max(x[b], x[b + 1], x[b + w], x[b + w + 1]))
+    return out
+
+
+def _ref_cnn(x, wc, wf):
+    fan = CC * 9
+    feat = CO * (CH // 2) * (CW // 2)
+    inv = 1.0 / math.sqrt(1.0 + CEPS)
+    total = 0.0
+    for i in range(CN):
+        planes = []
+        for o in range(CO):
+            plane = []
+            for ph in range(CH):
+                row = []
+                for pw in range(CW):
+                    acc = 0.01
+                    for cc in range(CC):
+                        for r in range(3):
+                            for s in range(3):
+                                ih = ph + r - 1
+                                iw = pw + s - 1
+                                if 0 <= ih < CH and 0 <= iw < CW:
+                                    acc += (x[i * CC * CH * CW + cc * CH * CW +
+                                              ih * CW + iw] *
+                                            wc[(cc * 9 + r * 3 + s) * CO + o])
+                    row.append(max(acc * inv, 0.0))
+                plane.append(row)
+            planes.append(plane)
+        flat = []
+        for o in range(CO):
+            for oh in range(CH // 2):
+                for ow in range(CW // 2):
+                    p = planes[o]
+                    flat.append(max(p[2 * oh][2 * ow], p[2 * oh][2 * ow + 1],
+                                    p[2 * oh + 1][2 * ow],
+                                    p[2 * oh + 1][2 * ow + 1]))
+        for j in range(CNCLS):
+            acc = 0.01
+            for f in range(feat):
+                acc += flat[f] * wf[f * CNCLS + j]
+            total += max(acc, 0.0)
+    return total
+
+
+def _load(shape, values):
+    t = rtensor.zeros(shape)
+    for i in range(len(values)):
+        t.host[i] = values[i]
+    return t
+
+
+def _make_cnn():
+    fan = CC * 9
+    feat = CO * (CH // 2) * (CW // 2)
+    bc = rtensor.zeros([CO])
+    for i in range(CO):
+        bc.host[i] = 0.01
+    bf = rtensor.zeros([CNCLS])
+    for i in range(CNCLS):
+        bf.host[i] = 0.01
+    conv = rtensor_nn.Conv2d(
+        rtensor_nn.Tensor(_load([fan, CO], _conv_weight(fan, CO))),
+        rtensor_nn.Tensor(bc), CC, CH, CW, CO)
+    fc = rtensor_nn.Linear(
+        rtensor_nn.Tensor(_load([feat, CNCLS], _conv_weight(feat, CNCLS))),
+        rtensor_nn.Tensor(bf))
+    return rtensor_nn.CNN(conv, rtensor_nn.BatchNorm2d(CO, CEPS),
+                          rtensor_nn.MaxPool2d(CO, CH, CW), fc)
+
+
+class TestConv(LLJitMixin):
+
+    def setup_method(self, meth):
+        rtensor.policy.static = True
+        rtensor.policy.seen = []
+
+    def test_im2col_matmul_conv(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
+        vals = _conv_input(1, 2, 4, 4)
+        wvals = _conv_weight(18, 3)
+
+        def f(n):
+            x = _load([1, 2 * 4 * 4], vals)
+            w = _load([18, 3], wvals)
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, w=w, acc=acc)
+                cols = rtensor.im2col(x, 2, 4, 4, 3, 1)
+                y = rtensor.tensor_matmul(cols, w, 16, 3, 18, 0, 0)
+                z = rtensor.col2chw(y, 1, 16, 3)
+                acc += rtensor.item(rtensor.sum(rtensor.mul(z, z)))
+                n -= 1
+            return acc
+        cols = _ref_im2col(vals, 1, 2, 4, 4, 3, 1)
+        expect = 0.0
+        for r in range(16):
+            for o in range(3):
+                v = 0.0
+                for k in range(18):
+                    v += cols[r * 18 + k] * wvals[k * 3 + o]
+                expect += v * v
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+        self.check_simple_loop(call_r=2, call_f=1)
+
+    def test_maxpool2_matches_reference(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'acc'])
+        vals = _conv_input(2, 2, 4, 6)
+
+        def f(n):
+            x = _load([2, 2 * 4 * 6], vals)
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, acc=acc)
+                y = rtensor.maxpool2(x, 2, 4, 6)
+                acc += rtensor.item(rtensor.sum(rtensor.mul(y, y)))
+                n -= 1
+            return acc
+        expect = sum([v * v for v in _ref_maxpool2(vals, 2, 2, 4, 6)])
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+        self.check_simple_loop(call_r=1, call_f=1)
+
+    def test_cnn_forward_matches_reference(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'cnn', 'acc'])
+        vals = _conv_input(CN, CC, CH, CW)
+
+        def f(n):
+            x = rtensor_nn.Tensor(_load([CN, CC * CH * CW], vals))
+            cnn = _make_cnn()
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, cnn=cnn, acc=acc)
+                acc += cnn.forward(x).sum().item()
+                n -= 1
+            return acc
+        expect = _ref_cnn(vals, _conv_weight(CC * 9, CO),
+                          _conv_weight(CO * (CH // 2) * (CW // 2), CNCLS))
+        res = self.meta_interp(f, [5])
+        assert abs(res - expect * 5) < 1e-9
+        self.check_simple_loop(call_r=6)
+
+    def test_cnn_backward_raises(self):
+        cnn = _make_cnn()
+        x = rtensor_nn.Tensor(_load([CN, CC * CH * CW],
+                                    _conv_input(CN, CC, CH, CW)), True)
+        y = cnn.forward(x).sum()
+        import py
+        py.test.raises(ValueError, y.backward)

@@ -403,3 +403,95 @@ class TransformerBlock(object):
         x = x.add(a)
         h2 = layernorm(x, self.gamma2, self.beta2, self.eps)
         return x.add(self.mlp.forward(h2))
+
+
+class Conv2d(object):
+    def __init__(self, weight, bias, c, h, w, o):
+        self.weight = weight
+        self.bias = bias
+        self.c = c
+        self.h = h
+        self.w = w
+        self.o = o
+
+    def forward(self, x):
+        hw = self.h * self.w
+        rows = rtensor.tensor_size(x.t) // (self.c * hw)
+        cols = rtensor.im2col(x.t, self.c, self.h, self.w, 3, 1)
+        y = rtensor.tensor_matmul(cols, self.weight.t, rows * hw, self.o,
+                                  self.c * 9, 0, 0)
+        y = rtensor.tensor_add(y, self.bias.t, rtensor.BC_R_ROW)
+        return x._forward_only(rtensor.col2chw(y, rows, hw, self.o),
+                               self.weight)
+
+
+class BatchNorm2d(object):
+    def __init__(self, c, eps=1e-05):
+        self.c = c
+        self.eps = eps
+        self.gamma = [1.0] * c
+        self.beta = [0.0] * c
+        self.mean = [0.0] * c
+        self.var = [1.0] * c
+        self.rows = -1
+        self.scale = rtensor.NULLTENSOR
+        self.shift = rtensor.NULLTENSOR
+
+    def set_stats(self, gamma, beta, mean, var):
+        self.gamma = gamma
+        self.beta = beta
+        self.mean = mean
+        self.var = var
+        self.rows = -1
+
+    def _prepare(self, rows):
+        a = rtensor.column(rows)
+        b = rtensor.column(rows)
+        for i in range(rows):
+            ci = i % self.c
+            g = self.gamma[ci] / math.sqrt(self.var[ci] + self.eps)
+            a.host[i] = g
+            b.host[i] = self.beta[ci] - self.mean[ci] * g
+        rtensor.dev(a)
+        rtensor.dev(b)
+        self.scale = a
+        self.shift = b
+        self.rows = rows
+
+    def forward(self, x, hw):
+        rows = rtensor.tensor_size(x.t) // hw
+        if self.rows != rows:
+            self._prepare(rows)
+        v = rtensor.view2(x.t, rows, hw)
+        y = rtensor.tensor_mul(v, self.scale, rtensor.BC_R_COL)
+        return x._forward_only(
+            rtensor.tensor_add(y, self.shift, rtensor.BC_R_COL), None)
+
+
+class MaxPool2d(object):
+    def __init__(self, c, h, w):
+        self.c = c
+        self.h = h
+        self.w = w
+
+    def forward(self, x):
+        return x._forward_only(rtensor.maxpool2(x.t, self.c, self.h, self.w),
+                               None)
+
+
+class CNN(object):
+    def __init__(self, conv, bn, pool, fc):
+        self.conv = conv
+        self.bn = bn
+        self.pool = pool
+        self.fc = fc
+
+    @jit.unroll_safe
+    def forward(self, x):
+        y = self.conv.forward(x)
+        y = self.bn.forward(y, self.pool.h * self.pool.w)
+        y = self.pool.forward(y.relu())
+        cols = self.pool.c * (self.pool.h // 2) * (self.pool.w // 2)
+        shape = [rtensor.tensor_size(y.t) // cols]
+        shape.append(cols)
+        return self.fc.forward(y.reshape(shape))

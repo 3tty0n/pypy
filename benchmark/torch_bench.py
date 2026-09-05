@@ -1,4 +1,5 @@
 import math, sys, time, torch
+import torch.nn.functional as F
 mode, variant, k, n, iters = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
 dev = "cuda"
 
@@ -109,6 +110,50 @@ def run_block(iters):
         x = step(x)
     torch.cuda.synchronize()
     return x.sum().item()
+
+CNN_C, CNN_HW, CNN_O, CNN_CLS = 3, 32, 8, 10
+
+def run_cnn(iters):
+    pixels = CNN_C * CNN_HW * CNN_HW
+    rows = n // pixels
+    if rows <= 0:
+        rows = 1
+    x = torch.tensor([(i % 7) - 3.0 for i in range(rows * pixels)],
+                     dtype=torch.float64, device=dev).reshape(rows, CNN_C, CNN_HW, CNN_HW)
+    fan = CNN_C * 9
+    feat = CNN_O * (CNN_HW // 2) * (CNN_HW // 2)
+    wcol = torch.tensor([float((i * 7) % 13 - 6) / fan for i in range(fan * CNN_O)],
+                        dtype=torch.float64, device=dev).reshape(fan, CNN_O)
+    cw = wcol.t().reshape(CNN_O, CNN_C, 3, 3).contiguous()
+    cb = torch.full((CNN_O,), 0.01, dtype=torch.float64, device=dev)
+    gamma = torch.ones(CNN_O, dtype=torch.float64, device=dev)
+    beta = torch.zeros(CNN_O, dtype=torch.float64, device=dev)
+    rmean = torch.zeros(CNN_O, dtype=torch.float64, device=dev)
+    rvar = torch.ones(CNN_O, dtype=torch.float64, device=dev)
+    wf = torch.tensor([float((i * 7) % 13 - 6) / feat for i in range(feat * CNN_CLS)],
+                      dtype=torch.float64, device=dev).reshape(feat, CNN_CLS)
+    bf = torch.full((CNN_CLS,), 0.01, dtype=torch.float64, device=dev)
+
+    def forward(t):
+        y = torch.conv2d(t, cw, cb, padding=1)
+        y = F.batch_norm(y, rmean, rvar, gamma, beta, False, 0.0, TB_EPS)
+        y = torch.max_pool2d(torch.relu(y), 2).reshape(rows, feat)
+        return torch.relu(y @ wf + bf)
+
+    step = torch.compile(forward, dynamic=False) if mode == "compile" else forward
+    acc = 0.0
+    with torch.no_grad():
+        for _ in range(iters):
+            acc += step(x).sum().item()
+    torch.cuda.synchronize()
+    return acc
+
+if variant == 9:
+    t0 = time.time(); run_cnn(20); warm = time.time() - t0
+    t0 = time.time(); acc = run_cnn(iters); steady = (time.time() - t0) / iters * 1e6
+    print("torch-%s %d %d %d %d %f %f 0 %f 0 -1 -1" % (mode, variant, k, n, iters,
+        warm, steady, acc))
+    sys.exit(0)
 
 if variant == 8:
     t0 = time.time(); run_block(20); warm = time.time() - t0

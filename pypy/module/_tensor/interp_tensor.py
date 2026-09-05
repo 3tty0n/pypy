@@ -92,6 +92,43 @@ class W_Tensor(W_Root):
         except ValueError:
             raise oefmt(space.w_ValueError, "shape mismatch")
 
+    @unwrap_spec(c=int, h=int, w=int, k=int, pad=int)
+    def descr_im2col(self, space, c, h, w, k=3, pad=1):
+        t = self.tensor.t
+        if c <= 0 or h <= 0 or w <= 0 or k <= 0 or pad < 0:
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        if rtensor.tensor_size(t) % (c * h * w) != 0:
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        return W_Tensor(rtensor_nn.Tensor(rtensor.im2col(t, c, h, w, k, pad)))
+
+    @unwrap_spec(c=int, h=int, w=int)
+    def descr_maxpool2(self, space, c, h, w):
+        t = self.tensor.t
+        if c <= 0 or h <= 1 or w <= 1:
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        if rtensor.tensor_size(t) % (c * h * w) != 0:
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        return W_Tensor(rtensor_nn.Tensor(rtensor.maxpool2(t, c, h, w)))
+
+    @unwrap_spec(c=int, h=int, w=int)
+    def descr_conv2d(self, space, w_weight, c, h, w, w_bias=None):
+        weight = self._other(space, w_weight).t
+        t = self.tensor.t
+        hw = h * w
+        if c <= 0 or h <= 0 or w <= 0 or rtensor.tensor_size(t) % (c * hw) != 0:
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        if (rtensor.tensor_ndim(weight) != 2 or
+                rtensor.tensor_shape(weight, 0) != c * 9):
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        o = rtensor.tensor_shape(weight, 1)
+        rows = rtensor.tensor_size(t) // (c * hw)
+        y = rtensor.tensor_matmul(rtensor.im2col(t, c, h, w, 3, 1), weight,
+                                  rows * hw, o, c * 9, 0, 0)
+        if w_bias is not None and not space.is_none(w_bias):
+            y = rtensor.tensor_add(y, self._other(space, w_bias).t,
+                                   rtensor.BC_R_ROW)
+        return W_Tensor(rtensor_nn.Tensor(rtensor.col2chw(y, rows, hw, o)))
+
     def descr_detach(self, space):
         return W_Tensor(rtensor_nn.Tensor(self.tensor.t, self.tensor.requires_grad))
 
@@ -141,6 +178,9 @@ W_Tensor.typedef = TypeDef(
     item=interp2app(W_Tensor.descr_item),
     matmul=interp2app(W_Tensor.descr_matmul),
     reshape=interp2app(W_Tensor.descr_reshape),
+    im2col=interp2app(W_Tensor.descr_im2col),
+    maxpool2=interp2app(W_Tensor.descr_maxpool2),
+    conv2d=interp2app(W_Tensor.descr_conv2d),
     detach=interp2app(W_Tensor.descr_detach),
     backward=interp2app(W_Tensor.descr_backward),
     zero_grad=interp2app(W_Tensor.descr_zero_grad),
