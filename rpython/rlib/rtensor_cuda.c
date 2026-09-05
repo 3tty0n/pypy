@@ -90,9 +90,13 @@ RPY_EXPORTED void rt_cuda_set_budget(long bytes)
     budget_bytes = bytes;
 }
 
-RPY_EXPORTED int rt_cuda_over_budget(void)
+RPY_EXPORTED int rt_cuda_needs_gc(long n)
 {
-    return live_bytes > budget_bytes;
+    long i;
+    if (live_bytes <= budget_bytes) return 0;
+    for (i = 0; i < nfreed; i++)
+        if (freed[i].n == n) return 0;
+    return 1;
 }
 
 RPY_EXPORTED long rt_cuda_upload(double *host, long n)

@@ -160,7 +160,7 @@ def init_device():
     try:
         config.block = int(_env('RTENSOR_BLOCK', '4096'))
         config.num_warps = int(_env('RTENSOR_WARPS', '8'))
-        rt_cuda_set_budget(int(_env('RTENSOR_BUDGET_MB', '256')) << 20)
+        rt_cuda_set_budget(int(_env('RTENSOR_BUDGET_MB', '64')) << 20)
     except ValueError:
         pass
     for opcode in range(4):
@@ -404,7 +404,7 @@ RPY_EXTERN void rt_cuda_reset(void);
 RPY_EXTERN void rt_cuda_free(long dptr, long n);
 RPY_EXTERN void rt_cuda_set_budget(long bytes);
 RPY_EXTERN long rt_cuda_launch_count(void);
-RPY_EXTERN int rt_cuda_over_budget(void);
+RPY_EXTERN int rt_cuda_needs_gc(long n);
 RPY_EXTERN void rt_cuda_sync(void);
 RPY_EXTERN int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
                               long *outs, int nouts, int threads,
@@ -481,8 +481,8 @@ rt_cuda_free = rffi.llexternal('rt_cuda_free', [lltype.Signed, lltype.Signed],
 rt_cuda_set_budget = rffi.llexternal('rt_cuda_set_budget', [lltype.Signed],
                                      lltype.Void, compilation_info=eci,
                                      releasegil=False)
-rt_cuda_over_budget = rffi.llexternal('rt_cuda_over_budget', [], rffi.INT,
-                                      compilation_info=eci, releasegil=False)
+rt_cuda_needs_gc = rffi.llexternal('rt_cuda_needs_gc', [lltype.Signed], rffi.INT,
+                                   compilation_info=eci, releasegil=False)
 
 rt_cuda_launch_count = rffi.llexternal('rt_cuda_launch_count', [],
                                        lltype.Signed, compilation_info=eci,
@@ -494,10 +494,10 @@ def launch_count():
 def reset_device():
     rt_cuda_reset()
 
-def collect_if_over_budget():
-    if rffi.cast(lltype.Signed, rt_cuda_over_budget()) != 0:
+def collect_if_needed(n):
+    if rffi.cast(lltype.Signed, rt_cuda_needs_gc(n)) != 0:
         rgc.collect(0)
-        if rffi.cast(lltype.Signed, rt_cuda_over_budget()) != 0:
+        if rffi.cast(lltype.Signed, rt_cuda_needs_gc(n)) != 0:
             rgc.collect()
 
 def sync_device():
@@ -645,7 +645,7 @@ def launch_gpu(kernel, inputs):
     outlen = 1 if kernel.sumroot else n
     shape = lltype.nullptr(SHAPEARRAY) if kernel.sumroot else inputs[0].shape
     nout = 1 + len(kernel.outputs)
-    collect_if_over_budget()
+    collect_if_needed(n)
     dptrs = lltype.malloc(SIGNEDARRAY, nin, flavor='raw')
     outs = lltype.malloc(SIGNEDARRAY, nout, flavor='raw')
     ok = True
