@@ -193,6 +193,35 @@ launches per iteration in variant 5 and the 1.15 in variant 2 are the eager
 re-evaluation that the blackhole performs when a guard fails before its
 bridge is compiled; they converge to 1.0 over longer runs.
 
+## App-level measurements
+
+`benchmark/applevel/` holds two plain-Python scripts run on a PyPy translated
+with `--withmod-_tensor` (translate with
+`rpython -Ojit --no-shared pypy/goal/targetpypystandalone.py --withmod-_tensor`,
+about an hour; module options go after the target).  Run them with a low JIT
+threshold, since they iterate a few hundred times:
+
+    ./pypy-c -S --jit threshold=3,function_threshold=3,trace_eagerness=2 benchmark/applevel/chain_unrolled.py 1000000 300
+
+`chain_unrolled.py` writes the four `relu(h*b+b)` steps out; `chain_loop.py`
+uses an inner `for` loop.  Per-iteration microseconds on the RTX 3090, 300
+iterations, with the RPython benchmark and PyTorch for the same chain:
+
+| N | app-level, unrolled | RPython bench (fused) | torch.compile | app-level, inner `for` |
+|---|---|---|---|---|
+| 1e4 | 19.9 | 15.0 | 41.9 | |
+| 1e5 | 20.3 | 15.0 | 43.3 | |
+| 1e6 | 64.6 | 51.6 | 69.0 | 933.3 |
+
+The unrolled chain becomes one fused kernel per iteration from unmodified
+Python: the trace shows a single `tensor_launch` call with the tensor objects
+kept virtual.  With an inner `for` loop, PyPy gives the inner loop its own
+trace, so every inner iteration is a kernel boundary (4 launches, and the
+loop exit re-enters through the interpreter); unrolling short constant loops
+inside the tracer is the missing piece there.  With the default JIT threshold
+(1039 iterations) short scripts spend most of their time in the interpreter,
+where every op is a separate one-node GPU kernel.
+
 ## Pitfalls that produce wrong numbers
 
 - The JIT's default loop threshold is 1039 iterations; the harness sets
