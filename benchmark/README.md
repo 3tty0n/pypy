@@ -208,3 +208,44 @@ bridge is compiled; they converge to 1.0 over longer runs.
 To verify what a run actually launches, an `LD_PRELOAD` shim that counts
 `cuLaunchKernel` calls is the quickest check; launches must grow by exactly
 one per iteration in `fused` mode.
+
+## App-level `_tensor` module
+
+`rpython/rlib/rtensor_nn.py` (autograd `Tensor`, `Linear`, `MLP`, `sgd_step`)
+is also exposed to app-level Python as the built-in module `_tensor`
+(`pypy/module/_tensor/`), so a translated PyPy can run
+
+    import _tensor, tensorlite
+    x = _tensor.tensor([[1.0, 2.0]])
+    layer = tensorlite.Linear(_tensor.tensor([[1.0], [1.0]], requires_grad=True),
+                               _tensor.tensor([0.0], requires_grad=True))
+    y = layer(x)
+    loss = y.sum()
+    loss.backward()
+
+`_tensor.tensor(data, shape=None, requires_grad=False)` accepts nested lists
+(flattened and shape-inferred at app level) and `_tensor.zeros(shape,
+requires_grad=False)`; `Tensor` instances support `add`/`mul`/`__add__`/
+`__mul__`/`relu`/`sum(axis=-1)`/`item`/`matmul`/`reshape`/`add_`/`mul_`/
+`detach`/`backward`/`zero_grad` and the `shape`/`size`/`grad`/`requires_grad`
+properties. This PyPy2's grammar has no `@` operator (no `MatMult` AST node),
+so matrix multiplication is the `matmul` method only, no `__matmul__`.
+`lib_pypy/tensorlite.py` is a pure app-level `Linear`/`MLP`/`sgd_step` built
+on that API (mirroring `rtensor_nn.py`), for `torch`-style user code.
+
+Build a PyPy with the module:
+
+    python2 rpython/bin/rpython -Ojit --withmod-_tensor pypy/goal/targetpypystandalone.py
+
+`--withmod-_tensor` is generated automatically for every directory under
+`pypy/module` that has an `__init__.py`
+(see `all_modules` in `pypy/config/pypyoption.py`), so `_tensor` needed no
+changes to `essential_modules`/`default_modules` there to gain the flag; it
+is simply not enabled by default, so it must be passed explicitly both for
+`pyinteractive.py` and for a real translation.
+
+Tests: `RTENSOR_PYTHON=/home/yusuke/.venvs/triton/bin/python RTENSOR_CPU=1
+python2 pytest.py pypy/module/_tensor/test/ -q` (`RTENSOR_CPU=1` skips the
+GPU device-init path so the untranslated, single-threaded app-level
+interpreter — which is slow — only exercises the CPU tensor ops; sizes in
+the tests are kept to a handful of elements for the same reason).
