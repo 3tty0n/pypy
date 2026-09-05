@@ -22,9 +22,13 @@ ADD, MUL, RELU, SUM = 0, 1, 2, 3
 ARITY = [2, 2, 1, 1]
 NAMES = ['add', 'mul', 'relu', 'sum']
 MAX_INPUTS = 3
+BC_NONE, BC_R_ROW, BC_R_SCALAR, BC_L_ROW, BC_L_SCALAR = 0, 1, 2, 3, 4
+NPARAMS = 5
+AXIS_ALL = -1
 
 NODE = lltype.Struct('TENSOR_NODE', ('opcode', lltype.Signed),
-                     ('a', lltype.Signed), ('b', lltype.Signed))
+                     ('a', lltype.Signed), ('b', lltype.Signed),
+                     ('p', lltype.Signed))
 NODEARRAY = lltype.GcArray(NODE)
 KERNEL = lltype.GcStruct('TENSOR_KERNEL', ('ninputs', lltype.Signed),
                          ('nodes', lltype.Ptr(NODEARRAY)),
@@ -102,8 +106,16 @@ def dev(t):
             attach_buffer(t, dptr, t.size)
     return t.dptr
 
-def eval_op(opcode, a, b):
-    kernel = single_kernel(opcode)
+def cols(t):
+    nd = len(t.shape)
+    if nd > 1:
+        c = t.shape[nd - 1]
+        if c > 0:
+            return c
+    return 1
+
+def eval_op(opcode, a, b, p):
+    kernel = single_kernel(opcode, p)
     if kernel.fn != 0:
         inputs = [a]
         if ARITY[opcode] == 2:
@@ -111,37 +123,79 @@ def eval_op(opcode, a, b):
         r = launch_gpu(kernel, inputs)
         if r:
             return r
-    return eval_op_cpu(opcode, a, b)
+    return eval_op_cpu(opcode, a, b, p)
 
-def eval_op_cpu(opcode, a, b):
-    ha = host(a)
-    n = a.size
+def eval_op_cpu(opcode, a, b, p):
     if opcode == SUM:
-        r = new_tensor(1)
-        s = 0.0
-        for i in range(n):
-            s += ha[i]
-        r.host[0] = s
-        return r
-    r = new_tensor(n, a.shape)
-    hr = r.host
+        return sum_cpu(a, p)
+    ha = host(a)
     if opcode == RELU:
+        n = a.size
+        r = new_tensor(n, a.shape)
+        hr = r.host
         for i in range(n):
             v = ha[i]
             hr[i] = v if v > 0.0 else 0.0
-    else:
-        hb = host(b)
+        return r
+    big = a
+    if p == BC_L_ROW or p == BC_L_SCALAR:
+        big = b
+    n = big.size
+    c = cols(big)
+    hb = host(b)
+    r = new_tensor(n, big.shape)
+    hr = r.host
+    for i in range(n):
+        ia = i
+        ib = i
+        if p == BC_R_ROW:
+            ib = i % c
+        elif p == BC_R_SCALAR:
+            ib = 0
+        elif p == BC_L_ROW:
+            ia = i % c
+        elif p == BC_L_SCALAR:
+            ia = 0
+        assert ia >= 0
+        assert ib >= 0
         if opcode == ADD:
-            for i in range(n):
-                hr[i] = ha[i] + hb[i]
+            hr[i] = ha[ia] + hb[ib]
         else:
-            for i in range(n):
-                hr[i] = ha[i] * hb[i]
+            hr[i] = ha[ia] * hb[ib]
+    return r
+
+def sum_cpu(a, axis):
+    ha = host(a)
+    n = a.size
+    c = cols(a)
+    if axis == 0:
+        m = c
+    elif axis == 1:
+        m = n // c
+    else:
+        m = 1
+    if m <= 0:
+        m = 1
+    r = new_tensor(m)
+    hr = r.host
+    for i in range(m):
+        hr[i] = 0.0
+    for i in range(n):
+        if axis == 0:
+            k = i % c
+        elif axis == 1:
+            k = i // c
+        else:
+            k = 0
+        if k >= m:
+            k = m - 1
+        assert k >= 0
+        hr[k] += ha[i]
     return r
 
 class SingleKernels(object):
     def __init__(self):
-        self.kernels = [_empty_kernel() for i in range(4)]
+        self.kernels = [_empty_kernel() for i in range(4 * NPARAMS)]
 
 def _empty_kernel():
     k = lltype.malloc(KERNEL)
@@ -153,8 +207,31 @@ def _empty_kernel():
     return k
 single_kernels = SingleKernels()
 
-def single_kernel(opcode):
-    return single_kernels.kernels[opcode]
+def param_slot(opcode, p):
+    if opcode == SUM:
+        if p == 0 or p == 1:
+            return p + 1
+        return 0
+    if opcode == RELU:
+        return 0
+    if p > 0 and p < NPARAMS:
+        return p
+    return 0
+
+def slot_param(opcode, slot):
+    if opcode == SUM:
+        return slot - 1
+    return slot
+
+def slot_used(opcode, slot):
+    if opcode == SUM:
+        return slot < 3
+    if opcode == RELU:
+        return slot == 0
+    return True
+
+def single_kernel(opcode, p):
+    return single_kernels.kernels[opcode * NPARAMS + param_slot(opcode, p)]
 
 def init_device():
     try:
@@ -164,30 +241,39 @@ def init_device():
     except ValueError:
         pass
     for opcode in range(4):
-        opcodes = []
-        opcodes.append(opcode)
-        lefts = []
-        lefts.append(0)
-        rights = []
-        rights.append(1 if ARITY[opcode] == 2 else -1)
-        single_kernels.kernels[opcode] = build_kernel(ARITY[opcode], opcodes,
-                                                     lefts, rights)
+        for slot in range(NPARAMS):
+            if not slot_used(opcode, slot):
+                continue
+            opcodes = []
+            opcodes.append(opcode)
+            lefts = []
+            lefts.append(0)
+            rights = []
+            rights.append(1 if ARITY[opcode] == 2 else -1)
+            params = []
+            params.append(slot_param(opcode, slot))
+            single_kernels.kernels[opcode * NPARAMS + slot] = build_kernel(
+                ARITY[opcode], opcodes, lefts, rights, params)
 
-@jit.oopspec("tensor.add(a, b)")
-def tensor_add(a, b):
-    return eval_op(ADD, a, b)
+@jit.oopspec("tensor.add(a, b, bcast)")
+def tensor_add(a, b, bcast):
+    return eval_op(ADD, a, b, bcast)
 
-@jit.oopspec("tensor.mul(a, b)")
-def tensor_mul(a, b):
-    return eval_op(MUL, a, b)
+@jit.oopspec("tensor.mul(a, b, bcast)")
+def tensor_mul(a, b, bcast):
+    return eval_op(MUL, a, b, bcast)
 
 @jit.oopspec("tensor.relu(a)")
 def tensor_relu(a):
-    return eval_op(RELU, a, NULLTENSOR)
+    return eval_op(RELU, a, NULLTENSOR, 0)
 
-@jit.oopspec("tensor.sum(a)")
-def tensor_sum(a):
-    return eval_op(SUM, a, NULLTENSOR)
+@jit.oopspec("tensor.sum(a, axis)")
+def tensor_sum(a, axis):
+    return eval_op(SUM, a, NULLTENSOR, axis)
+
+@jit.oopspec("tensor.ndim(a)")
+def tensor_ndim(a):
+    return len(a.shape)
 
 @jit.oopspec("tensor.size(a)")
 def tensor_size(a):
@@ -221,23 +307,58 @@ def size(t):
         note_size(n)
     return n
 
-def same_size(a, b):
-    if size(a) != size(b):
-        raise ValueError("shape mismatch")
+def bcast_of(big, m):
+    if m == 1:
+        return BC_R_SCALAR
+    if tensor_ndim(big) == 2 and tensor_shape(big, 1) == m:
+        return BC_R_ROW
+    raise ValueError("shape mismatch")
+
+def bcast(a, b):
+    na = size(a)
+    nb = size(b)
+    if na == nb:
+        return BC_NONE
+    if na > nb:
+        return bcast_of(a, nb)
+    return bcast_of(b, na) + 2
 
 def add(a, b):
-    same_size(a, b)
-    return tensor_add(a, b)
+    return tensor_add(a, b, bcast(a, b))
 
 def mul(a, b):
-    same_size(a, b)
-    return tensor_mul(a, b)
+    return tensor_mul(a, b, bcast(a, b))
+
+def add_(a, b):
+    return add(a, b)
+
+def mul_(a, b):
+    return mul(a, b)
 
 def relu(a):
     return tensor_relu(a)
 
-def sum(a):
-    return tensor_sum(a)
+def sum(a, axis=AXIS_ALL):
+    return tensor_sum(a, axis)
+
+def reshape(a, shape_list):
+    n = 1
+    for d in shape_list:
+        n *= d
+    a = tensor_force(a)
+    if n != a.size:
+        raise ValueError("shape mismatch")
+    shape = lltype.malloc(SHAPEARRAY, len(shape_list))
+    for i in range(len(shape_list)):
+        shape[i] = shape_list[i]
+    r = lltype.malloc(TENSOR)
+    r.size = a.size
+    r.shape = shape
+    r.dptr = a.dptr
+    r.host = a.host
+    r.extra = lltype.nullptr(TENSORARRAY)
+    r.buf = a.buf
+    return r
 
 def item(a):
     return tensor_item(a)
@@ -286,7 +407,7 @@ def kernel_key(kernel):
     parts = [str(kernel.ninputs), str(kernel.n)]
     for i in range(len(kernel.nodes)):
         node = kernel.nodes[i]
-        parts.append('%d:%d:%d' % (node.opcode, node.a, node.b))
+        parts.append('%d:%d:%d:%d' % (node.opcode, node.a, node.b, node.p))
     for i in range(len(kernel.outputs)):
         parts.append('o%d' % kernel.outputs[i])
     return ','.join(parts)
@@ -305,11 +426,12 @@ def compile_or_reuse(kernel):
     cache_kernel(key, kernel)
     return kernel
 
-def set_node(kernel, i, opcode, a, b):
+def set_node(kernel, i, opcode, a, b, p):
     node = kernel.nodes[i]
     node.opcode = opcode
     node.a = a
     node.b = b
+    node.p = p
 
 def finish_kernel(kernel):
     n = len(kernel.nodes)
@@ -317,10 +439,10 @@ def finish_kernel(kernel):
     kernel.fn = compile_gpu(kernel)
     return kernel
 
-def build_kernel(ninputs, opcodes, lefts, rights):
+def build_kernel(ninputs, opcodes, lefts, rights, params):
     kernel = new_kernel(ninputs, len(opcodes))
     for i in range(len(opcodes)):
-        set_node(kernel, i, opcodes[i], lefts[i], rights[i])
+        set_node(kernel, i, opcodes[i], lefts[i], rights[i], params[i])
     return finish_kernel(kernel)
 
 def launch(kernel, a, b, c):
@@ -329,7 +451,11 @@ def launch(kernel, a, b, c):
         values.append(b)
     if kernel.ninputs > 2:
         values.append(c)
-    if kernel.fn != 0 and (kernel.n == 0 or kernel.n == a.size):
+    nmax = 0
+    for k in range(len(values)):
+        if values[k].size > nmax:
+            nmax = values[k].size
+    if kernel.fn != 0 and (kernel.n == 0 or kernel.n == nmax):
         r = launch_gpu(kernel, values)
         if r:
             return r
@@ -339,7 +465,7 @@ def launch(kernel, a, b, c):
         opcode = node.opcode
         assert opcode >= 0
         right = values[node.b] if node.b >= 0 else NULLTENSOR
-        values.append(eval_op(opcode, values[node.a], right))
+        values.append(eval_op(opcode, values[node.a], right, node.p))
     result = values[len(values) - 1]
     nout = len(kernel.outputs)
     if nout > 0:
@@ -408,7 +534,8 @@ RPY_EXTERN int rt_cuda_needs_gc(long n);
 RPY_EXTERN void rt_cuda_sync(void);
 RPY_EXTERN int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
                               long *outs, int nouts, int threads,
-                              long elems_per_block, int shared, int nextra);
+                              long elems_per_block, int shared, int nextra,
+                              long cols);
 """],
     libraries=['cuda'])
 rt_cuda_load = rffi.llexternal('rt_cuda_load', [rffi.CCHARP, rffi.CCHARP],
@@ -418,7 +545,7 @@ rt_cuda_launch = rffi.llexternal(
     'rt_cuda_launch',
     [lltype.Signed, rffi.CArrayPtr(lltype.Signed), rffi.INT, lltype.Signed,
      rffi.CArrayPtr(lltype.Signed), rffi.INT, rffi.INT, lltype.Signed,
-     rffi.INT, rffi.INT],
+     rffi.INT, rffi.INT, lltype.Signed],
     rffi.INT, compilation_info=eci,
                                 releasegil=False)
 rt_cuda_available = rffi.llexternal('rt_cuda_available', [], rffi.INT,
@@ -503,6 +630,44 @@ def collect_if_needed(n):
 def sync_device():
     rt_cuda_sync()
 
+def set_mode(modes, v, m):
+    if modes[v] < 0:
+        modes[v] = m
+        return True
+    return modes[v] == m
+
+def input_modes(kernel):
+    nin = kernel.ninputs
+    nodes = kernel.nodes
+    modes = [-1] * (nin + len(nodes))
+    for k in range(len(nodes) - 1, -1, -1):
+        node = nodes[k]
+        m = modes[nin + k]
+        if m < 0:
+            m = 0
+        ma = m
+        mb = m
+        if node.opcode == ADD or node.opcode == MUL:
+            if node.p == BC_R_ROW:
+                mb = 1
+            elif node.p == BC_R_SCALAR:
+                mb = 2
+            elif node.p == BC_L_ROW:
+                ma = 1
+            elif node.p == BC_L_SCALAR:
+                ma = 2
+        if not set_mode(modes, node.a, ma):
+            return []
+        if node.b >= 0 and not set_mode(modes, node.b, mb):
+            return []
+    result = []
+    for i in range(nin):
+        m = modes[i]
+        if m < 0:
+            m = 0
+        result.append(m)
+    return result
+
 def to_ttir(kernel, name):
     nodes = kernel.nodes
     nin = kernel.ninputs
@@ -510,29 +675,65 @@ def to_ttir(kernel, name):
     masked = kernel.n == 0 or kernel.n % BLOCK != 0
     T = 'tensor<%dxf64>' % BLOCK
     P = 'tensor<%dx!tt.ptr<f64>>' % BLOCK
+    I32 = 'tensor<%dxi32>' % BLOCK
+    I64 = 'tensor<%dxi64>' % BLOCK
+    I1 = 'tensor<%dxi1>' % BLOCK
+    modes = input_modes(kernel)
+    if len(modes) != nin:
+        return ''
+    axis = AXIS_ALL
+    if kernel.sumroot:
+        axis = nodes[len(nodes) - 1].p
+    need_mod = axis == 0
+    need_div = axis == 1
+    need_zero_off = False
+    for i in range(nin):
+        if modes[i] == 1:
+            need_mod = True
+        elif modes[i] == 2:
+            need_zero_off = True
     params = ['%%in%d: !tt.ptr<f64>' % i for i in range(nin)]
     params.append('%out: !tt.ptr<f64>')
     for k in range(len(kernel.outputs)):
         params.append('%%out%d: !tt.ptr<f64>' % k)
     lines = ['module {',
-             '  tt.func public @%s(%s, %%n: i64) '
+             '  tt.func public @%s(%s, %%n: i64, %%c: i64) '
              'attributes {noinline = false} {' % (name, ', '.join(params)),
              '    %%zero = arith.constant dense<0.0> : %s' % T,
              '    %%bs = arith.constant %d : i32' % BLOCK,
              '    %pid = tt.get_program_id x : i32',
              '    %start = arith.muli %pid, %bs : i32',
              '    %%range = tt.make_range {end = %d : i32, start = 0 : i32} '
-             ': tensor<%dxi32>' % (BLOCK, BLOCK),
-             '    %%starts = tt.splat %%start : i32 -> tensor<%dxi32>' % BLOCK,
-             '    %%offs = arith.addi %%starts, %%range : tensor<%dxi32>' % BLOCK,
-             '    %%offs64 = arith.extsi %%offs : tensor<%dxi32> to tensor<%dxi64>'
-             % (BLOCK, BLOCK),
-             '    %%ns = tt.splat %%n : i64 -> tensor<%dxi64>' % BLOCK,
-             '    %%mask = arith.cmpi slt, %%offs64, %%ns : tensor<%dxi64>' % BLOCK]
+             ': %s' % (BLOCK, I32),
+             '    %%starts = tt.splat %%start : i32 -> %s' % I32,
+             '    %%offs = arith.addi %%starts, %%range : %s' % I32,
+             '    %%offs64 = arith.extsi %%offs : %s to %s' % (I32, I64),
+             '    %%ns = tt.splat %%n : i64 -> %s' % I64,
+             '    %%mask = arith.cmpi slt, %%offs64, %%ns : %s' % I64]
+    if need_mod or need_div:
+        lines.append('    %%cs = tt.splat %%c : i64 -> %s' % I64)
+    if need_mod:
+        lines.append('    %%offsm = arith.remsi %%offs64, %%cs : %s' % I64)
+    if need_div:
+        lines.append('    %%offsd = arith.divsi %%offs64, %%cs : %s' % I64)
+    if need_zero_off:
+        lines.append('    %%zoffs = arith.constant dense<0> : %s' % I32)
+    if masked:
+        tmask = '%mask'
+    else:
+        tmask = '%tmask'
+        lines.append('    %%tmask = arith.constant dense<true> : %s' % I1)
     for i in range(nin):
         lines.append('    %%p%d = tt.splat %%in%d : !tt.ptr<f64> -> %s' % (i, i, P))
-        lines.append('    %%q%d = tt.addptr %%p%d, %%offs : %s, tensor<%dxi32>'
-                     % (i, i, P, BLOCK))
+        if modes[i] == 1:
+            lines.append('    %%q%d = tt.addptr %%p%d, %%offsm : %s, %s'
+                         % (i, i, P, I64))
+        elif modes[i] == 2:
+            lines.append('    %%q%d = tt.addptr %%p%d, %%zoffs : %s, %s'
+                         % (i, i, P, I32))
+        else:
+            lines.append('    %%q%d = tt.addptr %%p%d, %%offs : %s, %s'
+                         % (i, i, P, I32))
         if masked:
             lines.append('    %%v%d = tt.load %%q%d, %%mask, %%zero : %s' % (i, i, P))
         else:
@@ -551,31 +752,41 @@ def to_ttir(kernel, name):
             lines.append('    %%c%d = arith.cmpf ogt, %%v%d, %%zero : %s'
                          % (v, node.a, T))
             lines.append('    %%v%d = arith.select %%c%d, %%v%d, %%zero : '
-                         'tensor<%dxi1>, %s' % (v, v, node.a, BLOCK, T))
+                         '%s, %s' % (v, v, node.a, I1, T))
         elif k == len(nodes) - 1:
-            lines.append('    %%v%d = "tt.reduce"(%%v%d) <{axis = 0 : i32}> ({'
-                         % (v, node.a))
-            lines.append('    ^bb0(%x: f64, %y: f64):')
-            lines.append('      %r = arith.addf %x, %y : f64')
-            lines.append('      tt.reduce.return %r : f64')
-            lines.append('    }) : (%s) -> f64' % T)
-            lines.append('    %true = arith.constant true')
-            lines.append('    %%o = tt.atomic_rmw fadd, acq_rel, gpu, %%out, %%v%d, '
-                         '%%true : (!tt.ptr<f64>, f64, i1) -> f64' % v)
+            if axis == 0 or axis == 1:
+                offs = '%offsm'
+                if axis == 1:
+                    offs = '%offsd'
+                lines.append('    %%po = tt.splat %%out : !tt.ptr<f64> -> %s' % P)
+                lines.append('    %%qo = tt.addptr %%po, %s : %s, %s'
+                             % (offs, P, I64))
+                lines.append('    %%v%d = tt.atomic_rmw fadd, acq_rel, gpu, '
+                             '%%qo, %%v%d, %s : (%s, %s, %s) -> %s'
+                             % (v, node.a, tmask, P, T, I1, T))
+            else:
+                lines.append('    %%v%d = "tt.reduce"(%%v%d) <{axis = 0 : i32}> ({'
+                             % (v, node.a))
+                lines.append('    ^bb0(%x: f64, %y: f64):')
+                lines.append('      %r = arith.addf %x, %y : f64')
+                lines.append('      tt.reduce.return %r : f64')
+                lines.append('    }) : (%s) -> f64' % T)
+                lines.append('    %true = arith.constant true')
+                lines.append('    %%o = tt.atomic_rmw fadd, acq_rel, gpu, %%out, %%v%d, '
+                             '%%true : (!tt.ptr<f64>, f64, i1) -> f64' % v)
         else:
             return ''
     if not kernel.sumroot:
         lines.append('    %%po = tt.splat %%out : !tt.ptr<f64> -> %s' % P)
-        lines.append('    %%qo = tt.addptr %%po, %%offs : %s, tensor<%dxi32>'
-                     % (P, BLOCK))
+        lines.append('    %%qo = tt.addptr %%po, %%offs : %s, %s' % (P, I32))
         if masked:
             lines.append('    tt.store %%qo, %%v%d, %%mask : %s' % (last, P))
         else:
             lines.append('    tt.store %%qo, %%v%d : %s' % (last, P))
     for k in range(len(kernel.outputs)):
         lines.append('    %%po%d = tt.splat %%out%d : !tt.ptr<f64> -> %s' % (k, k, P))
-        lines.append('    %%qo%d = tt.addptr %%po%d, %%offs : %s, tensor<%dxi32>'
-                     % (k, k, P, BLOCK))
+        lines.append('    %%qo%d = tt.addptr %%po%d, %%offs : %s, %s'
+                     % (k, k, P, I32))
         if masked:
             lines.append('    tt.store %%qo%d, %%v%d, %%mask : %s'
                          % (k, kernel.outputs[k], P))
@@ -641,9 +852,25 @@ def _compile_gpu(kernel):
 
 def launch_gpu(kernel, inputs):
     nin = len(inputs)
-    n = inputs[0].size
-    outlen = 1 if kernel.sumroot else n
-    shape = lltype.nullptr(SHAPEARRAY) if kernel.sumroot else inputs[0].shape
+    big = 0
+    for k in range(1, nin):
+        if inputs[k].size > inputs[big].size:
+            big = k
+    n = inputs[big].size
+    c = cols(inputs[big])
+    outlen = n
+    shape = inputs[big].shape
+    if kernel.sumroot:
+        axis = kernel.nodes[len(kernel.nodes) - 1].p
+        if axis == 0:
+            outlen = c
+        elif axis == 1:
+            outlen = n // c
+        else:
+            outlen = 1
+        if outlen <= 0:
+            outlen = 1
+        shape = _shape1(outlen)
     nout = 1 + len(kernel.outputs)
     collect_if_needed(n)
     dptrs = lltype.malloc(SIGNEDARRAY, nin, flavor='raw')
@@ -666,14 +893,14 @@ def launch_gpu(kernel, inputs):
             outs, rffi.cast(rffi.INT, nout),
             rffi.cast(rffi.INT, kernel.threads), config.block,
             rffi.cast(rffi.INT, kernel.shared),
-            rffi.cast(rffi.INT, kernel.nextra))) != 0
+            rffi.cast(rffi.INT, kernel.nextra), c)) != 0
     result = NULLTENSOR
     if ok:
         result = device_tensor(outlen, outs[0], shape)
         if nout > 1:
             result.extra = lltype.malloc(TENSORARRAY, nout - 1)
             for k in range(1, nout):
-                result.extra[k - 1] = device_tensor(n, outs[k], inputs[0].shape)
+                result.extra[k - 1] = device_tensor(n, outs[k], inputs[big].shape)
     lltype.free(dptrs, flavor='raw')
     lltype.free(outs, flavor='raw')
     return result

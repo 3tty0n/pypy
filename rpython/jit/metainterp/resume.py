@@ -356,8 +356,8 @@ class ResumeDataVirtualAdder(VirtualVisitor):
         else:
             return VStrSliceInfo()
 
-    def visit_vtensor(self, opcode):
-        return VTensorInfo(opcode)
+    def visit_vtensor(self, opcode, param):
+        return VTensorInfo(opcode, param)
 
     def register_virtual_fields(self, virtualbox, _fieldboxes):
         tagged = self.liveboxes_from_env.get(virtualbox, UNASSIGNEDVIRTUAL)
@@ -818,12 +818,13 @@ class VStrSliceInfo(AbstractVirtualInfo):
 
 
 class VTensorInfo(AbstractVirtualInfo):
-    def __init__(self, opcode):
+    def __init__(self, opcode, param):
         self.opcode = opcode
+        self.param = param
 
     @specialize.argtype(1)
     def allocate(self, decoder, index):
-        tensor = decoder.tensor_op(self.opcode, self.fieldnums)
+        tensor = decoder.tensor_op(self.opcode, self.param, self.fieldnums)
         decoder.virtuals_cache.set_ptr(index, tensor)
         return tensor
 
@@ -1167,13 +1168,16 @@ class ResumeDataBoxReader(AbstractResumeDataReader):
         return self.metainterp.execute_and_record_varargs(
             rop.CALL_R, [ConstInt(func), str1box, str2box], calldescr)
 
-    def tensor_op(self, opcode, fieldnums):
+    def tensor_op(self, opcode, param, fieldnums):
+        from rpython.rlib import rtensor
         cic = self.metainterp.staticdata.callinfocollection
         calldescr, func = cic.callinfo_for_oopspec(
             EffectInfo.OS_TENSOR_ADD + opcode)
         args = [ConstInt(func)]
         for num in fieldnums:
             args.append(self.decode_box(num, REF))
+        if opcode != rtensor.RELU:
+            args.append(ConstInt(param))
         return self.metainterp.execute_and_record_varargs(
             rop.CALL_R, args, calldescr)
 
@@ -1498,7 +1502,7 @@ class ResumeDataDirectReader(AbstractResumeDataReader):
         result = funcptr(str1, str2)
         return lltype.cast_opaque_ptr(llmemory.GCREF, result)
 
-    def tensor_op(self, opcode, fieldnums):
+    def tensor_op(self, opcode, param, fieldnums):
         from rpython.rlib import rtensor
         a = lltype.cast_opaque_ptr(rtensor.TENSORPTR,
                                    self.decode_ref(fieldnums[0]))
@@ -1507,7 +1511,7 @@ class ResumeDataDirectReader(AbstractResumeDataReader):
             b = lltype.cast_opaque_ptr(rtensor.TENSORPTR,
                                        self.decode_ref(fieldnums[1]))
         assert opcode >= 0
-        result = rtensor.eval_op(opcode, a, b)
+        result = rtensor.eval_op(opcode, a, b, param)
         return lltype.cast_opaque_ptr(llmemory.GCREF, result)
 
     def slice_string(self, strnum, startnum, lengthnum):

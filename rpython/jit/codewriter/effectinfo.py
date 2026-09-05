@@ -112,6 +112,7 @@ class EffectInfo(object):
     OS_TENSOR_SIZE              = 135
     OS_TENSOR_SHAPE             = 136
     OS_TENSOR_OUTPUT            = 137
+    OS_TENSOR_NDIM              = 138
 
     # for debugging:
     _OS_CANRAISE = set([

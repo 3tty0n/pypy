@@ -22,9 +22,10 @@ class VTensorInfo(AbstractVirtualPtrInfo):
     launched_box = None
     node_index = -1
 
-    def __init__(self, opcode, args, opt=None):
+    def __init__(self, opcode, args, param, opt=None):
         self.opcode = opcode
         self.args = args
+        self.param = param
         self.opt = opt
         self._is_virtual = True
 
@@ -37,8 +38,8 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         self._is_virtual = False
         if self.launched_kernel:
             return self.force_as_extra_output(op, optforce)
-        leaves, opcodes, lefts, rights, infos = [], [], [], [], []
-        _collect_indexed(self, leaves, opcodes, lefts, rights, infos)
+        leaves, opcodes, lefts, rights, params, infos = [], [], [], [], [], []
+        _collect_indexed(self, leaves, opcodes, lefts, rights, params, infos)
         n = self.opt.static_size(leaves) if self.opt is not None else 0
         kernel = lltype.malloc(rtensor.KERNEL)
         kernel.ninputs = len(leaves)
@@ -51,6 +52,7 @@ class VTensorInfo(AbstractVirtualPtrInfo):
             node.opcode = opcodes[i]
             node.a = lefts[i]
             node.b = rights[i]
+            node.p = params[i]
         if self.opt is not None:
             self.opt.pending.append(kernel)
         else:
@@ -86,14 +88,28 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         op.set_forwarded(newop)
         return newop
 
+    def big_arg(self):
+        if (self.param == rtensor.BC_L_ROW or
+                self.param == rtensor.BC_L_SCALAR):
+            return 1
+        return 0
+
     def size_leaf(self):
         if self.opcode == rtensor.SUM:
             return None
-        box = self.args[0]
+        box = self.args[self.big_arg()]
         sub = vtensor_info(box)
         if sub is not None:
             return sub.size_leaf()
         return box
+
+    def is_scalar(self):
+        if self.opcode == rtensor.SUM:
+            return self.param == rtensor.AXIS_ALL
+        sub = vtensor_info(self.args[self.big_arg()])
+        if sub is not None:
+            return sub.is_scalar()
+        return False
 
     def _visitor_walk_recursive(self, instbox, visitor):
         visitor.register_virtual_fields(instbox, self.args)
@@ -104,11 +120,11 @@ class VTensorInfo(AbstractVirtualPtrInfo):
 
     @specialize.argtype(1)
     def visitor_dispatch_virtual_type(self, visitor):
-        return visitor.visit_vtensor(self.opcode)
+        return visitor.visit_vtensor(self.opcode, self.param)
 
-def _collect_indexed(info, leaves, opcodes, lefts, rights, infos):
+def _collect_indexed(info, leaves, opcodes, lefts, rights, params, infos):
     _collect_leaves(info, leaves)
-    _emit_nodes(info, leaves, opcodes, lefts, rights, infos)
+    _emit_nodes(info, leaves, opcodes, lefts, rights, params, infos)
 
 def _collect_leaves(info, leaves):
     for box in info.args:
@@ -124,13 +140,14 @@ def _contains(leaves, box):
             return True
     return False
 
-def _emit_nodes(info, leaves, opcodes, lefts, rights, infos):
+def _emit_nodes(info, leaves, opcodes, lefts, rights, params, infos):
     idx = [-1, -1]
     for i in range(len(info.args)):
         box = info.args[i]
         sub = vtensor_info(box)
         if sub is not None:
-            idx[i] = _emit_nodes(sub, leaves, opcodes, lefts, rights, infos)
+            idx[i] = _emit_nodes(sub, leaves, opcodes, lefts, rights, params,
+                                 infos)
         else:
             for j in range(len(leaves)):
                 if leaves[j] is box:
@@ -138,6 +155,7 @@ def _emit_nodes(info, leaves, opcodes, lefts, rights, infos):
     opcodes.append(info.opcode)
     lefts.append(idx[0])
     rights.append(idx[1])
+    params.append(info.param)
     infos.append(info)
     return len(leaves) + len(opcodes) - 1
 
@@ -179,8 +197,15 @@ class OptTensor(Optimization):
         idx = effectinfo.oopspecindex
         if EffectInfo.OS_TENSOR_ADD <= idx <= EffectInfo.OS_TENSOR_SUM:
             opcode = idx - EffectInfo.OS_TENSOR_ADD
-            args = [get_box_replacement(op.getarg(i))
-                    for i in range(1, op.numargs())]
+            nargs = rtensor.ARITY[opcode]
+            param = 0
+            if opcode != rtensor.RELU:
+                pbox = get_box_replacement(op.getarg(1 + nargs))
+                if not pbox.is_constant():
+                    return self.emit(op)
+                param = pbox.getint()
+            args = [get_box_replacement(op.getarg(1 + i))
+                    for i in range(nargs)]
             for box in args:
                 sub = vtensor_info(box)
                 if sub is not None and sub.launched_kernel:
@@ -189,7 +214,7 @@ class OptTensor(Optimization):
             if self._nleaves(args) > rtensor.MAX_INPUTS:
                 for box in args:
                     self.optimizer.force_box(box)
-            info = VTensorInfo(opcode, args, self)
+            info = VTensorInfo(opcode, args, param, self)
             op = self.replace_op_with(op, op.getopnum())
             op.set_forwarded(info)
             self.last_emitted_operation = REMOVED
@@ -200,11 +225,15 @@ class OptTensor(Optimization):
     def optimize_CALL_I(self, op):
         effectinfo = op.getdescr().get_extra_info()
         idx = effectinfo.oopspecindex
-        if idx == EffectInfo.OS_TENSOR_SIZE or idx == EffectInfo.OS_TENSOR_SHAPE:
+        if (idx == EffectInfo.OS_TENSOR_SIZE or
+                idx == EffectInfo.OS_TENSOR_SHAPE or
+                idx == EffectInfo.OS_TENSOR_NDIM):
             info = vtensor_info(op.getarg(1))
             if info is not None:
                 leaf = info.size_leaf()
                 if leaf is None:
+                    if not info.is_scalar():
+                        return self.emit(op)
                     self.make_constant(op, ConstInt(1))
                     self.last_emitted_operation = REMOVED
                     return
@@ -219,7 +248,7 @@ class OptTensor(Optimization):
 
     def _nleaves(self, args):
         leaves = []
-        _collect_leaves(VTensorInfo(0, args), leaves)
+        _collect_leaves(VTensorInfo(0, args, 0), leaves)
         return len(leaves)
 
     def optimize_GUARD_NO_EXCEPTION(self, op):

@@ -32,7 +32,7 @@ class VirtualVisitor(object):
     def visit_vstrslice(self, is_unicode=False):
         raise NotImplementedError("abstract base class")
 
-    def visit_vtensor(self, opcode):
+    def visit_vtensor(self, opcode, param):
         raise NotImplementedError("abstract base class")
 
     def register_virtual_fields(self, virtualbox, fieldboxes):

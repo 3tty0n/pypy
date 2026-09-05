@@ -26,31 +26,31 @@ def run(variant, k, h, b, iters):
         driver.jit_merge_point(k=k, variant=variant)
         j = 0
         while j < k:
-            h = tensor_relu(tensor_add(tensor_mul(h, b), b))
+            h = tensor_relu(tensor_add(tensor_mul(h, b, 0), b))
             j += 1
         if variant == 1:
             if i % 7 == 0:
-                h = tensor_add(h, b)
+                h = tensor_add(h, b, 0)
         elif variant == 2:
             h = tensor_force(h)
             if i % 7 == 0:
-                h = tensor_add(h, b)
+                h = tensor_add(h, b, 0)
         elif variant == 3:
-            if tensor_item(tensor_sum(h)) > 0.0:
-                h = tensor_add(h, b)
+            if tensor_item(tensor_sum(h, -1)) > 0.0:
+                h = tensor_add(h, b, 0)
         elif variant == 4:
             try:
                 if i % 5 == 0:
                     raise ValueError
-                h = tensor_add(h, b)
+                h = tensor_add(h, b, 0)
             except ValueError:
-                h = tensor_mul(h, b)
+                h = tensor_mul(h, b, 0)
         elif variant == 5:
             if i % 50 == 0:
                 os.write(sink.fd, "step\n")
-            h = tensor_add(h, b)
+            h = tensor_add(h, b, 0)
         i += 1
-    return tensor_item(tensor_sum(h))
+    return tensor_item(tensor_sum(h, -1))
 
 def entry_point(argv):
     if len(argv) != 6:
