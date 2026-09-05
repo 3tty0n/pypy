@@ -17,12 +17,15 @@ def run_mlp(iters):
     x = torch.tensor([(i % 7) - 3.0 for i in range(rows * MLP_D)],
                      dtype=torch.float64, device=dev).reshape(rows, MLP_D)
     layers = [mlp_layer(), mlp_layer(), mlp_layer()]
-    h = x
-    for _ in range(iters):
-        y = h
+    def forward(y):
         for W, b in layers:
             y = torch.relu(y @ W + b)
-        h = y
+        return y
+    if mode == "compile":
+        forward = torch.compile(forward, dynamic=False)
+    h = x
+    for _ in range(iters):
+        h = forward(h)
     torch.cuda.synchronize()
     return h.sum().item()
 

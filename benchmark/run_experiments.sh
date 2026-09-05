@@ -29,4 +29,10 @@ for rep in $(seq $REPS); do for v in 1 2 3 4 5; do for n in 10000 1000000; do
   torch compile $v 4 $n $ITERS >> "$OUT/torch.tsv"
   torch eager $v 4 $n $ITERS >> "$OUT/torch.tsv"
 done; done; done
+echo -e "$HEADER" > "$OUT/rtensor_mlp.tsv"
+for n in 25600 256000; do for rep in $(seq $REPS); do
+  for mode in fused eager nojit; do ours $mode 6 1 $n $ITERS >> "$OUT/rtensor_mlp.tsv"; done
+  torch compile 6 1 $n $ITERS >> "$OUT/torch.tsv"
+  torch eager 6 1 $n $ITERS >> "$OUT/torch.tsv"
+done; done
 python3 "$HERE/summarize.py" "$OUT"/*.tsv | tee "$OUT/summary.txt"

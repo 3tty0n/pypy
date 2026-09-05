@@ -130,6 +130,21 @@ reports for the same step function:
 | 4 `try/except` around the chain | 64.3 | 1.00 | 333.0 | 1 / 0 (recompiles, then eager) | 343.2 |
 | 5 host write to `/dev/null` | 68.7 | 1.12 | 333.6 | 2 / 1 | 343.0 |
 
+Small model (variant 6): a 3-layer MLP `relu(x @ W + b)` with D=256 and
+rows = N/256, float64, matmul delegated to cuBLAS (never fused) and the bias
+add plus relu fused into one Triton kernel per layer (3 launches per
+iteration in `fused`, 6 in `eager`).  Per-iteration microseconds:
+
+| rows | fused | eager (ours) | torch.compile | torch eager |
+|---|---|---|---|---|
+| 100 | 300.9 | 314.8 | 390.9 | 386.6 |
+| 1000 | 1064.9 | 1042.4 | 1269.5 | 1256.1 |
+
+The float64 matmul dominates on this GPU (1/64-rate fp64), so fusion of the
+epilogue is worth only a few percent here and `torch.compile` gains nothing
+over eager either; the point of the row is that the wrapper layer, cuBLAS
+delegation and fusion compose, and that checksums agree with PyTorch.
+
 Variant 3 is a real force in every system (the value is needed on the host),
 so both produce two kernels.  Variants 1 and 4 depend on the loop counter;
 Dynamo specialises on the integer, hits its recompilation limit and falls back

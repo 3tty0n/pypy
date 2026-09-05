@@ -8,8 +8,8 @@ class Sink(object):
     fd = -1
 sink = Sink()
 
-driver = jit.JitDriver(greens=['k', 'variant'], reds='auto')
-mlp_driver = jit.JitDriver(greens=[], reds='auto')
+driver = jit.JitDriver(greens=['k', 'variant'], reds='auto', is_recursive=True)
+mlp_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 
 MLP_D = 256
 
@@ -66,7 +66,7 @@ def run(variant, k, h, b, iters):
         driver.jit_merge_point(k=k, variant=variant)
         j = 0
         while j < k:
-            h = tensor_relu(tensor_add(tensor_mul(h, b, 0), b))
+            h = tensor_relu(tensor_add(tensor_mul(h, b, 0), b, 0))
             j += 1
         if variant == 1:
             if i % 7 == 0:
