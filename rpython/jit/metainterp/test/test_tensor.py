@@ -1,3 +1,4 @@
+import math
 from rpython.jit.metainterp.test.support import LLJitMixin
 from rpython.rlib.jit import JitDriver
 from rpython.rlib import rtensor, rtensor_nn
@@ -608,3 +609,235 @@ class TestAutograd(LLJitMixin):
         assert losses[0] > losses[-1]
         res = self.meta_interp(f, [6])
         assert abs(res - losses[-1]) < 1e-9
+
+
+TD, TH, TROWS = 8, 2, 4
+TEPS = 1e-05
+
+
+def _init_weight(rows, cols):
+    t = rtensor.zeros([rows, cols])
+    for i in range(rows * cols):
+        t.host[i] = float((i * 7) % 13 - 6) / TD
+    return t
+
+
+def _ref_weight(rows, cols):
+    return [[float((i * cols + j) * 7 % 13 - 6) / TD for j in range(cols)]
+            for i in range(rows)]
+
+
+def _ref_matmul(a, b):
+    return [[sum([a[i][k] * b[k][j] for k in range(len(b))])
+             for j in range(len(b[0]))] for i in range(len(a))]
+
+
+def _ref_transpose(m):
+    return [[m[i][j] for i in range(len(m))] for j in range(len(m[0]))]
+
+
+def _ref_softmax(m):
+    out = []
+    for row in m:
+        top = max(row)
+        e = [math.exp(v - top) for v in row]
+        tot = sum(e)
+        out.append([v / tot for v in e])
+    return out
+
+
+def _ref_layernorm(m, gamma, beta):
+    out = []
+    for row in m:
+        c = len(row)
+        mu = sum(row) / float(c)
+        var = sum([(v - mu) ** 2 for v in row]) / float(c)
+        den = math.sqrt(var + TEPS)
+        out.append([(row[j] - mu) / den * gamma[j] + beta[j]
+                    for j in range(c)])
+    return out
+
+
+def _ref_input(rows, cols):
+    return [[((i * cols + j) % 7) - 3.0 for j in range(cols)]
+            for i in range(rows)]
+
+
+def _ref_block(x):
+    dh = TD // TH
+    gamma = [1.0] * TD
+    beta = [0.0] * TD
+    h = _ref_layernorm(x, gamma, beta)
+    acc = None
+    for _ in range(TH):
+        q = _ref_matmul(h, _ref_weight(TD, dh))
+        k = _ref_matmul(h, _ref_weight(TD, dh))
+        v = _ref_matmul(h, _ref_weight(TD, dh))
+        scores = _ref_matmul(q, _ref_transpose(k))
+        scale = 1.0 / math.sqrt(dh)
+        scores = [[c * scale for c in row] for row in scores]
+        head = _ref_matmul(_ref_softmax(scores), v)
+        head = _ref_matmul(head, _ref_weight(dh, TD))
+        if acc is None:
+            acc = head
+        else:
+            acc = [[acc[i][j] + head[i][j] for j in range(TD)]
+                   for i in range(len(acc))]
+    x = [[x[i][j] + acc[i][j] for j in range(TD)] for i in range(len(x))]
+    h2 = _ref_layernorm(x, gamma, beta)
+    y = h2
+    for _ in range(2):
+        y = _ref_matmul(y, _ref_weight(TD, TD))
+        y = [[max(v + 0.01, 0.0) for v in row] for row in y]
+    return [[x[i][j] + y[i][j] for j in range(TD)] for i in range(len(x))]
+
+
+def _make_block():
+    heads = []
+    dh = TD // TH
+    for _ in range(TH):
+        heads.append(rtensor_nn.Head(
+            rtensor_nn.Tensor(_init_weight(TD, dh)),
+            rtensor_nn.Tensor(_init_weight(TD, dh)),
+            rtensor_nn.Tensor(_init_weight(TD, dh)),
+            rtensor_nn.Tensor(_init_weight(dh, TD))))
+    layers = []
+    for _ in range(2):
+        bias = rtensor.zeros([TD])
+        for i in range(TD):
+            bias.host[i] = 0.01
+        layers.append(rtensor_nn.Linear(
+            rtensor_nn.Tensor(_init_weight(TD, TD)),
+            rtensor_nn.Tensor(bias)))
+    ones = rtensor.zeros([TD])
+    for i in range(TD):
+        ones.host[i] = 1.0
+    zeros = rtensor.zeros([TD])
+    for i in range(TD):
+        zeros.host[i] = 0.0
+    return rtensor_nn.TransformerBlock(
+        heads, rtensor_nn.Tensor(ones), rtensor_nn.Tensor(zeros),
+        rtensor_nn.Tensor(ones), rtensor_nn.Tensor(zeros),
+        rtensor_nn.MLP(layers), TEPS)
+
+
+class TestTransformer(LLJitMixin):
+
+    def setup_method(self, meth):
+        rtensor.policy.static = True
+        rtensor.policy.seen = []
+
+    def test_softmax_rows(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
+        def f(n):
+            x = rtensor.zeros([3, 4])
+            for i in range(12):
+                x.host[i] = ((i * i) % 7) - 3.0 + i * 0.5
+            w = rtensor.zeros([4])
+            for i in range(4):
+                w.host[i] = 1.0 * (1 << i)
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, w=w, acc=acc)
+                s = rtensor_nn.softmax(rtensor_nn.Tensor(x))
+                acc += rtensor.item(rtensor.sum(rtensor.mul(s.t, w)))
+                n -= 1
+            return acc
+        rows = [[((i * 4 + j) * (i * 4 + j)) % 7 - 3.0 + (i * 4 + j) * 0.5
+                 for j in range(4)] for i in range(3)]
+        ref = _ref_softmax(rows)
+        expect = 0.0
+        for i in range(3):
+            for j in range(4):
+                expect += ref[i][j] * (1 << j)
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+        self.check_simple_loop(call_r=1)
+
+    def test_layernorm_rows(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'g', 'b', 'w', 'acc'])
+        def f(n):
+            x = rtensor.zeros([3, 4])
+            for i in range(12):
+                x.host[i] = ((i * i) % 7) - 3.0 + i * 0.5
+            g = rtensor.zeros([4])
+            b = rtensor.zeros([4])
+            w = rtensor.zeros([4])
+            for i in range(4):
+                g.host[i] = 1.0 + i * 0.5
+                b.host[i] = i * 0.25
+                w.host[i] = 1.0 * (1 << i)
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, g=g, b=b, w=w, acc=acc)
+                y = rtensor_nn.layernorm(rtensor_nn.Tensor(x),
+                                         rtensor_nn.Tensor(g),
+                                         rtensor_nn.Tensor(b), TEPS)
+                acc += rtensor.item(rtensor.sum(rtensor.mul(y.t, w)))
+                n -= 1
+            return acc
+        rows = [[((i * 4 + j) * (i * 4 + j)) % 7 - 3.0 + (i * 4 + j) * 0.5
+                 for j in range(4)] for i in range(3)]
+        ref = _ref_layernorm(rows, [1.0 + j * 0.5 for j in range(4)],
+                             [j * 0.25 for j in range(4)])
+        expect = 0.0
+        for i in range(3):
+            for j in range(4):
+                expect += ref[i][j] * (1 << j)
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+        self.check_simple_loop(call_r=5)
+
+    def test_transformer_block_forward(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'block', 'acc'])
+        def f(n):
+            x0 = rtensor.zeros([TROWS, TD])
+            for i in range(TROWS * TD):
+                x0.host[i] = (i % 7) - 3.0
+            block = _make_block()
+            x = rtensor_nn.Tensor(x0)
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, block=block, acc=acc)
+                y = block.forward(x)
+                acc += y.sum().item()
+                n -= 1
+            return acc
+        ref = _ref_block(_ref_input(TROWS, TD))
+        expect = sum([sum(row) for row in ref]) * 5
+        res = self.meta_interp(f, [5])
+        assert abs(res - expect) < 1e-9
+        self.check_simple_loop(call_r=32)
+
+
+def _filled(shape, base):
+    t = rtensor.zeros(shape)
+    for i in range(t.size):
+        t.host[i] = base + i
+    return t
+
+
+def test_column_broadcast_shapes():
+    x = _filled([3, 4], 1.0)
+    assert rtensor.bcast(x, _filled([4], 0.5)) == rtensor.BC_R_ROW
+    assert rtensor.bcast(x, _filled([3], 0.5)) == rtensor.BC_R_COL
+    assert rtensor.bcast(x, _filled([3, 1], 0.5)) == rtensor.BC_R_COL
+    assert rtensor.bcast(_filled([3], 0.5), x) == rtensor.BC_L_COL
+    assert rtensor.bcast(x, _filled([1], 2.0)) == rtensor.BC_R_SCALAR
+    sq = _filled([4, 4], 1.0)
+    assert rtensor.bcast(sq, _filled([4], 0.5)) == rtensor.BC_R_ROW
+    assert rtensor.bcast(sq, _filled([4, 1], 0.5)) == rtensor.BC_R_COL
+    col = _filled([3, 1], 0.5)
+    r = rtensor.sub(x, col)
+    for i in range(3):
+        for j in range(4):
+            assert rtensor.host(r)[i * 4 + j] == (1.0 + i * 4 + j) - (0.5 + i)
+    d = rtensor.div(x, col)
+    assert rtensor.host(d)[5] == (1.0 + 5) / (0.5 + 1)
+    assert rtensor.item(rtensor.max(x)) == 12.0
+    m = rtensor.max(x, 1)
+    assert [rtensor.host(m)[i] for i in range(3)] == [4.0, 8.0, 12.0]
+    assert [rtensor.host(rtensor.max(x, 0))[j] for j in range(4)] == \
+        [9.0, 10.0, 11.0, 12.0]
+    assert rtensor.host(rtensor.sqrt(_filled([2], 4.0)))[0] == 2.0
+    assert rtensor.host(rtensor.exp(_filled([1], 0.0)))[0] == 1.0

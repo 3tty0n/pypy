@@ -109,11 +109,16 @@ class EffectInfo(object):
     OS_TENSOR_RELU              = 132
     OS_TENSOR_SUM               = 133
     OS_TENSOR_RELUGRAD          = 134
-    OS_TENSOR_LAUNCH            = 135
-    OS_TENSOR_SIZE              = 136
-    OS_TENSOR_SHAPE             = 137
-    OS_TENSOR_OUTPUT            = 138
-    OS_TENSOR_NDIM              = 139
+    OS_TENSOR_SUB               = 135
+    OS_TENSOR_DIV               = 136
+    OS_TENSOR_EXP               = 137
+    OS_TENSOR_SQRT              = 138
+    OS_TENSOR_MAXR              = 139
+    OS_TENSOR_LAUNCH            = 140
+    OS_TENSOR_SIZE              = 141
+    OS_TENSOR_SHAPE             = 142
+    OS_TENSOR_OUTPUT            = 143
+    OS_TENSOR_NDIM              = 144
 
     # for debugging:
     _OS_CANRAISE = set([

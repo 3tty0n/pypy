@@ -102,3 +102,40 @@ class AppTestTensor(object):
             tensorlite.sgd_step(mlp.parameters(), 0.05)
         loss1 = loss_fn().item()
         assert loss1 < loss0
+
+    def test_sub_div_exp_sqrt_max(self):
+        import _tensor
+        a = _tensor.tensor([1.0, 4.0, 9.0])
+        b = _tensor.tensor([1.0, 2.0, 3.0])
+        assert a.sub(b).sum().item() == 8.0
+        assert (a - b).sum().item() == 8.0
+        assert a.div(b).sum().item() == 6.0
+        assert (a / b).sum().item() == 6.0
+        assert a.sqrt().sum().item() == 6.0
+        assert abs(b.exp().sum().item() - 30.19287485057736) < 1e-12
+        assert a.max().item() == 9.0
+        m = _tensor.tensor([[1.0, 5.0], [7.0, 2.0]])
+        assert m.max(1).sum().item() == 12.0
+        assert m.max(0).sum().item() == 12.0
+
+    def test_matmul_transpose_b(self):
+        import _tensor
+        x = _tensor.tensor([[1.0, 2.0], [3.0, 4.0]])
+        w = _tensor.tensor([[1.0, 10.0], [100.0, 1000.0]])
+        assert x.matmul(w, True).sum().item() == 6464.0
+
+    def test_softmax_layernorm(self):
+        import _tensor, tensorlite, math
+        x = _tensor.tensor([[1.0, 2.0, 3.0], [1.0, 1.0, 1.0]])
+        s = tensorlite.softmax(x)
+        assert abs(s.sum().item() - 2.0) < 1e-12
+        e = [math.exp(v - 3.0) for v in [1.0, 2.0, 3.0]]
+        tot = sum(e)
+        pick = _tensor.tensor([[1.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+        assert abs(s.mul(pick).sum().item() - e[0] / tot) < 1e-12
+        one = _tensor.tensor([1.0, 1.0, 1.0])
+        zero = _tensor.tensor([0.0, 0.0, 0.0])
+        y = tensorlite.layernorm(x, one, zero)
+        assert abs(y.sum().item()) < 1e-9
+        std = math.sqrt(2.0 / 3.0)
+        assert abs(y.mul(pick).sum().item() + 1.0 / std) < 1e-4

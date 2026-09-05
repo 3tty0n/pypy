@@ -1,3 +1,4 @@
+import math
 from rpython.rlib import rtensor, jit
 
 
@@ -49,7 +50,41 @@ class Tensor(object):
     def item(self):
         return rtensor.item(self.t)
 
-    def matmul(self, other):
+    def _forward_only(self, t, other):
+        r = Tensor(t)
+        needs = self.requires_grad
+        inputs = [self]
+        if other is not None:
+            inputs.append(other)
+            needs = needs or other.requires_grad
+        if needs:
+            r.requires_grad = True
+            r.node = NoGradNode(inputs)
+        return r
+
+    def sub(self, other):
+        p = rtensor.bcast(self.t, other.t)
+        return self._forward_only(rtensor.tensor_sub(self.t, other.t, p), other)
+
+    def div(self, other):
+        p = rtensor.bcast(self.t, other.t)
+        return self._forward_only(rtensor.tensor_div(self.t, other.t, p), other)
+
+    def exp(self):
+        return self._forward_only(rtensor.tensor_exp(self.t), None)
+
+    def sqrt(self):
+        return self._forward_only(rtensor.tensor_sqrt(self.t), None)
+
+    def max(self, axis=rtensor.AXIS_ALL):
+        return self._forward_only(rtensor.tensor_maxr(self.t, axis), None)
+
+    def matmul(self, other, transpose_b=False):
+        if transpose_b:
+            rows, cols, inner = rtensor.matmul_shape_t(self.t, other.t)
+            return self._forward_only(
+                rtensor.tensor_matmul(self.t, other.t, rows, cols, inner, 0, 1),
+                other)
         rows, cols, inner = rtensor.matmul_shape(self.t, other.t)
         needs = self.requires_grad or other.requires_grad
         node = None
@@ -156,6 +191,11 @@ class Node(object):
 
     def apply(self, g):
         raise NotImplementedError
+
+
+class NoGradNode(Node):
+    def apply(self, g):
+        raise ValueError("no backward for this operation")
 
 
 class AddNode(Node):
@@ -294,3 +334,72 @@ def sgd_step(params, neg_lr):
         if g is not None:
             p.t = rtensor.add(p.t, rtensor.mul(g.t, neg_lr.t))
             p.grad = None
+
+
+def softmax(x):
+    m = rtensor.tensor_maxr(x.t, 1)
+    e = rtensor.tensor_exp(rtensor.tensor_sub(x.t, m, rtensor.BC_R_COL))
+    s = rtensor.tensor_sum(e, 1)
+    return x._forward_only(rtensor.tensor_div(e, s, rtensor.BC_R_COL), None)
+
+
+def layernorm(x, gamma, beta, eps):
+    c = rtensor.tensor_shape(x.t, 1)
+    inv = rtensor.from_list([1.0 / c])
+    epst = rtensor.from_list([eps])
+    mean = rtensor.tensor_mul(rtensor.tensor_sum(x.t, 1), inv,
+                              rtensor.BC_R_SCALAR)
+    d = rtensor.tensor_sub(x.t, mean, rtensor.BC_R_COL)
+    sq = rtensor.tensor_mul(d, d, rtensor.BC_NONE)
+    var = rtensor.tensor_mul(rtensor.tensor_sum(sq, 1), inv,
+                             rtensor.BC_R_SCALAR)
+    denom = rtensor.tensor_sqrt(rtensor.tensor_add(var, epst,
+                                                   rtensor.BC_R_SCALAR))
+    y = rtensor.tensor_div(d, denom, rtensor.BC_R_COL)
+    y = rtensor.tensor_mul(y, gamma.t, rtensor.BC_R_ROW)
+    y = rtensor.tensor_add(y, beta.t, rtensor.BC_R_ROW)
+    return x._forward_only(y, gamma)
+
+
+def attention(q, k, v):
+    d = rtensor.tensor_shape(q.t, 1)
+    scale = rtensor.from_list([1.0 / math.sqrt(d)])
+    scores = q.matmul(k, True)
+    scaled = q._forward_only(
+        rtensor.tensor_mul(scores.t, scale, rtensor.BC_R_SCALAR), None)
+    return softmax(scaled).matmul(v)
+
+
+class Head(object):
+    def __init__(self, wq, wk, wv, wo):
+        self.wq = wq
+        self.wk = wk
+        self.wv = wv
+        self.wo = wo
+
+    def forward(self, x):
+        q = x.matmul(self.wq)
+        k = x.matmul(self.wk)
+        v = x.matmul(self.wv)
+        return attention(q, k, v).matmul(self.wo)
+
+
+class TransformerBlock(object):
+    def __init__(self, heads, gamma1, beta1, gamma2, beta2, mlp, eps):
+        self.heads = heads
+        self.gamma1 = gamma1
+        self.beta1 = beta1
+        self.gamma2 = gamma2
+        self.beta2 = beta2
+        self.mlp = mlp
+        self.eps = eps
+
+    @jit.unroll_safe
+    def forward(self, x):
+        h = layernorm(x, self.gamma1, self.beta1, self.eps)
+        a = self.heads[0].forward(h)
+        for i in range(1, len(self.heads)):
+            a = a.add(self.heads[i].forward(h))
+        x = x.add(a)
+        h2 = layernorm(x, self.gamma2, self.beta2, self.eps)
+        return x.add(self.mlp.forward(h2))

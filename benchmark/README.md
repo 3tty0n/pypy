@@ -49,7 +49,7 @@ the translator.
 | argument | values |
 |---|---|
 | `MODE` | `fused` (tensor ops fused into one kernel), `eager` (the `tensor` optimization disabled, one GPU kernel per op, JIT otherwise on), `nojit` (interpreter, one GPU kernel per op) |
-| `VARIANT` | `0` plain chain; `1` a branch `if i % 7 == 0: h = h + b` inside the fused region (a guard, no force); `2` the same branch after an explicit force of `h`, modelling a graph break; `3` a data-dependent branch `if sum(h).item() > 0` (a true force in every system); `4` the chain continued inside `try/except` with an exception raised every 5th iteration; `5` a host-side write to `/dev/null` every 50th iteration between tensor ops; `6` an MLP forward (see below), `K` unused; `7` the same MLP with a reverse-mode backward pass and an SGD step per iteration, `K` unused |
+| `VARIANT` | `0` plain chain; `1` a branch `if i % 7 == 0: h = h + b` inside the fused region (a guard, no force); `2` the same branch after an explicit force of `h`, modelling a graph break; `3` a data-dependent branch `if sum(h).item() > 0` (a true force in every system); `4` the chain continued inside `try/except` with an exception raised every 5th iteration; `5` a host-side write to `/dev/null` every 50th iteration between tensor ops; `6` an MLP forward (see below), `K` unused; `7` the same MLP with a reverse-mode backward pass and an SGD step per iteration, `K` unused; `8` a Transformer block forward per iteration (see below), `K` unused |
 
 `VARIANT 6` runs a 3-layer MLP forward (`rpython/rlib/rtensor_nn.py`) each
 iteration: `x` is `(B, 256)` with `B = N / 256`, each layer is `256x256`.
@@ -222,6 +222,43 @@ inside the tracer is the missing piece there.  With the default JIT threshold
 (1039 iterations) short scripts spend most of their time in the interpreter,
 where every op is a separate one-node GPU kernel.
 
+`VARIANT 8` runs one pre-norm Transformer block forward per iteration with
+`D = 64`, `H = 4` heads and `rows = N / 64`, loop-carried (`x = block(x)`):
+
+    x + sum_h Wo_h(attention(LN1(x) Wq_h, LN1(x) Wk_h, LN1(x) Wv_h))
+
+followed by `x + MLP(LN2(x))` with two `relu` layers.  Heads are kept as
+separate `(D, D/H)` projections and recombined through per-head `(D/H, D)`
+output projections, so no column slicing of a `(rows, D)` matrix is needed.
+`layernorm`, `softmax` and `attention` are ordinary host code in
+`rpython/rlib/rtensor_nn.py` built from the primitives `sub`, `div`, `exp`,
+`sqrt`, `sum(axis)` and `maxr(axis)`; the six matmuls per head go to cuBLAS.
+Every weight uses the same deterministic init as the MLP variants (element
+`i` is `((i * 7) % 13 - 6) / D`), MLP biases are `0.01`, `gamma = 1`,
+`beta = 0` and `eps = 1e-5`, so the checksum can be compared with PyTorch:
+
+    PYTHONPATH=. python2 benchmark/rtensor_bench.py nojit 8 1 256 2
+    $RTENSOR_PYTHON benchmark/torch_bench.py eager 8 1 256 2
+
+both print `51.262221`.
+
+Broadcasting now covers column vectors as well as row vectors: the `bcast`
+parameter of an elementwise op is `0` none, `1`/`3` right/left row vector
+(index `i % c`), `2`/`4` right/left scalar, `5`/`6` right/left column vector
+(index `i / c`).  `add`/`sub`/`mul`/`div` pick the code from the shapes: same
+shape gives `0`, a 2-D operand against a `(cols,)` vector gives a row
+broadcast, against a `(rows, 1)` or (when `rows != cols`) a `(rows,)` vector a
+column broadcast, and `(1,)` a scalar.  When `rows == cols` the shapes are
+ambiguous; a 1-D vector is then taken as a row vector, so a column broadcast
+of a square matrix must be spelled with shape `(rows, 1)`.
+
+Row-wise `max` (the softmax shift) has no GPU kernel: PTX has no
+`atom.max.f64`, and Triton 3.8 accepts `tt.atomic_rmw max` on `f64` only by
+reinterpreting the bits as `s64`, which orders negative doubles backwards.
+Axis-0/1 max therefore falls back to `eval_op_cpu`, and only a whole-tensor
+`max` that fits in one Triton program is emitted (`tt.reduce` with
+`arith.maximumf`, masked lanes set to `-inf`).
+
 ## Pitfalls that produce wrong numbers
 
 - The JIT's default loop threshold is 1039 iterations; the harness sets
@@ -254,12 +291,16 @@ is also exposed to app-level Python as the built-in module `_tensor`
 
 `_tensor.tensor(data, shape=None, requires_grad=False)` accepts nested lists
 (flattened and shape-inferred at app level) and `_tensor.zeros(shape,
-requires_grad=False)`; `Tensor` instances support `add`/`mul`/`__add__`/
-`__mul__`/`relu`/`sum(axis=-1)`/`item`/`matmul`/`reshape`/`add_`/`mul_`/
-`detach`/`backward`/`zero_grad` and the `shape`/`size`/`grad`/`requires_grad`
-properties. This PyPy2's grammar has no `@` operator (no `MatMult` AST node),
+requires_grad=False)`; `Tensor` instances support `add`/`mul`/`sub`/`div`/`__add__`/
+`__mul__`/`__sub__`/`__div__`/`__truediv__`/`exp`/`sqrt`/`max(axis=-1)`/
+`relu`/`sum(axis=-1)`/`item`/`matmul(other, transpose_b=False)`/`reshape`/
+`add_`/`mul_`/`detach`/`backward`/`zero_grad` and the
+`shape`/`size`/`grad`/`requires_grad` properties.  Only the ops that have
+gradient rules (`add`, `mul`, `relu`, `sum`, `matmul`, `reshape`) can be
+backpropagated through; `backward` over the others raises `ValueError`. This PyPy2's grammar has no `@` operator (no `MatMult` AST node),
 so matrix multiplication is the `matmul` method only, no `__matmul__`.
-`lib_pypy/tensorlite.py` is a pure app-level `Linear`/`MLP`/`sgd_step` built
+`lib_pypy/tensorlite.py` is a pure app-level `Linear`/`MLP`/`sgd_step`,
+`softmax`/`layernorm`/`attention`/`Head`/`TransformerBlock` built
 on that API (mirroring `rtensor_nn.py`), for `torch`-style user code.
 
 Build a PyPy with the module:

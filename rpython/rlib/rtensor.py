@@ -1,5 +1,7 @@
+import math
 import os
 from rpython.rlib import jit, rgc
+from rpython.rlib.rfloat import INFINITY, NAN
 from rpython.rtyper.annlowlevel import cast_instance_to_base_ptr
 from rpython.rtyper.rclass import OBJECTPTR
 from rpython.rtyper.lltypesystem import lltype, rffi
@@ -19,13 +21,20 @@ TENSOR.become(lltype.GcStruct('TENSOR', ('size', lltype.Signed),
 NULLTENSOR = lltype.nullptr(TENSOR)
 
 ADD, MUL, RELU, SUM, RELUGRAD = 0, 1, 2, 3, 4
-NOPCODES = 5
-ARITY = [2, 2, 1, 1, 2]
-NAMES = ['add', 'mul', 'relu', 'sum', 'relugrad']
+SUB, DIV, EXP, SQRT, MAXR = 5, 6, 7, 8, 9
+NOPCODES = 10
+ARITY = [2, 2, 1, 1, 2, 2, 2, 1, 1, 1]
+NAMES = ['add', 'mul', 'relu', 'sum', 'relugrad',
+         'sub', 'div', 'exp', 'sqrt', 'maxr']
+HAS_PARAM = [True, True, False, True, True,
+             True, True, False, False, True]
 MAX_INPUTS = 3
 BC_NONE, BC_R_ROW, BC_R_SCALAR, BC_L_ROW, BC_L_SCALAR = 0, 1, 2, 3, 4
-NPARAMS = 5
+BC_R_COL, BC_L_COL = 5, 6
+NPARAMS = 7
 AXIS_ALL = -1
+NEG_INF_BITS = '0xFFF0000000000000'
+NEG_INF = -INFINITY
 
 NODE = lltype.Struct('TENSOR_NODE', ('opcode', lltype.Signed),
                      ('a', lltype.Signed), ('b', lltype.Signed),
@@ -126,20 +135,42 @@ def eval_op(opcode, a, b, p):
             return r
     return eval_op_cpu(opcode, a, b, p)
 
+def _exp(v):
+    if v > 709.0:
+        return INFINITY
+    return math.exp(v)
+
+def _sqrt(v):
+    if v < 0.0:
+        return NAN
+    return math.sqrt(v)
+
+def _div(x, y):
+    if y == 0.0:
+        if x == 0.0:
+            return NAN
+        return INFINITY if x > 0.0 else NEG_INF
+    return x / y
+
 def eval_op_cpu(opcode, a, b, p):
-    if opcode == SUM:
-        return sum_cpu(a, p)
+    if opcode == SUM or opcode == MAXR:
+        return reduce_cpu(opcode, a, p)
     ha = host(a)
-    if opcode == RELU:
+    if ARITY[opcode] == 1:
         n = a.size
         r = new_tensor(n, a.shape)
         hr = r.host
         for i in range(n):
             v = ha[i]
-            hr[i] = v if v > 0.0 else 0.0
+            if opcode == RELU:
+                hr[i] = v if v > 0.0 else 0.0
+            elif opcode == EXP:
+                hr[i] = _exp(v)
+            else:
+                hr[i] = _sqrt(v)
         return r
     big = a
-    if p == BC_L_ROW or p == BC_L_SCALAR:
+    if p == BC_L_ROW or p == BC_L_SCALAR or p == BC_L_COL:
         big = b
     n = big.size
     c = cols(big)
@@ -153,21 +184,29 @@ def eval_op_cpu(opcode, a, b, p):
             ib = i % c
         elif p == BC_R_SCALAR:
             ib = 0
+        elif p == BC_R_COL:
+            ib = i // c
         elif p == BC_L_ROW:
             ia = i % c
         elif p == BC_L_SCALAR:
             ia = 0
+        elif p == BC_L_COL:
+            ia = i // c
         assert ia >= 0
         assert ib >= 0
         if opcode == ADD:
             hr[i] = ha[ia] + hb[ib]
         elif opcode == MUL:
             hr[i] = ha[ia] * hb[ib]
+        elif opcode == SUB:
+            hr[i] = ha[ia] - hb[ib]
+        elif opcode == DIV:
+            hr[i] = _div(ha[ia], hb[ib])
         else:
             hr[i] = hb[ib] if ha[ia] > 0.0 else 0.0
     return r
 
-def sum_cpu(a, axis):
+def reduce_cpu(opcode, a, axis):
     ha = host(a)
     n = a.size
     c = cols(a)
@@ -182,7 +221,7 @@ def sum_cpu(a, axis):
     r = new_tensor(m)
     hr = r.host
     for i in range(m):
-        hr[i] = 0.0
+        hr[i] = 0.0 if opcode == SUM else NEG_INF
     for i in range(n):
         if axis == 0:
             k = i % c
@@ -193,7 +232,10 @@ def sum_cpu(a, axis):
         if k >= m:
             k = m - 1
         assert k >= 0
-        hr[k] += ha[i]
+        if opcode == SUM:
+            hr[k] += ha[i]
+        elif ha[i] > hr[k]:
+            hr[k] = ha[i]
     return r
 
 class SingleKernels(object):
@@ -210,26 +252,29 @@ def _empty_kernel():
     return k
 single_kernels = SingleKernels()
 
+def is_reduction(opcode):
+    return opcode == SUM or opcode == MAXR
+
 def param_slot(opcode, p):
-    if opcode == SUM:
+    if is_reduction(opcode):
         if p == 0 or p == 1:
             return p + 1
         return 0
-    if opcode == RELU:
+    if not HAS_PARAM[opcode]:
         return 0
     if p > 0 and p < NPARAMS:
         return p
     return 0
 
 def slot_param(opcode, slot):
-    if opcode == SUM:
+    if is_reduction(opcode):
         return slot - 1
     return slot
 
 def slot_used(opcode, slot):
-    if opcode == SUM:
+    if is_reduction(opcode):
         return slot < 3
-    if opcode == RELU:
+    if not HAS_PARAM[opcode]:
         return slot == 0
     return True
 
@@ -278,6 +323,26 @@ def tensor_sum(a, axis):
 def tensor_relugrad(y, g, bcast):
     return eval_op(RELUGRAD, y, g, bcast)
 
+@jit.oopspec("tensor.sub(a, b, bcast)")
+def tensor_sub(a, b, bcast):
+    return eval_op(SUB, a, b, bcast)
+
+@jit.oopspec("tensor.div(a, b, bcast)")
+def tensor_div(a, b, bcast):
+    return eval_op(DIV, a, b, bcast)
+
+@jit.oopspec("tensor.exp(a)")
+def tensor_exp(a):
+    return eval_op(EXP, a, NULLTENSOR, 0)
+
+@jit.oopspec("tensor.sqrt(a)")
+def tensor_sqrt(a):
+    return eval_op(SQRT, a, NULLTENSOR, 0)
+
+@jit.oopspec("tensor.maxr(a, axis)")
+def tensor_maxr(a, axis):
+    return eval_op(MAXR, a, NULLTENSOR, axis)
+
 @jit.oopspec("tensor.ndim(a)")
 def tensor_ndim(a):
     return len(a.shape)
@@ -314,12 +379,26 @@ def size(t):
         note_size(n)
     return n
 
-def bcast_of(big, m):
+def bcast_of(big, small, m):
     if m == 1:
         return BC_R_SCALAR
-    if tensor_ndim(big) == 2 and tensor_shape(big, 1) == m:
-        return BC_R_ROW
+    if tensor_ndim(big) == 2:
+        rows = tensor_shape(big, 0)
+        c = tensor_shape(big, 1)
+        if m == rows and tensor_ndim(small) == 2 and tensor_shape(small, 1) == 1:
+            return BC_R_COL
+        if m == c:
+            return BC_R_ROW
+        if m == rows:
+            return BC_R_COL
     raise ValueError("shape mismatch")
+
+def flip_bcast(p):
+    if p == BC_R_ROW:
+        return BC_L_ROW
+    if p == BC_R_SCALAR:
+        return BC_L_SCALAR
+    return BC_L_COL
 
 def bcast(a, b):
     na = size(a)
@@ -327,8 +406,8 @@ def bcast(a, b):
     if na == nb:
         return BC_NONE
     if na > nb:
-        return bcast_of(a, nb)
-    return bcast_of(b, na) + 2
+        return bcast_of(a, b, nb)
+    return flip_bcast(bcast_of(b, a, na))
 
 def add(a, b):
     return tensor_add(a, b, bcast(a, b))
@@ -350,6 +429,21 @@ def relugrad(y, g):
 
 def sum(a, axis=AXIS_ALL):
     return tensor_sum(a, axis)
+
+def sub(a, b):
+    return tensor_sub(a, b, bcast(a, b))
+
+def div(a, b):
+    return tensor_div(a, b, bcast(a, b))
+
+def exp(a):
+    return tensor_exp(a)
+
+def sqrt(a):
+    return tensor_sqrt(a)
+
+def max(a, axis=AXIS_ALL):
+    return tensor_maxr(a, axis)
 
 def reshape(a, shape_list):
     n = 1
@@ -411,9 +505,20 @@ def matmul_shape(a, b):
         raise ValueError("shape mismatch")
     return tensor_shape(a, 0), tensor_shape(b, 1), inner
 
-def matmul(a, b):
+def matmul(a, b, transpose_b=False):
+    if transpose_b:
+        rows, cols, inner = matmul_shape_t(a, b)
+        return tensor_matmul(a, b, rows, cols, inner, 0, 1)
     rows, cols, inner = matmul_shape(a, b)
     return tensor_matmul(a, b, rows, cols, inner, 0, 0)
+
+def matmul_shape_t(a, b):
+    if tensor_ndim(a) != 2 or tensor_ndim(b) != 2:
+        raise ValueError("shape mismatch")
+    inner = tensor_shape(a, 1)
+    if inner != tensor_shape(b, 1):
+        raise ValueError("shape mismatch")
+    return tensor_shape(a, 0), tensor_shape(b, 0), inner
 
 def matmul_cpu(a, b, rows, cols, inner, ta, tb):
     ha = host(a)
@@ -534,7 +639,7 @@ def set_node(kernel, i, opcode, a, b, p):
 
 def finish_kernel(kernel):
     n = len(kernel.nodes)
-    kernel.sumroot = int(n > 0 and kernel.nodes[n - 1].opcode == SUM)
+    kernel.sumroot = int(n > 0 and is_reduction(kernel.nodes[n - 1].opcode))
     kernel.fn = compile_gpu(kernel)
     return kernel
 
@@ -760,15 +865,19 @@ def input_modes(kernel):
             m = 0
         ma = m
         mb = m
-        if node.opcode != RELU and node.opcode != SUM:
+        if ARITY[node.opcode] == 2:
             if node.p == BC_R_ROW:
                 mb = 1
             elif node.p == BC_R_SCALAR:
                 mb = 2
+            elif node.p == BC_R_COL:
+                mb = 3
             elif node.p == BC_L_ROW:
                 ma = 1
             elif node.p == BC_L_SCALAR:
                 ma = 2
+            elif node.p == BC_L_COL:
+                ma = 3
         if not set_mode(modes, node.a, ma):
             return []
         if node.b >= 0 and not set_mode(modes, node.b, mb):
@@ -805,6 +914,8 @@ def to_ttir(kernel, name):
             need_mod = True
         elif modes[i] == 2:
             need_zero_off = True
+        elif modes[i] == 3:
+            need_div = True
     params = ['%%in%d: !tt.ptr<f64>' % i for i in range(nin)]
     params.append('%out: !tt.ptr<f64>')
     for k in range(len(kernel.outputs)):
@@ -844,6 +955,9 @@ def to_ttir(kernel, name):
         elif modes[i] == 2:
             lines.append('    %%q%d = tt.addptr %%p%d, %%zoffs : %s, %s'
                          % (i, i, P, I32))
+        elif modes[i] == 3:
+            lines.append('    %%q%d = tt.addptr %%p%d, %%offsd : %s, %s'
+                         % (i, i, P, I64))
         else:
             lines.append('    %%q%d = tt.addptr %%p%d, %%offs : %s, %s'
                          % (i, i, P, I32))
@@ -871,7 +985,36 @@ def to_ttir(kernel, name):
                          % (v, node.a, T))
             lines.append('    %%v%d = arith.select %%c%d, %%v%d, %%zero : '
                          '%s, %s' % (v, v, node.b, I1, T))
-        elif k == len(nodes) - 1:
+        elif node.opcode == SUB:
+            lines.append('    %%v%d = arith.subf %%v%d, %%v%d : %s'
+                         % (v, node.a, node.b, T))
+        elif node.opcode == DIV:
+            lines.append('    %%v%d = arith.divf %%v%d, %%v%d : %s'
+                         % (v, node.a, node.b, T))
+        elif node.opcode == EXP:
+            lines.append('    %%v%d = math.exp %%v%d : %s' % (v, node.a, T))
+        elif node.opcode == SQRT:
+            lines.append('    %%v%d = math.sqrt %%v%d : %s' % (v, node.a, T))
+        elif k != len(nodes) - 1 or not is_reduction(node.opcode):
+            return ''
+        elif node.opcode == MAXR:
+            if axis != AXIS_ALL or kernel.n == 0 or kernel.n > BLOCK:
+                return ''
+            src = '%%v%d' % node.a
+            if masked:
+                lines.append('    %%ninf = arith.constant dense<%s> : %s'
+                             % (NEG_INF_BITS, T))
+                lines.append('    %%m%d = arith.select %%mask, %%v%d, %%ninf '
+                             ': %s, %s' % (v, node.a, I1, T))
+                src = '%%m%d' % v
+            lines.append('    %%v%d = "tt.reduce"(%s) <{axis = 0 : i32}> ({'
+                         % (v, src))
+            lines.append('    ^bb0(%x: f64, %y: f64):')
+            lines.append('      %r = arith.maximumf %x, %y : f64')
+            lines.append('      tt.reduce.return %r : f64')
+            lines.append('    }) : (%s) -> f64' % T)
+            lines.append('    tt.store %%out, %%v%d : !tt.ptr<f64>' % v)
+        else:
             if axis == 0 or axis == 1:
                 offs = '%offsm'
                 if axis == 1:
@@ -892,8 +1035,6 @@ def to_ttir(kernel, name):
                 lines.append('    %true = arith.constant true')
                 lines.append('    %%o = tt.atomic_rmw fadd, acq_rel, gpu, %%out, %%v%d, '
                              '%%true : (!tt.ptr<f64>, f64, i1) -> f64' % v)
-        else:
-            return ''
     if not kernel.sumroot:
         lines.append('    %%po = tt.splat %%out : !tt.ptr<f64> -> %s' % P)
         lines.append('    %%qo = tt.addptr %%po, %%offs : %s, %s' % (P, I32))

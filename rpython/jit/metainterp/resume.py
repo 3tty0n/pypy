@@ -1176,7 +1176,7 @@ class ResumeDataBoxReader(AbstractResumeDataReader):
         args = [ConstInt(func)]
         for num in fieldnums:
             args.append(self.decode_box(num, REF))
-        if opcode != rtensor.RELU:
+        if rtensor.HAS_PARAM[opcode]:
             args.append(ConstInt(param))
         return self.metainterp.execute_and_record_varargs(
             rop.CALL_R, args, calldescr)

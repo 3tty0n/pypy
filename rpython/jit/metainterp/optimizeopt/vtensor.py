@@ -70,7 +70,7 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         op.set_forwarded(newop)
         for i in range(len(infos)):
             info = infos[i]
-            if info is not self and info.opcode != rtensor.SUM:
+            if info is not self and not rtensor.is_reduction(info.opcode):
                 info.launched_kernel = kernel
                 info.launched_box = newop
                 info.node_index = len(leaves) + i
@@ -90,12 +90,13 @@ class VTensorInfo(AbstractVirtualPtrInfo):
 
     def big_arg(self):
         if (self.param == rtensor.BC_L_ROW or
-                self.param == rtensor.BC_L_SCALAR):
+                self.param == rtensor.BC_L_SCALAR or
+                self.param == rtensor.BC_L_COL):
             return 1
         return 0
 
     def size_leaf(self):
-        if self.opcode == rtensor.SUM:
+        if rtensor.is_reduction(self.opcode):
             return None
         box = self.args[self.big_arg()]
         sub = vtensor_info(box)
@@ -104,7 +105,7 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         return box
 
     def is_scalar(self):
-        if self.opcode == rtensor.SUM:
+        if rtensor.is_reduction(self.opcode):
             return self.param == rtensor.AXIS_ALL
         sub = vtensor_info(self.args[self.big_arg()])
         if sub is not None:
@@ -195,11 +196,11 @@ class OptTensor(Optimization):
     def optimize_CALL_R(self, op):
         effectinfo = op.getdescr().get_extra_info()
         idx = effectinfo.oopspecindex
-        if EffectInfo.OS_TENSOR_ADD <= idx <= EffectInfo.OS_TENSOR_RELUGRAD:
+        if EffectInfo.OS_TENSOR_ADD <= idx <= EffectInfo.OS_TENSOR_MAXR:
             opcode = idx - EffectInfo.OS_TENSOR_ADD
             nargs = rtensor.ARITY[opcode]
             param = 0
-            if opcode != rtensor.RELU:
+            if rtensor.HAS_PARAM[opcode]:
                 pbox = get_box_replacement(op.getarg(1 + nargs))
                 if not pbox.is_constant():
                     return self.emit(op)

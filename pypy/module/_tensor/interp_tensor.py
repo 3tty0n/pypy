@@ -45,6 +45,28 @@ class W_Tensor(W_Root):
     def descr_mul_(self, space, w_other):
         return self.descr_mul(space, w_other)
 
+    def descr_sub(self, space, w_other):
+        try:
+            return W_Tensor(self.tensor.sub(self._other(space, w_other)))
+        except ValueError:
+            raise oefmt(space.w_ValueError, "shape mismatch")
+
+    def descr_div(self, space, w_other):
+        try:
+            return W_Tensor(self.tensor.div(self._other(space, w_other)))
+        except ValueError:
+            raise oefmt(space.w_ValueError, "shape mismatch")
+
+    def descr_exp(self, space):
+        return W_Tensor(self.tensor.exp())
+
+    def descr_sqrt(self, space):
+        return W_Tensor(self.tensor.sqrt())
+
+    @unwrap_spec(axis=int)
+    def descr_max(self, space, axis=-1):
+        return W_Tensor(self.tensor.max(axis))
+
     def descr_relu(self, space):
         return W_Tensor(self.tensor.relu())
 
@@ -55,9 +77,11 @@ class W_Tensor(W_Root):
     def descr_item(self, space):
         return space.newfloat(self.tensor.item())
 
-    def descr_matmul(self, space, w_other):
+    @unwrap_spec(transpose_b=bool)
+    def descr_matmul(self, space, w_other, transpose_b=False):
         try:
-            return W_Tensor(self.tensor.matmul(self._other(space, w_other)))
+            return W_Tensor(self.tensor.matmul(self._other(space, w_other),
+                                               transpose_b))
         except ValueError:
             raise oefmt(space.w_ValueError, "shape mismatch")
 
@@ -107,6 +131,11 @@ W_Tensor.typedef = TypeDef(
     mul=interp2app(W_Tensor.descr_mul),
     add_=interp2app(W_Tensor.descr_add_),
     mul_=interp2app(W_Tensor.descr_mul_),
+    sub=interp2app(W_Tensor.descr_sub),
+    div=interp2app(W_Tensor.descr_div),
+    exp=interp2app(W_Tensor.descr_exp),
+    sqrt=interp2app(W_Tensor.descr_sqrt),
+    max=interp2app(W_Tensor.descr_max),
     relu=interp2app(W_Tensor.descr_relu),
     sum=interp2app(W_Tensor.descr_sum),
     item=interp2app(W_Tensor.descr_item),
@@ -117,6 +146,9 @@ W_Tensor.typedef = TypeDef(
     zero_grad=interp2app(W_Tensor.descr_zero_grad),
     __add__=interp2app(W_Tensor.descr_add),
     __mul__=interp2app(W_Tensor.descr_mul),
+    __sub__=interp2app(W_Tensor.descr_sub),
+    __div__=interp2app(W_Tensor.descr_div),
+    __truediv__=interp2app(W_Tensor.descr_div),
     __repr__=interp2app(W_Tensor.descr_repr),
     shape=GetSetProperty(W_Tensor.descr_shape),
     size=GetSetProperty(W_Tensor.descr_size),

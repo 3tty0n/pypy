@@ -31,7 +31,7 @@ for rep in $(seq $REPS); do for v in 1 2 3 4 5; do for n in 10000 1000000; do
 done; done; done
 echo -e "$HEADER" > "$OUT/rtensor_mlp.tsv"
 for n in 25600 256000; do for rep in $(seq $REPS); do
-  for v in 6 7; do
+  for v in 6 7 8; do
     for mode in fused eager nojit; do ours $mode $v 1 $n $ITERS >> "$OUT/rtensor_mlp.tsv"; done
     torch compile $v 1 $n $ITERS >> "$OUT/torch.tsv"
     torch eager $v 1 $n $ITERS >> "$OUT/torch.tsv"
