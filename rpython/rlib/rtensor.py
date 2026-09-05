@@ -28,7 +28,7 @@ NAMES = ['add', 'mul', 'relu', 'sum', 'relugrad',
          'sub', 'div', 'exp', 'sqrt', 'maxr']
 HAS_PARAM = [True, True, False, True, True,
              True, True, False, False, True]
-MAX_INPUTS = 3
+MAX_INPUTS = 6
 BC_NONE, BC_R_ROW, BC_R_SCALAR, BC_L_ROW, BC_L_SCALAR = 0, 1, 2, 3, 4
 BC_R_COL, BC_L_COL = 5, 6
 NPARAMS = 7
@@ -44,6 +44,7 @@ KERNEL = lltype.GcStruct('TENSOR_KERNEL', ('ninputs', lltype.Signed),
                          ('nodes', lltype.Ptr(NODEARRAY)),
                          ('fn', lltype.Signed),
                          ('sumroot', lltype.Signed),
+                         ('rowmode', lltype.Signed),
                          ('threads', lltype.Signed),
                          ('shared', lltype.Signed),
                          ('nextra', lltype.Signed),
@@ -247,6 +248,7 @@ def _empty_kernel():
     k.ninputs = 0
     k.nodes = lltype.malloc(NODEARRAY, 0)
     k.fn = k.sumroot = k.threads = k.shared = k.nextra = 0
+    k.rowmode = 0
     k.n = 0
     k.outputs = lltype.malloc(SHAPEARRAY, 0)
     return k
@@ -594,6 +596,7 @@ def new_kernel(ninputs, nnodes):
     kernel.ninputs = ninputs
     kernel.nodes = lltype.malloc(NODEARRAY, nnodes)
     kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
+    kernel.rowmode = 0
     kernel.n = 0
     kernel.outputs = lltype.malloc(SHAPEARRAY, 0)
     return kernel
@@ -608,7 +611,10 @@ def add_output(kernel, node):
     return len(old)
 
 def kernel_key(kernel):
-    parts = [str(kernel.ninputs), str(kernel.n)]
+    rowmode = kernel_row_mode(kernel)
+    parts = [str(kernel.ninputs), '0' if rowmode else str(kernel.n)]
+    if rowmode:
+        parts.append('r')
     for i in range(len(kernel.nodes)):
         node = kernel.nodes[i]
         parts.append('%d:%d:%d:%d' % (node.opcode, node.a, node.b, node.p))
@@ -625,6 +631,7 @@ def compile_or_reuse(kernel):
         kernel.shared = cached.shared
         kernel.nextra = cached.nextra
         kernel.sumroot = cached.sumroot
+        kernel.rowmode = cached.rowmode
         return kernel
     finish_kernel(kernel)
     cache_kernel(key, kernel)
@@ -640,6 +647,7 @@ def set_node(kernel, i, opcode, a, b, p):
 def finish_kernel(kernel):
     n = len(kernel.nodes)
     kernel.sumroot = int(n > 0 and is_reduction(kernel.nodes[n - 1].opcode))
+    kernel.rowmode = int(kernel_row_mode(kernel))
     kernel.fn = compile_gpu(kernel)
     return kernel
 
@@ -649,12 +657,18 @@ def build_kernel(ninputs, opcodes, lefts, rights, params):
         set_node(kernel, i, opcodes[i], lefts[i], rights[i], params[i])
     return finish_kernel(kernel)
 
-def launch(kernel, a, b, c):
+def launch(kernel, a, b, c, d=NULLTENSOR, e=NULLTENSOR, f=NULLTENSOR):
     values = [a]
     if kernel.ninputs > 1:
         values.append(b)
     if kernel.ninputs > 2:
         values.append(c)
+    if kernel.ninputs > 3:
+        values.append(d)
+    if kernel.ninputs > 4:
+        values.append(e)
+    if kernel.ninputs > 5:
+        values.append(f)
     nmax = 0
     for k in range(len(values)):
         if values[k].size > nmax:
@@ -854,7 +868,7 @@ def set_mode(modes, v, m):
         return True
     return modes[v] == m
 
-def input_modes(kernel):
+def all_modes(kernel):
     nin = kernel.ninputs
     nodes = kernel.nodes
     modes = [-1] * (nin + len(nodes))
@@ -865,7 +879,9 @@ def input_modes(kernel):
             m = 0
         ma = m
         mb = m
-        if ARITY[node.opcode] == 2:
+        if is_reduction(node.opcode):
+            ma = 0
+        elif ARITY[node.opcode] == 2:
             if node.p == BC_R_ROW:
                 mb = 1
             elif node.p == BC_R_SCALAR:
@@ -882,15 +898,194 @@ def input_modes(kernel):
             return []
         if node.b >= 0 and not set_mode(modes, node.b, mb):
             return []
+    for i in range(len(modes)):
+        if modes[i] < 0:
+            modes[i] = 0
+    return modes
+
+def input_modes(kernel):
+    modes = all_modes(kernel)
+    nin = kernel.ninputs
+    if len(modes) != nin + len(kernel.nodes):
+        return []
     result = []
     for i in range(nin):
-        m = modes[i]
-        if m < 0:
-            m = 0
-        result.append(m)
+        result.append(modes[i])
     return result
 
+def row_mode(kernel, modes):
+    nin = kernel.ninputs
+    nodes = kernel.nodes
+    if len(modes) != nin + len(nodes):
+        return False
+    for k in range(len(nodes)):
+        node = nodes[k]
+        if is_reduction(node.opcode) and node.p == 1:
+            if k == len(nodes) - 1 or modes[nin + k] == 3:
+                return True
+    for i in range(nin):
+        if modes[i] == 3:
+            return True
+    return False
+
+def kernel_row_mode(kernel):
+    return row_mode(kernel, all_modes(kernel))
+
 def to_ttir(kernel, name):
+    modes = all_modes(kernel)
+    if len(modes) != kernel.ninputs + len(kernel.nodes):
+        return ''
+    if row_mode(kernel, modes):
+        return to_ttir_row(kernel, name, modes)
+    return to_ttir_flat(kernel, name)
+
+def _elementwise(lines, node, v, T, I1):
+    if node.opcode == ADD:
+        lines.append('    %%v%d = arith.addf %%v%d, %%v%d : %s'
+                     % (v, node.a, node.b, T))
+    elif node.opcode == MUL:
+        lines.append('    %%v%d = arith.mulf %%v%d, %%v%d : %s'
+                     % (v, node.a, node.b, T))
+    elif node.opcode == RELU:
+        lines.append('    %%c%d = arith.cmpf ogt, %%v%d, %%zero : %s'
+                     % (v, node.a, T))
+        lines.append('    %%v%d = arith.select %%c%d, %%v%d, %%zero : %s, %s'
+                     % (v, v, node.a, I1, T))
+    elif node.opcode == RELUGRAD:
+        lines.append('    %%c%d = arith.cmpf ogt, %%v%d, %%zero : %s'
+                     % (v, node.a, T))
+        lines.append('    %%v%d = arith.select %%c%d, %%v%d, %%zero : %s, %s'
+                     % (v, v, node.b, I1, T))
+    elif node.opcode == SUB:
+        lines.append('    %%v%d = arith.subf %%v%d, %%v%d : %s'
+                     % (v, node.a, node.b, T))
+    elif node.opcode == DIV:
+        lines.append('    %%v%d = arith.divf %%v%d, %%v%d : %s'
+                     % (v, node.a, node.b, T))
+    elif node.opcode == EXP:
+        lines.append('    %%v%d = math.exp %%v%d : %s' % (v, node.a, T))
+    elif node.opcode == SQRT:
+        lines.append('    %%v%d = math.sqrt %%v%d : %s' % (v, node.a, T))
+    else:
+        return False
+    return True
+
+def to_ttir_row(kernel, name, modes):
+    nodes = kernel.nodes
+    nin = kernel.ninputs
+    last = len(nodes) - 1
+    if last < 0:
+        return ''
+    BLOCK = config.block
+    T = 'tensor<%dxf64>' % BLOCK
+    P = 'tensor<%dx!tt.ptr<f64>>' % BLOCK
+    I32 = 'tensor<%dxi32>' % BLOCK
+    I64 = 'tensor<%dxi64>' % BLOCK
+    I1 = 'tensor<%dxi1>' % BLOCK
+    isred = [False] * (nin + len(nodes))
+    for k in range(len(nodes)):
+        node = nodes[k]
+        if not is_reduction(node.opcode):
+            continue
+        if node.p == 1:
+            if k != last and modes[nin + k] != 3:
+                return ''
+        elif node.p == AXIS_ALL:
+            if k != last or node.opcode != SUM:
+                return ''
+        else:
+            return ''
+        isred[nin + k] = True
+    for k in range(len(kernel.outputs)):
+        if isred[kernel.outputs[k]]:
+            return ''
+    params = ['%%in%d: !tt.ptr<f64>' % i for i in range(nin)]
+    params.append('%out: !tt.ptr<f64>')
+    for k in range(len(kernel.outputs)):
+        params.append('%%out%d: !tt.ptr<f64>' % k)
+    lines = ['module {',
+             '  tt.func public @%s(%s, %%n: i64, %%c: i64) '
+             'attributes {noinline = false} {' % (name, ', '.join(params)),
+             '    %%zero = arith.constant dense<0.0> : %s' % T,
+             '    %pid = tt.get_program_id x : i32',
+             '    %rowi = arith.extsi %pid : i32 to i64',
+             '    %%range = tt.make_range {end = %d : i32, start = 0 : i32} '
+             ': %s' % (BLOCK, I32),
+             '    %%ar = arith.extsi %%range : %s to %s' % (I32, I64),
+             '    %%cs = tt.splat %%c : i64 -> %s' % I64,
+             '    %%mask = arith.cmpi slt, %%ar, %%cs : %s' % I64,
+             '    %base = arith.muli %rowi, %c : i64',
+             '    %%bases = tt.splat %%base : i64 -> %s' % I64,
+             '    %%offs = arith.addi %%bases, %%ar : %s' % I64]
+    for i in range(nin):
+        if modes[i] == 2 or modes[i] == 3:
+            src = '%%in%d' % i
+            if modes[i] == 3:
+                lines.append('    %%sp%d = tt.addptr %%in%d, %%pid : '
+                             '!tt.ptr<f64>, i32' % (i, i))
+                src = '%%sp%d' % i
+            lines.append('    %%sv%d = tt.load %s : !tt.ptr<f64>' % (i, src))
+            lines.append('    %%v%d = tt.splat %%sv%d : f64 -> %s' % (i, i, T))
+            continue
+        offs = '%offs'
+        if modes[i] == 1:
+            offs = '%ar'
+        lines.append('    %%p%d = tt.splat %%in%d : !tt.ptr<f64> -> %s'
+                     % (i, i, P))
+        lines.append('    %%q%d = tt.addptr %%p%d, %s : %s, %s'
+                     % (i, i, offs, P, I64))
+        lines.append('    %%v%d = tt.load %%q%d, %%mask, %%zero : %s'
+                     % (i, i, P))
+    for k in range(len(nodes)):
+        node = nodes[k]
+        v = nin + k
+        if _elementwise(lines, node, v, T, I1):
+            continue
+        if node.opcode == MAXR:
+            lines.append('    %%ninf%d = arith.constant dense<%s> : %s'
+                         % (v, NEG_INF_BITS, T))
+            init = '%%ninf%d' % v
+            combine = 'maximumf'
+        else:
+            init = '%zero'
+            combine = 'addf'
+        lines.append('    %%rm%d = arith.select %%mask, %%v%d, %s : %s, %s'
+                     % (v, node.a, init, I1, T))
+        lines.append('    %%rs%d = "tt.reduce"(%%rm%d) <{axis = 0 : i32}> ({'
+                     % (v, v))
+        lines.append('    ^bb0(%%x%d: f64, %%y%d: f64):' % (v, v))
+        lines.append('      %%rr%d = arith.%s %%x%d, %%y%d : f64'
+                     % (v, combine, v, v))
+        lines.append('      tt.reduce.return %%rr%d : f64' % v)
+        lines.append('    }) : (%s) -> f64' % T)
+        lines.append('    %%v%d = tt.splat %%rs%d : f64 -> %s' % (v, v, T))
+        if k != last:
+            continue
+        if node.p == 1:
+            lines.append('    %po = tt.addptr %out, %pid : !tt.ptr<f64>, i32')
+            lines.append('    tt.store %%po, %%rs%d : !tt.ptr<f64>' % v)
+        else:
+            lines.append('    %true = arith.constant true')
+            lines.append('    %%o = tt.atomic_rmw fadd, acq_rel, gpu, %%out, '
+                         '%%rs%d, %%true : (!tt.ptr<f64>, f64, i1) -> f64' % v)
+    if not isred[nin + last]:
+        lines.append('    %%po = tt.splat %%out : !tt.ptr<f64> -> %s' % P)
+        lines.append('    %%qo = tt.addptr %%po, %%offs : %s, %s' % (P, I64))
+        lines.append('    tt.store %%qo, %%v%d, %%mask : %s'
+                     % (nin + last, P))
+    for k in range(len(kernel.outputs)):
+        lines.append('    %%po%d = tt.splat %%out%d : !tt.ptr<f64> -> %s'
+                     % (k, k, P))
+        lines.append('    %%qo%d = tt.addptr %%po%d, %%offs : %s, %s'
+                     % (k, k, P, I64))
+        lines.append('    tt.store %%qo%d, %%v%d, %%mask : %s'
+                     % (k, kernel.outputs[k], P))
+    lines.append('    tt.return')
+    lines.append('  }')
+    lines.append('}')
+    return '\n'.join(lines) + '\n'
+
+def to_ttir_flat(kernel, name):
     nodes = kernel.nodes
     nin = kernel.ninputs
     BLOCK = config.block
@@ -969,35 +1164,11 @@ def to_ttir(kernel, name):
     for k in range(len(nodes)):
         node = nodes[k]
         v = nin + k
-        if node.opcode == ADD:
-            lines.append('    %%v%d = arith.addf %%v%d, %%v%d : %s'
-                         % (v, node.a, node.b, T))
-        elif node.opcode == MUL:
-            lines.append('    %%v%d = arith.mulf %%v%d, %%v%d : %s'
-                         % (v, node.a, node.b, T))
-        elif node.opcode == RELU:
-            lines.append('    %%c%d = arith.cmpf ogt, %%v%d, %%zero : %s'
-                         % (v, node.a, T))
-            lines.append('    %%v%d = arith.select %%c%d, %%v%d, %%zero : '
-                         '%s, %s' % (v, v, node.a, I1, T))
-        elif node.opcode == RELUGRAD:
-            lines.append('    %%c%d = arith.cmpf ogt, %%v%d, %%zero : %s'
-                         % (v, node.a, T))
-            lines.append('    %%v%d = arith.select %%c%d, %%v%d, %%zero : '
-                         '%s, %s' % (v, v, node.b, I1, T))
-        elif node.opcode == SUB:
-            lines.append('    %%v%d = arith.subf %%v%d, %%v%d : %s'
-                         % (v, node.a, node.b, T))
-        elif node.opcode == DIV:
-            lines.append('    %%v%d = arith.divf %%v%d, %%v%d : %s'
-                         % (v, node.a, node.b, T))
-        elif node.opcode == EXP:
-            lines.append('    %%v%d = math.exp %%v%d : %s' % (v, node.a, T))
-        elif node.opcode == SQRT:
-            lines.append('    %%v%d = math.sqrt %%v%d : %s' % (v, node.a, T))
-        elif k != len(nodes) - 1 or not is_reduction(node.opcode):
+        if _elementwise(lines, node, v, T, I1):
+            continue
+        if k != len(nodes) - 1 or not is_reduction(node.opcode):
             return ''
-        elif node.opcode == MAXR:
+        if node.opcode == MAXR:
             if axis != AXIS_ALL or kernel.n == 0 or kernel.n > BLOCK:
                 return ''
             src = '%%v%d' % node.a
@@ -1119,6 +1290,11 @@ def launch_gpu(kernel, inputs):
     c = cols(inputs[big])
     outlen = n
     shape = inputs[big].shape
+    elems = config.block
+    if kernel.rowmode:
+        if c <= 0 or c > config.block or n % c != 0:
+            return NULLTENSOR
+        elems = c
     if kernel.sumroot:
         axis = kernel.nodes[len(kernel.nodes) - 1].p
         if axis == 0:
@@ -1150,7 +1326,7 @@ def launch_gpu(kernel, inputs):
         ok = rffi.cast(lltype.Signed, rt_cuda_launch(
             kernel.fn, dptrs, rffi.cast(rffi.INT, nin), n,
             outs, rffi.cast(rffi.INT, nout),
-            rffi.cast(rffi.INT, kernel.threads), config.block,
+            rffi.cast(rffi.INT, kernel.threads), elems,
             rffi.cast(rffi.INT, kernel.shared),
             rffi.cast(rffi.INT, kernel.nextra), c)) != 0
     result = NULLTENSOR

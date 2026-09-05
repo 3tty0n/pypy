@@ -683,9 +683,9 @@ class LLtypeHelpers:
         llop.gc_add_memory_pressure(lltype.Void, num, obj)
 
 
-def _ll_4_tensor_launch(kernel, a, b, c):
+def _ll_7_tensor_launch(kernel, a, b, c, d, e, f):
     from rpython.rlib import rtensor
-    return rtensor.launch(kernel, a, b, c)
+    return rtensor.launch(kernel, a, b, c, d, e, f)
 
 def _ll_2_tensor_output(t, k):
     from rpython.rlib import rtensor

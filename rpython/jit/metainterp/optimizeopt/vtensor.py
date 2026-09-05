@@ -45,6 +45,7 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         kernel.ninputs = len(leaves)
         kernel.nodes = lltype.malloc(rtensor.NODEARRAY, len(opcodes))
         kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
+        kernel.rowmode = 0
         kernel.n = n
         kernel.outputs = lltype.malloc(rtensor.SHAPEARRAY, 0)
         for i in range(len(opcodes)):

@@ -397,7 +397,7 @@ def test_sum_axis_elements():
 
 B, D = 2, 3
 LR = 0.01
-BACKWARD_CALL_R = 5
+BACKWARD_CALL_R = 3
 
 def _fill_matrix(w, rows, cols, seed):
     for i in range(rows):
@@ -743,6 +743,7 @@ class TestTransformer(LLJitMixin):
                 acc += rtensor.item(rtensor.sum(rtensor.mul(s.t, w)))
                 n -= 1
             return acc
+        before = set(rtensor.kernel_cache.kernels)
         rows = [[((i * 4 + j) * (i * 4 + j)) % 7 - 3.0 + (i * 4 + j) * 0.5
                  for j in range(4)] for i in range(3)]
         ref = _ref_softmax(rows)
@@ -753,6 +754,9 @@ class TestTransformer(LLJitMixin):
         res = self.meta_interp(f, [10])
         assert abs(res - expect * 10) < 1e-9
         self.check_simple_loop(call_r=1)
+        added = set(rtensor.kernel_cache.kernels) - before
+        assert len(added) == 1
+        assert ',r,' in added.pop()
 
     def test_layernorm_rows(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'g', 'b', 'w', 'acc'])
@@ -776,6 +780,7 @@ class TestTransformer(LLJitMixin):
                 acc += rtensor.item(rtensor.sum(rtensor.mul(y.t, w)))
                 n -= 1
             return acc
+        before = set(rtensor.kernel_cache.kernels)
         rows = [[((i * 4 + j) * (i * 4 + j)) % 7 - 3.0 + (i * 4 + j) * 0.5
                  for j in range(4)] for i in range(3)]
         ref = _ref_layernorm(rows, [1.0 + j * 0.5 for j in range(4)],
@@ -786,7 +791,11 @@ class TestTransformer(LLJitMixin):
                 expect += ref[i][j] * (1 << j)
         res = self.meta_interp(f, [10])
         assert abs(res - expect * 10) < 1e-9
-        self.check_simple_loop(call_r=5)
+        self.check_simple_loop(call_r=3)
+        added = set(rtensor.kernel_cache.kernels) - before
+        assert len(added) == 1
+        key = added.pop()
+        assert ',r,' in key and key.split(',')[0] == '6'
 
     def test_transformer_block_forward(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'block', 'acc'])
@@ -805,9 +814,12 @@ class TestTransformer(LLJitMixin):
             return acc
         ref = _ref_block(_ref_input(TROWS, TD))
         expect = sum([sum(row) for row in ref]) * 5
+        before = set(rtensor.kernel_cache.kernels)
         res = self.meta_interp(f, [5])
         assert abs(res - expect) < 1e-9
-        self.check_simple_loop(call_r=32)
+        self.check_simple_loop(call_r=28)
+        added = set(rtensor.kernel_cache.kernels) - before
+        assert len([k for k in added if ',r,' in k]) == 3
 
 
 def _filled(shape, base):

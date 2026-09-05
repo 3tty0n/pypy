@@ -2211,7 +2211,8 @@ class Transformer(object):
         T = args[0].concretetype
         self._register_analyzed_helper(EffectInfo.OS_TENSOR_LAUNCH,
                                        "tensor.launch",
-                                       [rtensor.KERNELPTR, T, T, T], T,
+                                       [rtensor.KERNELPTR, T, T, T, T, T, T],
+                                       T,
                                        EffectInfo.EF_ELIDABLE_OR_MEMORYERROR)
         self._register_analyzed_helper(EffectInfo.OS_TENSOR_OUTPUT,
                                        "tensor.output",
