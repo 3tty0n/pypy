@@ -209,24 +209,31 @@ because the tape is host code the tracer sees; the remaining launches are the
 matmuls and the per-parameter updates.
 
 Model demos (variants 8 and 9, forward only, float64, 100 iterations).  The
-Transformer block has D=64, H=4 heads with per-head projections, softmax and
-layernorm written as host code and fused into row-tiled kernels (one Triton
-program per row, reductions along the row inside the kernel); the CNN is
-conv3x3 (im2col + cuBLAS) -> batchnorm -> relu -> maxpool2 -> linear.
-Per-iteration microseconds and launches (matmuls not counted):
+Transformer block has D=64, H=4 heads: three (D,D) projections, a head-split
+gather, one strided-batched cuBLAS call for the scores, scale and softmax over
+the (H*rows, rows) matrix in a single row-tiled kernel (one Triton program per
+row, tile width specialised to the promoted column count), a second batched
+call with V, a head-merge gather, the output projection, and layernorms and
+the MLP as further fused kernels; the torch baseline uses the same batched
+formulation.  The CNN is conv3x3 (im2col + cuBLAS) -> batchnorm -> relu ->
+maxpool2 -> linear.  Per-iteration microseconds and launches (matmuls not
+counted):
 
 | model | size | fused (launches) | eager, ours (launches) | torch.compile | torch eager |
 |---|---|---|---|---|---|
-| Transformer | 64 rows | 978 (33) | 1094 (55) | 588 | 663 |
-| Transformer | 1024 rows | 4077 (33) | 4413 (55) | 1999 | 1963 |
-| CNN | 1 image | 99.7 (6) | 105.1 (10) | 202.9 | 135.6 |
-| CNN | 21 images | 247.0 (6) | 268.2 (10) | 354.5 | 265.1 |
+| Transformer | 64 rows | 219.6 (9) | 540.3 (38) | 250.4 | 388.9 |
+| Transformer | 1024 rows | 1695.5 (9) | 3825.2 (38) | 1883.6 | 1874.2 |
+| CNN | 1 image | 81.4 (6) | 89.2 (10) | 202.9 | 135.6 |
+| CNN | 21 images | 230.3 (6) | 238.6 (10) | 354.5 | 265.1 |
 
-The Transformer gap is the 14 small per-head cuBLAS fp64 matmuls per
-iteration (D/H = 16) against PyTorch's batched attention; before the
-row-tiled kernels the axis-1 max ran on the host and the block took 39.6 ms
-at 1024 rows.  Row kernels use a fixed 4096-lane tile, so at D=64 most lanes
-are masked; compiling row kernels per column count is the next step.
+Three runtime changes took the Transformer from 978 / 4077 us to these
+numbers: device buffers are zero-filled only when the kernel accumulates
+atomically (a memset per allocation had cost about 100 GPU operations per
+iteration), scalar constants such as `eps` and the attention scale are cached
+device tensors instead of per-call uploads, and attention runs batched over
+heads (8 cuBLAS calls instead of 14 small ones).  Row kernels compiled with
+the tile width of the promoted column count (64 for layernorm, 1024 for the
+attention softmax) then halved the 1024-row time again.
 
 Variant 3 is a real force in every system (the value is needed on the host),
 so both produce two kernels.  Variants 1 and 4 depend on the loop counter;
