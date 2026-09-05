@@ -45,6 +45,9 @@ Output columns: `mode variant k n iters warm_s steady_us kernels acc compiled_in
 | chain K=4, N=1e6 | 67.9 | 68.7 | 312.4 |
 | chain + loop-counter branch (variant 1) | 53.3 | 308.2 (recompiles, falls back) | 317.3 |
 | chain + host write (variant 5) | 68.7 | 333.6 (graph break) | 343.0 |
+| reduction, 1000 rows (variant 11) | 63.6 | 284.0 | 221.2 |
+| matmul + fused epilogue, 1000 rows (variant 12) | 382.9 | 637.4 | 622.3 |
+| attention, 1000 rows (variant 13) | 4844.3 | 6497.0 | 5097.5 |
 | MLP forward, 1000 rows | 1064.9 | 1269.5 | 1256.1 |
 | MLP training, 1000 rows | 2862.5 | 3054.1 | 3083.2 |
 | Transformer forward, 1024 rows | 1690.5 | 1883.6 | 1874.2 |
