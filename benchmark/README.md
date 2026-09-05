@@ -64,16 +64,19 @@ is not yet attributed.  Raw runs are in `results/`.
 
 Real HuggingFace checkpoints (`applevel/gpt2_export.py` writes the weights,
 `applevel/gpt2.py` runs them on our PyPy, `applevel/gpt2_torch.py` runs
-`transformers.GPT2LMHeadModel` on the same token ids; seq 64, float32,
-argmax agrees at every position, max logits difference 1.7e-4):
+`transformers.GPT2LMHeadModel` on the same token ids; the `llama_*.py`
+triple does the same for Llama-architecture models; seq 64, float32,
+argmax agrees at every position, max logits difference 1.7e-4 for GPT-2
+and 1.9e-4 for SmolLM2):
 
 | model | ours (PyPy) | torch.compile | torch eager |
 |---|---|---|---|
 | distilgpt2 (6 layers, 768, 12 heads) | 2984 | 1356 | 2521 |
 | sshleifer/tiny-gpt2 (2 layers, width 2) | 558 | 373 | 1418 |
+| SmolLM2-135M (Llama, 30 layers, 576, 9/3 heads) | 11593 | 6304 | 14855 |
 
-distilgpt2 takes 157 launches per iteration (cuBLAS included); the gap to
-torch.compile is the open item.
+distilgpt2 takes 157 launches per iteration (cuBLAS included), SmolLM2-135M
+576; the gap to torch.compile is the open item.
 
 App-level scripts in `applevel/` (Transformer, CNN, chains) run on a PyPy
 translated with `--withmod-_tensor` and track the RPython numbers within

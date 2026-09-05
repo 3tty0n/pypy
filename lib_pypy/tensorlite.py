@@ -253,3 +253,88 @@ class GPT2(object):
             x = block(x)
         x = layernorm(x, self.gf, self.bf, self.eps)
         return x.matmul(self.wte, True)
+
+
+def rmsnorm(x, gamma, eps=1e-5):
+    rows, cols = x.shape
+    dt = x.dtype
+    inv = _scalar(1.0 / cols, dt)
+    denom = x.mul(x).sum(1).mul(inv).add(_scalar(eps, dt)).sqrt()
+    return x.div(denom.reshape([rows, 1])).mul(gamma)
+
+
+def silu(x):
+    dt = x.dtype
+    one = _scalar(1.0, dt)
+    return x.div(one.add(x.mul(_scalar(-1.0, dt)).exp()))
+
+
+def rope(x, cos, sin, p):
+    return x.mul(cos).add(x.matmul(p).mul(sin))
+
+
+class LlamaAttention(object):
+    def __init__(self, wq, wk, wv, wo, heads, mask, cos, sin, p):
+        self.wq = wq
+        self.wk = wk
+        self.wv = wv
+        self.wo = wo
+        self.heads = heads
+        self.mask = mask
+        self.cos = cos
+        self.sin = sin
+        self.p = p
+
+    def __call__(self, x):
+        import math
+        h = self.heads
+        dh = x.shape[1] // h
+        q = rope(x.matmul(self.wq), self.cos, self.sin, self.p).head_split(h)
+        k = rope(x.matmul(self.wk), self.cos, self.sin, self.p).head_split(h)
+        v = x.matmul(self.wv).head_split(h)
+        s = q.bmm(k, h, True).mul(
+            _scalar(1.0 / math.sqrt(dh), x.dtype)).add(self.mask)
+        c = softmax(s).bmm(v, h)
+        return c.head_merge(h).matmul(self.wo)
+
+
+class LlamaMLP(object):
+    def __init__(self, wgate, wup, wdown):
+        self.wgate = wgate
+        self.wup = wup
+        self.wdown = wdown
+
+    def __call__(self, x):
+        return silu(x.matmul(self.wgate)).mul(x.matmul(self.wup)).matmul(
+            self.wdown)
+
+
+class LlamaBlock(object):
+    def __init__(self, attn, g1, g2, mlp, eps=1e-5):
+        self.attn = attn
+        self.g1 = g1
+        self.g2 = g2
+        self.mlp = mlp
+        self.eps = eps
+
+    def __call__(self, x):
+        x = x.add(self.attn(rmsnorm(x, self.g1, self.eps)))
+        return x.add(self.mlp(rmsnorm(x, self.g2, self.eps)))
+
+
+class Llama(object):
+    def __init__(self, wte, blocks, gf, head=None, eps=1e-5):
+        self.wte = wte
+        self.blocks = blocks
+        self.gf = gf
+        self.head = head
+        self.eps = eps
+
+    def __call__(self, idx):
+        x = self.wte.take(idx)
+        for block in self.blocks:
+            x = block(x)
+        x = rmsnorm(x, self.gf, self.eps)
+        if self.head is None:
+            return x.matmul(self.wte, True)
+        return x.matmul(self.head, True)
