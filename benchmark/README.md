@@ -168,6 +168,21 @@ epilogue is worth only a few percent here and `torch.compile` gains nothing
 over eager either; the point of the row is that the wrapper layer, cuBLAS
 delegation and fusion compose, and that checksums agree with PyTorch.
 
+Training step (variant 7): the same MLP with `loss = sum(y)`, reverse-mode
+autograd written as ordinary RPython code on top of the tensor library, and
+an SGD update.  Per iteration: 8 cuBLAS matmuls (3 forward, 3 weight
+gradients, 2 input gradients) plus the fused elementwise gradient and update
+kernels.  Per-iteration microseconds and kernel launches:
+
+| rows | fused (launches) | eager, ours (launches) | torch.compile | torch eager |
+|---|---|---|---|---|
+| 100 | 712.2 (18) | 740.4 (26) | 839.5 | 793.7 |
+| 1000 | 2862.5 (18) | 2902.0 (26) | 3054.1 | 3083.2 |
+
+The backward pass fuses into the same kind of kernels as the forward pass
+because the tape is host code the tracer sees; the remaining launches are the
+matmuls and the per-parameter updates.
+
 Variant 3 is a real force in every system (the value is needed on the host),
 so both produce two kernels.  Variants 1 and 4 depend on the loop counter;
 Dynamo specialises on the integer, hits its recompilation limit and falls back
