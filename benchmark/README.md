@@ -106,7 +106,11 @@ accumulated, which forces every iteration.
 
 Output is one line:
 
-    mode variant k n iters warm_s steady_us kernels acc compiled_in_timed launches_per_iter
+    mode variant k n iters warm_s steady_us kernels acc compiled_in_timed launches_per_iter dtype
+
+`RTENSOR_DTYPE` selects the element type of every tensor the benchmark builds
+(`float64`, the default, `float32` or `float16`) and is echoed in the trailing
+`dtype` column; `torch_bench.py` takes the same values in `TORCH_DTYPE`.
 
 `warm_s` is the first warmup run (tracing plus Triton compilation), `steady_us`
 the per-iteration time of the timed run after two more warmup runs, `kernels`

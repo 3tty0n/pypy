@@ -200,6 +200,14 @@ class W_Tensor(W_Root):
     def descr_requires_grad(self, space):
         return space.newbool(self.tensor.requires_grad)
 
+    def descr_dtype(self, space):
+        return space.newtext(rtensor.DTYPE_NAMES[self.tensor.t.dtype])
+
+    def descr_astype(self, space, w_dtype):
+        dtype = _dtype_w(space, w_dtype)
+        return W_Tensor(rtensor_nn.Tensor(
+            rtensor.astype(self.tensor.t, dtype), self.tensor.requires_grad))
+
     def descr_repr(self, space):
         t = self.tensor.t
         shape = [rtensor.tensor_shape(t, i) for i in range(rtensor.tensor_ndim(t))]
@@ -242,7 +250,18 @@ W_Tensor.typedef = TypeDef(
     size=GetSetProperty(W_Tensor.descr_size),
     grad=GetSetProperty(W_Tensor.descr_grad),
     requires_grad=GetSetProperty(W_Tensor.descr_requires_grad),
+    dtype=GetSetProperty(W_Tensor.descr_dtype),
+    astype=interp2app(W_Tensor.descr_astype),
 )
+
+
+def _dtype_w(space, w_dtype):
+    try:
+        dtype = rtensor.dtype_of_name(space.text_w(w_dtype))
+    except ValueError:
+        raise oefmt(space.w_ValueError, "unknown dtype")
+    ensure_dtype(dtype)
+    return dtype
 
 
 class DeviceState(object):
@@ -254,9 +273,17 @@ def ensure_device():
         device_state.ready = True
         rtensor.init_device()
 
-@unwrap_spec(requires_grad=bool)
-def tensor_flat(space, w_data, w_shape, requires_grad=False):
+def ensure_dtype(dtype):
     ensure_device()
+    rtensor.init_dtype(dtype)
+
+@unwrap_spec(requires_grad=bool)
+def tensor_flat(space, w_data, w_shape, requires_grad=False,
+                w_dtype=None):
+    ensure_device()
+    dtype = rtensor.F64
+    if w_dtype is not None and not space.is_none(w_dtype):
+        dtype = _dtype_w(space, w_dtype)
     values = _floats_w(space, w_data)
     shape = _ints_w(space, w_shape)
     n = 1
@@ -264,7 +291,7 @@ def tensor_flat(space, w_data, w_shape, requires_grad=False):
         n *= d
     if n != len(values):
         raise oefmt(space.w_ValueError, "shape mismatch")
-    t = rtensor.from_list(values)
+    t = rtensor.from_list(values, dtype)
     if len(shape) != 1 or shape[0] != n:
         try:
             t = rtensor.reshape(t, shape)
@@ -274,10 +301,13 @@ def tensor_flat(space, w_data, w_shape, requires_grad=False):
 
 
 @unwrap_spec(requires_grad=bool)
-def zeros(space, w_shape, requires_grad=False):
+def zeros(space, w_shape, requires_grad=False, w_dtype=None):
     ensure_device()
+    dtype = rtensor.F64
+    if w_dtype is not None and not space.is_none(w_dtype):
+        dtype = _dtype_w(space, w_dtype)
     shape = _ints_w(space, w_shape)
-    t = rtensor.zeros(shape)
+    t = rtensor.zeros(shape, dtype)
     h = rtensor.host(t)
     for i in range(t.size):
         h[i] = 0.0

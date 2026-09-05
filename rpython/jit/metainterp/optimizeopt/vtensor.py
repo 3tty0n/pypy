@@ -52,6 +52,7 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         kernel.rowmode = 0
         kernel.n = n
         kernel.cols = cols
+        kernel.dtype = rtensor.policy.dtype
         kernel.outputs = lltype.malloc(rtensor.SHAPEARRAY, 0)
         for i in range(len(opcodes)):
             node = kernel.nodes[i]
@@ -254,6 +255,12 @@ class OptTensor(Optimization):
     def optimize_CALL_I(self, op):
         effectinfo = op.getdescr().get_extra_info()
         idx = effectinfo.oopspecindex
+        if idx == EffectInfo.OS_TENSOR_DTYPE:
+            info = vtensor_info(op.getarg(1))
+            if info is not None:
+                args = [op.getarg(0), info.big_leaf()]
+                op = self.replace_op_with(op, op.getopnum(), args=args)
+            return self.emit(op)
         if (idx == EffectInfo.OS_TENSOR_SIZE or
                 idx == EffectInfo.OS_TENSOR_SHAPE or
                 idx == EffectInfo.OS_TENSOR_NDIM):

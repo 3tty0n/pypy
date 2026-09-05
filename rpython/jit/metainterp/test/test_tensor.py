@@ -1261,3 +1261,99 @@ class TestTransformerTrain(LLJitMixin):
         tol = 1e-09 if 'RTENSOR_CPU' in os.environ else 1e-04
         assert abs(res - expect) <= tol * abs(expect)
         self.check_simple_loop(call_r=TRAIN_CALL_R)
+
+
+class TestDtypes(LLJitMixin):
+
+    def setup_method(self, meth):
+        rtensor.policy.static = True
+        rtensor.policy.seen = []
+        rtensor.policy.static_cols = True
+        rtensor.policy.seen_cols = []
+
+    def _chain(self, dt, tol):
+        driver = JitDriver(greens=[], reds=['n', 'w', 'b', 'acc'])
+        def f(n):
+            w = rtensor.from_list([1.0, -2.0, 3.0, -4.0], dt)
+            b = rtensor.from_list([0.5, 0.5, 0.5, 0.5], dt)
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, acc=acc, w=w, b=b)
+                h = tensor_relu(tensor_add(tensor_mul(w, b, 0), b, 0))
+                acc += tensor_item(tensor_sum(h, -1))
+                n -= 1
+            return acc
+        rtensor.init_dtype(dt)
+        res = self.meta_interp(f, [10])
+        assert abs(res - 30.0) <= tol * 30.0
+        self.check_simple_loop(call_r=1, call_f=1)
+
+    def test_fused_chain_float32(self):
+        self._chain(rtensor.F32, 1e-04)
+
+    def test_fused_chain_float16(self):
+        self._chain(rtensor.F16, 1e-02)
+
+    def _softmax(self, dt, tol):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
+        def f(n):
+            x = rtensor.zeros([3, 4], dt)
+            for i in range(12):
+                x.host[i] = ((i * i) % 7) - 3.0 + i * 0.5
+            w = rtensor.zeros([4], dt)
+            for i in range(4):
+                w.host[i] = 1.0 * (1 << i)
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, w=w, acc=acc)
+                s = rtensor_nn.softmax(rtensor_nn.Tensor(x))
+                acc += rtensor.item(rtensor.sum(rtensor.mul(s.t, w)))
+                n -= 1
+            return acc
+        rows = [[((i * 4 + j) * (i * 4 + j)) % 7 - 3.0 + (i * 4 + j) * 0.5
+                 for j in range(4)] for i in range(3)]
+        ref = _ref_softmax(rows)
+        expect = 0.0
+        for i in range(3):
+            for j in range(4):
+                expect += ref[i][j] * (1 << j)
+        expect *= 10
+        rtensor.init_dtype(dt)
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect) <= tol * abs(expect)
+        self.check_simple_loop(call_r=1)
+
+    def test_softmax_rows_float32(self):
+        self._softmax(rtensor.F32, 1e-04)
+
+    def test_softmax_rows_float16(self):
+        self._softmax(rtensor.F16, 1e-02)
+
+
+def _dtype_matrix(rows, cols, seed, dt):
+    m = rtensor.zeros([rows, cols], dt)
+    for i in range(rows * cols):
+        m.host[i] = ((i * 7 + seed) % 11 - 5) * 0.25
+    return m
+
+
+def test_matmul_float32_matches_float64():
+    rtensor.init_dtype(rtensor.F32)
+    ref = rtensor.matmul(_dtype_matrix(4, 5, 1, rtensor.F64),
+                         _dtype_matrix(5, 3, 2, rtensor.F64))
+    got = rtensor.matmul(_dtype_matrix(4, 5, 1, rtensor.F32),
+                         _dtype_matrix(5, 3, 2, rtensor.F32))
+    assert got.dtype == rtensor.F32
+    hr = rtensor.host(ref)
+    hg = rtensor.host(got)
+    for i in range(12):
+        assert abs(hg[i] - hr[i]) <= 1e-04 * (abs(hr[i]) + 1.0)
+
+
+def test_dtype_mismatch_raises():
+    import py
+    a = rtensor.from_list([1.0, 2.0], rtensor.F32)
+    b = rtensor.from_list([1.0, 2.0], rtensor.F64)
+    py.test.raises(ValueError, rtensor.add, a, b)
+    py.test.raises(ValueError, rtensor.mul, a, b)
+    rtensor.note_dtype(rtensor.F64)

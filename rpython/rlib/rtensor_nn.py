@@ -263,7 +263,8 @@ def _lp(p):
 
 
 def _neg(t):
-    return rtensor.tensor_mul(t, rtensor.scalar(-1.0), rtensor.BC_R_SCALAR)
+    return rtensor.tensor_mul(t, rtensor.scalar(-1.0),
+                              rtensor.BC_R_SCALAR)
 
 
 class Node(object):
@@ -447,7 +448,8 @@ class SqrtNode(Node):
         self.y = y
 
     def apply(self, g):
-        h = rtensor.tensor_mul(g.t, rtensor.scalar(0.5), rtensor.BC_R_SCALAR)
+        h = rtensor.tensor_mul(g.t, rtensor.scalar(0.5),
+                               rtensor.BC_R_SCALAR)
         return [Tensor(rtensor.tensor_div(h, self.y.t, rtensor.BC_NONE))]
 
 
@@ -741,9 +743,9 @@ class BatchNorm2d(object):
         self.var = var
         self.rows = -1
 
-    def _prepare(self, rows):
-        a = rtensor.column(rows)
-        b = rtensor.column(rows)
+    def _prepare(self, rows, dtype):
+        a = rtensor.column(rows, dtype)
+        b = rtensor.column(rows, dtype)
         for i in range(rows):
             ci = i % self.c
             g = self.gamma[ci] / math.sqrt(self.var[ci] + self.eps)
@@ -757,8 +759,9 @@ class BatchNorm2d(object):
 
     def forward(self, x, hw):
         rows = rtensor.tensor_size(x.t) // hw
-        if self.rows != rows:
-            self._prepare(rows)
+        dt = rtensor.tensor_dtype(x.t)
+        if self.rows != rows or self.scale.dtype != dt:
+            self._prepare(rows, dt)
         v = rtensor.view2(x.t, rows, hw)
         y = rtensor.tensor_mul(v, self.scale, rtensor.BC_R_COL)
         return x._forward_only(

@@ -2,11 +2,18 @@ import sys, os, time
 from rpython.rlib import jit
 from rpython.rlib import rtensor, rtensor_nn
 from rpython.rlib.rtensor import (tensor_add, tensor_mul, tensor_relu,
-    tensor_sum, tensor_item, tensor_force, new_tensor)
+    tensor_sum, tensor_item, tensor_force)
 
 class Sink(object):
     fd = -1
 sink = Sink()
+
+class Cfg(object):
+    dtype = rtensor.F64
+cfg = Cfg()
+
+def _zeros(shape):
+    return rtensor.zeros(shape, cfg.dtype)
 
 driver = jit.JitDriver(greens=['k', 'variant'], reds='auto', is_recursive=True)
 mlp_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
@@ -23,10 +30,10 @@ TB_EPS = 1e-05
 TF_BLOCKS = 2
 
 def make_mlp_layer(d):
-    w = rtensor.zeros([d, d])
+    w = _zeros([d, d])
     for i in range(d * d):
         w.host[i] = float((i * 7) % 13 - 6) / d
-    b = rtensor.zeros([d])
+    b = _zeros([d])
     for i in range(d):
         b.host[i] = 0.01
     rtensor.dev(w)
@@ -38,7 +45,7 @@ def make_mlp(d):
                            make_mlp_layer(d)])
 
 def make_mlp_input(rows, d):
-    x = rtensor.zeros([rows, d])
+    x = _zeros([rows, d])
     for i in range(rows * d):
         x.host[i] = (i % 7) - 3.0
     rtensor.dev(x)
@@ -66,7 +73,7 @@ def run_mlp_train(n, iters):
     mlp = make_mlp(MLP_D)
     x = make_mlp_input(rows, MLP_D)
     params = mlp.parameters()
-    lr = rtensor_nn.Tensor(rtensor.from_list([-LR]))
+    lr = rtensor_nn.Tensor(rtensor.from_list([-LR], cfg.dtype))
     rtensor.dev(lr.t)
     loss = 0.0
     i = 0
@@ -80,14 +87,14 @@ def run_mlp_train(n, iters):
     return loss
 
 def tb_weight(rows, cols):
-    w = rtensor.zeros([rows, cols])
+    w = _zeros([rows, cols])
     for i in range(rows * cols):
         w.host[i] = float((i * 7) % 13 - 6) / TB_D
     rtensor.dev(w)
     return rtensor_nn.Tensor(w)
 
 def tb_vector(v):
-    t = rtensor.zeros([TB_D])
+    t = _zeros([TB_D])
     for i in range(TB_D):
         t.host[i] = v
     rtensor.dev(t)
@@ -95,7 +102,7 @@ def tb_vector(v):
 
 def tb_qkv():
     dh = TB_D // TB_H
-    w = rtensor.zeros([TB_D, TB_D])
+    w = _zeros([TB_D, TB_D])
     for r in range(TB_D):
         for h in range(TB_H):
             for c in range(dh):
@@ -106,7 +113,7 @@ def tb_qkv():
 
 def tb_proj():
     dh = TB_D // TB_H
-    w = rtensor.zeros([TB_D, TB_D])
+    w = _zeros([TB_D, TB_D])
     for h in range(TB_H):
         for r in range(dh):
             for c in range(TB_D):
@@ -163,7 +170,7 @@ def run_transformer_train(n, iters):
     model = make_transformer()
     x = make_mlp_input(rows, TB_D)
     params = model.parameters()
-    lr = rtensor_nn.Tensor(rtensor.from_list([-LR]))
+    lr = rtensor_nn.Tensor(rtensor.from_list([-LR], cfg.dtype))
     rtensor.dev(lr.t)
     loss = 0.0
     i = 0
@@ -179,14 +186,14 @@ def run_transformer_train(n, iters):
 CNN_C, CNN_HW, CNN_O, CNN_CLS = 3, 32, 8, 10
 
 def cnn_weight(rows, cols):
-    w = rtensor.zeros([rows, cols])
+    w = _zeros([rows, cols])
     for i in range(rows * cols):
         w.host[i] = float((i * 7) % 13 - 6) / rows
     rtensor.dev(w)
     return rtensor_nn.Tensor(w)
 
 def cnn_bias(m):
-    t = rtensor.zeros([m])
+    t = _zeros([m])
     for i in range(m):
         t.host[i] = 0.01
     rtensor.dev(t)
@@ -228,8 +235,8 @@ def run_model(variant, n, iters):
     return run_mlp(n, iters)
 
 def make_inputs(n):
-    w = new_tensor(n)
-    b = new_tensor(n)
+    w = _zeros([n])
+    b = _zeros([n])
     for i in range(n):
         w.host[i] = (i % 7) - 3.0
         b.host[i] = 0.5
@@ -269,6 +276,12 @@ def run(variant, k, h, b, iters):
         i += 1
     return tensor_item(tensor_sum(h, -1))
 
+def _bench_env(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value
+
 def entry_point(argv):
     if len(argv) != 6:
         print 'usage: rtensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..10)'
@@ -285,6 +298,14 @@ def entry_point(argv):
     elif mode == 'nojit':
         jit.set_user_param(None, 'off')
     rtensor.init_device()
+    try:
+        cfg.dtype = rtensor.dtype_of_name(_bench_env('RTENSOR_DTYPE',
+                                                     'float64'))
+    except ValueError:
+        print 'unknown RTENSOR_DTYPE'
+        return 1
+    rtensor.init_dtype(cfg.dtype)
+    dtname = rtensor.DTYPE_NAMES[cfg.dtype]
     sink.fd = os.open('/dev/null', os.O_WRONLY, 0)
     if variant >= 6:
         run_model(variant, n, 20)
@@ -301,9 +322,9 @@ def entry_point(argv):
         steady = (time.time() - t0) / iters * 1e6
         launches = float(rtensor.launch_count() - launches_before) / iters
         rtensor.reset_device()
-        print '%s %d %d %d %d %f %f %d %f %d %f' % (mode, variant, k, n, iters,
-            warm, steady, rtensor.counter.n, acc, rtensor.counter.n - before,
-            launches)
+        print '%s %d %d %d %d %f %f %d %f %d %f %s' % (mode, variant, k, n,
+            iters, warm, steady, rtensor.counter.n, acc,
+            rtensor.counter.n - before, launches, dtname)
         return 0
     w, b = make_inputs(n)
     t0 = time.time()
@@ -319,9 +340,9 @@ def entry_point(argv):
     steady = (time.time() - t0) / iters * 1e6
     launches = float(rtensor.launch_count() - launches_before) / iters
     rtensor.reset_device()
-    print '%s %d %d %d %d %f %f %d %f %d %f' % (mode, variant, k, n, iters,
+    print '%s %d %d %d %d %f %f %d %f %d %f %s' % (mode, variant, k, n, iters,
         warm, steady, rtensor.counter.n, acc, rtensor.counter.n - before,
-        launches)
+        launches, dtname)
     return 0
 
 def target(*args):

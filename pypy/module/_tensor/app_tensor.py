@@ -17,10 +17,10 @@ def _flatten(data, out):
         out.append(float(data))
 
 
-def tensor(data, shape=None, requires_grad=False):
+def tensor(data, shape=None, requires_grad=False, dtype="float64"):
     import _tensor
     if shape is None:
         shape = _shape_of(data)
     flat = []
     _flatten(data, flat)
-    return _tensor._tensor_flat(flat, shape, requires_grad)
+    return _tensor._tensor_flat(flat, shape, requires_grad, dtype)

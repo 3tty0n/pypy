@@ -245,3 +245,21 @@ class AppTestTensor(object):
         g = x.grad
         rows = g.mul(_tensor.tensor([1.0, 1.0, 1.0])).sum(1)
         assert abs(rows.mul(_tensor.tensor([1.0, 1.0])).sum().item()) < 1e-12
+
+    def test_dtype_and_astype(self):
+        import _tensor
+        a = _tensor.tensor([1.0, 2.0, 3.0])
+        assert a.dtype == "float64"
+        b = _tensor.tensor([1.0, 2.0, 3.0], dtype="float32")
+        assert b.dtype == "float32"
+        assert abs(b.sum().item() - 6.0) < 1e-4
+        c = b.astype("float64")
+        assert c.dtype == "float64"
+        assert abs(c.sum().item() - 6.0) < 1e-9
+        h = a.astype("float16")
+        assert h.dtype == "float16"
+        assert h.shape == (3,)
+        z = _tensor.zeros([2, 2], False, "float32")
+        assert z.dtype == "float32"
+        raises(ValueError, _tensor.tensor, [1.0], None, False, "float8")
+        raises(ValueError, b.add, a)

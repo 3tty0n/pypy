@@ -17,8 +17,26 @@ TENSOR.become(lltype.GcStruct('TENSOR', ('size', lltype.Signed),
                               ('dptr', lltype.Signed),
                               ('host', lltype.Ptr(HOSTARRAY)),
                               ('extra', lltype.Ptr(TENSORARRAY)),
+                              ('dtype', lltype.Signed),
                               ('buf', OBJECTPTR)))
 NULLTENSOR = lltype.nullptr(TENSOR)
+
+F64, F32, F16 = 0, 1, 2
+NDTYPES = 3
+DTYPE_BYTES = [8, 4, 2]
+DTYPE_NAMES = ['float64', 'float32', 'float16']
+STORE_TYPE = ['f64', 'f32', 'f16']
+COMP_TYPE = ['f64', 'f32', 'f32']
+COMP_NEG_INF = ['0xFFF0000000000000', '0xFF800000', '0xFF800000']
+
+def dtype_of_name(name):
+    for i in range(NDTYPES):
+        if DTYPE_NAMES[i] == name:
+            return i
+    raise ValueError("unknown dtype")
+
+def nbytes(n, dtype):
+    return n * DTYPE_BYTES[dtype]
 
 ADD, MUL, RELU, SUM, RELUGRAD = 0, 1, 2, 3, 4
 SUB, DIV, EXP, SQRT, MAXR = 5, 6, 7, 8, 9
@@ -34,7 +52,6 @@ BC_NONE, BC_R_ROW, BC_R_SCALAR, BC_L_ROW, BC_L_SCALAR = 0, 1, 2, 3, 4
 BC_R_COL, BC_L_COL = 5, 6
 NPARAMS = 7
 AXIS_ALL = -1
-NEG_INF_BITS = '0xFFF0000000000000'
 NEG_INF = -INFINITY
 
 NODE = lltype.Struct('TENSOR_NODE', ('opcode', lltype.Signed),
@@ -51,6 +68,7 @@ KERNEL = lltype.GcStruct('TENSOR_KERNEL', ('ninputs', lltype.Signed),
                          ('nextra', lltype.Signed),
                          ('n', lltype.Signed),
                          ('cols', lltype.Signed),
+                         ('dtype', lltype.Signed),
                          ('outputs', lltype.Ptr(SHAPEARRAY)))
 KERNELPTR = lltype.Ptr(KERNEL)
 
@@ -63,60 +81,74 @@ class DeviceBuffer(object):
     def __del__(self):
         rt_cuda_free(self.dptr, self.n)
 
-def attach_buffer(t, dptr, n):
+def attach_buffer(t, dptr, nb):
     t.dptr = dptr
-    t.buf = cast_instance_to_base_ptr(DeviceBuffer(dptr, n))
+    t.buf = cast_instance_to_base_ptr(DeviceBuffer(dptr, nb))
 
 def _shape1(n):
     shape = lltype.malloc(SHAPEARRAY, 1)
     shape[0] = n
     return shape
 
-def new_tensor(n, shape=lltype.nullptr(SHAPEARRAY)):
+def new_tensor(n, shape=lltype.nullptr(SHAPEARRAY), dtype=F64):
     t = lltype.malloc(TENSOR)
     t.size = n
     t.shape = shape if shape else _shape1(n)
     t.dptr = 0
     t.host = lltype.malloc(HOSTARRAY, n)
     t.extra = lltype.nullptr(TENSORARRAY)
+    t.dtype = dtype
     t.buf = lltype.nullptr(OBJECTPTR.TO)
     return t
 
-def device_tensor(n, dptr, shape=lltype.nullptr(SHAPEARRAY)):
+def device_tensor(n, dptr, shape=lltype.nullptr(SHAPEARRAY), dtype=F64):
     t = lltype.malloc(TENSOR)
     t.size = n
     t.shape = shape if shape else _shape1(n)
     t.host = lltype.nullptr(HOSTARRAY)
     t.extra = lltype.nullptr(TENSORARRAY)
-    attach_buffer(t, dptr, n)
+    t.dtype = dtype
+    attach_buffer(t, dptr, nbytes(n, dtype))
     return t
 
-def zeros(shape_list):
+def zeros(shape_list, dtype=F64):
     n = 1
     for d in shape_list:
         n *= d
     shape = lltype.malloc(SHAPEARRAY, len(shape_list))
     for i in range(len(shape_list)):
         shape[i] = shape_list[i]
-    return new_tensor(n, shape)
+    note_dtype(dtype)
+    return new_tensor(n, shape, dtype)
 
-def from_list(values):
-    t = new_tensor(len(values))
+def from_list(values, dtype=F64):
+    note_dtype(dtype)
+    t = new_tensor(len(values), lltype.nullptr(SHAPEARRAY), dtype)
     for i in range(len(values)):
         t.host[i] = values[i]
     return t
 
+def astype(t, dtype):
+    if t.dtype == dtype:
+        return t
+    note_dtype(dtype)
+    h = host(t)
+    r = new_tensor(t.size, t.shape, dtype)
+    for i in range(t.size):
+        r.host[i] = h[i]
+    return r
+
 def host(t):
     if not t.host:
         t.host = lltype.malloc(HOSTARRAY, t.size)
-        download(t.dptr, t.host)
+        download(t.dptr, t.host, t.dtype)
     return t.host
 
 def dev(t):
     if t.dptr == 0:
-        dptr = upload(t.host)
+        dptr = upload(t.host, t.dtype)
         if dptr != 0:
-            attach_buffer(t, dptr, t.size)
+            attach_buffer(t, dptr, nbytes(t.size, t.dtype))
     return t.dptr
 
 def cols(t):
@@ -128,7 +160,7 @@ def cols(t):
     return 1
 
 def eval_op(opcode, a, b, p):
-    kernel = single_kernel(opcode, p)
+    kernel = single_kernel(opcode, p, a.dtype)
     if kernel.fn != 0:
         inputs = [a]
         if ARITY[opcode] == 2:
@@ -161,7 +193,7 @@ def eval_op_cpu(opcode, a, b, p):
     ha = host(a)
     if ARITY[opcode] == 1:
         n = a.size
-        r = new_tensor(n, a.shape)
+        r = new_tensor(n, a.shape, a.dtype)
         hr = r.host
         for i in range(n):
             v = ha[i]
@@ -178,7 +210,7 @@ def eval_op_cpu(opcode, a, b, p):
     n = big.size
     c = cols(big)
     hb = host(b)
-    r = new_tensor(n, big.shape)
+    r = new_tensor(n, big.shape, big.dtype)
     hr = r.host
     for i in range(n):
         ia = i
@@ -223,7 +255,7 @@ def reduce_cpu(opcode, a, axis):
         m = 1
     if m <= 0:
         m = 1
-    r = new_tensor(m)
+    r = new_tensor(m, lltype.nullptr(SHAPEARRAY), a.dtype)
     hr = r.host
     for i in range(m):
         hr[i] = 0.0 if opcode == SUM else NEG_INF
@@ -245,7 +277,9 @@ def reduce_cpu(opcode, a, axis):
 
 class SingleKernels(object):
     def __init__(self):
-        self.kernels = [_empty_kernel() for i in range(NOPCODES * NPARAMS)]
+        self.kernels = [_empty_kernel()
+                        for i in range(NOPCODES * NPARAMS * NDTYPES)]
+        self.done = [False] * NDTYPES
 
 def _empty_kernel():
     k = lltype.malloc(KERNEL)
@@ -255,6 +289,7 @@ def _empty_kernel():
     k.rowmode = 0
     k.n = 0
     k.cols = 0
+    k.dtype = F64
     k.outputs = lltype.malloc(SHAPEARRAY, 0)
     return k
 single_kernels = SingleKernels()
@@ -285,8 +320,9 @@ def slot_used(opcode, slot):
         return slot == 0
     return True
 
-def single_kernel(opcode, p):
-    return single_kernels.kernels[opcode * NPARAMS + param_slot(opcode, p)]
+def single_kernel(opcode, p, dtype):
+    return single_kernels.kernels[(dtype * NOPCODES + opcode) * NPARAMS +
+                                  param_slot(opcode, p)]
 
 def init_device():
     try:
@@ -295,6 +331,12 @@ def init_device():
         rt_cuda_set_budget(int(_env('RTENSOR_BUDGET_MB', '64')) << 20)
     except ValueError:
         pass
+    init_dtype(F64)
+
+def init_dtype(dtype):
+    if single_kernels.done[dtype]:
+        return
+    single_kernels.done[dtype] = True
     for opcode in range(NOPCODES):
         for slot in range(NPARAMS):
             if not slot_used(opcode, slot):
@@ -307,8 +349,9 @@ def init_device():
             rights.append(1 if ARITY[opcode] == 2 else -1)
             params = []
             params.append(slot_param(opcode, slot))
-            single_kernels.kernels[opcode * NPARAMS + slot] = build_kernel(
-                ARITY[opcode], opcodes, lefts, rights, params)
+            single_kernels.kernels[(dtype * NOPCODES + opcode) * NPARAMS +
+                                   slot] = build_kernel(
+                ARITY[opcode], opcodes, lefts, rights, params, dtype)
 
 @jit.oopspec("tensor.add(a, b, bcast)")
 def tensor_add(a, b, bcast):
@@ -366,15 +409,24 @@ def tensor_size(a):
 def tensor_shape(a, axis):
     return a.shape[axis]
 
+@jit.oopspec("tensor.dtype(a)")
+def tensor_dtype(a):
+    return a.dtype
+
 
 class SizePolicy(object):
-    _immutable_fields_ = ['static?', 'static_cols?']
+    _immutable_fields_ = ['static?', 'static_cols?', 'dtype?']
     def __init__(self):
         self.static = True
         self.seen = []
         self.static_cols = True
         self.seen_cols = []
+        self.dtype = F64
 policy = SizePolicy()
+
+def note_dtype(dtype):
+    if policy.dtype != dtype:
+        policy.dtype = dtype
 MAX_STATIC_SIZES = 3
 
 @jit.elidable
@@ -431,6 +483,8 @@ def flip_bcast(p):
     return BC_L_COL
 
 def bcast(a, b):
+    if tensor_dtype(a) != tensor_dtype(b):
+        raise ValueError("dtype mismatch")
     na = size(a)
     nb = size(b)
     if na == nb:
@@ -498,18 +552,19 @@ def view(a, shape):
     r.dptr = a.dptr
     r.host = a.host
     r.extra = lltype.nullptr(TENSORARRAY)
+    r.dtype = a.dtype
     r.buf = a.buf
     return r
 
 class Ones(object):
     def __init__(self):
-        self.n = -1
-        self.t = NULLTENSOR
-        self.one = NULLTENSOR
+        self.n = [-1] * NDTYPES
+        self.t = [NULLTENSOR] * NDTYPES
+        self.one = [NULLTENSOR] * NDTYPES
 ones = Ones()
 
-def _make_ones(n):
-    t = new_tensor(n)
+def _make_ones(n, dtype):
+    t = new_tensor(n, lltype.nullptr(SHAPEARRAY), dtype)
     for i in range(n):
         t.host[i] = 1.0
     dev(t)
@@ -519,31 +574,34 @@ def _make_ones(n):
 def ones_like(a):
     n = tensor_size(a)
     nd = tensor_ndim(a)
+    dtype = tensor_dtype(a)
     shape = lltype.malloc(SHAPEARRAY, nd)
     for i in range(nd):
         shape[i] = tensor_shape(a, i)
     if n == 1:
-        if not ones.one:
-            ones.one = _make_ones(1)
-        return view(ones.one, shape)
-    if ones.n != n:
-        ones.t = _make_ones(n)
-        ones.n = n
-    return view(ones.t, shape)
+        if not ones.one[dtype]:
+            ones.one[dtype] = _make_ones(1, dtype)
+        return view(ones.one[dtype], shape)
+    if ones.n[dtype] != n:
+        ones.t[dtype] = _make_ones(n, dtype)
+        ones.n[dtype] = n
+    return view(ones.t[dtype], shape)
 
 class ScalarCache(object):
     def __init__(self):
-        self.tensors = {}
+        self.tensors = [{}, {}, {}]
 scalars = ScalarCache()
 
 
 @jit.elidable
 def scalar(value):
-    t = scalars.tensors.get(value, NULLTENSOR)
+    dtype = policy.dtype
+    t = scalars.tensors[dtype].get(value, NULLTENSOR)
     if not t:
-        t = from_list([value])
+        t = new_tensor(1, lltype.nullptr(SHAPEARRAY), dtype)
+        t.host[0] = value
         dev(t)
-        scalars.tensors[value] = t
+        scalars.tensors[dtype][value] = t
     return t
 
 
@@ -576,7 +634,7 @@ def matmul_cpu(a, b, rows, cols, inner, ta, tb):
     shape = lltype.malloc(SHAPEARRAY, 2)
     shape[0] = rows
     shape[1] = cols
-    r = new_tensor(rows * cols, shape)
+    r = new_tensor(rows * cols, shape, a.dtype)
     hr = r.host
     for i in range(rows):
         for j in range(cols):
@@ -596,22 +654,25 @@ def matmul_cpu(a, b, rows, cols, inner, ta, tb):
 
 @jit.dont_look_inside
 def tensor_matmul(a, b, rows, cols, inner, ta, tb):
-    if gpu_enabled():
+    if gpu_enabled() and a.dtype == b.dtype:
+        dt = a.dtype
         dptr_a = dev(a)
         dptr_b = dev(b)
         if dptr_a != 0 and dptr_b != 0:
             n = rows * cols
-            collect_if_needed(n)
-            outptr = rt_cuda_alloc(n, 0)
+            nb = nbytes(n, dt)
+            collect_if_needed(nb)
+            outptr = rt_cuda_alloc(nb, 0)
             if outptr != 0:
                 ok = rffi.cast(lltype.Signed, rt_cuda_matmul(
-                    dptr_a, dptr_b, outptr, rows, inner, cols, ta, tb)) != 0
+                    dptr_a, dptr_b, outptr, rows, inner, cols, ta, tb,
+                    dt)) != 0
                 if ok:
                     shape = lltype.malloc(SHAPEARRAY, 2)
                     shape[0] = rows
                     shape[1] = cols
-                    return device_tensor(n, outptr, shape)
-                rt_cuda_free(outptr, n)
+                    return device_tensor(n, outptr, shape, dt)
+                rt_cuda_free(outptr, nb)
     return matmul_cpu(a, b, rows, cols, inner, ta, tb)
 
 def item(a):
@@ -639,7 +700,7 @@ def cached_kernel(key):
 def cache_kernel(key, kernel):
     kernel_cache.kernels[key] = kernel
 
-def new_kernel(ninputs, nnodes):
+def new_kernel(ninputs, nnodes, dtype=F64):
     kernel = lltype.malloc(KERNEL)
     kernel.ninputs = ninputs
     kernel.nodes = lltype.malloc(NODEARRAY, nnodes)
@@ -647,6 +708,7 @@ def new_kernel(ninputs, nnodes):
     kernel.rowmode = 0
     kernel.n = 0
     kernel.cols = 0
+    kernel.dtype = dtype
     kernel.outputs = lltype.malloc(SHAPEARRAY, 0)
     return kernel
 
@@ -690,6 +752,7 @@ def kernel_key(kernel):
         parts.append('%d:%d:%d:%d' % (node.opcode, node.a, node.b, node.p))
     for i in range(len(kernel.outputs)):
         parts.append('o%d' % kernel.outputs[i])
+    parts.append('d%d' % kernel.dtype)
     return ','.join(parts)
 
 def compile_or_reuse(kernel):
@@ -721,8 +784,8 @@ def finish_kernel(kernel):
     kernel.fn = compile_gpu(kernel)
     return kernel
 
-def build_kernel(ninputs, opcodes, lefts, rights, params):
-    kernel = new_kernel(ninputs, len(opcodes))
+def build_kernel(ninputs, opcodes, lefts, rights, params, dtype=F64):
+    kernel = new_kernel(ninputs, len(opcodes), dtype)
     for i in range(len(opcodes)):
         set_node(kernel, i, opcodes[i], lefts[i], rights[i], params[i])
     return finish_kernel(kernel)
@@ -763,10 +826,11 @@ def launch(kernel, a, b, c, d=NULLTENSOR, e=NULLTENSOR, f=NULLTENSOR):
     return result
 
 def to_tile_ir(kernel, name, n):
-    tile = 'tile<%dxf64>' % n
-    params = ', '.join(['%%in%d: !cuda_tile.ptr<f64>' % i
+    ty = STORE_TYPE[kernel.dtype]
+    tile = 'tile<%dx%s>' % (n, ty)
+    params = ', '.join(['%%in%d: !cuda_tile.ptr<%s>' % (i, ty)
                         for i in range(kernel.ninputs)] +
-                       ['%out: !cuda_tile.ptr<f64>'])
+                       ['%%out: !cuda_tile.ptr<%s>' % ty])
     lines = ['cuda_tile.module {',
              '  cuda_tile.entry @%s(%s) {' % (name, params)]
     for i in range(kernel.ninputs):
@@ -790,7 +854,7 @@ def to_tile_ir(kernel, name, n):
             lines.append('    %%v%d = cuda_tile.select %%v%d, %%v%d, %%zero : %s'
                          % (v, node.a, node.b, tile))
         else:
-            result = 'tile<1xf64>'
+            result = 'tile<1x%s>' % ty
             lines.append('    %%v%d = cuda_tile.reduce add %%v%d : %s -> %s'
                          % (v, node.a, tile, result))
     lines.append('    cuda_tile.store_ptr_tko %%out, %%v%d : %s'
@@ -814,23 +878,24 @@ eci = ExternalCompilationInfo(
     post_include_bits=["""
 RPY_EXTERN int rt_cuda_available(void);
 RPY_EXTERN long rt_cuda_load(const char *ptx, const char *name);
-RPY_EXTERN long rt_cuda_alloc(long n, long zero);
-RPY_EXTERN long rt_cuda_upload(double *host, long n);
-RPY_EXTERN int rt_cuda_download(long dptr, double *host, long n);
+RPY_EXTERN long rt_cuda_alloc(long nbytes, long zero);
+RPY_EXTERN long rt_cuda_upload(double *host, long n, long dtype);
+RPY_EXTERN int rt_cuda_download(long dptr, double *host, long n, long dtype);
 RPY_EXTERN void rt_cuda_reset(void);
-RPY_EXTERN void rt_cuda_free(long dptr, long n);
+RPY_EXTERN void rt_cuda_free(long dptr, long nbytes);
 RPY_EXTERN void rt_cuda_set_budget(long bytes);
 RPY_EXTERN long rt_cuda_launch_count(void);
-RPY_EXTERN int rt_cuda_needs_gc(long n);
+RPY_EXTERN int rt_cuda_needs_gc(long nbytes);
 RPY_EXTERN void rt_cuda_sync(void);
 RPY_EXTERN int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
                               long *outs, int nouts, int threads,
                               long elems_per_block, int shared, int nextra,
                               long cols);
 RPY_EXTERN int rt_cuda_matmul(long a, long b, long c, long rows, long inner,
-                              long cols, long ta, long tb);
+                              long cols, long ta, long tb, long dtype);
 RPY_EXTERN int rt_cuda_bmm(long a, long b, long c, long batch, long rows,
-                           long inner, long cols, long ta, long tb);
+                           long inner, long cols, long ta, long tb,
+                           long dtype);
 """],
     libraries=['cuda', 'dl'])
 rt_cuda_load = rffi.llexternal('rt_cuda_load', [rffi.CCHARP, rffi.CCHARP],
@@ -851,11 +916,13 @@ rt_cuda_alloc = rffi.llexternal('rt_cuda_alloc',
                                 lltype.Signed, compilation_info=eci,
                                 releasegil=False)
 rt_cuda_upload = rffi.llexternal('rt_cuda_upload',
-                                 [rffi.DOUBLEP, lltype.Signed],
+                                 [rffi.DOUBLEP, lltype.Signed,
+                                  lltype.Signed],
                                  lltype.Signed, compilation_info=eci,
                                 releasegil=False)
 rt_cuda_download = rffi.llexternal('rt_cuda_download',
-                                   [lltype.Signed, rffi.DOUBLEP, lltype.Signed],
+                                   [lltype.Signed, rffi.DOUBLEP,
+                                    lltype.Signed, lltype.Signed],
                                    rffi.INT, compilation_info=eci,
                                 releasegil=False)
 rt_cuda_reset = rffi.llexternal('rt_cuda_reset', [], lltype.Void,
@@ -867,14 +934,15 @@ rt_cuda_sync = rffi.llexternal('rt_cuda_sync', [], lltype.Void,
 rt_cuda_matmul = rffi.llexternal(
     'rt_cuda_matmul',
     [lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
-     lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed],
+     lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
+     lltype.Signed],
     rffi.INT, compilation_info=eci,
                                 releasegil=False)
 rt_cuda_bmm = rffi.llexternal(
     'rt_cuda_bmm',
     [lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
      lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
-     lltype.Signed],
+     lltype.Signed, lltype.Signed],
     rffi.INT, compilation_info=eci,
                                 releasegil=False)
 
@@ -889,21 +957,21 @@ def gpu_enabled():
         return False
     return rffi.cast(lltype.Signed, rt_cuda_available()) != 0
 
-def upload(hostarray):
+def upload(hostarray, dtype=F64):
     if not gpu_enabled():
         return 0
     n = len(hostarray)
     buf = lltype.malloc(DOUBLEARRAY, n, flavor='raw')
     for i in range(n):
         buf[i] = hostarray[i]
-    dptr = rt_cuda_upload(buf, n)
+    dptr = rt_cuda_upload(buf, n, dtype)
     lltype.free(buf, flavor='raw')
     return dptr
 
-def download(dptr, hostarray):
+def download(dptr, hostarray, dtype=F64):
     n = len(hostarray)
     buf = lltype.malloc(DOUBLEARRAY, n, flavor='raw')
-    rt_cuda_download(dptr, buf, n)
+    rt_cuda_download(dptr, buf, n, dtype)
     for i in range(n):
         hostarray[i] = buf[i]
     lltype.free(buf, flavor='raw')
@@ -928,16 +996,17 @@ def launch_count():
     return rt_cuda_launch_count()
 
 def reset_device():
-    scalars.tensors.clear()
-    ones.n = -1
-    ones.t = NULLTENSOR
-    ones.one = NULLTENSOR
+    for i in range(NDTYPES):
+        scalars.tensors[i].clear()
+        ones.n[i] = -1
+        ones.t[i] = NULLTENSOR
+        ones.one[i] = NULLTENSOR
     rt_cuda_reset()
 
-def collect_if_needed(n):
-    if rffi.cast(lltype.Signed, rt_cuda_needs_gc(n)) != 0:
+def collect_if_needed(nb):
+    if rffi.cast(lltype.Signed, rt_cuda_needs_gc(nb)) != 0:
         rgc.collect(0)
-        if rffi.cast(lltype.Signed, rt_cuda_needs_gc(n)) != 0:
+        if rffi.cast(lltype.Signed, rt_cuda_needs_gc(nb)) != 0:
             rgc.collect()
 
 def sync_device():
@@ -1056,6 +1125,13 @@ def _elementwise(lines, node, v, T, I1):
         return False
     return True
 
+def _trunc(lines, tag, v, half, T, TS):
+    if not half:
+        return '%%v%d' % v
+    lines.append('    %%%s = arith.truncf %%v%d : %s to %s' % (tag, v, T, TS))
+    return '%%%s' % tag
+
+
 def to_ttir_row(kernel, name, modes):
     nodes = kernel.nodes
     nin = kernel.ninputs
@@ -1063,8 +1139,13 @@ def to_ttir_row(kernel, name, modes):
     if last < 0:
         return ''
     BLOCK = row_tile(kernel)
-    T = 'tensor<%dxf64>' % BLOCK
-    P = 'tensor<%dx!tt.ptr<f64>>' % BLOCK
+    dt = kernel.dtype
+    S = STORE_TYPE[dt]
+    C = COMP_TYPE[dt]
+    half = S != C
+    T = 'tensor<%dx%s>' % (BLOCK, C)
+    TS = 'tensor<%dx%s>' % (BLOCK, S)
+    P = 'tensor<%dx!tt.ptr<%s>>' % (BLOCK, S)
     I32 = 'tensor<%dxi32>' % BLOCK
     I64 = 'tensor<%dxi64>' % BLOCK
     I1 = 'tensor<%dxi1>' % BLOCK
@@ -1077,7 +1158,7 @@ def to_ttir_row(kernel, name, modes):
             if k != last and modes[nin + k] != 3:
                 return ''
         elif node.p == AXIS_ALL:
-            if k != last or node.opcode != SUM:
+            if k != last or node.opcode != SUM or half:
                 return ''
         else:
             return ''
@@ -1085,10 +1166,10 @@ def to_ttir_row(kernel, name, modes):
     for k in range(len(kernel.outputs)):
         if isred[kernel.outputs[k]]:
             return ''
-    params = ['%%in%d: !tt.ptr<f64>' % i for i in range(nin)]
-    params.append('%out: !tt.ptr<f64>')
+    params = ['%%in%d: !tt.ptr<%s>' % (i, S) for i in range(nin)]
+    params.append('%%out: !tt.ptr<%s>' % S)
     for k in range(len(kernel.outputs)):
-        params.append('%%out%d: !tt.ptr<f64>' % k)
+        params.append('%%out%d: !tt.ptr<%s>' % (k, S))
     lines = ['module {',
              '  tt.func public @%s(%s, %%n: i64, %%c: i64) '
              'attributes {noinline = false} {' % (name, ', '.join(params)),
@@ -1104,25 +1185,38 @@ def to_ttir_row(kernel, name, modes):
              '    %base = arith.muli %rowi, %c : i64',
              '    %%bases = tt.splat %%base : i64 -> %s' % I64,
              '    %%offs = arith.addi %%bases, %%ar : %s' % I64]
+    if half:
+        lines.append('    %%zeros = arith.constant dense<0.0> : %s' % TS)
     for i in range(nin):
         if modes[i] == 2 or modes[i] == 3:
             src = '%%in%d' % i
             if modes[i] == 3:
                 lines.append('    %%sp%d = tt.addptr %%in%d, %%pid : '
-                             '!tt.ptr<f64>, i32' % (i, i))
+                             '!tt.ptr<%s>, i32' % (i, i, S))
                 src = '%%sp%d' % i
-            lines.append('    %%sv%d = tt.load %s : !tt.ptr<f64>' % (i, src))
-            lines.append('    %%v%d = tt.splat %%sv%d : f64 -> %s' % (i, i, T))
+            lines.append('    %%sv%d = tt.load %s : !tt.ptr<%s>' % (i, src, S))
+            sv = '%%sv%d' % i
+            if half:
+                lines.append('    %%se%d = arith.extf %s : %s to %s'
+                             % (i, sv, S, C))
+                sv = '%%se%d' % i
+            lines.append('    %%v%d = tt.splat %s : %s -> %s' % (i, sv, C, T))
             continue
         offs = '%offs'
         if modes[i] == 1:
             offs = '%ar'
-        lines.append('    %%p%d = tt.splat %%in%d : !tt.ptr<f64> -> %s'
-                     % (i, i, P))
+        lines.append('    %%p%d = tt.splat %%in%d : !tt.ptr<%s> -> %s'
+                     % (i, i, S, P))
         lines.append('    %%q%d = tt.addptr %%p%d, %s : %s, %s'
                      % (i, i, offs, P, I64))
-        lines.append('    %%v%d = tt.load %%q%d, %%mask, %%zero : %s'
-                     % (i, i, P))
+        if half:
+            lines.append('    %%rv%d = tt.load %%q%d, %%mask, %%zeros : %s'
+                         % (i, i, P))
+            lines.append('    %%v%d = arith.extf %%rv%d : %s to %s'
+                         % (i, i, TS, T))
+        else:
+            lines.append('    %%v%d = tt.load %%q%d, %%mask, %%zero : %s'
+                         % (i, i, P))
     for k in range(len(nodes)):
         node = nodes[k]
         v = nin + k
@@ -1130,7 +1224,7 @@ def to_ttir_row(kernel, name, modes):
             continue
         if node.opcode == MAXR:
             lines.append('    %%ninf%d = arith.constant dense<%s> : %s'
-                         % (v, NEG_INF_BITS, T))
+                         % (v, COMP_NEG_INF[dt], T))
             init = '%%ninf%d' % v
             combine = 'maximumf'
         else:
@@ -1140,33 +1234,40 @@ def to_ttir_row(kernel, name, modes):
                      % (v, node.a, init, I1, T))
         lines.append('    %%rs%d = "tt.reduce"(%%rm%d) <{axis = 0 : i32}> ({'
                      % (v, v))
-        lines.append('    ^bb0(%%x%d: f64, %%y%d: f64):' % (v, v))
-        lines.append('      %%rr%d = arith.%s %%x%d, %%y%d : f64'
-                     % (v, combine, v, v))
-        lines.append('      tt.reduce.return %%rr%d : f64' % v)
-        lines.append('    }) : (%s) -> f64' % T)
-        lines.append('    %%v%d = tt.splat %%rs%d : f64 -> %s' % (v, v, T))
+        lines.append('    ^bb0(%%x%d: %s, %%y%d: %s):' % (v, C, v, C))
+        lines.append('      %%rr%d = arith.%s %%x%d, %%y%d : %s'
+                     % (v, combine, v, v, C))
+        lines.append('      tt.reduce.return %%rr%d : %s' % (v, C))
+        lines.append('    }) : (%s) -> %s' % (T, C))
+        lines.append('    %%v%d = tt.splat %%rs%d : %s -> %s' % (v, v, C, T))
         if k != last:
             continue
         if node.p == 1:
-            lines.append('    %po = tt.addptr %out, %pid : !tt.ptr<f64>, i32')
-            lines.append('    tt.store %%po, %%rs%d : !tt.ptr<f64>' % v)
+            lines.append('    %%po = tt.addptr %%out, %%pid : !tt.ptr<%s>, i32'
+                         % S)
+            sv = '%%rs%d' % v
+            if half:
+                lines.append('    %%rt%d = arith.truncf %s : %s to %s'
+                             % (v, sv, C, S))
+                sv = '%%rt%d' % v
+            lines.append('    tt.store %%po, %s : !tt.ptr<%s>' % (sv, S))
         else:
             lines.append('    %true = arith.constant true')
             lines.append('    %%o = tt.atomic_rmw fadd, acq_rel, gpu, %%out, '
                          '%%rs%d, %%true : (!tt.ptr<f64>, f64, i1) -> f64' % v)
     if not isred[nin + last]:
-        lines.append('    %%po = tt.splat %%out : !tt.ptr<f64> -> %s' % P)
+        lines.append('    %%po = tt.splat %%out : !tt.ptr<%s> -> %s' % (S, P))
         lines.append('    %%qo = tt.addptr %%po, %%offs : %s, %s' % (P, I64))
-        lines.append('    tt.store %%qo, %%v%d, %%mask : %s'
-                     % (nin + last, P))
+        lines.append('    tt.store %%qo, %s, %%mask : %s'
+                     % (_trunc(lines, 'so', nin + last, half, T, TS), P))
     for k in range(len(kernel.outputs)):
-        lines.append('    %%po%d = tt.splat %%out%d : !tt.ptr<f64> -> %s'
-                     % (k, k, P))
+        lines.append('    %%po%d = tt.splat %%out%d : !tt.ptr<%s> -> %s'
+                     % (k, k, S, P))
         lines.append('    %%qo%d = tt.addptr %%po%d, %%offs : %s, %s'
                      % (k, k, P, I64))
-        lines.append('    tt.store %%qo%d, %%v%d, %%mask : %s'
-                     % (k, kernel.outputs[k], P))
+        lines.append('    tt.store %%qo%d, %s, %%mask : %s'
+                     % (k, _trunc(lines, 'sx%d' % k, kernel.outputs[k], half,
+                                  T, TS), P))
     lines.append('    tt.return')
     lines.append('  }')
     lines.append('}')
@@ -1177,8 +1278,13 @@ def to_ttir_flat(kernel, name):
     nin = kernel.ninputs
     BLOCK = config.block
     masked = kernel.n == 0 or kernel.n % BLOCK != 0
-    T = 'tensor<%dxf64>' % BLOCK
-    P = 'tensor<%dx!tt.ptr<f64>>' % BLOCK
+    dt = kernel.dtype
+    S = STORE_TYPE[dt]
+    C = COMP_TYPE[dt]
+    half = S != C
+    T = 'tensor<%dx%s>' % (BLOCK, C)
+    TS = 'tensor<%dx%s>' % (BLOCK, S)
+    P = 'tensor<%dx!tt.ptr<%s>>' % (BLOCK, S)
     I32 = 'tensor<%dxi32>' % BLOCK
     I64 = 'tensor<%dxi64>' % BLOCK
     I1 = 'tensor<%dxi1>' % BLOCK
@@ -1198,10 +1304,12 @@ def to_ttir_flat(kernel, name):
             need_zero_off = True
         elif modes[i] == 3:
             need_div = True
-    params = ['%%in%d: !tt.ptr<f64>' % i for i in range(nin)]
-    params.append('%out: !tt.ptr<f64>')
+    if half and kernel.sumroot and nodes[len(nodes) - 1].opcode == SUM:
+        return ''
+    params = ['%%in%d: !tt.ptr<%s>' % (i, S) for i in range(nin)]
+    params.append('%%out: !tt.ptr<%s>' % S)
     for k in range(len(kernel.outputs)):
-        params.append('%%out%d: !tt.ptr<f64>' % k)
+        params.append('%%out%d: !tt.ptr<%s>' % (k, S))
     lines = ['module {',
              '  tt.func public @%s(%s, %%n: i64, %%c: i64) '
              'attributes {noinline = false} {' % (name, ', '.join(params)),
@@ -1230,8 +1338,11 @@ def to_ttir_flat(kernel, name):
     else:
         tmask = '%tmask'
         lines.append('    %%tmask = arith.constant dense<true> : %s' % I1)
+    if half:
+        lines.append('    %%zeros = arith.constant dense<0.0> : %s' % TS)
     for i in range(nin):
-        lines.append('    %%p%d = tt.splat %%in%d : !tt.ptr<f64> -> %s' % (i, i, P))
+        lines.append('    %%p%d = tt.splat %%in%d : !tt.ptr<%s> -> %s'
+                     % (i, i, S, P))
         if modes[i] == 1:
             lines.append('    %%q%d = tt.addptr %%p%d, %%offsm : %s, %s'
                          % (i, i, P, I64))
@@ -1244,10 +1355,17 @@ def to_ttir_flat(kernel, name):
         else:
             lines.append('    %%q%d = tt.addptr %%p%d, %%offs : %s, %s'
                          % (i, i, P, I32))
+        dst = '%%v%d' % i
+        if half:
+            dst = '%%rv%d' % i
         if masked:
-            lines.append('    %%v%d = tt.load %%q%d, %%mask, %%zero : %s' % (i, i, P))
+            lines.append('    %s = tt.load %%q%d, %%mask, %s : %s'
+                         % (dst, i, '%zeros' if half else '%zero', P))
         else:
-            lines.append('    %%v%d = tt.load %%q%d : %s' % (i, i, P))
+            lines.append('    %s = tt.load %%q%d : %s' % (dst, i, P))
+        if half:
+            lines.append('    %%v%d = arith.extf %%rv%d : %s to %s'
+                         % (i, i, TS, T))
     last = nin + len(nodes) - 1
     for k in range(len(nodes)):
         node = nodes[k]
@@ -1262,23 +1380,29 @@ def to_ttir_flat(kernel, name):
             src = '%%v%d' % node.a
             if masked:
                 lines.append('    %%ninf = arith.constant dense<%s> : %s'
-                             % (NEG_INF_BITS, T))
+                             % (COMP_NEG_INF[dt], T))
                 lines.append('    %%m%d = arith.select %%mask, %%v%d, %%ninf '
                              ': %s, %s' % (v, node.a, I1, T))
                 src = '%%m%d' % v
             lines.append('    %%v%d = "tt.reduce"(%s) <{axis = 0 : i32}> ({'
                          % (v, src))
-            lines.append('    ^bb0(%x: f64, %y: f64):')
-            lines.append('      %r = arith.maximumf %x, %y : f64')
-            lines.append('      tt.reduce.return %r : f64')
-            lines.append('    }) : (%s) -> f64' % T)
-            lines.append('    tt.store %%out, %%v%d : !tt.ptr<f64>' % v)
+            lines.append('    ^bb0(%%x: %s, %%y: %s):' % (C, C))
+            lines.append('      %%r = arith.maximumf %%x, %%y : %s' % C)
+            lines.append('      tt.reduce.return %%r : %s' % C)
+            lines.append('    }) : (%s) -> %s' % (T, C))
+            out = '%%v%d' % v
+            if half:
+                lines.append('    %%mt%d = arith.truncf %s : %s to %s'
+                             % (v, out, C, S))
+                out = '%%mt%d' % v
+            lines.append('    tt.store %%out, %s : !tt.ptr<%s>' % (out, S))
         else:
             if axis == 0 or axis == 1:
                 offs = '%offsm'
                 if axis == 1:
                     offs = '%offsd'
-                lines.append('    %%po = tt.splat %%out : !tt.ptr<f64> -> %s' % P)
+                lines.append('    %%po = tt.splat %%out : !tt.ptr<%s> -> %s'
+                             % (S, P))
                 lines.append('    %%qo = tt.addptr %%po, %s : %s, %s'
                              % (offs, P, I64))
                 lines.append('    %%v%d = tt.atomic_rmw fadd, acq_rel, gpu, '
@@ -1287,29 +1411,32 @@ def to_ttir_flat(kernel, name):
             else:
                 lines.append('    %%v%d = "tt.reduce"(%%v%d) <{axis = 0 : i32}> ({'
                              % (v, node.a))
-                lines.append('    ^bb0(%x: f64, %y: f64):')
-                lines.append('      %r = arith.addf %x, %y : f64')
-                lines.append('      tt.reduce.return %r : f64')
-                lines.append('    }) : (%s) -> f64' % T)
+                lines.append('    ^bb0(%%x: %s, %%y: %s):' % (C, C))
+                lines.append('      %%r = arith.addf %%x, %%y : %s' % C)
+                lines.append('      tt.reduce.return %%r : %s' % C)
+                lines.append('    }) : (%s) -> %s' % (T, C))
                 lines.append('    %true = arith.constant true')
-                lines.append('    %%o = tt.atomic_rmw fadd, acq_rel, gpu, %%out, %%v%d, '
-                             '%%true : (!tt.ptr<f64>, f64, i1) -> f64' % v)
+                lines.append('    %%o = tt.atomic_rmw fadd, acq_rel, gpu, '
+                             '%%out, %%v%d, %%true : (!tt.ptr<%s>, %s, i1) '
+                             '-> %s' % (v, S, C, C))
     if not kernel.sumroot:
-        lines.append('    %%po = tt.splat %%out : !tt.ptr<f64> -> %s' % P)
+        lines.append('    %%po = tt.splat %%out : !tt.ptr<%s> -> %s' % (S, P))
         lines.append('    %%qo = tt.addptr %%po, %%offs : %s, %s' % (P, I32))
+        val = _trunc(lines, 'so', last, half, T, TS)
         if masked:
-            lines.append('    tt.store %%qo, %%v%d, %%mask : %s' % (last, P))
+            lines.append('    tt.store %%qo, %s, %%mask : %s' % (val, P))
         else:
-            lines.append('    tt.store %%qo, %%v%d : %s' % (last, P))
+            lines.append('    tt.store %%qo, %s : %s' % (val, P))
     for k in range(len(kernel.outputs)):
-        lines.append('    %%po%d = tt.splat %%out%d : !tt.ptr<f64> -> %s' % (k, k, P))
+        lines.append('    %%po%d = tt.splat %%out%d : !tt.ptr<%s> -> %s'
+                     % (k, k, S, P))
         lines.append('    %%qo%d = tt.addptr %%po%d, %%offs : %s, %s'
                      % (k, k, P, I32))
+        val = _trunc(lines, 'sx%d' % k, kernel.outputs[k], half, T, TS)
         if masked:
-            lines.append('    tt.store %%qo%d, %%v%d, %%mask : %s'
-                         % (k, kernel.outputs[k], P))
+            lines.append('    tt.store %%qo%d, %s, %%mask : %s' % (k, val, P))
         else:
-            lines.append('    tt.store %%qo%d, %%v%d : %s' % (k, kernel.outputs[k], P))
+            lines.append('    tt.store %%qo%d, %s : %s' % (k, val, P))
     lines.append('    tt.return')
     lines.append('  }')
     lines.append('}')
@@ -1384,6 +1511,10 @@ def needs_zero(kernel):
 
 def launch_gpu(kernel, inputs):
     nin = len(inputs)
+    dt = kernel.dtype
+    for k in range(nin):
+        if inputs[k].dtype != dt:
+            return NULLTENSOR
     big = 0
     for k in range(1, nin):
         if inputs[k].size > inputs[big].size:
@@ -1411,7 +1542,7 @@ def launch_gpu(kernel, inputs):
             outlen = 1
         shape = _shape1(outlen)
     nout = 1 + len(kernel.outputs)
-    collect_if_needed(n)
+    collect_if_needed(nbytes(n, dt))
     dptrs = lltype.malloc(SIGNEDARRAY, nin, flavor='raw')
     outs = lltype.malloc(SIGNEDARRAY, nout, flavor='raw')
     ok = True
@@ -1419,11 +1550,12 @@ def launch_gpu(kernel, inputs):
         dptrs[k] = dev(inputs[k])
         if dptrs[k] == 0:
             ok = False
-    outs[0] = rt_cuda_alloc(outlen, needs_zero(kernel)) if ok else 0
+    outs[0] = rt_cuda_alloc(nbytes(outlen, dt),
+                            needs_zero(kernel)) if ok else 0
     if outs[0] == 0:
         ok = False
     for k in range(1, nout):
-        outs[k] = rt_cuda_alloc(n, 0) if ok else 0
+        outs[k] = rt_cuda_alloc(nbytes(n, dt), 0) if ok else 0
         if outs[k] == 0:
             ok = False
     if ok:
@@ -1435,11 +1567,12 @@ def launch_gpu(kernel, inputs):
             rffi.cast(rffi.INT, kernel.nextra), c)) != 0
     result = NULLTENSOR
     if ok:
-        result = device_tensor(outlen, outs[0], shape)
+        result = device_tensor(outlen, outs[0], shape, dt)
         if nout > 1:
             result.extra = lltype.malloc(TENSORARRAY, nout - 1)
             for k in range(1, nout):
-                result.extra[k - 1] = device_tensor(n, outs[k], inputs[big].shape)
+                result.extra[k - 1] = device_tensor(n, outs[k],
+                                                    inputs[big].shape, dt)
     lltype.free(dptrs, flavor='raw')
     lltype.free(outs, flavor='raw')
     return result
@@ -1460,8 +1593,8 @@ def view2(a, rows, cols):
     return view(a, _shape2(rows, cols))
 
 
-def column(rows):
-    return new_tensor(rows, _shape2(rows, 1))
+def column(rows, dtype=F64):
+    return new_tensor(rows, _shape2(rows, 1), dtype)
 
 
 class GatherKernel(object):
@@ -1601,17 +1734,20 @@ def _gather_index(e, op, params, I64, I1):
     return srcs, ''
 
 
-def to_ttir_gather(op, params, name):
+def to_ttir_gather(op, params, name, dtype):
     BLOCK = config.block
-    T = 'tensor<%dxf64>' % BLOCK
-    P = 'tensor<%dx!tt.ptr<f64>>' % BLOCK
+    S = STORE_TYPE[dtype]
+    C = COMP_TYPE[dtype]
+    half = S != C
+    T = 'tensor<%dx%s>' % (BLOCK, S)
+    P = 'tensor<%dx!tt.ptr<%s>>' % (BLOCK, S)
     I32 = 'tensor<%dxi32>' % BLOCK
     I64 = 'tensor<%dxi64>' % BLOCK
     I1 = 'tensor<%dxi1>' % BLOCK
     e = Emitter()
     e.add('module {')
-    e.add('  tt.func public @%s(%%in: !tt.ptr<f64>, %%out: !tt.ptr<f64>, '
-          '%%n: i64, %%c: i64) attributes {noinline = false} {' % name)
+    e.add('  tt.func public @%s(%%in: !tt.ptr<%s>, %%out: !tt.ptr<%s>, '
+          '%%n: i64, %%c: i64) attributes {noinline = false} {' % (name, S, S))
     e.add('    %%zero = arith.constant dense<0.0> : %s' % T)
     e.add('    %%bs = arith.constant %d : i32' % BLOCK)
     e.add('    %pid = tt.get_program_id x : i32')
@@ -1627,7 +1763,7 @@ def to_ttir_gather(op, params, name):
     mask = '%mask'
     if ok:
         mask = _gbin(e, 'andi', mask, ok, I1)
-    e.add('    %%pin = tt.splat %%in : !tt.ptr<f64> -> %s' % P)
+    e.add('    %%pin = tt.splat %%in : !tt.ptr<%s> -> %s' % (S, P))
     vals = []
     for i in range(len(srcs)):
         q = e.tmp()
@@ -1636,9 +1772,22 @@ def to_ttir_gather(op, params, name):
         e.add('    %s = tt.load %s, %s, %%zero : %s' % (v, q, mask, P))
         vals.append(v)
     acc = vals[0]
-    for i in range(1, len(vals)):
-        acc = _gbin(e, 'maximumf', acc, vals[i], T)
-    e.add('    %%pout = tt.splat %%out : !tt.ptr<f64> -> %s' % P)
+    if len(vals) > 1 and half:
+        TC = 'tensor<%dx%s>' % (BLOCK, C)
+        for i in range(len(vals)):
+            r = e.tmp()
+            e.add('    %s = arith.extf %s : %s to %s' % (r, vals[i], T, TC))
+            vals[i] = r
+        acc = vals[0]
+        for i in range(1, len(vals)):
+            acc = _gbin(e, 'maximumf', acc, vals[i], TC)
+        r = e.tmp()
+        e.add('    %s = arith.truncf %s : %s to %s' % (r, acc, TC, T))
+        acc = r
+    else:
+        for i in range(1, len(vals)):
+            acc = _gbin(e, 'maximumf', acc, vals[i], T)
+    e.add('    %%pout = tt.splat %%out : !tt.ptr<%s> -> %s' % (S, P))
     e.add('    %%qout = tt.addptr %%pout, %%offs : %s, %s' % (P, I32))
     e.add('    tt.store %%qout, %s, %%mask : %s' % (acc, P))
     e.add('    tt.return')
@@ -1647,35 +1796,36 @@ def to_ttir_gather(op, params, name):
     return '\n'.join(e.lines) + '\n'
 
 
-def gather_key(op, params):
+def gather_key(op, params, dtype):
     parts = ['g%d' % op]
     for i in range(len(params)):
         parts.append(str(params[i]))
+    parts.append('d%d' % dtype)
     return ','.join(parts)
 
 
-def gather_kernel(op, params):
-    key = gather_key(op, params)
+def gather_kernel(op, params, dtype):
+    key = gather_key(op, params, dtype)
     k = gather_cache.kernels.get(key, None)
     if k is None:
-        k = _gather_compile(op, params)
+        k = _gather_compile(op, params, dtype)
         gather_cache.kernels[key] = k
     return k
 
 
-def _gather_compile(op, params):
+def _gather_compile(op, params, dtype):
     if not gpu_enabled():
         return GatherKernel(0, 0, 0, 0)
     try:
-        return _gather_compile_gpu(op, params)
+        return _gather_compile_gpu(op, params, dtype)
     except (OSError, ValueError, IndexError):
         return GatherKernel(0, 0, 0, 0)
 
 
-def _gather_compile_gpu(op, params):
+def _gather_compile_gpu(op, params, dtype):
     name = 'rtensor_g%d' % counter.n
     counter.n += 1
-    src = to_ttir_gather(op, params, name)
+    src = to_ttir_gather(op, params, name, dtype)
     base = _env('TMPDIR', '/tmp') + '/' + name
     _write(base + '.ttir', src)
     cmd = '%s -P %s %s.ttir %s.ptx %s.meta %s %d' % (
@@ -1697,17 +1847,18 @@ def _gather_compile_gpu(op, params):
 
 
 def gather_gpu(op, params, x, outn, shape):
-    kernel = gather_kernel(op, params)
+    dt = x.dtype
+    kernel = gather_kernel(op, params, dt)
     if kernel.fn == 0:
         return NULLTENSOR
     dptr = dev(x)
     if dptr == 0:
         return NULLTENSOR
-    collect_if_needed(outn)
+    collect_if_needed(nbytes(outn, dt))
     ins = lltype.malloc(SIGNEDARRAY, 1, flavor='raw')
     outs = lltype.malloc(SIGNEDARRAY, 1, flavor='raw')
     ins[0] = dptr
-    outs[0] = rt_cuda_alloc(outn, 0)
+    outs[0] = rt_cuda_alloc(nbytes(outn, dt), 0)
     ok = outs[0] != 0
     if ok:
         ok = rffi.cast(lltype.Signed, rt_cuda_launch(
@@ -1717,7 +1868,7 @@ def gather_gpu(op, params, x, outn, shape):
             rffi.cast(rffi.INT, kernel.nextra), 0)) != 0
     result = NULLTENSOR
     if ok:
-        result = device_tensor(outn, outs[0], shape)
+        result = device_tensor(outn, outs[0], shape, dt)
     lltype.free(ins, flavor='raw')
     lltype.free(outs, flavor='raw')
     return result
@@ -1730,7 +1881,7 @@ def im2col_cpu(x, n, c, h, w, k, pad):
     kk = k * k
     rows = n * hw
     cols = c * kk
-    r = new_tensor(rows * cols, _shape2(rows, cols))
+    r = new_tensor(rows * cols, _shape2(rows, cols), x.dtype)
     hr = r.host
     for i in range(rows * cols):
         row = i // cols
@@ -1769,7 +1920,7 @@ def im2col(x, c, h, w, k, pad):
 
 def col2chw_cpu(y, n, hw, o):
     hy = host(y)
-    r = new_tensor(n * o * hw, _shape2(n, o * hw))
+    r = new_tensor(n * o * hw, _shape2(n, o * hw), y.dtype)
     hr = r.host
     for i in range(n * o * hw):
         img = i // (o * hw)
@@ -1798,7 +1949,7 @@ def maxpool2_cpu(x, n, c, h, w):
     oh = h // 2
     ow = w // 2
     outn = n * c * oh * ow
-    r = new_tensor(outn, _shape2(n, c * oh * ow))
+    r = new_tensor(outn, _shape2(n, c * oh * ow), x.dtype)
     hr = r.host
     for i in range(outn):
         q = i // ow
@@ -1833,7 +1984,7 @@ def maxpool2(x, c, h, w):
 
 def head_split_cpu(x, rows, dh, heads):
     hx = host(x)
-    r = new_tensor(rows * dh * heads, _shape2(heads * rows, dh))
+    r = new_tensor(rows * dh * heads, _shape2(heads * rows, dh), x.dtype)
     hr = r.host
     for i in range(rows * dh * heads):
         hi = i // (rows * dh)
@@ -1846,7 +1997,7 @@ def head_split_cpu(x, rows, dh, heads):
 
 def head_merge_cpu(x, rows, dh, heads):
     hx = host(x)
-    r = new_tensor(rows * dh * heads, _shape2(rows, heads * dh))
+    r = new_tensor(rows * dh * heads, _shape2(rows, heads * dh), x.dtype)
     hr = r.host
     for i in range(rows * dh * heads):
         ri = i // (heads * dh)
@@ -1888,7 +2039,7 @@ def head_merge(x, rows, dh, heads):
 def bmm_cpu(a, b, batch, rows, cols, inner, ta, tb):
     ha = host(a)
     hb = host(b)
-    r = new_tensor(batch * rows * cols, _shape2(batch * rows, cols))
+    r = new_tensor(batch * rows * cols, _shape2(batch * rows, cols), a.dtype)
     hr = r.host
     for t in range(batch):
         abase = t * rows * inner
@@ -1913,19 +2064,21 @@ def bmm_cpu(a, b, batch, rows, cols, inner, ta, tb):
 
 @jit.dont_look_inside
 def tensor_bmm(a, b, batch, rows, cols, inner, ta, tb):
-    if gpu_enabled():
+    if gpu_enabled() and a.dtype == b.dtype:
+        dt = a.dtype
         dptr_a = dev(a)
         dptr_b = dev(b)
         if dptr_a != 0 and dptr_b != 0:
             n = batch * rows * cols
-            collect_if_needed(n)
-            outptr = rt_cuda_alloc(n, 0)
+            nb = nbytes(n, dt)
+            collect_if_needed(nb)
+            outptr = rt_cuda_alloc(nb, 0)
             if outptr != 0:
                 ok = rffi.cast(lltype.Signed, rt_cuda_bmm(
                     dptr_a, dptr_b, outptr, batch, rows, inner, cols,
-                    ta, tb)) != 0
+                    ta, tb, dt)) != 0
                 if ok:
                     return device_tensor(n, outptr,
-                                         _shape2(batch * rows, cols))
-                rt_cuda_free(outptr, n)
+                                         _shape2(batch * rows, cols), dt)
+                rt_cuda_free(outptr, nb)
     return bmm_cpu(a, b, batch, rows, cols, inner, ta, tb)
