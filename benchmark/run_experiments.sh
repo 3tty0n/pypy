@@ -3,11 +3,12 @@ set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 BIN=${BIN:-$HERE/rtensor-bench}
 TORCH_PYTHON=${TORCH_PYTHON:-$RTENSOR_PYTHON}
+export RTENSOR_BUDGET_MB=${RTENSOR_BUDGET_MB:-256}
 OUT=${OUT:-$HERE/results/$(date +%F)-$(hostname)}
 REPS=${REPS:-3}
 ITERS=${ITERS:-200}
 mkdir -p "$OUT"
-HEADER="mode\tvariant\tk\tn\titers\twarm_s\tsteady_us\tkernels\tacc\tcompiled_in_timed"
+HEADER="mode\tvariant\tk\tn\titers\twarm_s\tsteady_us\tkernels\tacc\tcompiled_in_timed\tlaunches_per_iter\tgraphs\tbreaks"
 ours() { "$BIN" "$@" | tr ' ' '\t'; }
 torch() { "$TORCH_PYTHON" "$HERE/torch_bench.py" "$@" 2>/dev/null | tail -1 | tr ' ' '\t'; }
 
@@ -23,7 +24,7 @@ for n in 1000 10000 100000 1000000 10000000; do for rep in $(seq $REPS); do
 done; done
 
 echo -e "$HEADER" > "$OUT/rtensor_branch.tsv"
-for rep in $(seq $REPS); do for v in 1 2; do for n in 10000 1000000; do
+for rep in $(seq $REPS); do for v in 1 2 3 4 5; do for n in 10000 1000000; do
   for mode in fused eager; do ours $mode $v 4 $n $ITERS >> "$OUT/rtensor_branch.tsv"; done
   torch compile $v 4 $n $ITERS >> "$OUT/torch.tsv"
   torch eager $v 4 $n $ITERS >> "$OUT/torch.tsv"
