@@ -40,7 +40,7 @@ def run(variant, k, h, b, iters):
 
 def entry_point(argv):
     if len(argv) != 6:
-        print __doc__
+        print 'usage: rtensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0|1|2)'
         return 1
     mode = argv[1]
     variant = int(argv[2])

@@ -2,7 +2,7 @@ from rpython.jit.metainterp.test.support import LLJitMixin
 from rpython.rlib.jit import JitDriver
 from rpython.rlib import rtensor
 from rpython.rlib.rtensor import (tensor_add, tensor_mul, tensor_relu,
-    tensor_sum, tensor_item, from_list)
+    tensor_sum, tensor_item, tensor_size, from_list)
 
 rtensor.init_device()
 
@@ -62,6 +62,46 @@ class TestTensor(LLJitMixin):
         res = self.meta_interp(f, [12])
         assert res == f(12)
         self.check_simple_loop(call_r=1)
+
+class TestTensorMeta(LLJitMixin):
+
+    def test_size_of_virtual_does_not_force(self):
+        driver = JitDriver(greens=[], reds=['n', 'w', 'b', 'acc'])
+        def f(n):
+            w = from_list([1.0, -2.0, 3.0, -4.0])
+            b = from_list([0.5, 0.5, 0.5, 0.5])
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, acc=acc, w=w, b=b)
+                h = tensor_relu(tensor_add(tensor_mul(w, b), b))
+                if tensor_size(h) > 2:
+                    h = tensor_add(h, b)
+                if tensor_size(tensor_sum(h)) == 1:
+                    acc += tensor_item(tensor_sum(h))
+                n -= 1
+            return acc
+        res = self.meta_interp(f, [10])
+        assert res == f(10)
+        self.check_simple_loop(call_r=1, call_pure_r=0)
+
+    def test_kernel_cache_reuses_compiled_kernel(self):
+        driver = JitDriver(greens=[], reds=['n', 'w', 'b', 'acc'])
+        def f(n):
+            w = from_list([1.0, -2.0, 3.0, -4.0])
+            b = from_list([0.5, 0.5, 0.5, 0.5])
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, acc=acc, w=w, b=b)
+                acc += tensor_item(tensor_sum(tensor_relu(tensor_mul(tensor_mul(w, b), b))))
+                n -= 1
+            return acc
+        before = rtensor.counter.n
+        res = self.meta_interp(f, [10])
+        assert res == f(10)
+        import os
+        if 'RTENSOR_CPU' not in os.environ:
+            assert rtensor.counter.n - before == 1
+
 
 def test_gpu_launch_matches_cpu():
     k = rtensor.build_kernel(2, [rtensor.MUL, rtensor.ADD, rtensor.RELU, rtensor.SUM],

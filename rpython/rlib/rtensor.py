@@ -142,6 +142,10 @@ def tensor_relu(a):
 def tensor_sum(a):
     return eval_op(SUM, a, NULLTENSOR)
 
+@jit.oopspec("tensor.size(a)")
+def tensor_size(a):
+    return a.size
+
 @jit.dont_look_inside
 def tensor_force(a):
     return a
@@ -149,6 +153,17 @@ def tensor_force(a):
 @jit.elidable
 def tensor_item(a):
     return host(a)[0]
+
+class KernelCache(object):
+    def __init__(self):
+        self.kernels = {}
+kernel_cache = KernelCache()
+
+def cached_kernel(key):
+    return kernel_cache.kernels.get(key, lltype.nullptr(KERNEL))
+
+def cache_kernel(key, kernel):
+    kernel_cache.kernels[key] = kernel
 
 def new_kernel(ninputs, nnodes):
     kernel = lltype.malloc(KERNEL)

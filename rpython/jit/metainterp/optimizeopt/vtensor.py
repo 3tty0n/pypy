@@ -32,16 +32,23 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         self._is_virtual = False
         leaves, opcodes, lefts, rights = [], [], [], []
         _collect_indexed(self, leaves, opcodes, lefts, rights)
-        kernel = lltype.malloc(rtensor.KERNEL)
-        kernel.ninputs = len(leaves)
-        kernel.nodes = lltype.malloc(rtensor.NODEARRAY, len(opcodes))
-        kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
+        parts = [str(len(leaves))]
         for i in range(len(opcodes)):
-            node = kernel.nodes[i]
-            node.opcode = opcodes[i]
-            node.a = lefts[i]
-            node.b = rights[i]
-        rtensor.finish_kernel(kernel)
+            parts.append('%d:%d:%d' % (opcodes[i], lefts[i], rights[i]))
+        key = ','.join(parts)
+        kernel = rtensor.cached_kernel(key)
+        if not kernel:
+            kernel = lltype.malloc(rtensor.KERNEL)
+            kernel.ninputs = len(leaves)
+            kernel.nodes = lltype.malloc(rtensor.NODEARRAY, len(opcodes))
+            kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
+            for i in range(len(opcodes)):
+                node = kernel.nodes[i]
+                node.opcode = opcodes[i]
+                node.a = lefts[i]
+                node.b = rights[i]
+            rtensor.finish_kernel(kernel)
+            rtensor.cache_kernel(key, kernel)
         gcref = lltype.cast_opaque_ptr(llmemory.GCREF, kernel)
         cic = optforce.optimizer.metainterp_sd.callinfocollection
         calldescr, func = cic.callinfo_for_oopspec(EffectInfo.OS_TENSOR_LAUNCH)
@@ -54,6 +61,15 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         op = get_box_replacement(op)
         op.set_forwarded(newop)
         return newop
+
+    def size_leaf(self):
+        if self.opcode == rtensor.SUM:
+            return None
+        box = self.args[0]
+        sub = vtensor_info(box)
+        if sub is not None:
+            return sub.size_leaf()
+        return box
 
     def _visitor_walk_recursive(self, instbox, visitor):
         visitor.register_virtual_fields(instbox, self.args)
@@ -123,6 +139,21 @@ class OptTensor(Optimization):
             return
         return self.emit(op)
     optimize_CALL_PURE_R = optimize_CALL_R
+
+    def optimize_CALL_I(self, op):
+        effectinfo = op.getdescr().get_extra_info()
+        if effectinfo.oopspecindex == EffectInfo.OS_TENSOR_SIZE:
+            info = vtensor_info(op.getarg(1))
+            if info is not None:
+                leaf = info.size_leaf()
+                if leaf is None:
+                    self.make_constant(op, ConstInt(1))
+                    self.last_emitted_operation = REMOVED
+                    return
+                op = self.replace_op_with(op, op.getopnum(),
+                                          args=[op.getarg(0), leaf])
+        return self.emit(op)
+    optimize_CALL_PURE_I = optimize_CALL_I
 
     def _nleaves(self, args):
         leaves = []
