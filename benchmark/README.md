@@ -13,7 +13,9 @@ unless noted, steady-state microseconds per iteration.
 
 Other env vars: `RTENSOR_DTYPE` (`float64|float32|float16`), `RTENSOR_CPU=1`
 (no GPU), `RTENSOR_BUDGET_MB` (device GC byte threshold, default 8),
-`RTENSOR_PROFILE=1`, `CUDA_HOME`, `RTENSOR_CUBLAS`.
+`RTENSOR_PROFILE=1`, `CUDA_HOME`, `RTENSOR_CUBLAS` (path to `libcublas.so`; read at
+run time, and if set at translation time it becomes the compiled-in default,
+otherwise `libcublas.so` is looked up through the dynamic loader).
 
 ## Run
 

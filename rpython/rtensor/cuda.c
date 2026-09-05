@@ -8,8 +8,9 @@
 #  define RPY_EXPORTED extern __attribute__((visibility("default")))
 #endif
 
-#define RTENSOR_CUBLAS_DEFAULT \
-    "/home/yusuke/.venvs/triton/lib/python3.14/site-packages/nvidia/cu13/lib/libcublas.so.13"
+#ifndef RTENSOR_CUBLAS_DEFAULT
+#  define RTENSOR_CUBLAS_DEFAULT "libcublas.so"
+#endif
 
 typedef int (*cublasCreate_v2_t)(void **handle);
 typedef int (*cublasDgemm_v2_t)(void *handle, int transa, int transb,

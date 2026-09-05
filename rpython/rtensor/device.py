@@ -47,8 +47,10 @@ DOUBLEARRAY = rffi.CArray(rffi.DOUBLE)
 SIGNEDARRAY = rffi.CArray(lltype.Signed)
 _here = os.path.dirname(os.path.abspath(__file__))
 CUDA_HOME = os.environ.get('CUDA_HOME', '/usr/local/cuda')
+_cublas = os.environ.get('RTENSOR_CUBLAS')
 eci = ExternalCompilationInfo(
     include_dirs=[os.path.join(CUDA_HOME, 'include')],
+    compile_extra=['-DRTENSOR_CUBLAS_DEFAULT="%s"' % _cublas] if _cublas else [],
     separate_module_files=[os.path.join(_here, 'cuda.c')],
     post_include_bits=["""
 RPY_EXTERN int rt_cuda_available(void);

@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
+if [ -z "$RTENSOR_CUBLAS" ] && [ -n "$RTENSOR_PYTHON" ]; then
+  for f in "$(dirname "$RTENSOR_PYTHON")"/../lib/python3*/site-packages/nvidia/cu*/lib/libcublas.so.*; do
+    [ -e "$f" ] && export RTENSOR_CUBLAS="$f" && break
+  done
+fi
 BIN=${BIN:-$HERE/rtensor-bench}
 TORCH_PYTHON=${TORCH_PYTHON:-$RTENSOR_PYTHON}
 export RTENSOR_BUDGET_MB=${RTENSOR_BUDGET_MB:-8}
