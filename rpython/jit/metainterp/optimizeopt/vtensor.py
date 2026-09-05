@@ -18,9 +18,10 @@ def vtensor_info(box):
 
 class VTensorInfo(AbstractVirtualPtrInfo):
 
-    def __init__(self, opcode, args):
+    def __init__(self, opcode, args, opt=None):
         self.opcode = opcode
         self.args = args
+        self.opt = opt
         self._is_virtual = True
 
     def is_virtual(self):
@@ -32,7 +33,8 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         self._is_virtual = False
         leaves, opcodes, lefts, rights = [], [], [], []
         _collect_indexed(self, leaves, opcodes, lefts, rights)
-        parts = [str(len(leaves))]
+        n = self.opt.static_size(leaves) if self.opt is not None else 0
+        parts = [str(len(leaves)), str(n)]
         for i in range(len(opcodes)):
             parts.append('%d:%d:%d' % (opcodes[i], lefts[i], rights[i]))
         key = ','.join(parts)
@@ -42,6 +44,7 @@ class VTensorInfo(AbstractVirtualPtrInfo):
             kernel.ninputs = len(leaves)
             kernel.nodes = lltype.malloc(rtensor.NODEARRAY, len(opcodes))
             kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
+            kernel.n = n
             for i in range(len(opcodes)):
                 node = kernel.nodes[i]
                 node.opcode = opcodes[i]
@@ -117,10 +120,32 @@ def _emit_nodes(info, leaves, opcodes, lefts, rights):
     return len(leaves) + len(opcodes) - 1
 
 class OptTensor(Optimization):
-    "Keep rtensor ops virtual and fuse them into one kernel launch."
+
+    def setup(self):
+        self.sizes = {}
 
     def propagate_forward(self, op):
         return dispatch_opt(self, op)
+
+    def flush(self):
+        self.sizes = {}
+
+    def static_size(self, leaves):
+        n = -1
+        for leaf in leaves:
+            sizebox = self.sizes.get(leaf, None)
+            if sizebox is None:
+                return 0
+            sizebox = get_box_replacement(sizebox)
+            if not sizebox.is_constant():
+                return 0
+            value = sizebox.getint()
+            if n != -1 and value != n:
+                return 0
+            n = value
+        if n <= 0:
+            return 0
+        return n
 
     def optimize_CALL_R(self, op):
         effectinfo = op.getdescr().get_extra_info()
@@ -132,7 +157,7 @@ class OptTensor(Optimization):
             if self._nleaves(args) > rtensor.MAX_INPUTS:
                 for box in args:
                     self.optimizer.force_box(box)
-            info = VTensorInfo(opcode, args)
+            info = VTensorInfo(opcode, args, self)
             op = self.replace_op_with(op, op.getopnum())
             op.set_forwarded(info)
             self.last_emitted_operation = REMOVED
@@ -142,7 +167,8 @@ class OptTensor(Optimization):
 
     def optimize_CALL_I(self, op):
         effectinfo = op.getdescr().get_extra_info()
-        if effectinfo.oopspecindex == EffectInfo.OS_TENSOR_SIZE:
+        idx = effectinfo.oopspecindex
+        if idx == EffectInfo.OS_TENSOR_SIZE or idx == EffectInfo.OS_TENSOR_SHAPE:
             info = vtensor_info(op.getarg(1))
             if info is not None:
                 leaf = info.size_leaf()
@@ -150,8 +176,12 @@ class OptTensor(Optimization):
                     self.make_constant(op, ConstInt(1))
                     self.last_emitted_operation = REMOVED
                     return
-                op = self.replace_op_with(op, op.getopnum(),
-                                          args=[op.getarg(0), leaf])
+                args = [op.getarg(0), leaf]
+                if idx == EffectInfo.OS_TENSOR_SHAPE:
+                    args.append(op.getarg(2))
+                op = self.replace_op_with(op, op.getopnum(), args=args)
+            if idx == EffectInfo.OS_TENSOR_SIZE:
+                self.sizes[get_box_replacement(op.getarg(1))] = op
         return self.emit(op)
     optimize_CALL_PURE_I = optimize_CALL_I
 

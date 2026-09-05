@@ -4,7 +4,9 @@ from rpython.rtyper.lltypesystem import lltype, rffi
 from rpython.translator.tool.cbuild import ExternalCompilationInfo
 
 HOSTARRAY = lltype.GcArray(lltype.Float)
+SHAPEARRAY = lltype.GcArray(lltype.Signed)
 TENSOR = lltype.GcStruct('TENSOR', ('size', lltype.Signed),
+                         ('shape', lltype.Ptr(SHAPEARRAY)),
                          ('dptr', lltype.Signed),
                          ('host', lltype.Ptr(HOSTARRAY)))
 TENSORPTR = lltype.Ptr(TENSOR)
@@ -24,22 +26,39 @@ KERNEL = lltype.GcStruct('TENSOR_KERNEL', ('ninputs', lltype.Signed),
                          ('sumroot', lltype.Signed),
                          ('threads', lltype.Signed),
                          ('shared', lltype.Signed),
-                         ('nextra', lltype.Signed))
+                         ('nextra', lltype.Signed),
+                         ('n', lltype.Signed))
 KERNELPTR = lltype.Ptr(KERNEL)
 
-def new_tensor(n):
+def _shape1(n):
+    shape = lltype.malloc(SHAPEARRAY, 1)
+    shape[0] = n
+    return shape
+
+def new_tensor(n, shape=lltype.nullptr(SHAPEARRAY)):
     t = lltype.malloc(TENSOR)
     t.size = n
+    t.shape = shape if shape else _shape1(n)
     t.dptr = 0
     t.host = lltype.malloc(HOSTARRAY, n)
     return t
 
-def device_tensor(n, dptr):
+def device_tensor(n, dptr, shape=lltype.nullptr(SHAPEARRAY)):
     t = lltype.malloc(TENSOR)
     t.size = n
+    t.shape = shape if shape else _shape1(n)
     t.dptr = dptr
     t.host = lltype.nullptr(HOSTARRAY)
     return t
+
+def zeros(shape_list):
+    n = 1
+    for d in shape_list:
+        n *= d
+    shape = lltype.malloc(SHAPEARRAY, len(shape_list))
+    for i in range(len(shape_list)):
+        shape[i] = shape_list[i]
+    return new_tensor(n, shape)
 
 def from_list(values):
     t = new_tensor(len(values))
@@ -79,7 +98,7 @@ def eval_op_cpu(opcode, a, b):
             s += ha[i]
         r.host[0] = s
         return r
-    r = new_tensor(n)
+    r = new_tensor(n, a.shape)
     hr = r.host
     if opcode == RELU:
         for i in range(n):
@@ -104,6 +123,7 @@ def _empty_kernel():
     k.ninputs = 0
     k.nodes = lltype.malloc(NODEARRAY, 0)
     k.fn = k.sumroot = k.threads = k.shared = k.nextra = 0
+    k.n = 0
     return k
 single_kernels = SingleKernels()
 
@@ -146,6 +166,55 @@ def tensor_sum(a):
 def tensor_size(a):
     return a.size
 
+@jit.oopspec("tensor.shape(a, axis)")
+def tensor_shape(a, axis):
+    return a.shape[axis]
+
+
+class SizePolicy(object):
+    _immutable_fields_ = ['static?']
+    def __init__(self):
+        self.static = True
+        self.seen = []
+policy = SizePolicy()
+MAX_STATIC_SIZES = 3
+
+@jit.elidable
+def note_size(n):
+    if n not in policy.seen:
+        policy.seen.append(n)
+        if len(policy.seen) > MAX_STATIC_SIZES:
+            policy.static = False
+    return n
+
+def size(t):
+    n = tensor_size(t)
+    if policy.static:
+        n = jit.promote(n)
+        note_size(n)
+    return n
+
+def same_size(a, b):
+    if size(a) != size(b):
+        raise ValueError("shape mismatch")
+
+def add(a, b):
+    same_size(a, b)
+    return tensor_add(a, b)
+
+def mul(a, b):
+    same_size(a, b)
+    return tensor_mul(a, b)
+
+def relu(a):
+    return tensor_relu(a)
+
+def sum(a):
+    return tensor_sum(a)
+
+def item(a):
+    return tensor_item(a)
+
 @jit.dont_look_inside
 def tensor_force(a):
     return a
@@ -170,6 +239,7 @@ def new_kernel(ninputs, nnodes):
     kernel.ninputs = ninputs
     kernel.nodes = lltype.malloc(NODEARRAY, nnodes)
     kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
+    kernel.n = 0
     return kernel
 
 def set_node(kernel, i, opcode, a, b):
@@ -196,7 +266,7 @@ def launch(kernel, a, b, c):
         values.append(b)
     if kernel.ninputs > 2:
         values.append(c)
-    if kernel.fn != 0:
+    if kernel.fn != 0 and (kernel.n == 0 or kernel.n == a.size):
         r = launch_gpu(kernel, values)
         if r:
             return r
@@ -360,6 +430,7 @@ def to_ttir(kernel, name):
     nodes = kernel.nodes
     nin = kernel.ninputs
     BLOCK = config.block
+    masked = kernel.n == 0 or kernel.n % BLOCK != 0
     T = 'tensor<%dxf64>' % BLOCK
     P = 'tensor<%dx!tt.ptr<f64>>' % BLOCK
     params = ['%%in%d: !tt.ptr<f64>' % i for i in range(nin)]
@@ -382,7 +453,10 @@ def to_ttir(kernel, name):
         lines.append('    %%p%d = tt.splat %%in%d : !tt.ptr<f64> -> %s' % (i, i, P))
         lines.append('    %%q%d = tt.addptr %%p%d, %%offs : %s, tensor<%dxi32>'
                      % (i, i, P, BLOCK))
-        lines.append('    %%v%d = tt.load %%q%d, %%mask, %%zero : %s' % (i, i, P))
+        if masked:
+            lines.append('    %%v%d = tt.load %%q%d, %%mask, %%zero : %s' % (i, i, P))
+        else:
+            lines.append('    %%v%d = tt.load %%q%d : %s' % (i, i, P))
     last = nin + len(nodes) - 1
     for k in range(len(nodes)):
         node = nodes[k]
@@ -414,7 +488,10 @@ def to_ttir(kernel, name):
         lines.append('    %%po = tt.splat %%out : !tt.ptr<f64> -> %s' % P)
         lines.append('    %%qo = tt.addptr %%po, %%offs : %s, tensor<%dxi32>'
                      % (P, BLOCK))
-        lines.append('    tt.store %%qo, %%v%d, %%mask : %s' % (last, P))
+        if masked:
+            lines.append('    tt.store %%qo, %%v%d, %%mask : %s' % (last, P))
+        else:
+            lines.append('    tt.store %%qo, %%v%d : %s' % (last, P))
     lines.append('    tt.return')
     lines.append('  }')
     lines.append('}')
@@ -477,6 +554,7 @@ def launch_gpu(kernel, inputs):
     nin = len(inputs)
     n = inputs[0].size
     outlen = 1 if kernel.sumroot else n
+    shape = lltype.nullptr(SHAPEARRAY) if kernel.sumroot else inputs[0].shape
     dptrs = lltype.malloc(SIGNEDARRAY, nin, flavor='raw')
     ok = True
     for k in range(nin):
@@ -495,4 +573,4 @@ def launch_gpu(kernel, inputs):
     lltype.free(dptrs, flavor='raw')
     if not ok:
         return NULLTENSOR
-    return device_tensor(outlen, out)
+    return device_tensor(outlen, out, shape)

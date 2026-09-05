@@ -103,6 +103,44 @@ class TestTensorMeta(LLJitMixin):
             assert rtensor.counter.n - before == 1
 
 
+class TestShapeSpecialization(LLJitMixin):
+
+    def setup_method(self, meth):
+        rtensor.policy.static = True
+        rtensor.policy.seen = []
+
+    def test_static_size_kernel_then_demotion(self):
+        driver = JitDriver(greens=[], reds=['n', 'size', 'w', 'b', 'acc'])
+        def f(n, size):
+            w = rtensor.zeros([size])
+            b = rtensor.zeros([size])
+            for i in range(size):
+                w.host[i] = i - 2.0
+                b.host[i] = 0.5
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, size=size, acc=acc, w=w, b=b)
+                h = rtensor.relu(rtensor.add(rtensor.mul(w, b), b))
+                if rtensor.tensor_shape(h, 0) == size:
+                    acc += rtensor.item(rtensor.sum(h))
+                n -= 1
+            return acc
+        res = self.meta_interp(f, [10, 8])
+        assert res == f(10, 8)
+        self.check_simple_loop(call_r=1)
+        self.check_resops(guard_value=2)
+        keys = [k for k in rtensor.kernel_cache.kernels if k.split(',')[1] == '8']
+        assert keys
+        assert rtensor.policy.static
+        for size in (16, 24, 40):
+            assert self.meta_interp(f, [10, size]) == f(10, size)
+        assert not rtensor.policy.static
+        res = self.meta_interp(f, [10, 48])
+        assert res == f(10, 48)
+        self.check_resops(guard_value=0)
+        assert any(k.split(',')[1] == '0' for k in rtensor.kernel_cache.kernels)
+
+
 def test_gpu_launch_matches_cpu():
     k = rtensor.build_kernel(2, [rtensor.MUL, rtensor.ADD, rtensor.RELU, rtensor.SUM],
                              [0, 2, 3, 4], [1, 1, -1, -1])
