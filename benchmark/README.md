@@ -145,8 +145,8 @@ across all modes and with PyTorch in every configuration.
 
 | configuration | fused | eager (ours) | torch.compile | torch eager |
 |---|---|---|---|---|
-| K=1, N=1e6 | 40.5 | 113.3 | 42.7 | 78.6 |
-| K=4, N=1e6 | 51.6 | 452.5 | 69.0 | 312.4 |
+| K=1, N=1e6 | 29.8 | 113.3 | 42.7 | 78.6 |
+| K=4, N=1e6 | 67.9 | 452.5 | 69.0 | 312.4 |
 | K=8, N=1e6 | 82.9 | 903.2 | 133.4 | 622.9 |
 | K=4, N=1e4 | 15.0 | 138.3 | 41.9 | 55.2 |
 | K=4, N=1e5 | 15.0 | 70.3 | 43.3 | 56.1 |
@@ -164,7 +164,7 @@ reports for the same step function:
 
 | variant | fused (us) | launches | torch.compile (us) | graphs / breaks | torch eager (us) |
 |---|---|---|---|---|---|
-| 0 plain chain | 51.6 | 1.00 | 69.0 | 1 / 0 | 312.4 |
+| 0 plain chain | 67.9 | 1.00 | 69.0 | 1 / 0 | 312.4 |
 | 1 branch on the loop counter | 53.3 | 1.00 | 308.2 | 1 / 0 (recompiles, then eager) | 317.3 |
 | 2 same after an explicit force | 57.5 | 1.15 | 308.2 | 1 / 0 | 317.3 |
 | 3 branch on `sum(h).item()` | 111.3 | 2.00 | 169.9 | 2 / 1 | 376.7 |
@@ -226,9 +226,9 @@ counted):
 | model | size | fused (launches) | eager, ours (launches) | torch.compile | torch eager |
 |---|---|---|---|---|---|
 | Transformer | 64 rows | 219.6 (9) | 540.3 (38) | 250.4 | 388.9 |
-| Transformer | 1024 rows | 1695.5 (9) | 3825.2 (38) | 1883.6 | 1874.2 |
-| CNN | 1 image | 81.4 (6) | 89.2 (10) | 202.9 | 135.6 |
-| CNN | 21 images | 230.3 (6) | 238.6 (10) | 354.5 | 265.1 |
+| Transformer | 1024 rows | 1690.5 (9) | 3825.2 (38) | 1883.6 | 1874.2 |
+| CNN | 1 image | 74.4 (6) | 89.2 (10) | 202.9 | 135.6 |
+| CNN | 21 images | 228.1 (6) | 238.6 (10) | 354.5 | 265.1 |
 
 Three runtime changes took the Transformer from 978 / 4077 us to these
 numbers: device buffers are zero-filled only when the kernel accumulates
@@ -238,6 +238,20 @@ device tensors instead of per-call uploads, and attention runs batched over
 heads (8 cuBLAS calls instead of 14 small ones).  Row kernels compiled with
 the tile width of the promoted column count (64 for layernorm, 1024 for the
 attention softmax) then halved the 1024-row time again.
+
+Transformer training (variant 10): two Transformer blocks, `loss = sum(y)`,
+reverse-mode autograd and an SGD update over all 26 parameters, float64,
+50 iterations.  Per-iteration microseconds and kernel launches:
+
+| rows | fused (launches) | eager, ours (launches) | torch.compile | torch eager |
+|---|---|---|---|---|
+| 64 | 1933.1 (112) | 3092.4 (251) | 1816.0 | 3210.0 |
+| 1024 | 13625.5 (112) | 26122.0 (251) | 9531.5 | 10513.4 |
+
+The 1024-row gap is not yet attributed; the in-process profiler
+(`RTENSOR_PROFILE=1`) nests its brackets, so gather and batched-matmul time
+is double counted.  Retained activations are what made this step 75 ms
+before the adaptive GC trigger described in the caveats below.
 
 Precision (`RTENSOR_DTYPE` / `TORCH_DTYPE`, 100 iterations, per-iteration
 microseconds, fused mode; torch uses the same dtype end to end):
@@ -398,7 +412,7 @@ Axis-0/1 max therefore falls back to `eval_op_cpu`, and only a whole-tensor
 - Device buffers are owned by finalizable objects and recycled through a
   free list.  When no buffer of the requested size is free, an allocation
   first runs a GC once `max(RTENSOR_BUDGET_MB, live-after-last-GC)` bytes or
-  an adaptive number of fresh buffers (64 to 65536, doubled after a GC that
+  an adaptive number of fresh buffers (1 to 65536, doubled after a GC that
   recycled nothing, halved after one that did) have been allocated since the
   last GC.  Retained activations in training therefore do not trigger a GC
   per allocation, while short-lived chains recycle every iteration.

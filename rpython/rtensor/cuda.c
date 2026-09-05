@@ -120,7 +120,7 @@ static buf_t *allocs, *freed;
 static long nallocs, capallocs, nfreed, capfreed;
 static long live_bytes, budget_bytes = 8L << 20, launches, fresh_since_gc;
 static long allocated_since_gc, live_after_gc;
-static long count_threshold = 64, just_collected;
+static long count_threshold = 1, just_collected;
 
 static int rt_init(void)
 {
@@ -241,7 +241,7 @@ RPY_EXPORTED int rt_cuda_needs_gc(long nbytes)
     if (just_collected) {
         just_collected = 0;
         if (!reusable && count_threshold < 65536) count_threshold *= 2;
-        else if (reusable && count_threshold > 64) count_threshold /= 2;
+        else if (reusable && count_threshold > 1) count_threshold /= 2;
     }
     if (reusable) return 0;
     if (allocated_since_gc < threshold && fresh_since_gc < count_threshold) return 0;
