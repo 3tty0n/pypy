@@ -44,11 +44,12 @@ def sgd_step(params, lr):
 _scalars = {}
 
 
-def _scalar(v):
-    t = _scalars.get(v)
+def _scalar(v, dtype="float64"):
+    key = (v, dtype)
+    t = _scalars.get(key)
     if t is None:
-        t = _tensor.tensor([v])
-        _scalars[v] = t
+        t = _tensor.tensor([v], None, False, dtype)
+        _scalars[key] = t
     return t
 
 
@@ -62,11 +63,12 @@ def softmax(x):
 
 def layernorm(x, gamma, beta, eps=1e-5):
     rows, cols = x.shape
-    inv = _scalar(1.0 / cols)
+    dt = x.dtype
+    inv = _scalar(1.0 / cols, dt)
     mean = x.sum(1).mul(inv).reshape([rows, 1])
     d = x.sub(mean)
     var = d.mul(d).sum(1).mul(inv).reshape([rows, 1])
-    denom = var.add(_scalar(eps)).sqrt()
+    denom = var.add(_scalar(eps, dt)).sqrt()
     return d.div(denom).mul(gamma).add(beta)
 
 
@@ -85,7 +87,7 @@ class MultiHead(object):
         q = x.matmul(self.wq).head_split(h)
         k = x.matmul(self.wk).head_split(h)
         v = x.matmul(self.wv).head_split(h)
-        s = q.bmm(k, h, True).mul(_scalar(1.0 / math.sqrt(dh)))
+        s = q.bmm(k, h, True).mul(_scalar(1.0 / math.sqrt(dh), x.dtype))
         c = softmax(s).bmm(v, h)
         return c.head_merge(h).matmul(self.wo)
 
@@ -171,3 +173,83 @@ class CNN(object):
     def __call__(self, x):
         y = self.bn(self.conv(x), self.pool.h * self.pool.w)
         return self.fc(self.pool(y.relu()))
+
+
+def gelu(x):
+    import math
+    dt = x.dtype
+    c = _scalar(math.sqrt(2.0 / math.pi), dt)
+    x3 = x.mul(x).mul(x).mul(_scalar(0.044715, dt))
+    z = x.add(x3).mul(c).mul(_scalar(2.0, dt))
+    one = _scalar(1.0, dt)
+    tanh = one.sub(_scalar(2.0, dt).div(z.exp().add(one)))
+    return x.mul(_scalar(0.5, dt)).mul(tanh.add(one))
+
+
+class CausalSelfAttention(object):
+    def __init__(self, wq, bq, wk, bk, wv, bv, wo, bo, heads, mask):
+        self.wq = wq
+        self.bq = bq
+        self.wk = wk
+        self.bk = bk
+        self.wv = wv
+        self.bv = bv
+        self.wo = wo
+        self.bo = bo
+        self.heads = heads
+        self.mask = mask
+
+    def __call__(self, x):
+        import math
+        h = self.heads
+        dh = x.shape[1] // h
+        q = x.matmul(self.wq).add(self.bq).head_split(h)
+        k = x.matmul(self.wk).add(self.bk).head_split(h)
+        v = x.matmul(self.wv).add(self.bv).head_split(h)
+        s = q.bmm(k, h, True).mul(
+            _scalar(1.0 / math.sqrt(dh), x.dtype)).add(self.mask)
+        c = softmax(s).bmm(v, h)
+        return c.head_merge(h).matmul(self.wo).add(self.bo)
+
+
+class GPT2MLP(object):
+    def __init__(self, wfc, bfc, wproj, bproj):
+        self.wfc = wfc
+        self.bfc = bfc
+        self.wproj = wproj
+        self.bproj = bproj
+
+    def __call__(self, x):
+        h = gelu(x.matmul(self.wfc).add(self.bfc))
+        return h.matmul(self.wproj).add(self.bproj)
+
+
+class GPT2Block(object):
+    def __init__(self, attn, g1, b1, g2, b2, mlp, eps=1e-5):
+        self.attn = attn
+        self.g1 = g1
+        self.b1 = b1
+        self.g2 = g2
+        self.b2 = b2
+        self.mlp = mlp
+        self.eps = eps
+
+    def __call__(self, x):
+        x = x.add(self.attn(layernorm(x, self.g1, self.b1, self.eps)))
+        return x.add(self.mlp(layernorm(x, self.g2, self.b2, self.eps)))
+
+
+class GPT2(object):
+    def __init__(self, wte, blocks, gf, bf, eps=1e-5):
+        self.wte = wte
+        self.blocks = blocks
+        self.gf = gf
+        self.bf = bf
+        self.eps = eps
+
+    def __call__(self, idx, pos):
+        x = self.wte.take(idx).add(pos)
+        for block in self.blocks:
+            x = block(x)
+        x = layernorm(x, self.gf, self.bf, self.eps)
+        return x.matmul(self.wte, True)

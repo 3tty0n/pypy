@@ -1,7 +1,7 @@
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import os
-from rpython.rtensor.core import (ADD, ARITY, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, F64, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, KERNEL, MAXR, MUL, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, RELU, RELUGRAD, SHAPEARRAY, SQRT, STORE_TYPE, SUB, SUM, config, is_reduction, param_slot, slot_param, slot_used)
+from rpython.rtensor.core import (ADD, ARITY, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, F64, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, KERNEL, MAXR, MUL, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, RELU, RELUGRAD, SHAPEARRAY, SQRT, STORE_TYPE, SUB, SUM, config, is_reduction, param_slot, slot_param, slot_used)
 from rpython.rtensor.device import (_env, _here, gpu_enabled, profile, rt_cuda_load, rt_cuda_set_budget)
 
 class SingleKernels(object):
@@ -830,7 +830,58 @@ def _gather_index(e, op, params, I64, I1):
     return srcs, ''
 
 
+def to_ttir_rowgather(params, name, dtype):
+    BLOCK = config.block
+    S = STORE_TYPE[dtype]
+    cols = params[0]
+    T = 'tensor<%dx%s>' % (BLOCK, S)
+    P = 'tensor<%dx!tt.ptr<%s>>' % (BLOCK, S)
+    I32 = 'tensor<%dxi32>' % BLOCK
+    I64 = 'tensor<%dxi64>' % BLOCK
+    e = Emitter()
+    e.add('module {')
+    e.add('  tt.func public @%s(%%in: !tt.ptr<%s>, %%idx: !tt.ptr<%s>, '
+          '%%out: !tt.ptr<%s>, %%n: i64, %%c: i64) '
+          'attributes {noinline = false} {' % (name, S, S, S))
+    e.add('    %%zero = arith.constant dense<0.0> : %s' % T)
+    e.add('    %%bs = arith.constant %d : i32' % BLOCK)
+    e.add('    %pid = tt.get_program_id x : i32')
+    e.add('    %start = arith.muli %pid, %bs : i32')
+    e.add('    %%range = tt.make_range {end = %d : i32, start = 0 : i32} : %s'
+          % (BLOCK, I32))
+    e.add('    %%starts = tt.splat %%start : i32 -> %s' % I32)
+    e.add('    %%offs = arith.addi %%starts, %%range : %s' % I32)
+    e.add('    %%offs64 = arith.extsi %%offs : %s to %s' % (I32, I64))
+    e.add('    %%ns = tt.splat %%n : i64 -> %s' % I64)
+    e.add('    %%mask = arith.cmpi slt, %%offs64, %%ns : %s' % I64)
+    row = _gdiv(e, '%offs64', cols, I64)
+    col = _gmod(e, '%offs64', cols, I64)
+    e.add('    %%pidx = tt.splat %%idx : !tt.ptr<%s> -> %s' % (S, P))
+    q = e.tmp()
+    e.add('    %s = tt.addptr %%pidx, %s : %s, %s' % (q, row, P, I64))
+    iv = e.tmp()
+    e.add('    %s = tt.load %s, %%mask, %%zero : %s' % (iv, q, P))
+    ii = e.tmp()
+    e.add('    %s = arith.fptosi %s : %s to %s' % (ii, iv, T, I64))
+    src = _gbin(e, 'addi', _gbin(e, 'muli', ii, _gconst(e, cols, I64), I64),
+                col, I64)
+    e.add('    %%pin = tt.splat %%in : !tt.ptr<%s> -> %s' % (S, P))
+    qs = e.tmp()
+    e.add('    %s = tt.addptr %%pin, %s : %s, %s' % (qs, src, P, I64))
+    v = e.tmp()
+    e.add('    %s = tt.load %s, %%mask, %%zero : %s' % (v, qs, P))
+    e.add('    %%pout = tt.splat %%out : !tt.ptr<%s> -> %s' % (S, P))
+    e.add('    %%qout = tt.addptr %%pout, %%offs : %s, %s' % (P, I32))
+    e.add('    tt.store %%qout, %s, %%mask : %s' % (v, P))
+    e.add('    tt.return')
+    e.add('  }')
+    e.add('}')
+    return '\n'.join(e.lines) + '\n'
+
+
 def to_ttir_gather(op, params, name, dtype):
+    if op == GA_ROWS:
+        return to_ttir_rowgather(params, name, dtype)
     BLOCK = config.block
     S = STORE_TYPE[dtype]
     C = COMP_TYPE[dtype]

@@ -62,6 +62,19 @@ fewer launches and no graph breaks at Python control flow; where we lose
 (large training steps) the cuBLAS matmul share dominates and the residual
 is not yet attributed.  Raw runs are in `results/`.
 
+Real HuggingFace checkpoints (`applevel/gpt2_export.py` writes the weights,
+`applevel/gpt2.py` runs them on our PyPy, `applevel/gpt2_torch.py` runs
+`transformers.GPT2LMHeadModel` on the same token ids; seq 64, float32,
+argmax agrees at every position, max logits difference 1.7e-4):
+
+| model | ours (PyPy) | torch.compile | torch eager |
+|---|---|---|---|
+| distilgpt2 (6 layers, 768, 12 heads) | 2984 | 1356 | 2521 |
+| sshleifer/tiny-gpt2 (2 layers, width 2) | 558 | 373 | 1418 |
+
+distilgpt2 takes 157 launches per iteration (cuBLAS included); the gap to
+torch.compile is the open item.
+
 App-level scripts in `applevel/` (Transformer, CNN, chains) run on a PyPy
 translated with `--withmod-_tensor` and track the RPython numbers within
 about 1.3x:

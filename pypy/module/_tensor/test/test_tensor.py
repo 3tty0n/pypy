@@ -279,3 +279,63 @@ class AppTestTensor(object):
         assert z.dtype == "float32"
         raises(ValueError, _tensor.tensor, [1.0], None, False, "float8")
         raises(ValueError, b.add, a)
+
+    def test_gelu(self):
+        import _tensor, tensorlite, math
+        x = _tensor.tensor([-2.0, -0.5, 0.0, 0.5, 2.0])
+        y = tensorlite.gelu(x)
+        want = 0.0
+        for v in [-2.0, -0.5, 0.0, 0.5, 2.0]:
+            z = math.sqrt(2.0 / math.pi) * (v + 0.044715 * v ** 3)
+            want += 0.5 * v * (1.0 + math.tanh(z))
+        assert abs(y.sum().item() - want) < 1e-9
+
+    def test_gpt2_causal(self):
+        import _tensor, tensorlite
+        v, d, h, t = 4, 4, 2, 3
+
+        def mat(rows, cols, k):
+            data = [float(((i * k) % 7) - 3) / 8.0 for i in range(rows * cols)]
+            return _tensor.tensor(data, [rows, cols])
+
+        def vec(n, val):
+            return _tensor.tensor([val] * n)
+
+        mask = [0.0] * (h * t * t)
+        for head in range(h):
+            for i in range(t):
+                for j in range(i + 1, t):
+                    mask[(head * t + i) * t + j] = -1e9
+        mask = _tensor.tensor(mask, [h * t, t])
+        attn = tensorlite.CausalSelfAttention(
+            mat(d, d, 3), vec(d, 0.0), mat(d, d, 5), vec(d, 0.0),
+            mat(d, d, 2), vec(d, 0.0), mat(d, d, 4), vec(d, 0.0), h, mask)
+        mlp = tensorlite.GPT2MLP(mat(d, 4 * d, 3), vec(4 * d, 0.0),
+                                 mat(4 * d, d, 5), vec(d, 0.0))
+        block = tensorlite.GPT2Block(attn, vec(d, 1.0), vec(d, 0.0),
+                                     vec(d, 1.0), vec(d, 0.0), mlp)
+        model = tensorlite.GPT2(mat(v, d, 3), [block], vec(d, 1.0),
+                                vec(d, 0.0))
+        pos = mat(t, d, 7)
+        pick = _tensor.tensor([1.0] + [0.0] * (t * v - 1), [t, v])
+
+        def run(last):
+            idx = _tensor.tensor([1.0, 2.0, float(last)])
+            return model(idx, pos)
+
+        a = run(0)
+        b = run(3)
+        assert a.shape == (t, v)
+        assert abs(a.mul(pick).sum().item() -
+                   b.mul(pick).sum().item()) < 1e-12
+        assert abs(a.sum().item() - b.sum().item()) > 1e-9
+
+    def test_take_rows(self):
+        import _tensor
+        table = _tensor.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        idx = _tensor.tensor([2.0, 0.0, 2.0])
+        r = table.take(idx)
+        assert r.shape == (3, 2)
+        assert r.sum().item() == 25.0
+        pick = _tensor.tensor([[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
+        assert r.mul(pick).sum().item() == 5.0

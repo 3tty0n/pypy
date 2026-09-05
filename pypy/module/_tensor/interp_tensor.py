@@ -145,6 +145,22 @@ class W_Tensor(W_Root):
             self._other(space, w_other), batch, rows, cols, inner,
             1 if transpose_b else 0))
 
+    def descr_tolist(self, space):
+        t = self.tensor.t
+        h = device.host(t)
+        n = ops.tensor_size(t)
+        return space.newlist([space.newfloat(h[i]) for i in range(n)])
+
+    def descr_take(self, space, w_idx):
+        t = self.tensor.t
+        idx = self._other(space, w_idx).t
+        if (ops.tensor_ndim(t) != 2 or
+                ops.tensor_dtype(idx) != ops.tensor_dtype(t)):
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        rows = ops.tensor_size(idx)
+        cols = ops.tensor_shape(t, 1)
+        return W_Tensor(nn.Tensor(runtime.rowgather(t, idx, rows, cols)))
+
     @unwrap_spec(c=int, h=int, w=int, k=int, pad=int)
     def descr_im2col(self, space, c, h, w, k=3, pad=1):
         t = self.tensor.t
@@ -209,7 +225,8 @@ class W_Tensor(W_Root):
         return space.newbool(self.tensor.requires_grad)
 
     def descr_dtype(self, space):
-        return space.newtext(core.DTYPE_NAMES[self.tensor.t.dtype])
+        dtype = ops.tensor_dtype(self.tensor.t)
+        return space.newtext(core.DTYPE_NAMES[dtype])
 
     def descr_astype(self, space, w_dtype):
         dtype = _dtype_w(space, w_dtype)
@@ -242,6 +259,8 @@ W_Tensor.typedef = TypeDef(
     head_split=interp2app(W_Tensor.descr_head_split),
     head_merge=interp2app(W_Tensor.descr_head_merge),
     bmm=interp2app(W_Tensor.descr_bmm),
+    take=interp2app(W_Tensor.descr_take),
+    tolist=interp2app(W_Tensor.descr_tolist),
     im2col=interp2app(W_Tensor.descr_im2col),
     maxpool2=interp2app(W_Tensor.descr_maxpool2),
     conv2d=interp2app(W_Tensor.descr_conv2d),

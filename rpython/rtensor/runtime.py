@@ -5,7 +5,7 @@ from rpython.rlib.rfloat import NAN
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import math
-from rpython.rtensor.core import (ADD, ARITY, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_MAXPOOL, HOSTARRAY, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, _shape2, cols, config, nbytes, new_tensor, policy)
+from rpython.rtensor.core import (ADD, ARITY, F16, GA_ROWS, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_MAXPOOL, HOSTARRAY, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, _shape2, cols, config, nbytes, new_tensor, policy)
 from rpython.rtensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, gpu_enabled, host, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_bmm, rt_cuda_copy, rt_cuda_free, rt_cuda_launch, rt_cuda_matmul, rt_cuda_reset)
 from rpython.rtensor.kernels import (gather_kernel, needs_zero, row_tile, single_kernel)
 
@@ -364,6 +364,58 @@ def gather_gpu(op, params, x, outn, shape):
     lltype.free(ins, flavor='raw')
     lltype.free(outs, flavor='raw')
     return result
+
+
+def rowgather_gpu(table, idx, rows, cols):
+    dt = table.dtype
+    kernel = gather_kernel(GA_ROWS, [cols], dt)
+    if kernel.fn == 0:
+        return NULLTENSOR
+    tptr = dev(table)
+    iptr = dev(idx)
+    if tptr == 0 or iptr == 0:
+        return NULLTENSOR
+    outn = rows * cols
+    collect_if_needed(nbytes(outn, dt))
+    ins = lltype.malloc(SIGNEDARRAY, 2, flavor='raw')
+    outs = lltype.malloc(SIGNEDARRAY, 1, flavor='raw')
+    ins[0] = tptr
+    ins[1] = iptr
+    outs[0] = rt_cuda_alloc(nbytes(outn, dt), 0)
+    ok = outs[0] != 0
+    if ok:
+        ok = rffi.cast(lltype.Signed, rt_cuda_launch(
+            kernel.fn, ins, rffi.cast(rffi.INT, 2), outn, outs,
+            rffi.cast(rffi.INT, 1), rffi.cast(rffi.INT, kernel.threads),
+            config.block, rffi.cast(rffi.INT, kernel.shared),
+            rffi.cast(rffi.INT, kernel.nextra), 0)) != 0
+    result = NULLTENSOR
+    if ok:
+        result = device_tensor(outn, outs[0], _shape2(rows, cols), dt)
+    lltype.free(ins, flavor='raw')
+    lltype.free(outs, flavor='raw')
+    return result
+
+
+def rowgather_cpu(table, idx, rows, cols):
+    ht = host(table)
+    hi = host(idx)
+    r = new_tensor(rows * cols, _shape2(rows, cols), table.dtype)
+    hr = r.host
+    for i in range(rows * cols):
+        row = int(hi[i // cols])
+        assert row >= 0
+        hr[i] = ht[row * cols + i % cols]
+    return r
+
+
+@jit.dont_look_inside
+def rowgather(table, idx, rows, cols):
+    if gpu_enabled() and table.dtype != F16:
+        r = rowgather_gpu(table, idx, rows, cols)
+        if r:
+            return r
+    return rowgather_cpu(table, idx, rows, cols)
 
 
 def im2col_cpu(x, n, c, h, w, k, pad):

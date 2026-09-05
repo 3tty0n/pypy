@@ -1101,6 +1101,28 @@ class TestConv(LLJitMixin):
         assert abs(res - expect * 10) < 1e-9
         self.check_simple_loop(call_r=2, call_f=1)
 
+    def test_rowgather_matches_reference(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'idx', 'acc'])
+        vals = [float(i) for i in range(5 * 3)]
+
+        def f(n):
+            x = _load([5, 3], vals)
+            idx = _load([4], [4.0, 0.0, 2.0, 4.0])
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, idx=idx, acc=acc)
+                y = runtime.rowgather(x, idx, 4, 3)
+                acc += ops.item(ops.sum(ops.mul(y, y)))
+                n -= 1
+            return acc
+        expect = 0.0
+        for r in [4, 0, 2, 4]:
+            for c in range(3):
+                v = vals[r * 3 + c]
+                expect += v * v
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+
     def test_maxpool2_matches_reference(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'acc'])
         vals = _conv_input(2, 2, 4, 6)
