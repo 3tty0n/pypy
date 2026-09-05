@@ -18,9 +18,10 @@ TENSOR.become(lltype.GcStruct('TENSOR', ('size', lltype.Signed),
                               ('buf', OBJECTPTR)))
 NULLTENSOR = lltype.nullptr(TENSOR)
 
-ADD, MUL, RELU, SUM = 0, 1, 2, 3
-ARITY = [2, 2, 1, 1]
-NAMES = ['add', 'mul', 'relu', 'sum']
+ADD, MUL, RELU, SUM, RELUGRAD = 0, 1, 2, 3, 4
+NOPCODES = 5
+ARITY = [2, 2, 1, 1, 2]
+NAMES = ['add', 'mul', 'relu', 'sum', 'relugrad']
 MAX_INPUTS = 3
 BC_NONE, BC_R_ROW, BC_R_SCALAR, BC_L_ROW, BC_L_SCALAR = 0, 1, 2, 3, 4
 NPARAMS = 5
@@ -160,8 +161,10 @@ def eval_op_cpu(opcode, a, b, p):
         assert ib >= 0
         if opcode == ADD:
             hr[i] = ha[ia] + hb[ib]
-        else:
+        elif opcode == MUL:
             hr[i] = ha[ia] * hb[ib]
+        else:
+            hr[i] = hb[ib] if ha[ia] > 0.0 else 0.0
     return r
 
 def sum_cpu(a, axis):
@@ -195,7 +198,7 @@ def sum_cpu(a, axis):
 
 class SingleKernels(object):
     def __init__(self):
-        self.kernels = [_empty_kernel() for i in range(4 * NPARAMS)]
+        self.kernels = [_empty_kernel() for i in range(NOPCODES * NPARAMS)]
 
 def _empty_kernel():
     k = lltype.malloc(KERNEL)
@@ -240,7 +243,7 @@ def init_device():
         rt_cuda_set_budget(int(_env('RTENSOR_BUDGET_MB', '64')) << 20)
     except ValueError:
         pass
-    for opcode in range(4):
+    for opcode in range(NOPCODES):
         for slot in range(NPARAMS):
             if not slot_used(opcode, slot):
                 continue
@@ -270,6 +273,10 @@ def tensor_relu(a):
 @jit.oopspec("tensor.sum(a, axis)")
 def tensor_sum(a, axis):
     return eval_op(SUM, a, NULLTENSOR, axis)
+
+@jit.oopspec("tensor.relugrad(y, g, bcast)")
+def tensor_relugrad(y, g, bcast):
+    return eval_op(RELUGRAD, y, g, bcast)
 
 @jit.oopspec("tensor.ndim(a)")
 def tensor_ndim(a):
@@ -338,6 +345,9 @@ def mul_(a, b):
 def relu(a):
     return tensor_relu(a)
 
+def relugrad(y, g):
+    return tensor_relugrad(y, g, bcast(y, g))
+
 def sum(a, axis=AXIS_ALL):
     return tensor_sum(a, axis)
 
@@ -351,6 +361,9 @@ def reshape(a, shape_list):
     shape = lltype.malloc(SHAPEARRAY, len(shape_list))
     for i in range(len(shape_list)):
         shape[i] = shape_list[i]
+    return view(a, shape)
+
+def view(a, shape):
     r = lltype.malloc(TENSOR)
     r.size = a.size
     r.shape = shape
@@ -359,6 +372,36 @@ def reshape(a, shape_list):
     r.extra = lltype.nullptr(TENSORARRAY)
     r.buf = a.buf
     return r
+
+class Ones(object):
+    def __init__(self):
+        self.n = -1
+        self.t = NULLTENSOR
+        self.one = NULLTENSOR
+ones = Ones()
+
+def _make_ones(n):
+    t = new_tensor(n)
+    for i in range(n):
+        t.host[i] = 1.0
+    dev(t)
+    return t
+
+@jit.unroll_safe
+def ones_like(a):
+    n = tensor_size(a)
+    nd = tensor_ndim(a)
+    shape = lltype.malloc(SHAPEARRAY, nd)
+    for i in range(nd):
+        shape[i] = tensor_shape(a, i)
+    if n == 1:
+        if not ones.one:
+            ones.one = _make_ones(1)
+        return view(ones.one, shape)
+    if ones.n != n:
+        ones.t = _make_ones(n)
+        ones.n = n
+    return view(ones.t, shape)
 
 def matmul_shape(a, b):
     if tensor_ndim(a) != 2 or tensor_ndim(b) != 2:
@@ -370,9 +413,9 @@ def matmul_shape(a, b):
 
 def matmul(a, b):
     rows, cols, inner = matmul_shape(a, b)
-    return tensor_matmul(a, b, rows, cols, inner)
+    return tensor_matmul(a, b, rows, cols, inner, 0, 0)
 
-def matmul_cpu(a, b, rows, cols, inner):
+def matmul_cpu(a, b, rows, cols, inner, ta, tb):
     ha = host(a)
     hb = host(b)
     shape = lltype.malloc(SHAPEARRAY, 2)
@@ -384,12 +427,20 @@ def matmul_cpu(a, b, rows, cols, inner):
         for j in range(cols):
             acc = 0.0
             for k in range(inner):
-                acc += ha[i * inner + k] * hb[k * cols + j]
+                if ta:
+                    va = ha[k * rows + i]
+                else:
+                    va = ha[i * inner + k]
+                if tb:
+                    vb = hb[j * inner + k]
+                else:
+                    vb = hb[k * cols + j]
+                acc += va * vb
             hr[i * cols + j] = acc
     return r
 
 @jit.dont_look_inside
-def tensor_matmul(a, b, rows, cols, inner):
+def tensor_matmul(a, b, rows, cols, inner, ta, tb):
     if gpu_enabled():
         dptr_a = dev(a)
         dptr_b = dev(b)
@@ -399,14 +450,14 @@ def tensor_matmul(a, b, rows, cols, inner):
             outptr = rt_cuda_alloc(n)
             if outptr != 0:
                 ok = rffi.cast(lltype.Signed, rt_cuda_matmul(
-                    dptr_a, dptr_b, outptr, rows, inner, cols)) != 0
+                    dptr_a, dptr_b, outptr, rows, inner, cols, ta, tb)) != 0
                 if ok:
                     shape = lltype.malloc(SHAPEARRAY, 2)
                     shape[0] = rows
                     shape[1] = cols
                     return device_tensor(n, outptr, shape)
                 rt_cuda_free(outptr, n)
-    return matmul_cpu(a, b, rows, cols, inner)
+    return matmul_cpu(a, b, rows, cols, inner, ta, tb)
 
 def item(a):
     return tensor_item(a)
@@ -546,6 +597,9 @@ def to_tile_ir(kernel, name, n):
         elif node.opcode == RELU:
             lines.append('    %%v%d = arith.maximumf %%v%d, %%zero : %s'
                          % (v, node.a, tile))
+        elif node.opcode == RELUGRAD:
+            lines.append('    %%v%d = cuda_tile.select %%v%d, %%v%d, %%zero : %s'
+                         % (v, node.a, node.b, tile))
         else:
             result = 'tile<1xf64>'
             lines.append('    %%v%d = cuda_tile.reduce add %%v%d : %s -> %s'
@@ -585,7 +639,7 @@ RPY_EXTERN int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
                               long elems_per_block, int shared, int nextra,
                               long cols);
 RPY_EXTERN int rt_cuda_matmul(long a, long b, long c, long rows, long inner,
-                              long cols);
+                              long cols, long ta, long tb);
 """],
     libraries=['cuda', 'dl'])
 rt_cuda_load = rffi.llexternal('rt_cuda_load', [rffi.CCHARP, rffi.CCHARP],
@@ -621,7 +675,7 @@ rt_cuda_sync = rffi.llexternal('rt_cuda_sync', [], lltype.Void,
 rt_cuda_matmul = rffi.llexternal(
     'rt_cuda_matmul',
     [lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
-     lltype.Signed, lltype.Signed],
+     lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed],
     rffi.INT, compilation_info=eci,
                                 releasegil=False)
 
@@ -675,6 +729,9 @@ def launch_count():
     return rt_cuda_launch_count()
 
 def reset_device():
+    ones.n = -1
+    ones.t = NULLTENSOR
+    ones.one = NULLTENSOR
     rt_cuda_reset()
 
 def collect_if_needed(n):
@@ -703,7 +760,7 @@ def input_modes(kernel):
             m = 0
         ma = m
         mb = m
-        if node.opcode == ADD or node.opcode == MUL:
+        if node.opcode != RELU and node.opcode != SUM:
             if node.p == BC_R_ROW:
                 mb = 1
             elif node.p == BC_R_SCALAR:
@@ -809,6 +866,11 @@ def to_ttir(kernel, name):
                          % (v, node.a, T))
             lines.append('    %%v%d = arith.select %%c%d, %%v%d, %%zero : '
                          '%s, %s' % (v, v, node.a, I1, T))
+        elif node.opcode == RELUGRAD:
+            lines.append('    %%c%d = arith.cmpf ogt, %%v%d, %%zero : %s'
+                         % (v, node.a, T))
+            lines.append('    %%v%d = arith.select %%c%d, %%v%d, %%zero : '
+                         '%s, %s' % (v, v, node.b, I1, T))
         elif k == len(nodes) - 1:
             if axis == 0 or axis == 1:
                 offs = '%offsm'

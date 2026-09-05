@@ -195,7 +195,7 @@ class OptTensor(Optimization):
     def optimize_CALL_R(self, op):
         effectinfo = op.getdescr().get_extra_info()
         idx = effectinfo.oopspecindex
-        if EffectInfo.OS_TENSOR_ADD <= idx <= EffectInfo.OS_TENSOR_SUM:
+        if EffectInfo.OS_TENSOR_ADD <= idx <= EffectInfo.OS_TENSOR_RELUGRAD:
             opcode = idx - EffectInfo.OS_TENSOR_ADD
             nargs = rtensor.ARITY[opcode]
             param = 0

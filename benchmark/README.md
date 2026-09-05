@@ -49,7 +49,7 @@ the translator.
 | argument | values |
 |---|---|
 | `MODE` | `fused` (tensor ops fused into one kernel), `eager` (the `tensor` optimization disabled, one GPU kernel per op, JIT otherwise on), `nojit` (interpreter, one GPU kernel per op) |
-| `VARIANT` | `0` plain chain; `1` a branch `if i % 7 == 0: h = h + b` inside the fused region (a guard, no force); `2` the same branch after an explicit force of `h`, modelling a graph break; `3` a data-dependent branch `if sum(h).item() > 0` (a true force in every system); `4` the chain continued inside `try/except` with an exception raised every 5th iteration; `5` a host-side write to `/dev/null` every 50th iteration between tensor ops; `6` an MLP forward (see below), `K` unused |
+| `VARIANT` | `0` plain chain; `1` a branch `if i % 7 == 0: h = h + b` inside the fused region (a guard, no force); `2` the same branch after an explicit force of `h`, modelling a graph break; `3` a data-dependent branch `if sum(h).item() > 0` (a true force in every system); `4` the chain continued inside `try/except` with an exception raised every 5th iteration; `5` a host-side write to `/dev/null` every 50th iteration between tensor ops; `6` an MLP forward (see below), `K` unused; `7` the same MLP with a reverse-mode backward pass and an SGD step per iteration, `K` unused |
 
 `VARIANT 6` runs a 3-layer MLP forward (`rpython/rlib/rtensor_nn.py`) each
 iteration: `x` is `(B, 256)` with `B = N / 256`, each layer is `256x256`.
@@ -63,6 +63,18 @@ not counted as Triton kernels) plus 3 fused elementwise launches (the last one
 also folds in the final `sum`). `RTENSOR_CUBLAS` overrides the path to
 `libcublas.so`; it defaults to the path where the PyTorch wheel installs it
 under `nvidia/cu13/lib`.
+
+`VARIANT 7` adds the backward pass and a plain SGD step to variant 6.  The
+autograd tape is ordinary RPython host code in `rpython/rlib/rtensor_nn.py`:
+each forward method records a small `Node` object, `Tensor.backward()` walks
+the tape in reverse and issues the gradient formulas through the same
+`rtensor` primitives, so the backward pass is traced and fused by the same
+JIT as the forward one.  The elementwise gradients use a fusible `relugrad`
+opcode (`g if y > 0 else 0`) and `sum(axis=0)` for bias gradients; the two
+matmul gradients (`dx = dy @ W^T` and `dW = x^T @ dy`) reuse `rt_cuda_matmul`
+with cuBLAS transpose flags, so no transpose kernel is needed.  The loss is
+`sum(y)` and the SGD step is `p = p + (-lr) * p.grad` with `-lr` held in a
+`(1,)` tensor, which fuses into one kernel per parameter.
 | `K` | chain length |
 | `N` | tensor size |
 | `ITERS` | timed iterations |
@@ -139,6 +151,17 @@ iteration in `fused`, 6 in `eager`).  Per-iteration microseconds:
 |---|---|---|---|---|
 | 100 | 300.9 | 314.8 | 390.9 | 386.6 |
 | 1000 | 1064.9 | 1042.4 | 1269.5 | 1256.1 |
+
+Variant 7 (`forward + backward + SGD`) runs the same shapes with the tape
+enabled; per iteration it issues 8 cuBLAS matmuls (3 forward, 3 for `dW`,
+and 2 for `dx`; the first layer's input needs no gradient) plus the fused
+elementwise kernels for the relu gradients, the column sums for the bias
+gradients and the 6 parameter updates.  Checksums (the final loss) agree with PyTorch:
+
+    PYTHONPATH=. python2 benchmark/rtensor_bench.py nojit 7 1 2560 3
+    $RTENSOR_PYTHON benchmark/torch_bench.py eager 7 1 2560 3
+
+both print `63.912787`.
 
 The float64 matmul dominates on this GPU (1/64-rate fp64), so fusion of the
 epilogue is worth only a few percent here and `torch.compile` gains nothing

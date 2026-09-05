@@ -179,12 +179,14 @@ RPY_EXPORTED int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
 }
 
 RPY_EXPORTED int rt_cuda_matmul(long a, long b, long c, long rows,
-                                long inner, long cols)
+                                long inner, long cols, long ta, long tb)
 {
     double alpha = 1.0, beta = 0.0;
+    int ldb = tb ? (int)inner : (int)cols;
+    int lda = ta ? (int)rows : (int)inner;
     if (!rt_cublas_init()) return 0;
-    return p_cublasDgemm_v2(cublas_handle, 0, 0, (int)cols, (int)rows,
-                            (int)inner, &alpha, (const double *)b,
-                            (int)cols, (const double *)a, (int)inner,
+    return p_cublasDgemm_v2(cublas_handle, tb ? 1 : 0, ta ? 1 : 0,
+                            (int)cols, (int)rows, (int)inner, &alpha,
+                            (const double *)b, ldb, (const double *)a, lda,
                             &beta, (double *)c, (int)cols) == 0;
 }

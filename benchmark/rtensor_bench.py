@@ -10,8 +10,10 @@ sink = Sink()
 
 driver = jit.JitDriver(greens=['k', 'variant'], reds='auto', is_recursive=True)
 mlp_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
+train_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 
 MLP_D = 256
+LR = 1e-06
 
 def make_mlp_layer(d):
     w = rtensor.zeros([d, d])
@@ -49,6 +51,26 @@ def run_mlp(n, iters):
         x = h
         i += 1
     return tensor_item(tensor_sum(x.t, -1))
+
+def run_mlp_train(n, iters):
+    rows = n // MLP_D
+    if rows <= 0:
+        rows = 1
+    mlp = make_mlp(MLP_D)
+    x = make_mlp_input(rows, MLP_D)
+    params = mlp.parameters()
+    lr = rtensor_nn.Tensor(rtensor.from_list([-LR]))
+    rtensor.dev(lr.t)
+    loss = 0.0
+    i = 0
+    while i < iters:
+        train_driver.jit_merge_point()
+        out = mlp.forward(x).sum()
+        out.backward()
+        rtensor_nn.sgd_step(params, lr)
+        loss = out.item()
+        i += 1
+    return loss
 
 def make_inputs(n):
     w = new_tensor(n)
@@ -94,7 +116,7 @@ def run(variant, k, h, b, iters):
 
 def entry_point(argv):
     if len(argv) != 6:
-        print 'usage: rtensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..6)'
+        print 'usage: rtensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..7)'
         return 1
     mode = argv[1]
     variant = int(argv[2])
@@ -109,17 +131,31 @@ def entry_point(argv):
         jit.set_user_param(None, 'off')
     rtensor.init_device()
     sink.fd = os.open('/dev/null', os.O_WRONLY, 0)
-    if variant == 6:
-        run_mlp(n, 20)
+    if variant == 6 or variant == 7:
+        train = variant == 7
+        if train:
+            run_mlp_train(n, 20)
+        else:
+            run_mlp(n, 20)
         t0 = time.time()
-        run_mlp(n, 20)
+        if train:
+            run_mlp_train(n, 20)
+        else:
+            run_mlp(n, 20)
         warm = time.time() - t0
-        run_mlp(n, 30)
-        run_mlp(n, 30)
+        if train:
+            run_mlp_train(n, 30)
+            run_mlp_train(n, 30)
+        else:
+            run_mlp(n, 30)
+            run_mlp(n, 30)
         before = rtensor.counter.n
         launches_before = rtensor.launch_count()
         t0 = time.time()
-        acc = run_mlp(n, iters)
+        if train:
+            acc = run_mlp_train(n, iters)
+        else:
+            acc = run_mlp(n, iters)
         rtensor.sync_device()
         steady = (time.time() - t0) / iters * 1e6
         launches = float(rtensor.launch_count() - launches_before) / iters

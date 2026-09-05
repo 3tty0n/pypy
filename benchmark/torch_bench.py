@@ -3,6 +3,7 @@ mode, variant, k, n, iters = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), in
 dev = "cuda"
 
 MLP_D = 256
+LR = 1e-06
 
 def mlp_layer():
     W = torch.tensor([float((i * 7) % 13 - 6) / MLP_D for i in range(MLP_D * MLP_D)],
@@ -28,6 +29,45 @@ def run_mlp(iters):
         h = forward(h)
     torch.cuda.synchronize()
     return h.sum().item()
+
+def run_mlp_train(iters):
+    rows = n // MLP_D
+    if rows <= 0:
+        rows = 1
+    x = torch.tensor([(i % 7) - 3.0 for i in range(rows * MLP_D)],
+                     dtype=torch.float64, device=dev).reshape(rows, MLP_D)
+    layers = [mlp_layer(), mlp_layer(), mlp_layer()]
+    params = []
+    for W, b in layers:
+        W.requires_grad_(True)
+        b.requires_grad_(True)
+        params.append(W)
+        params.append(b)
+    def step():
+        y = x
+        for W, b in layers:
+            y = torch.relu(y @ W + b)
+        return y.sum()
+    if mode == "compile":
+        step = torch.compile(step, dynamic=False)
+    loss = 0.0
+    for _ in range(iters):
+        out = step()
+        out.backward()
+        with torch.no_grad():
+            for p in params:
+                p -= LR * p.grad
+                p.grad = None
+        loss = out.item()
+    torch.cuda.synchronize()
+    return loss
+
+if variant == 7:
+    t0 = time.time(); run_mlp_train(20); warm = time.time() - t0
+    t0 = time.time(); acc = run_mlp_train(iters); steady = (time.time() - t0) / iters * 1e6
+    print("torch-%s %d %d %d %d %f %f 0 %f 0 -1 -1" % (mode, variant, k, n, iters,
+        warm, steady, acc))
+    sys.exit(0)
 
 if variant == 6:
     t0 = time.time(); run_mlp(20); warm = time.time() - t0

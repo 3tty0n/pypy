@@ -395,6 +395,8 @@ def test_sum_axis_elements():
 
 
 B, D = 2, 3
+LR = 0.01
+BACKWARD_CALL_R = 5
 
 def _fill_matrix(w, rows, cols, seed):
     for i in range(rows):
@@ -469,3 +471,140 @@ class TestTensorNN(LLJitMixin):
         res = self.meta_interp(f, [5])
         assert res == _cpu_expect(5)
         self.check_simple_loop(call_r=6)
+
+
+AB, AD = 2, 3
+AW = [1.0, -2.0, 0.5]
+ABIAS = [0.25, 0.5, -1.0]
+
+def _autograd_ref():
+    loss = 0.0
+    gw = [0.0] * AD
+    gb = [0.0] * AD
+    for i in range(AB):
+        for j in range(AD):
+            x = i * AD + j - 2.5
+            v = x * AW[j] + ABIAS[j]
+            if v > 0.0:
+                loss += v
+                gw[j] += x
+                gb[j] += 1.0
+    return loss, gw, gb
+
+def _autograd_setup():
+    x = rtensor.zeros([AB, AD])
+    for i in range(AB * AD):
+        x.host[i] = i - 2.5
+    w = rtensor.zeros([AD])
+    b = rtensor.zeros([AD])
+    for j in range(AD):
+        w.host[j] = AW[j]
+        b.host[j] = ABIAS[j]
+    return x, w, b
+
+def test_autograd_elementwise_matches_reference():
+    x, w, b = _autograd_setup()
+    xt = rtensor_nn.Tensor(x)
+    wt = rtensor_nn.Tensor(w, True)
+    bt = rtensor_nn.Tensor(b, True)
+    loss = xt.mul(wt).add(bt).relu().sum()
+    loss.backward()
+    eloss, egw, egb = _autograd_ref()
+    assert loss.item() == eloss
+    for j in range(AD):
+        assert rtensor.host(wt.grad.t)[j] == egw[j]
+        assert rtensor.host(bt.grad.t)[j] == egb[j]
+
+def _mlp_train_ref(iters, lr):
+    x = [[(i - j) * 0.5 for j in range(D)] for i in range(B)]
+    ws = [_cpu_matrix(1), _cpu_matrix(2)]
+    bs = [_cpu_bias(1), _cpu_bias(2)]
+    losses = []
+    for _ in range(iters):
+        acts = [x]
+        pre = []
+        h = x
+        for l in range(2):
+            y = [[sum([h[i][k] * ws[l][k][j] for k in range(D)]) + bs[l][j]
+                  for j in range(D)] for i in range(B)]
+            r = [[v if v > 0.0 else 0.0 for v in row] for row in y]
+            pre.append(y)
+            acts.append(r)
+            h = r
+        losses.append(sum([sum(row) for row in h]))
+        g = [[1.0] * D for _ in range(B)]
+        for l in (1, 0):
+            g = [[g[i][j] if pre[l][i][j] > 0.0 else 0.0 for j in range(D)]
+                 for i in range(B)]
+            gb = [sum([g[i][j] for i in range(B)]) for j in range(D)]
+            gw = [[sum([acts[l][i][k] * g[i][j] for i in range(B)])
+                   for j in range(D)] for k in range(D)]
+            gx = [[sum([g[i][j] * ws[l][k][j] for j in range(D)])
+                   for k in range(D)] for i in range(B)]
+            for k in range(D):
+                for j in range(D):
+                    ws[l][k][j] -= lr * gw[k][j]
+            for j in range(D):
+                bs[l][j] -= lr * gb[j]
+            g = gx
+    return losses
+
+
+class TestAutograd(LLJitMixin):
+
+    def setup_method(self, meth):
+        rtensor.policy.static = True
+        rtensor.policy.seen = []
+
+    def test_backward_of_relu_mul_add_fuses(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'b', 'acc'])
+        def f(n):
+            x, w, b = _autograd_setup()
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, w=w, b=b, acc=acc)
+                xt = rtensor_nn.Tensor(x)
+                wt = rtensor_nn.Tensor(w, True)
+                bt = rtensor_nn.Tensor(b, True)
+                loss = xt.mul(wt).add(bt).relu().sum()
+                loss.backward()
+                acc += (loss.item() + 3.0 * wt.grad.sum().item() +
+                        7.0 * bt.grad.sum().item())
+                n -= 1
+            return acc
+        eloss, egw, egb = _autograd_ref()
+        expect = (eloss + 3.0 * sum(egw) + 7.0 * sum(egb)) * 10
+        res = self.meta_interp(f, [10])
+        assert res == expect
+        self.check_simple_loop(call_r=BACKWARD_CALL_R, call_f=3)
+
+    def test_mlp_train_step_matches_reference(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'mlp', 'lr', 'loss', 'prev'])
+        def f(n):
+            x0 = rtensor.zeros([B, D])
+            for i in range(B):
+                for j in range(D):
+                    x0.host[i * D + j] = (i - j) * 0.5
+            mlp = rtensor_nn.MLP([_make_layer(1), _make_layer(2)])
+            x = rtensor_nn.Tensor(x0)
+            lr = rtensor_nn.Tensor(rtensor.from_list([-LR]))
+            params = mlp.parameters()
+            loss = 0.0
+            prev = 1e30
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, mlp=mlp, lr=lr, loss=loss,
+                                       prev=prev)
+                y = mlp.forward(x)
+                out = y.reshape([B * D]).sum()
+                out.backward()
+                rtensor_nn.sgd_step(mlp.parameters(), lr)
+                loss = out.item()
+                if loss >= prev:
+                    return -1.0
+                prev = loss
+                n -= 1
+            return loss
+        losses = _mlp_train_ref(6, LR)
+        assert losses[0] > losses[-1]
+        res = self.meta_interp(f, [6])
+        assert abs(res - losses[-1]) < 1e-9
