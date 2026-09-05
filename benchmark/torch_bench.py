@@ -13,6 +13,9 @@ TB_D = 64
 TB_H = 4
 TB_EPS = 1e-05
 TF_BLOCKS = 2
+RED_COLS = 64
+ATT_D = 256
+ATT_H = 8
 
 def mlp_layer():
     W = torch.tensor([float((i * 7) % 13 - 6) / MLP_D for i in range(MLP_D * MLP_D)],
@@ -231,6 +234,89 @@ def run_cnn(iters):
             acc += step(x).sum().item()
     torch.cuda.synchronize()
     return acc
+
+def gen_weight(rows, cols, divisor):
+    return torch.tensor([float((i * 7) % 13 - 6) / divisor for i in range(rows * cols)],
+                        dtype=DT, device=dev).reshape(rows, cols)
+
+def run_reduction(iters):
+    rows = n // RED_COLS
+    if rows <= 0:
+        rows = 1
+    x = torch.tensor([(i % 7) - 3.0 for i in range(rows * RED_COLS)],
+                     dtype=DT, device=dev).reshape(rows, RED_COLS)
+    def forward(t):
+        h = (t * t).sum(1, keepdim=True)
+        return t + h
+    step = torch.compile(forward, dynamic=False) if mode == "compile" else forward
+    for _ in range(iters):
+        x = step(x)
+    torch.cuda.synchronize()
+    return x.sum().item()
+
+def run_matmul(iters):
+    rows = n // MLP_D
+    if rows <= 0:
+        rows = 1
+    x = torch.tensor([(i % 7) - 3.0 for i in range(rows * MLP_D)],
+                     dtype=DT, device=dev).reshape(rows, MLP_D)
+    W, b = mlp_layer()
+    def forward(t):
+        return torch.relu(t @ W + b)
+    step = torch.compile(forward, dynamic=False) if mode == "compile" else forward
+    for _ in range(iters):
+        x = step(x)
+    torch.cuda.synchronize()
+    return x.sum().item()
+
+def run_attn(iters):
+    rows = n // ATT_D
+    if rows <= 0:
+        rows = 1
+    x = torch.tensor([(i % 7) - 3.0 for i in range(rows * ATT_D)],
+                     dtype=DT, device=dev).reshape(rows, ATT_D)
+    dh = ATT_D // ATT_H
+    scale = 1.0 / math.sqrt(dh)
+    heads = [(gen_weight(ATT_D, dh, ATT_D), gen_weight(ATT_D, dh, ATT_D),
+              gen_weight(ATT_D, dh, ATT_D), gen_weight(dh, ATT_D, ATT_D))
+             for _ in range(ATT_H)]
+    WQ = torch.cat([hd[0] for hd in heads], dim=1)
+    WK = torch.cat([hd[1] for hd in heads], dim=1)
+    WV = torch.cat([hd[2] for hd in heads], dim=1)
+    WO = torch.cat([hd[3] for hd in heads], dim=0)
+    def split(t):
+        return t.reshape(rows, ATT_H, dh).transpose(0, 1)
+    def forward(t):
+        q, k, v = split(t @ WQ), split(t @ WK), split(t @ WV)
+        p = torch.softmax(torch.bmm(q, k.transpose(1, 2)) * scale, dim=2)
+        o = torch.bmm(p, v).transpose(0, 1).reshape(rows, ATT_D)
+        return o @ WO
+    step = torch.compile(forward, dynamic=False) if mode == "compile" else forward
+    for _ in range(iters):
+        x = step(x)
+    torch.cuda.synchronize()
+    return x.sum().item()
+
+if variant == 13:
+    t0 = time.time(); run_attn(20); warm = time.time() - t0
+    t0 = time.time(); acc = run_attn(iters); steady = (time.time() - t0) / iters * 1e6
+    print("torch-%s %d %d %d %d %f %f 0 %f 0 -1 -1 %s" % (mode, variant, k, n, iters,
+        warm, steady, acc, DTNAME))
+    sys.exit(0)
+
+if variant == 12:
+    t0 = time.time(); run_matmul(20); warm = time.time() - t0
+    t0 = time.time(); acc = run_matmul(iters); steady = (time.time() - t0) / iters * 1e6
+    print("torch-%s %d %d %d %d %f %f 0 %f 0 -1 -1 %s" % (mode, variant, k, n, iters,
+        warm, steady, acc, DTNAME))
+    sys.exit(0)
+
+if variant == 11:
+    t0 = time.time(); run_reduction(20); warm = time.time() - t0
+    t0 = time.time(); acc = run_reduction(iters); steady = (time.time() - t0) / iters * 1e6
+    print("torch-%s %d %d %d %d %f %f 0 %f 0 -1 -1 %s" % (mode, variant, k, n, iters,
+        warm, steady, acc, DTNAME))
+    sys.exit(0)
 
 if variant == 10:
     t0 = time.time(); run_transformer_train(20); warm = time.time() - t0

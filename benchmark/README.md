@@ -31,6 +31,9 @@ Other env vars: `RTENSOR_DTYPE` (`float64|float32|float16`), `RTENSOR_CPU=1`
 | 6 / 7 | 3-layer MLP forward / training step |
 | 8 / 10 | Transformer block forward / 2-block training step |
 | 9 | small CNN forward |
+| 11 | row reduction, carried: `h = sum(x*x, axis=1); x = x + h` |
+| 12 | one matmul layer, carried: `x = relu(matmul(x, W) + b)` |
+| 13 | multi-head self-attention only, carried, D=256, 8 heads |
 
 Output columns: `mode variant k n iters warm_s steady_us kernels acc compiled_in_timed launches_per_iter dtype`.
 `launches_per_iter` must be 1.0 for the chain in `fused` mode.

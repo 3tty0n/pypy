@@ -21,6 +21,9 @@ train_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 block_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 cnn_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 tf_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
+reduction_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
+matmul_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
+attn_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 
 MLP_D = 256
 LR = 1e-06
@@ -28,6 +31,9 @@ TB_D = 64
 TB_H = 4
 TB_EPS = 1e-05
 TF_BLOCKS = 2
+RED_COLS = 64
+ATT_D = 256
+ATT_H = 8
 
 def make_mlp_layer(d):
     w = _zeros([d, d])
@@ -100,30 +106,31 @@ def tb_vector(v):
     device.dev(t)
     return nn.Tensor(t)
 
-def tb_qkv():
-    dh = TB_D // TB_H
-    w = _zeros([TB_D, TB_D])
-    for r in range(TB_D):
-        for h in range(TB_H):
+def tb_qkv(d, h_count):
+    dh = d // h_count
+    w = _zeros([d, d])
+    for r in range(d):
+        for h in range(h_count):
             for c in range(dh):
-                w.host[r * TB_D + h * dh + c] = float(
-                    ((r * dh + c) * 7) % 13 - 6) / TB_D
+                w.host[r * d + h * dh + c] = float(
+                    ((r * dh + c) * 7) % 13 - 6) / d
     device.dev(w)
     return nn.Tensor(w)
 
-def tb_proj():
-    dh = TB_D // TB_H
-    w = _zeros([TB_D, TB_D])
-    for h in range(TB_H):
+def tb_proj(d, h_count):
+    dh = d // h_count
+    w = _zeros([d, d])
+    for h in range(h_count):
         for r in range(dh):
-            for c in range(TB_D):
-                w.host[(h * dh + r) * TB_D + c] = float(
-                    ((r * TB_D + c) * 7) % 13 - 6) / TB_D
+            for c in range(d):
+                w.host[(h * dh + r) * d + c] = float(
+                    ((r * d + c) * 7) % 13 - 6) / d
     device.dev(w)
     return nn.Tensor(w)
 
 def make_block():
-    attn = nn.MultiHead(tb_qkv(), tb_qkv(), tb_qkv(), tb_proj(), TB_H)
+    attn = nn.MultiHead(tb_qkv(TB_D, TB_H), tb_qkv(TB_D, TB_H),
+                                tb_qkv(TB_D, TB_H), tb_proj(TB_D, TB_H), TB_H)
     layers = []
     for i in range(2):
         layers.append(nn.Linear(tb_weight(TB_D, TB_D),
@@ -146,7 +153,8 @@ def run_block(n, iters):
     return tensor_item(tensor_sum(x.t, -1))
 
 def make_train_block():
-    attn = nn.MultiHead(tb_qkv(), tb_qkv(), tb_qkv(), tb_proj(),
+    attn = nn.MultiHead(tb_qkv(TB_D, TB_H), tb_qkv(TB_D, TB_H),
+                                tb_qkv(TB_D, TB_H), tb_proj(TB_D, TB_H),
                                 TB_H, True)
     layers = []
     for i in range(2):
@@ -223,7 +231,60 @@ def run_cnn(n, iters):
         i += 1
     return acc
 
+def run_reduction(n, iters):
+    rows = n // RED_COLS
+    if rows <= 0:
+        rows = 1
+    x = _zeros([rows, RED_COLS])
+    for i in range(rows * RED_COLS):
+        x.host[i] = (i % 7) - 3.0
+    device.dev(x)
+    i = 0
+    while i < iters:
+        reduction_driver.jit_merge_point()
+        h = ops.sum(tensor_mul(x, x, core.BC_NONE), 1)
+        x = tensor_add(x, h, core.BC_R_COL)
+        i += 1
+    return tensor_item(tensor_sum(x, -1))
+
+def run_matmul(n, iters):
+    rows = n // MLP_D
+    if rows <= 0:
+        rows = 1
+    layer = make_mlp_layer(MLP_D)
+    x = make_mlp_input(rows, MLP_D)
+    i = 0
+    while i < iters:
+        matmul_driver.jit_merge_point()
+        x = layer.forward(x)
+        i += 1
+    return tensor_item(tensor_sum(x.t, -1))
+
+def make_attn():
+    return nn.MultiHead(tb_qkv(ATT_D, ATT_H), tb_qkv(ATT_D, ATT_H),
+                                tb_qkv(ATT_D, ATT_H), tb_proj(ATT_D, ATT_H),
+                                ATT_H)
+
+def run_attn(n, iters):
+    rows = n // ATT_D
+    if rows <= 0:
+        rows = 1
+    attn = make_attn()
+    x = make_mlp_input(rows, ATT_D)
+    i = 0
+    while i < iters:
+        attn_driver.jit_merge_point()
+        x = nn.Tensor(attn.forward(x).t)
+        i += 1
+    return tensor_item(tensor_sum(x.t, -1))
+
 def run_model(variant, n, iters):
+    if variant == 13:
+        return run_attn(n, iters)
+    if variant == 12:
+        return run_matmul(n, iters)
+    if variant == 11:
+        return run_reduction(n, iters)
     if variant == 10:
         return run_transformer_train(n, iters)
     if variant == 9:
@@ -284,7 +345,7 @@ def _bench_env(name, default):
 
 def entry_point(argv):
     if len(argv) != 6:
-        print 'usage: rtensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..10)'
+        print 'usage: rtensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..13)'
         return 1
     mode = argv[1]
     variant = int(argv[2])
