@@ -267,6 +267,18 @@ Every weight uses the same deterministic init as the MLP variants (element
 
 both print `51.262221`.
 
+`benchmark/applevel/transformer.py ROWS ITERS` and `benchmark/applevel/cnn.py
+IMAGES ITERS` reproduce variants 8 and 9 through the app-level `_tensor` API
+and `lib_pypy/tensorlite.py` instead of `rtensor_nn.py`, using the same
+`TB_D`/`TB_H`/`CNN_*` sizes and deterministic weight init, so their printed
+`checksum` matches `rtensor_bench.py`'s for the same `ROWS*TB_D`/`IMAGES*3072`
+and `ITERS`; each does 10 warmup iterations on a throwaway model before timing
+a freshly built one for `ITERS` iterations. Run them on a translated PyPy the
+same way as `chain_unrolled.py`, or check them against the untranslated
+interpreter (slow, so keep sizes tiny) with `RTENSOR_PYTHON=... RTENSOR_CPU=1
+python2 pypy/bin/pyinteractive.py --withmod-_tensor
+benchmark/applevel/transformer.py 4 2`.
+
 Broadcasting now covers column vectors as well as row vectors: the `bcast`
 parameter of an elementwise op is `0` none, `1`/`3` right/left row vector
 (index `i % c`), `2`/`4` right/left scalar, `5`/`6` right/left column vector
