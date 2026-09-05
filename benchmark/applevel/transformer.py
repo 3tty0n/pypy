@@ -20,16 +20,34 @@ def tb_vector(v):
     return _tensor.tensor([v] * TB_D)
 
 
-def make_block():
+def tb_qkv():
     dh = TB_D // TB_H
-    heads = []
-    for i in range(TB_H):
-        heads.append(tensorlite.Head(tb_weight(TB_D, dh), tb_weight(TB_D, dh),
-                                     tb_weight(TB_D, dh), tb_weight(dh, TB_D)))
+    data = [0.0] * (TB_D * TB_D)
+    for r in range(TB_D):
+        for h in range(TB_H):
+            for c in range(dh):
+                data[r * TB_D + h * dh + c] = float(
+                    ((r * dh + c) * 7) % 13 - 6) / TB_D
+    return _tensor.tensor(data, [TB_D, TB_D])
+
+
+def tb_proj():
+    dh = TB_D // TB_H
+    data = [0.0] * (TB_D * TB_D)
+    for h in range(TB_H):
+        for r in range(dh):
+            for c in range(TB_D):
+                data[(h * dh + r) * TB_D + c] = float(
+                    ((r * TB_D + c) * 7) % 13 - 6) / TB_D
+    return _tensor.tensor(data, [TB_D, TB_D])
+
+
+def make_block():
+    attn = tensorlite.MultiHead(tb_qkv(), tb_qkv(), tb_qkv(), tb_proj(), TB_H)
     layers = []
     for i in range(2):
         layers.append(tensorlite.Linear(tb_weight(TB_D, TB_D), tb_vector(0.01)))
-    return tensorlite.TransformerBlock(heads, tb_vector(1.0), tb_vector(0.0),
+    return tensorlite.TransformerBlock(attn, tb_vector(1.0), tb_vector(0.0),
                                        tb_vector(1.0), tb_vector(0.0),
                                        tensorlite.MLP(layers), TB_EPS)
 

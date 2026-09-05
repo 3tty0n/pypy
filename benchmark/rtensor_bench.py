@@ -91,17 +91,35 @@ def tb_vector(v):
     rtensor.dev(t)
     return rtensor_nn.Tensor(t)
 
-def make_block():
+def tb_qkv():
     dh = TB_D // TB_H
-    heads = []
-    for i in range(TB_H):
-        heads.append(rtensor_nn.Head(tb_weight(TB_D, dh), tb_weight(TB_D, dh),
-                                     tb_weight(TB_D, dh), tb_weight(dh, TB_D)))
+    w = rtensor.zeros([TB_D, TB_D])
+    for r in range(TB_D):
+        for h in range(TB_H):
+            for c in range(dh):
+                w.host[r * TB_D + h * dh + c] = float(
+                    ((r * dh + c) * 7) % 13 - 6) / TB_D
+    rtensor.dev(w)
+    return rtensor_nn.Tensor(w)
+
+def tb_proj():
+    dh = TB_D // TB_H
+    w = rtensor.zeros([TB_D, TB_D])
+    for h in range(TB_H):
+        for r in range(dh):
+            for c in range(TB_D):
+                w.host[(h * dh + r) * TB_D + c] = float(
+                    ((r * TB_D + c) * 7) % 13 - 6) / TB_D
+    rtensor.dev(w)
+    return rtensor_nn.Tensor(w)
+
+def make_block():
+    attn = rtensor_nn.MultiHead(tb_qkv(), tb_qkv(), tb_qkv(), tb_proj(), TB_H)
     layers = []
     for i in range(2):
         layers.append(rtensor_nn.Linear(tb_weight(TB_D, TB_D),
                                         tb_vector(0.01)))
-    return rtensor_nn.TransformerBlock(heads, tb_vector(1.0), tb_vector(0.0),
+    return rtensor_nn.TransformerBlock(attn, tb_vector(1.0), tb_vector(0.0),
                                        tb_vector(1.0), tb_vector(0.0),
                                        rtensor_nn.MLP(layers), TB_EPS)
 

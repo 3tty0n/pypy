@@ -15,11 +15,16 @@ typedef int (*cublasCreate_v2_t)(void **handle);
 typedef int (*cublasDgemm_v2_t)(void *handle, int transa, int transb,
     int m, int n, int k, const double *alpha, const double *A, int lda,
     const double *B, int ldb, const double *beta, double *C, int ldc);
+typedef int (*cublasDgemmStridedBatched_t)(void *handle, int transa, int transb,
+    int m, int n, int k, const double *alpha, const double *A, int lda,
+    long long strideA, const double *B, int ldb, long long strideB,
+    const double *beta, double *C, int ldc, long long strideC, int batchCount);
 
 static void *cublas_lib;
 static void *cublas_handle;
 static cublasCreate_v2_t p_cublasCreate_v2;
 static cublasDgemm_v2_t p_cublasDgemm_v2;
+static cublasDgemmStridedBatched_t p_cublasDgemmStridedBatched;
 static int cublas_inited;
 
 static CUcontext ctx;
@@ -54,6 +59,8 @@ static int rt_cublas_init(void)
     if (!cublas_lib) return 0;
     p_cublasCreate_v2 = (cublasCreate_v2_t)dlsym(cublas_lib, "cublasCreate_v2");
     p_cublasDgemm_v2 = (cublasDgemm_v2_t)dlsym(cublas_lib, "cublasDgemm_v2");
+    p_cublasDgemmStridedBatched = (cublasDgemmStridedBatched_t)dlsym(
+        cublas_lib, "cublasDgemmStridedBatched");
     if (!p_cublasCreate_v2 || !p_cublasDgemm_v2) return 0;
     if (p_cublasCreate_v2(&cublas_handle) != 0) return 0;
     cublas_inited = 1;
@@ -86,7 +93,7 @@ RPY_EXPORTED long rt_cuda_load(const char *ptx, const char *name)
     return (long)fn;
 }
 
-RPY_EXPORTED long rt_cuda_alloc(long n)
+RPY_EXPORTED long rt_cuda_alloc(long n, long zero)
 {
     CUdeviceptr p = 0;
     long i;
@@ -103,7 +110,7 @@ RPY_EXPORTED long rt_cuda_alloc(long n)
         push(&allocs, &nallocs, &capallocs, p, n);
     }
     live_bytes += n * sizeof(double);
-    cuMemsetD8(p, 0, n * sizeof(double));
+    if (zero) cuMemsetD8(p, 0, n * sizeof(double));
     return (long)p;
 }
 
@@ -134,7 +141,7 @@ RPY_EXPORTED int rt_cuda_needs_gc(long n)
 
 RPY_EXPORTED long rt_cuda_upload(double *host, long n)
 {
-    long p = rt_cuda_alloc(n);
+    long p = rt_cuda_alloc(n, 0);
     if (p) cuMemcpyHtoD((CUdeviceptr)p, host, n * sizeof(double));
     return p;
 }
@@ -189,4 +196,21 @@ RPY_EXPORTED int rt_cuda_matmul(long a, long b, long c, long rows,
                             (int)cols, (int)rows, (int)inner, &alpha,
                             (const double *)b, ldb, (const double *)a, lda,
                             &beta, (double *)c, (int)cols) == 0;
+}
+
+RPY_EXPORTED int rt_cuda_bmm(long a, long b, long c, long batch, long rows,
+                             long inner, long cols, long tb)
+{
+    double alpha = 1.0, beta = 0.0;
+    int ldb = tb ? (int)inner : (int)cols;
+    if (!rt_cublas_init() || !p_cublasDgemmStridedBatched) return 0;
+    return p_cublasDgemmStridedBatched(cublas_handle, tb ? 1 : 0, 0,
+                                       (int)cols, (int)rows, (int)inner, &alpha,
+                                       (const double *)b, ldb,
+                                       (long long)(inner * cols),
+                                       (const double *)a, (int)inner,
+                                       (long long)(rows * inner),
+                                       &beta, (double *)c, (int)cols,
+                                       (long long)(rows * cols),
+                                       (int)batch) == 0;
 }

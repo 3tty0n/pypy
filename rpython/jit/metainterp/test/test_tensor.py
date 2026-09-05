@@ -692,15 +692,33 @@ def _ref_block(x):
     return [[x[i][j] + y[i][j] for j in range(TD)] for i in range(len(x))]
 
 
-def _make_block():
-    heads = []
+def _qkv_weight():
     dh = TD // TH
-    for _ in range(TH):
-        heads.append(rtensor_nn.Head(
-            rtensor_nn.Tensor(_init_weight(TD, dh)),
-            rtensor_nn.Tensor(_init_weight(TD, dh)),
-            rtensor_nn.Tensor(_init_weight(TD, dh)),
-            rtensor_nn.Tensor(_init_weight(dh, TD))))
+    t = rtensor.zeros([TD, TD])
+    for r in range(TD):
+        for h in range(TH):
+            for c in range(dh):
+                t.host[r * TD + h * dh + c] = float(
+                    ((r * dh + c) * 7) % 13 - 6) / TD
+    return t
+
+
+def _proj_weight():
+    dh = TD // TH
+    t = rtensor.zeros([TD, TD])
+    for h in range(TH):
+        for r in range(dh):
+            for c in range(TD):
+                t.host[(h * dh + r) * TD + c] = float(
+                    ((r * TD + c) * 7) % 13 - 6) / TD
+    return t
+
+
+def _make_block():
+    attn = rtensor_nn.MultiHead(
+        rtensor_nn.Tensor(_qkv_weight()), rtensor_nn.Tensor(_qkv_weight()),
+        rtensor_nn.Tensor(_qkv_weight()), rtensor_nn.Tensor(_proj_weight()),
+        TH)
     layers = []
     for _ in range(2):
         bias = rtensor.zeros([TD])
@@ -716,7 +734,7 @@ def _make_block():
     for i in range(TD):
         zeros.host[i] = 0.0
     return rtensor_nn.TransformerBlock(
-        heads, rtensor_nn.Tensor(ones), rtensor_nn.Tensor(zeros),
+        attn, rtensor_nn.Tensor(ones), rtensor_nn.Tensor(zeros),
         rtensor_nn.Tensor(ones), rtensor_nn.Tensor(zeros),
         rtensor_nn.MLP(layers), TEPS)
 
@@ -791,7 +809,7 @@ class TestTransformer(LLJitMixin):
                 expect += ref[i][j] * (1 << j)
         res = self.meta_interp(f, [10])
         assert abs(res - expect * 10) < 1e-9
-        self.check_simple_loop(call_r=3)
+        self.check_simple_loop(call_r=1)
         added = set(rtensor.kernel_cache.kernels) - before
         assert len(added) == 1
         key = added.pop()
@@ -817,7 +835,7 @@ class TestTransformer(LLJitMixin):
         before = set(rtensor.kernel_cache.kernels)
         res = self.meta_interp(f, [5])
         assert abs(res - expect) < 1e-9
-        self.check_simple_loop(call_r=28)
+        self.check_simple_loop(call_r=17)
         added = set(rtensor.kernel_cache.kernels) - before
         assert len([k for k in added if ',r,' in k]) == 3
 

@@ -92,6 +92,50 @@ class W_Tensor(W_Root):
         except ValueError:
             raise oefmt(space.w_ValueError, "shape mismatch")
 
+    @unwrap_spec(heads=int)
+    def descr_head_split(self, space, heads):
+        t = self.tensor.t
+        if heads <= 0 or rtensor.tensor_ndim(t) != 2:
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        d = rtensor.tensor_shape(t, 1)
+        if d % heads != 0:
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        return W_Tensor(rtensor_nn.Tensor(rtensor.head_split(
+            t, rtensor.tensor_shape(t, 0), d // heads, heads)))
+
+    @unwrap_spec(heads=int)
+    def descr_head_merge(self, space, heads):
+        t = self.tensor.t
+        if heads <= 0 or rtensor.tensor_ndim(t) != 2:
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        hr = rtensor.tensor_shape(t, 0)
+        if hr % heads != 0:
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        return W_Tensor(rtensor_nn.Tensor(rtensor.head_merge(
+            t, hr // heads, rtensor.tensor_shape(t, 1), heads)))
+
+    @unwrap_spec(batch=int, transpose_b=bool)
+    def descr_bmm(self, space, w_other, batch, transpose_b=False):
+        a = self.tensor.t
+        b = self._other(space, w_other).t
+        if (batch <= 0 or rtensor.tensor_ndim(a) != 2 or
+                rtensor.tensor_ndim(b) != 2 or
+                rtensor.tensor_shape(a, 0) % batch != 0 or
+                rtensor.tensor_shape(b, 0) % batch != 0):
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        rows = rtensor.tensor_shape(a, 0) // batch
+        inner = rtensor.tensor_shape(a, 1)
+        if transpose_b:
+            cols = rtensor.tensor_shape(b, 0) // batch
+            ok = rtensor.tensor_shape(b, 1) == inner
+        else:
+            cols = rtensor.tensor_shape(b, 1)
+            ok = rtensor.tensor_shape(b, 0) // batch == inner
+        if not ok:
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        return W_Tensor(rtensor_nn.Tensor(rtensor.tensor_bmm(
+            a, b, batch, rows, cols, inner, 1 if transpose_b else 0)))
+
     @unwrap_spec(c=int, h=int, w=int, k=int, pad=int)
     def descr_im2col(self, space, c, h, w, k=3, pad=1):
         t = self.tensor.t
@@ -178,6 +222,9 @@ W_Tensor.typedef = TypeDef(
     item=interp2app(W_Tensor.descr_item),
     matmul=interp2app(W_Tensor.descr_matmul),
     reshape=interp2app(W_Tensor.descr_reshape),
+    head_split=interp2app(W_Tensor.descr_head_split),
+    head_merge=interp2app(W_Tensor.descr_head_merge),
+    bmm=interp2app(W_Tensor.descr_bmm),
     im2col=interp2app(W_Tensor.descr_im2col),
     maxpool2=interp2app(W_Tensor.descr_maxpool2),
     conv2d=interp2app(W_Tensor.descr_conv2d),

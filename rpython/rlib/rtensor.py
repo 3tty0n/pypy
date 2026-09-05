@@ -499,6 +499,22 @@ def ones_like(a):
         ones.n = n
     return view(ones.t, shape)
 
+class ScalarCache(object):
+    def __init__(self):
+        self.tensors = {}
+scalars = ScalarCache()
+
+
+@jit.elidable
+def scalar(value):
+    t = scalars.tensors.get(value, NULLTENSOR)
+    if not t:
+        t = from_list([value])
+        dev(t)
+        scalars.tensors[value] = t
+    return t
+
+
 def matmul_shape(a, b):
     if tensor_ndim(a) != 2 or tensor_ndim(b) != 2:
         raise ValueError("shape mismatch")
@@ -554,7 +570,7 @@ def tensor_matmul(a, b, rows, cols, inner, ta, tb):
         if dptr_a != 0 and dptr_b != 0:
             n = rows * cols
             collect_if_needed(n)
-            outptr = rt_cuda_alloc(n)
+            outptr = rt_cuda_alloc(n, 0)
             if outptr != 0:
                 ok = rffi.cast(lltype.Signed, rt_cuda_matmul(
                     dptr_a, dptr_b, outptr, rows, inner, cols, ta, tb)) != 0
@@ -744,7 +760,7 @@ eci = ExternalCompilationInfo(
     post_include_bits=["""
 RPY_EXTERN int rt_cuda_available(void);
 RPY_EXTERN long rt_cuda_load(const char *ptx, const char *name);
-RPY_EXTERN long rt_cuda_alloc(long n);
+RPY_EXTERN long rt_cuda_alloc(long n, long zero);
 RPY_EXTERN long rt_cuda_upload(double *host, long n);
 RPY_EXTERN int rt_cuda_download(long dptr, double *host, long n);
 RPY_EXTERN void rt_cuda_reset(void);
@@ -759,6 +775,8 @@ RPY_EXTERN int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
                               long cols);
 RPY_EXTERN int rt_cuda_matmul(long a, long b, long c, long rows, long inner,
                               long cols, long ta, long tb);
+RPY_EXTERN int rt_cuda_bmm(long a, long b, long c, long batch, long rows,
+                           long inner, long cols, long tb);
 """],
     libraries=['cuda', 'dl'])
 rt_cuda_load = rffi.llexternal('rt_cuda_load', [rffi.CCHARP, rffi.CCHARP],
@@ -774,7 +792,8 @@ rt_cuda_launch = rffi.llexternal(
 rt_cuda_available = rffi.llexternal('rt_cuda_available', [], rffi.INT,
                                     compilation_info=eci,
                                 releasegil=False)
-rt_cuda_alloc = rffi.llexternal('rt_cuda_alloc', [lltype.Signed],
+rt_cuda_alloc = rffi.llexternal('rt_cuda_alloc',
+                                [lltype.Signed, lltype.Signed],
                                 lltype.Signed, compilation_info=eci,
                                 releasegil=False)
 rt_cuda_upload = rffi.llexternal('rt_cuda_upload',
@@ -793,6 +812,12 @@ rt_cuda_sync = rffi.llexternal('rt_cuda_sync', [], lltype.Void,
                                 releasegil=False)
 rt_cuda_matmul = rffi.llexternal(
     'rt_cuda_matmul',
+    [lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
+     lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed],
+    rffi.INT, compilation_info=eci,
+                                releasegil=False)
+rt_cuda_bmm = rffi.llexternal(
+    'rt_cuda_bmm',
     [lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
      lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed],
     rffi.INT, compilation_info=eci,
@@ -848,6 +873,7 @@ def launch_count():
     return rt_cuda_launch_count()
 
 def reset_device():
+    scalars.tensors.clear()
     ones.n = -1
     ones.t = NULLTENSOR
     ones.one = NULLTENSOR
@@ -1280,6 +1306,17 @@ def _compile_gpu(kernel):
     rffi.free_charp(p_name)
     return fn
 
+def needs_zero(kernel):
+    if not kernel.sumroot:
+        return 0
+    root = kernel.nodes[len(kernel.nodes) - 1]
+    if root.opcode != SUM:
+        return 0
+    if kernel.rowmode and root.p != AXIS_ALL:
+        return 0
+    return 1
+
+
 def launch_gpu(kernel, inputs):
     nin = len(inputs)
     big = 0
@@ -1315,11 +1352,11 @@ def launch_gpu(kernel, inputs):
         dptrs[k] = dev(inputs[k])
         if dptrs[k] == 0:
             ok = False
-    outs[0] = rt_cuda_alloc(outlen) if ok else 0
+    outs[0] = rt_cuda_alloc(outlen, needs_zero(kernel)) if ok else 0
     if outs[0] == 0:
         ok = False
     for k in range(1, nout):
-        outs[k] = rt_cuda_alloc(n) if ok else 0
+        outs[k] = rt_cuda_alloc(n, 0) if ok else 0
         if outs[k] == 0:
             ok = False
     if ok:
@@ -1342,6 +1379,7 @@ def launch_gpu(kernel, inputs):
 
 
 GA_IM2COL, GA_COL2CHW, GA_MAXPOOL = 0, 1, 2
+GA_HEADSPLIT, GA_HEADMERGE = 3, 4
 
 
 def _shape2(rows, cols):
@@ -1461,6 +1499,20 @@ def _gather_index(e, op, params, I64, I1):
         pos = _gmod(e, rem, hw, I64)
         row = _gbin(e, 'addi', _gmul(e, img, hw, I64), pos, I64)
         srcs.append(_gbin(e, 'addi', _gmul(e, row, o, I64), ch, I64))
+        return srcs, ''
+    if op == GA_HEADSPLIT or op == GA_HEADMERGE:
+        rows, dh, heads = params[0], params[1], params[2]
+        if op == GA_HEADSPLIT:
+            ostride, sstride = rows * dh, heads * dh
+        else:
+            ostride, sstride = heads * dh, rows * dh
+        oi = _gdiv(e, off, ostride, I64)
+        rem = _gmod(e, off, ostride, I64)
+        ii = _gdiv(e, rem, dh, I64)
+        ci = _gmod(e, rem, dh, I64)
+        srcs.append(_gbin(e, 'addi',
+                          _gbin(e, 'addi', _gmul(e, ii, sstride, I64),
+                                _gmul(e, oi, dh, I64), I64), ci, I64))
         return srcs, ''
     n, c, h, w = params[0], params[1], params[2], params[3]
     oh = h // 2
@@ -1588,7 +1640,7 @@ def gather_gpu(op, params, x, outn, shape):
     ins = lltype.malloc(SIGNEDARRAY, 1, flavor='raw')
     outs = lltype.malloc(SIGNEDARRAY, 1, flavor='raw')
     ins[0] = dptr
-    outs[0] = rt_cuda_alloc(outn)
+    outs[0] = rt_cuda_alloc(outn, 0)
     ok = outs[0] != 0
     if ok:
         ok = rffi.cast(lltype.Signed, rt_cuda_launch(
@@ -1710,3 +1762,99 @@ def maxpool2(x, c, h, w):
         if r:
             return r
     return maxpool2_cpu(x, n, c, h, w)
+
+
+def head_split_cpu(x, rows, dh, heads):
+    hx = host(x)
+    r = new_tensor(rows * dh * heads, _shape2(heads * rows, dh))
+    hr = r.host
+    for i in range(rows * dh * heads):
+        hi = i // (rows * dh)
+        rem = i % (rows * dh)
+        idx = rem // dh * (heads * dh) + hi * dh + rem % dh
+        assert idx >= 0
+        hr[i] = hx[idx]
+    return r
+
+
+def head_merge_cpu(x, rows, dh, heads):
+    hx = host(x)
+    r = new_tensor(rows * dh * heads, _shape2(rows, heads * dh))
+    hr = r.host
+    for i in range(rows * dh * heads):
+        ri = i // (heads * dh)
+        rem = i % (heads * dh)
+        idx = rem // dh * (rows * dh) + ri * dh + rem % dh
+        assert idx >= 0
+        hr[i] = hx[idx]
+    return r
+
+
+@jit.dont_look_inside
+def head_split(x, rows, dh, heads):
+    outn = rows * dh * heads
+    if gpu_enabled():
+        params = [rows]
+        params.append(dh)
+        params.append(heads)
+        r = gather_gpu(GA_HEADSPLIT, params, x, outn,
+                       _shape2(heads * rows, dh))
+        if r:
+            return r
+    return head_split_cpu(x, rows, dh, heads)
+
+
+@jit.dont_look_inside
+def head_merge(x, rows, dh, heads):
+    outn = rows * dh * heads
+    if gpu_enabled():
+        params = [rows]
+        params.append(dh)
+        params.append(heads)
+        r = gather_gpu(GA_HEADMERGE, params, x, outn,
+                       _shape2(rows, heads * dh))
+        if r:
+            return r
+    return head_merge_cpu(x, rows, dh, heads)
+
+
+def bmm_cpu(a, b, batch, rows, cols, inner, tb):
+    ha = host(a)
+    hb = host(b)
+    r = new_tensor(batch * rows * cols, _shape2(batch * rows, cols))
+    hr = r.host
+    for t in range(batch):
+        abase = t * rows * inner
+        bbase = t * inner * cols
+        cbase = t * rows * cols
+        for i in range(rows):
+            for j in range(cols):
+                acc = 0.0
+                for k in range(inner):
+                    if tb:
+                        vb = hb[bbase + j * inner + k]
+                    else:
+                        vb = hb[bbase + k * cols + j]
+                    acc += ha[abase + i * inner + k] * vb
+                hr[cbase + i * cols + j] = acc
+    return r
+
+
+@jit.dont_look_inside
+def tensor_bmm(a, b, batch, rows, cols, inner, tb):
+    if gpu_enabled():
+        dptr_a = dev(a)
+        dptr_b = dev(b)
+        if dptr_a != 0 and dptr_b != 0:
+            n = batch * rows * cols
+            collect_if_needed(n)
+            outptr = rt_cuda_alloc(n, 0)
+            if outptr != 0:
+                ok = rffi.cast(lltype.Signed, rt_cuda_bmm(
+                    dptr_a, dptr_b, outptr, batch, rows, inner, cols,
+                    tb)) != 0
+                if ok:
+                    return device_tensor(n, outptr,
+                                         _shape2(batch * rows, cols))
+                rt_cuda_free(outptr, n)
+    return bmm_cpu(a, b, batch, rows, cols, inner, tb)

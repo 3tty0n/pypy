@@ -336,17 +336,21 @@ def sgd_step(params, neg_lr):
             p.grad = None
 
 
-def softmax(x):
-    m = rtensor.tensor_maxr(x.t, 1)
-    e = rtensor.tensor_exp(rtensor.tensor_sub(x.t, m, rtensor.BC_R_COL))
+def softmax_raw(t):
+    m = rtensor.tensor_maxr(t, 1)
+    e = rtensor.tensor_exp(rtensor.tensor_sub(t, m, rtensor.BC_R_COL))
     s = rtensor.tensor_sum(e, 1)
-    return x._forward_only(rtensor.tensor_div(e, s, rtensor.BC_R_COL), None)
+    return rtensor.tensor_div(e, s, rtensor.BC_R_COL)
+
+
+def softmax(x):
+    return x._forward_only(softmax_raw(x.t), None)
 
 
 def layernorm(x, gamma, beta, eps):
     c = rtensor.tensor_shape(x.t, 1)
-    inv = rtensor.from_list([1.0 / c])
-    epst = rtensor.from_list([eps])
+    inv = rtensor.scalar(1.0 / c)
+    epst = rtensor.scalar(eps)
     mean = rtensor.tensor_mul(rtensor.tensor_sum(x.t, 1), inv,
                               rtensor.BC_R_SCALAR)
     d = rtensor.tensor_sub(x.t, mean, rtensor.BC_R_COL)
@@ -361,32 +365,40 @@ def layernorm(x, gamma, beta, eps):
     return x._forward_only(y, gamma)
 
 
-def attention(q, k, v):
-    d = rtensor.tensor_shape(q.t, 1)
-    scale = rtensor.from_list([1.0 / math.sqrt(d)])
-    scores = q.matmul(k, True)
-    scaled = q._forward_only(
-        rtensor.tensor_mul(scores.t, scale, rtensor.BC_R_SCALAR), None)
-    return softmax(scaled).matmul(v)
+def mha(x, wq, wk, wv, wo, heads):
+    rows = rtensor.tensor_shape(x.t, 0)
+    d = rtensor.tensor_shape(x.t, 1)
+    dh = d // heads
+    q = rtensor.head_split(
+        rtensor.tensor_matmul(x.t, wq.t, rows, d, d, 0, 0), rows, dh, heads)
+    k = rtensor.head_split(
+        rtensor.tensor_matmul(x.t, wk.t, rows, d, d, 0, 0), rows, dh, heads)
+    v = rtensor.head_split(
+        rtensor.tensor_matmul(x.t, wv.t, rows, d, d, 0, 0), rows, dh, heads)
+    scores = rtensor.tensor_bmm(q, k, heads, rows, rows, dh, 1)
+    scaled = rtensor.tensor_mul(scores, rtensor.scalar(1.0 / math.sqrt(dh)),
+                                rtensor.BC_R_SCALAR)
+    ctx = rtensor.tensor_bmm(softmax_raw(scaled), v, heads, rows, dh, rows, 0)
+    merged = rtensor.head_merge(ctx, rows, dh, heads)
+    return x._forward_only(
+        rtensor.tensor_matmul(merged, wo.t, rows, d, d, 0, 0), None)
 
 
-class Head(object):
-    def __init__(self, wq, wk, wv, wo):
+class MultiHead(object):
+    def __init__(self, wq, wk, wv, wo, heads):
         self.wq = wq
         self.wk = wk
         self.wv = wv
         self.wo = wo
+        self.heads = heads
 
     def forward(self, x):
-        q = x.matmul(self.wq)
-        k = x.matmul(self.wk)
-        v = x.matmul(self.wv)
-        return attention(q, k, v).matmul(self.wo)
+        return mha(x, self.wq, self.wk, self.wv, self.wo, self.heads)
 
 
 class TransformerBlock(object):
-    def __init__(self, heads, gamma1, beta1, gamma2, beta2, mlp, eps):
-        self.heads = heads
+    def __init__(self, attn, gamma1, beta1, gamma2, beta2, mlp, eps):
+        self.attn = attn
         self.gamma1 = gamma1
         self.beta1 = beta1
         self.gamma2 = gamma2
@@ -397,10 +409,7 @@ class TransformerBlock(object):
     @jit.unroll_safe
     def forward(self, x):
         h = layernorm(x, self.gamma1, self.beta1, self.eps)
-        a = self.heads[0].forward(h)
-        for i in range(1, len(self.heads)):
-            a = a.add(self.heads[i].forward(h))
-        x = x.add(a)
+        x = x.add(self.attn.forward(h))
         h2 = layernorm(x, self.gamma2, self.beta2, self.eps)
         return x.add(self.mlp.forward(h2))
 

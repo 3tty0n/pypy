@@ -41,6 +41,17 @@ def sgd_step(params, lr):
             p.tensor = t.add(g.mul(neg_lr)).detach()
 
 
+_scalars = {}
+
+
+def _scalar(v):
+    t = _scalars.get(v)
+    if t is None:
+        t = _tensor.tensor([v])
+        _scalars[v] = t
+    return t
+
+
 def softmax(x):
     rows = x.shape[0]
     m = x.max(1).reshape([rows, 1])
@@ -51,36 +62,37 @@ def softmax(x):
 
 def layernorm(x, gamma, beta, eps=1e-5):
     rows, cols = x.shape
-    inv = _tensor.tensor([1.0 / cols])
+    inv = _scalar(1.0 / cols)
     mean = x.sum(1).mul(inv).reshape([rows, 1])
     d = x.sub(mean)
     var = d.mul(d).sum(1).mul(inv).reshape([rows, 1])
-    denom = var.add(_tensor.tensor([eps])).sqrt()
+    denom = var.add(_scalar(eps)).sqrt()
     return d.div(denom).mul(gamma).add(beta)
 
 
-def attention(q, k, v):
-    import math
-    scale = _tensor.tensor([1.0 / math.sqrt(q.shape[1])])
-    scores = q.matmul(k, True).mul(scale)
-    return softmax(scores).matmul(v)
-
-
-class Head(object):
-    def __init__(self, wq, wk, wv, wo):
+class MultiHead(object):
+    def __init__(self, wq, wk, wv, wo, heads):
         self.wq = wq
         self.wk = wk
         self.wv = wv
         self.wo = wo
+        self.heads = heads
 
     def __call__(self, x):
-        return attention(x.matmul(self.wq), x.matmul(self.wk),
-                         x.matmul(self.wv)).matmul(self.wo)
+        import math
+        h = self.heads
+        dh = x.shape[1] // h
+        q = x.matmul(self.wq).head_split(h)
+        k = x.matmul(self.wk).head_split(h)
+        v = x.matmul(self.wv).head_split(h)
+        s = q.bmm(k, h, True).mul(_scalar(1.0 / math.sqrt(dh)))
+        c = softmax(s).bmm(v, h)
+        return c.head_merge(h).matmul(self.wo)
 
 
 class TransformerBlock(object):
-    def __init__(self, heads, gamma1, beta1, gamma2, beta2, mlp, eps=1e-5):
-        self.heads = heads
+    def __init__(self, attn, gamma1, beta1, gamma2, beta2, mlp, eps=1e-5):
+        self.attn = attn
         self.gamma1 = gamma1
         self.beta1 = beta1
         self.gamma2 = gamma2
@@ -90,10 +102,7 @@ class TransformerBlock(object):
 
     def __call__(self, x):
         h = layernorm(x, self.gamma1, self.beta1, self.eps)
-        a = self.heads[0](h)
-        for head in self.heads[1:]:
-            a = a.add(head(h))
-        x = x.add(a)
+        x = x.add(self.attn(h))
         return x.add(self.mlp(layernorm(x, self.gamma2, self.beta2, self.eps)))
 
 
