@@ -125,7 +125,6 @@ W_Tensor.typedef = TypeDef(
 )
 
 
-@unwrap_spec(requires_grad=bool)
 class DeviceState(object):
     ready = False
 device_state = DeviceState()
@@ -135,6 +134,7 @@ def ensure_device():
         device_state.ready = True
         rtensor.init_device()
 
+@unwrap_spec(requires_grad=bool)
 def tensor_flat(space, w_data, w_shape, requires_grad=False):
     ensure_device()
     values = _floats_w(space, w_data)
