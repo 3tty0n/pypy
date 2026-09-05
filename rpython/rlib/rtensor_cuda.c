@@ -27,7 +27,7 @@ static int inited;
 typedef struct { CUdeviceptr p; long n; } buf_t;
 static buf_t *allocs, *freed;
 static long nallocs, capallocs, nfreed, capfreed;
-static long live_bytes, budget_bytes = 2L << 30, launches;
+static long live_bytes, budget_bytes = 64L << 20, launches;
 
 static int rt_init(void)
 {

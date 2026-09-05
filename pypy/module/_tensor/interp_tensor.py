@@ -126,7 +126,17 @@ W_Tensor.typedef = TypeDef(
 
 
 @unwrap_spec(requires_grad=bool)
+class DeviceState(object):
+    ready = False
+device_state = DeviceState()
+
+def ensure_device():
+    if not device_state.ready:
+        device_state.ready = True
+        rtensor.init_device()
+
 def tensor_flat(space, w_data, w_shape, requires_grad=False):
+    ensure_device()
     values = _floats_w(space, w_data)
     shape = _ints_w(space, w_shape)
     n = 1
@@ -145,6 +155,7 @@ def tensor_flat(space, w_data, w_shape, requires_grad=False):
 
 @unwrap_spec(requires_grad=bool)
 def zeros(space, w_shape, requires_grad=False):
+    ensure_device()
     shape = _ints_w(space, w_shape)
     t = rtensor.zeros(shape)
     h = rtensor.host(t)
