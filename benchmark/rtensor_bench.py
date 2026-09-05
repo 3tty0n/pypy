@@ -292,6 +292,10 @@ def entry_point(argv):
     n = int(argv[4])
     iters = int(argv[5])
     jit.set_user_param(None, 'threshold=3,function_threshold=3,trace_eagerness=2')
+    jit.set_user_param(None, 'trace_limit=60000')
+    extra = os.environ.get('RTENSOR_JIT')
+    if extra is not None:
+        jit.set_user_param(None, extra)
     if mode == 'eager':
         jit.set_user_param(None, 'enable_opts=intbounds:rewrite:virtualize:'
                                  'string:pure:earlyforce:heap:unroll')

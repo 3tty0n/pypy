@@ -276,6 +276,13 @@ RPY_EXPORTED int rt_cuda_download(long dptr, double *host, long n, long dtype)
     return ok;
 }
 
+RPY_EXPORTED int rt_cuda_copy(long dst, long src, long nbytes)
+{
+    if (!rt_init()) return 0;
+    return cuMemcpyDtoD_v2((CUdeviceptr)dst, (CUdeviceptr)src, nbytes) ==
+           CUDA_SUCCESS;
+}
+
 RPY_EXPORTED void rt_cuda_reset(void)
 {
     long i;

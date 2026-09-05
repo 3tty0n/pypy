@@ -63,6 +63,22 @@ class AppTestTensor(object):
         raises(ValueError, a.add, b)
         raises(ValueError, a.reshape, [3, 3])
 
+    def test_add__inplace_updates_view(self):
+        import _tensor
+        t = _tensor.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        v = t.reshape([2, 3])
+        b = _tensor.tensor([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+        r = t.add_(b)
+        assert r is t
+        assert v.sum().item() == 27.0
+
+    def test_add__on_requires_grad_leaf_raises(self):
+        import _tensor
+        a = _tensor.tensor([1.0, 2.0], requires_grad=True)
+        b = _tensor.tensor([0.5, 0.5])
+        raises(ValueError, a.add_, b)
+        raises(ValueError, a.mul_, b)
+
     def test_backward(self):
         import _tensor
         x = _tensor.tensor([1.0, -2.0, 3.0], requires_grad=True)

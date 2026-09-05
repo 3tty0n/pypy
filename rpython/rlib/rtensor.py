@@ -500,10 +500,10 @@ def mul(a, b):
     return tensor_mul(a, b, bcast(a, b))
 
 def add_(a, b):
-    return add(a, b)
+    return assign(a, add(a, b))
 
 def mul_(a, b):
-    return mul(a, b)
+    return assign(a, mul(a, b))
 
 def relu(a):
     return tensor_relu(a)
@@ -674,6 +674,28 @@ def tensor_matmul(a, b, rows, cols, inner, ta, tb):
                     return device_tensor(n, outptr, shape, dt)
                 rt_cuda_free(outptr, nb)
     return matmul_cpu(a, b, rows, cols, inner, ta, tb)
+
+@jit.dont_look_inside
+def tensor_assign(dst, src):
+    if dst.dptr != 0 and gpu_enabled():
+        dptr_src = dev(src)
+        if dptr_src != 0:
+            ok = rffi.cast(lltype.Signed, rt_cuda_copy(
+                dst.dptr, dptr_src, nbytes(dst.size, dst.dtype))) != 0
+            if ok:
+                dst.host = lltype.nullptr(HOSTARRAY)
+                return dst
+    hdst = host(dst)
+    hsrc = host(src)
+    for i in range(dst.size):
+        hdst[i] = hsrc[i]
+    return dst
+
+def assign(dst, src):
+    if (tensor_size(dst) != tensor_size(src) or
+            tensor_dtype(dst) != tensor_dtype(src)):
+        raise ValueError("shape mismatch")
+    return tensor_assign(dst, src)
 
 def item(a):
     return tensor_item(a)
@@ -883,6 +905,7 @@ RPY_EXTERN long rt_cuda_upload(double *host, long n, long dtype);
 RPY_EXTERN int rt_cuda_download(long dptr, double *host, long n, long dtype);
 RPY_EXTERN void rt_cuda_reset(void);
 RPY_EXTERN void rt_cuda_free(long dptr, long nbytes);
+RPY_EXTERN int rt_cuda_copy(long dst, long src, long nbytes);
 RPY_EXTERN void rt_cuda_set_budget(long bytes);
 RPY_EXTERN long rt_cuda_launch_count(void);
 RPY_EXTERN int rt_cuda_needs_gc(long nbytes);
@@ -980,6 +1003,11 @@ def download(dptr, hostarray, dtype=F64):
 
 rt_cuda_free = rffi.llexternal('rt_cuda_free', [lltype.Signed, lltype.Signed],
                                lltype.Void, compilation_info=eci,
+                               releasegil=False)
+
+rt_cuda_copy = rffi.llexternal('rt_cuda_copy',
+                               [lltype.Signed, lltype.Signed, lltype.Signed],
+                               rffi.INT, compilation_info=eci,
                                releasegil=False)
 
 rt_cuda_set_budget = rffi.llexternal('rt_cuda_set_budget', [lltype.Signed],

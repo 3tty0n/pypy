@@ -40,10 +40,18 @@ class W_Tensor(W_Root):
             raise oefmt(space.w_ValueError, "shape mismatch")
 
     def descr_add_(self, space, w_other):
-        return self.descr_add(space, w_other)
+        try:
+            self.tensor.add_(self._other(space, w_other))
+        except ValueError:
+            raise oefmt(space.w_ValueError, "in-place op not allowed")
+        return self
 
     def descr_mul_(self, space, w_other):
-        return self.descr_mul(space, w_other)
+        try:
+            self.tensor.mul_(self._other(space, w_other))
+        except ValueError:
+            raise oefmt(space.w_ValueError, "in-place op not allowed")
+        return self
 
     def descr_sub(self, space, w_other):
         try:

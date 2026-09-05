@@ -368,7 +368,31 @@ class TestBroadcast(LLJitMixin):
             return rtensor.item(rtensor.sum(h))
         res = self.meta_interp(f, [12])
         assert res == f(12)
-        self.check_simple_loop(call_r=1)
+        self.check_simple_loop(call_r=3)
+
+    def test_inplace_view_reflects_update(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'v', 'b', 'acc'])
+        def f(n):
+            x = from_list([1.0, 2.0, 3.0, 4.0])
+            b = from_list([0.5, -0.5, 0.25, -0.25])
+            rtensor.dev(x)
+            v = rtensor.reshape(x, [2, 2])
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, v=v, b=b, acc=acc)
+                rtensor.add_(x, b)
+                acc += tensor_item(tensor_sum(v, -1))
+                n -= 1
+            return acc
+        expect = 0.0
+        vals = [1.0, 2.0, 3.0, 4.0]
+        delta = [0.5, -0.5, 0.25, -0.25]
+        for _ in range(5):
+            vals = [vals[i] + delta[i] for i in range(4)]
+            expect += sum(vals)
+        res = self.meta_interp(f, [5])
+        assert res == expect
+        assert res == f(5)
 
 
 def test_reshape_shares_storage():
@@ -378,6 +402,30 @@ def test_reshape_shares_storage():
     assert v.host is t.host and v.dptr == t.dptr
     t.host[0] = 9.0
     assert rtensor.host(v)[0] == 9.0
+
+def test_assign_into_view_updates_base():
+    t = from_list([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    v = rtensor.reshape(t, [2, 3])
+    other = from_list([10.0, 20.0, 30.0, 40.0, 50.0, 60.0])
+    rtensor.assign(v, other)
+    assert [rtensor.host(t)[i] for i in range(6)] == \
+        [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
+
+
+def test_assign_shape_mismatch_raises():
+    import py
+    a = from_list([1.0, 2.0])
+    b = from_list([1.0, 2.0, 3.0])
+    py.test.raises(ValueError, rtensor.assign, a, b)
+
+
+def test_add_on_requires_grad_leaf_raises():
+    import py
+    a = rtensor_nn.Tensor(from_list([1.0, 2.0]), True)
+    b = rtensor_nn.Tensor(from_list([0.5, 0.5]))
+    py.test.raises(ValueError, a.add_, b)
+    py.test.raises(ValueError, a.mul_, b)
+
 
 def test_sum_axis_elements():
     x = rtensor.zeros([3, 4])

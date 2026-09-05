@@ -160,10 +160,18 @@ class Tensor(object):
                           self.requires_grad)
 
     def add_(self, other):
-        return self.add(other)
+        if self.requires_grad:
+            raise ValueError("a leaf Variable that requires grad is being "
+                              "used in an in-place operation")
+        rtensor.assign(self.t, rtensor.add(self.t, other.t))
+        return self
 
     def mul_(self, other):
-        return self.mul(other)
+        if self.requires_grad:
+            raise ValueError("a leaf Variable that requires grad is being "
+                              "used in an in-place operation")
+        rtensor.assign(self.t, rtensor.mul(self.t, other.t))
+        return self
 
     def shape(self, axis):
         return rtensor.tensor_shape(self.t, axis)
