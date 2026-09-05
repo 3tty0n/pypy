@@ -263,7 +263,22 @@ iterations, with the RPython benchmark and PyTorch for the same chain:
 |---|---|---|---|---|
 | 1e4 | 19.9 | 15.0 | 41.9 | |
 | 1e5 | 20.3 | 15.0 | 43.3 | |
-| 1e6 | 64.6 | 51.6 | 69.0 | 933.3 |
+| 1e6 | 49.4 | 40.2 | 69.0 | 933.3 |
+
+The model demos from unmodified Python on the same binary (100 iterations,
+checksums equal to PyTorch):
+
+| script | size | app-level | RPython bench (fused) | torch.compile | torch eager |
+|---|---|---|---|---|---|
+| `transformer.py` | 64 rows | 287.9 | 219.6 | 250.4 | 388.9 |
+| `transformer.py` | 1024 rows | 2560.7 | 1695.5 | 1883.6 | 1874.2 |
+| `cnn.py` | 1 image | 137.3 | 81.4 | 202.9 | 135.6 |
+| `cnn.py` | 21 images | 278.8 | 230.3 | 354.5 | 265.1 |
+
+The app-level versions pay for the Python-level object model around every
+op (a `W_Tensor` and an inner `Tensor` per result, virtual inside a trace but
+real at every residual call boundary such as the cuBLAS calls), which is the
+gap to the RPython benchmark.
 
 The unrolled chain becomes one fused kernel per iteration from unmodified
 Python: the trace shows a single `tensor_launch` call with the tensor objects
