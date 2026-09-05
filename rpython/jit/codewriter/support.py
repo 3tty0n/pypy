@@ -684,12 +684,12 @@ class LLtypeHelpers:
 
 
 def _ll_7_tensor_launch(kernel, a, b, c, d, e, f):
-    from rpython.rlib import rtensor
-    return rtensor.launch(kernel, a, b, c, d, e, f)
+    from rpython.rtensor import runtime
+    return runtime.launch(kernel, a, b, c, d, e, f)
 
 def _ll_2_tensor_output(t, k):
-    from rpython.rlib import rtensor
-    return rtensor.tensor_output(t, k)
+    from rpython.rtensor import ops
+    return ops.tensor_output(t, k)
 
 def setup_extra_builtin(rtyper, oopspec_name, nb_args, extra=None):
     name = '_ll_%d_%s' % (nb_args, oopspec_name.replace('.', '_'))

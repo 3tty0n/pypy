@@ -1,5 +1,6 @@
 import math
-from rpython.rlib import rtensor, jit
+from rpython.rlib import jit
+from rpython.rtensor import core, device, ops, runtime
 
 
 class Tensor(object):
@@ -20,38 +21,38 @@ class Tensor(object):
 
     def add(self, other, p=-1):
         if p < 0:
-            p = rtensor.bcast(self.t, other.t)
+            p = ops.bcast(self.t, other.t)
         needs = self.requires_grad or other.requires_grad
         node = None
         if needs:
             node = AddNode(self, other, p)
-        return self._wrap(rtensor.tensor_add(self.t, other.t, p), node, needs)
+        return self._wrap(ops.tensor_add(self.t, other.t, p), node, needs)
 
     def mul(self, other, p=-1):
         if p < 0:
-            p = rtensor.bcast(self.t, other.t)
+            p = ops.bcast(self.t, other.t)
         needs = self.requires_grad or other.requires_grad
         node = None
         if needs:
             node = MulNode(self, other, p)
-        return self._wrap(rtensor.tensor_mul(self.t, other.t, p), node, needs)
+        return self._wrap(ops.tensor_mul(self.t, other.t, p), node, needs)
 
     def relu(self):
-        r = Tensor(rtensor.relu(self.t))
+        r = Tensor(ops.relu(self.t))
         if self.requires_grad:
             r.requires_grad = True
             r.node = ReluNode(self, r)
         return r
 
-    def sum(self, axis=rtensor.AXIS_ALL):
+    def sum(self, axis=core.AXIS_ALL):
         node = None
         if self.requires_grad:
             node = SumNode(self, axis)
-        return self._wrap(rtensor.tensor_sum(self.t, axis), node,
+        return self._wrap(ops.tensor_sum(self.t, axis), node,
                           self.requires_grad)
 
     def item(self):
-        return rtensor.item(self.t)
+        return ops.item(self.t)
 
     def _forward_only(self, t, other):
         r = Tensor(t)
@@ -67,38 +68,38 @@ class Tensor(object):
 
     def sub(self, other, p=-1):
         if p < 0:
-            p = rtensor.bcast(self.t, other.t)
+            p = ops.bcast(self.t, other.t)
         needs = self.requires_grad or other.requires_grad
         node = None
         if needs:
             node = SubNode(self, other, p)
-        return self._wrap(rtensor.tensor_sub(self.t, other.t, p), node, needs)
+        return self._wrap(ops.tensor_sub(self.t, other.t, p), node, needs)
 
     def div(self, other, p=-1):
         if p < 0:
-            p = rtensor.bcast(self.t, other.t)
+            p = ops.bcast(self.t, other.t)
         needs = self.requires_grad or other.requires_grad
-        r = self._wrap(rtensor.tensor_div(self.t, other.t, p), None, needs)
+        r = self._wrap(ops.tensor_div(self.t, other.t, p), None, needs)
         if needs:
             r.node = DivNode(self, other, p, r)
         return r
 
     def exp(self):
-        r = Tensor(rtensor.tensor_exp(self.t))
+        r = Tensor(ops.tensor_exp(self.t))
         if self.requires_grad:
             r.requires_grad = True
             r.node = ExpNode(self, r)
         return r
 
     def sqrt(self):
-        r = Tensor(rtensor.tensor_sqrt(self.t))
+        r = Tensor(ops.tensor_sqrt(self.t))
         if self.requires_grad:
             r.requires_grad = True
             r.node = SqrtNode(self, r)
         return r
 
-    def max(self, axis=rtensor.AXIS_ALL):
-        r = Tensor(rtensor.tensor_maxr(self.t, axis))
+    def max(self, axis=core.AXIS_ALL):
+        r = Tensor(ops.tensor_maxr(self.t, axis))
         if self.requires_grad:
             r.requires_grad = True
             if axis == 1:
@@ -114,14 +115,14 @@ class Tensor(object):
         if needs:
             node = MatmulNode(self, other, rows, cols, inner, tb)
         return self._wrap(
-            rtensor.tensor_matmul(self.t, other.t, rows, cols, inner, 0, tb),
+            runtime.tensor_matmul(self.t, other.t, rows, cols, inner, 0, tb),
             node, needs)
 
     def matmul(self, other, transpose_b=False):
         if transpose_b:
-            rows, cols, inner = rtensor.matmul_shape_t(self.t, other.t)
+            rows, cols, inner = ops.matmul_shape_t(self.t, other.t)
             return self._matmul(other, rows, cols, inner, 1)
-        rows, cols, inner = rtensor.matmul_shape(self.t, other.t)
+        rows, cols, inner = ops.matmul_shape(self.t, other.t)
         return self._matmul(other, rows, cols, inner, 0)
 
     def bmm(self, other, batch, rows, cols, inner, tb):
@@ -130,7 +131,7 @@ class Tensor(object):
         if needs:
             node = BmmNode(self, other, batch, rows, cols, inner, tb)
         return self._wrap(
-            rtensor.tensor_bmm(self.t, other.t, batch, rows, cols, inner,
+            runtime.tensor_bmm(self.t, other.t, batch, rows, cols, inner,
                                0, tb),
             node, needs)
 
@@ -138,14 +139,14 @@ class Tensor(object):
         node = None
         if self.requires_grad:
             node = HeadSplitNode(self, rows, dh, heads)
-        return self._wrap(rtensor.head_split(self.t, rows, dh, heads), node,
+        return self._wrap(runtime.head_split(self.t, rows, dh, heads), node,
                           self.requires_grad)
 
     def head_merge(self, rows, dh, heads):
         node = None
         if self.requires_grad:
             node = HeadMergeNode(self, rows, dh, heads)
-        return self._wrap(rtensor.head_merge(self.t, rows, dh, heads), node,
+        return self._wrap(runtime.head_merge(self.t, rows, dh, heads), node,
                           self.requires_grad)
 
     @jit.unroll_safe
@@ -153,37 +154,37 @@ class Tensor(object):
         node = None
         if self.requires_grad:
             old = []
-            for i in range(rtensor.tensor_ndim(self.t)):
-                old.append(rtensor.tensor_shape(self.t, i))
+            for i in range(ops.tensor_ndim(self.t)):
+                old.append(ops.tensor_shape(self.t, i))
             node = ReshapeNode(self, old)
-        return self._wrap(rtensor.reshape(self.t, shape_list), node,
+        return self._wrap(ops.reshape(self.t, shape_list), node,
                           self.requires_grad)
 
     def add_(self, other):
         if self.requires_grad:
             raise ValueError("a leaf Variable that requires grad is being "
                               "used in an in-place operation")
-        rtensor.assign(self.t, rtensor.add(self.t, other.t))
+        ops.assign(self.t, ops.add(self.t, other.t))
         return self
 
     def mul_(self, other):
         if self.requires_grad:
             raise ValueError("a leaf Variable that requires grad is being "
                               "used in an in-place operation")
-        rtensor.assign(self.t, rtensor.mul(self.t, other.t))
+        ops.assign(self.t, ops.mul(self.t, other.t))
         return self
 
     def shape(self, axis):
-        return rtensor.tensor_shape(self.t, axis)
+        return ops.tensor_shape(self.t, axis)
 
     def size(self):
-        return rtensor.tensor_size(self.t)
+        return ops.tensor_size(self.t)
 
     @jit.unroll_safe
     def backward(self):
         order = []
         _topo(self, order)
-        self.acc = Tensor(rtensor.ones_like(self.t))
+        self.acc = Tensor(ops.ones_like(self.t))
         i = len(order) - 1
         while i >= 0:
             t = order[i]
@@ -209,7 +210,7 @@ class Tensor(object):
 def _accumulate(old, g):
     if old is None:
         return g
-    return Tensor(rtensor.add(old.t, g.t))
+    return Tensor(ops.add(old.t, g.t))
 
 
 @jit.unroll_safe
@@ -237,42 +238,42 @@ def _topo(root, order):
 
 def _unbroadcast(g, p, right):
     if right:
-        row = rtensor.BC_R_ROW
-        scalar = rtensor.BC_R_SCALAR
-        col = rtensor.BC_R_COL
+        row = core.BC_R_ROW
+        scalar = core.BC_R_SCALAR
+        col = core.BC_R_COL
     else:
-        row = rtensor.BC_L_ROW
-        scalar = rtensor.BC_L_SCALAR
-        col = rtensor.BC_L_COL
+        row = core.BC_L_ROW
+        scalar = core.BC_L_SCALAR
+        col = core.BC_L_COL
     if p == row:
-        return Tensor(rtensor.sum(g.t, 0))
+        return Tensor(ops.sum(g.t, 0))
     if p == scalar:
-        return Tensor(rtensor.sum(g.t, rtensor.AXIS_ALL))
+        return Tensor(ops.sum(g.t, core.AXIS_ALL))
     if p == col:
-        return Tensor(rtensor.sum(g.t, 1))
+        return Tensor(ops.sum(g.t, 1))
     return g
 
 
 def _rp(p):
-    if (p == rtensor.BC_L_ROW or p == rtensor.BC_L_SCALAR or
-            p == rtensor.BC_L_COL):
-        return rtensor.BC_NONE
+    if (p == core.BC_L_ROW or p == core.BC_L_SCALAR or
+            p == core.BC_L_COL):
+        return core.BC_NONE
     return p
 
 
 def _lp(p):
-    if p == rtensor.BC_L_ROW:
-        return rtensor.BC_R_ROW
-    if p == rtensor.BC_L_SCALAR:
-        return rtensor.BC_R_SCALAR
-    if p == rtensor.BC_L_COL:
-        return rtensor.BC_R_COL
-    return rtensor.BC_NONE
+    if p == core.BC_L_ROW:
+        return core.BC_R_ROW
+    if p == core.BC_L_SCALAR:
+        return core.BC_R_SCALAR
+    if p == core.BC_L_COL:
+        return core.BC_R_COL
+    return core.BC_NONE
 
 
 def _neg(t):
-    return rtensor.tensor_mul(t, rtensor.scalar(-1.0),
-                              rtensor.BC_R_SCALAR)
+    return ops.tensor_mul(t, runtime.scalar(-1.0),
+                              core.BC_R_SCALAR)
 
 
 class Node(object):
@@ -320,12 +321,12 @@ class MulNode(Node):
         ga = None
         if a.requires_grad:
             ga = _unbroadcast(
-                Tensor(rtensor.tensor_mul(g.t, b.t, _rp(self.p))),
+                Tensor(ops.tensor_mul(g.t, b.t, _rp(self.p))),
                 self.p, False)
         gb = None
         if b.requires_grad:
             gb = _unbroadcast(
-                Tensor(rtensor.tensor_mul(g.t, a.t, _lp(self.p))),
+                Tensor(ops.tensor_mul(g.t, a.t, _lp(self.p))),
                 self.p, True)
         grads = [ga]
         grads.append(gb)
@@ -339,7 +340,7 @@ class ReluNode(Node):
         self.y = y
 
     def apply(self, g):
-        return [Tensor(rtensor.relugrad(self.y.t, g.t))]
+        return [Tensor(ops.relugrad(self.y.t, g.t))]
 
 
 class SumNode(Node):
@@ -351,13 +352,13 @@ class SumNode(Node):
     def apply(self, g):
         x = self.inputs[0]
         if self.axis == 1:
-            rtensor.cols_of(x.t)
-            p = rtensor.BC_R_COL
+            ops.cols_of(x.t)
+            p = core.BC_R_COL
         elif self.axis == 0:
-            p = rtensor.BC_R_ROW
+            p = core.BC_R_ROW
         else:
-            p = rtensor.BC_R_SCALAR
-        return [Tensor(rtensor.tensor_mul(rtensor.ones_like(x.t), g.t, p))]
+            p = core.BC_R_SCALAR
+        return [Tensor(ops.tensor_mul(ops.ones_like(x.t), g.t, p))]
 
 
 class MatmulNode(Node):
@@ -377,17 +378,17 @@ class MatmulNode(Node):
         gw = None
         if self.tb:
             if x.requires_grad:
-                gx = Tensor(rtensor.tensor_matmul(
+                gx = Tensor(runtime.tensor_matmul(
                     g.t, w.t, self.rows, self.inner, self.cols, 0, 0))
             if w.requires_grad:
-                gw = Tensor(rtensor.tensor_matmul(
+                gw = Tensor(runtime.tensor_matmul(
                     g.t, x.t, self.cols, self.inner, self.rows, 1, 0))
         else:
             if x.requires_grad:
-                gx = Tensor(rtensor.tensor_matmul(
+                gx = Tensor(runtime.tensor_matmul(
                     g.t, w.t, self.rows, self.inner, self.cols, 0, 1))
             if w.requires_grad:
-                gw = Tensor(rtensor.tensor_matmul(
+                gw = Tensor(runtime.tensor_matmul(
                     x.t, g.t, self.inner, self.cols, self.rows, 1, 0))
         grads = [gx]
         grads.append(gw)
@@ -427,12 +428,12 @@ class DivNode(Node):
         ga = None
         if a.requires_grad:
             ga = _unbroadcast(
-                Tensor(rtensor.tensor_div(g.t, b.t, _rp(self.p))),
+                Tensor(ops.tensor_div(g.t, b.t, _rp(self.p))),
                 self.p, False)
         gb = None
         if b.requires_grad:
-            t = rtensor.tensor_mul(self.y.t, g.t, rtensor.BC_NONE)
-            t = rtensor.tensor_div(t, b.t, _rp(self.p))
+            t = ops.tensor_mul(self.y.t, g.t, core.BC_NONE)
+            t = ops.tensor_div(t, b.t, _rp(self.p))
             gb = _unbroadcast(Tensor(_neg(t)), self.p, True)
         grads = [ga]
         grads.append(gb)
@@ -446,7 +447,7 @@ class ExpNode(Node):
         self.y = y
 
     def apply(self, g):
-        return [Tensor(rtensor.tensor_mul(g.t, self.y.t, rtensor.BC_NONE))]
+        return [Tensor(ops.tensor_mul(g.t, self.y.t, core.BC_NONE))]
 
 
 class SqrtNode(Node):
@@ -456,9 +457,9 @@ class SqrtNode(Node):
         self.y = y
 
     def apply(self, g):
-        h = rtensor.tensor_mul(g.t, rtensor.scalar(0.5),
-                               rtensor.BC_R_SCALAR)
-        return [Tensor(rtensor.tensor_div(h, self.y.t, rtensor.BC_NONE))]
+        h = ops.tensor_mul(g.t, runtime.scalar(0.5),
+                               core.BC_R_SCALAR)
+        return [Tensor(ops.tensor_div(h, self.y.t, core.BC_NONE))]
 
 
 class MaxNode(Node):
@@ -469,9 +470,9 @@ class MaxNode(Node):
 
     def apply(self, g):
         x = self.inputs[0]
-        rtensor.cols_of(x.t)
-        mask = rtensor.tensor_eqmask(x.t, self.m.t, rtensor.BC_R_COL)
-        return [Tensor(rtensor.tensor_mul(mask, g.t, rtensor.BC_R_COL))]
+        ops.cols_of(x.t)
+        mask = ops.tensor_eqmask(x.t, self.m.t, core.BC_R_COL)
+        return [Tensor(ops.tensor_mul(mask, g.t, core.BC_R_COL))]
 
 
 class BmmNode(Node):
@@ -492,20 +493,20 @@ class BmmNode(Node):
         gb = None
         if self.tb:
             if a.requires_grad:
-                ga = Tensor(rtensor.tensor_bmm(
+                ga = Tensor(runtime.tensor_bmm(
                     g.t, b.t, self.batch, self.rows, self.inner, self.cols,
                     0, 0))
             if b.requires_grad:
-                gb = Tensor(rtensor.tensor_bmm(
+                gb = Tensor(runtime.tensor_bmm(
                     g.t, a.t, self.batch, self.cols, self.inner, self.rows,
                     1, 0))
         else:
             if a.requires_grad:
-                ga = Tensor(rtensor.tensor_bmm(
+                ga = Tensor(runtime.tensor_bmm(
                     g.t, b.t, self.batch, self.rows, self.inner, self.cols,
                     0, 1))
             if b.requires_grad:
-                gb = Tensor(rtensor.tensor_bmm(
+                gb = Tensor(runtime.tensor_bmm(
                     a.t, g.t, self.batch, self.inner, self.cols, self.rows,
                     1, 0))
         grads = [ga]
@@ -522,7 +523,7 @@ class HeadSplitNode(Node):
         self.heads = heads
 
     def apply(self, g):
-        return [Tensor(rtensor.head_merge(g.t, self.rows, self.dh,
+        return [Tensor(runtime.head_merge(g.t, self.rows, self.dh,
                                           self.heads))]
 
 
@@ -535,7 +536,7 @@ class HeadMergeNode(Node):
         self.heads = heads
 
     def apply(self, g):
-        return [Tensor(rtensor.head_split(g.t, self.rows, self.dh,
+        return [Tensor(runtime.head_split(g.t, self.rows, self.dh,
                                           self.heads))]
 
 
@@ -546,7 +547,7 @@ class ReshapeNode(Node):
         self.shape_list = shape_list
 
     def apply(self, g):
-        return [Tensor(rtensor.reshape(g.t, self.shape_list))]
+        return [Tensor(ops.reshape(g.t, self.shape_list))]
 
 
 @jit.unroll_safe
@@ -596,39 +597,39 @@ def sgd_step(params, neg_lr):
         p = params[i]
         g = p.grad
         if g is not None:
-            p.t = rtensor.add(p.t, rtensor.mul(g.t, neg_lr.t))
+            p.t = ops.add(p.t, ops.mul(g.t, neg_lr.t))
             p.grad = None
 
 
 def softmax(x):
-    rtensor.cols_of(x.t)
+    ops.cols_of(x.t)
     m = x.max(1)
-    e = x.sub(m, rtensor.BC_R_COL).exp()
-    return e.div(e.sum(1), rtensor.BC_R_COL)
+    e = x.sub(m, core.BC_R_COL).exp()
+    return e.div(e.sum(1), core.BC_R_COL)
 
 
 def layernorm(x, gamma, beta, eps):
-    c = rtensor.cols_of(x.t)
-    inv = Tensor(rtensor.scalar(1.0 / c))
-    epst = Tensor(rtensor.scalar(eps))
-    mean = x.sum(1).mul(inv, rtensor.BC_R_SCALAR)
-    d = x.sub(mean, rtensor.BC_R_COL)
-    var = d.mul(d, rtensor.BC_NONE).sum(1).mul(inv, rtensor.BC_R_SCALAR)
-    denom = var.add(epst, rtensor.BC_R_SCALAR).sqrt()
-    y = d.div(denom, rtensor.BC_R_COL)
-    return y.mul(gamma, rtensor.BC_R_ROW).add(beta, rtensor.BC_R_ROW)
+    c = ops.cols_of(x.t)
+    inv = Tensor(runtime.scalar(1.0 / c))
+    epst = Tensor(runtime.scalar(eps))
+    mean = x.sum(1).mul(inv, core.BC_R_SCALAR)
+    d = x.sub(mean, core.BC_R_COL)
+    var = d.mul(d, core.BC_NONE).sum(1).mul(inv, core.BC_R_SCALAR)
+    denom = var.add(epst, core.BC_R_SCALAR).sqrt()
+    y = d.div(denom, core.BC_R_COL)
+    return y.mul(gamma, core.BC_R_ROW).add(beta, core.BC_R_ROW)
 
 
 def mha(x, wq, wk, wv, wo, heads):
-    rows = rtensor.tensor_shape(x.t, 0)
-    d = rtensor.tensor_shape(x.t, 1)
+    rows = ops.tensor_shape(x.t, 0)
+    d = ops.tensor_shape(x.t, 1)
     dh = d // heads
     q = x._matmul(wq, rows, d, d, 0).head_split(rows, dh, heads)
     k = x._matmul(wk, rows, d, d, 0).head_split(rows, dh, heads)
     v = x._matmul(wv, rows, d, d, 0).head_split(rows, dh, heads)
     scores = q.bmm(k, heads, rows, rows, dh, 1)
-    scale = Tensor(rtensor.scalar(1.0 / math.sqrt(dh)))
-    scaled = scores.mul(scale, rtensor.BC_R_SCALAR)
+    scale = Tensor(runtime.scalar(1.0 / math.sqrt(dh)))
+    scaled = scores.mul(scale, core.BC_R_SCALAR)
     ctx = softmax(scaled).bmm(v, heads, rows, dh, rows, 0)
     return ctx.head_merge(rows, dh, heads)._matmul(wo, rows, d, d, 0)
 
@@ -723,12 +724,12 @@ class Conv2d(object):
 
     def forward(self, x):
         hw = self.h * self.w
-        rows = rtensor.tensor_size(x.t) // (self.c * hw)
-        cols = rtensor.im2col(x.t, self.c, self.h, self.w, 3, 1)
-        y = rtensor.tensor_matmul(cols, self.weight.t, rows * hw, self.o,
+        rows = ops.tensor_size(x.t) // (self.c * hw)
+        cols = runtime.im2col(x.t, self.c, self.h, self.w, 3, 1)
+        y = runtime.tensor_matmul(cols, self.weight.t, rows * hw, self.o,
                                   self.c * 9, 0, 0)
-        y = rtensor.tensor_add(y, self.bias.t, rtensor.BC_R_ROW)
-        return x._forward_only(rtensor.col2chw(y, rows, hw, self.o),
+        y = ops.tensor_add(y, self.bias.t, core.BC_R_ROW)
+        return x._forward_only(runtime.col2chw(y, rows, hw, self.o),
                                self.weight)
 
 
@@ -741,8 +742,8 @@ class BatchNorm2d(object):
         self.mean = [0.0] * c
         self.var = [1.0] * c
         self.rows = -1
-        self.scale = rtensor.NULLTENSOR
-        self.shift = rtensor.NULLTENSOR
+        self.scale = core.NULLTENSOR
+        self.shift = core.NULLTENSOR
 
     def set_stats(self, gamma, beta, mean, var):
         self.gamma = gamma
@@ -752,28 +753,28 @@ class BatchNorm2d(object):
         self.rows = -1
 
     def _prepare(self, rows, dtype):
-        a = rtensor.column(rows, dtype)
-        b = rtensor.column(rows, dtype)
+        a = core.column(rows, dtype)
+        b = core.column(rows, dtype)
         for i in range(rows):
             ci = i % self.c
             g = self.gamma[ci] / math.sqrt(self.var[ci] + self.eps)
             a.host[i] = g
             b.host[i] = self.beta[ci] - self.mean[ci] * g
-        rtensor.dev(a)
-        rtensor.dev(b)
+        device.dev(a)
+        device.dev(b)
         self.scale = a
         self.shift = b
         self.rows = rows
 
     def forward(self, x, hw):
-        rows = rtensor.tensor_size(x.t) // hw
-        dt = rtensor.tensor_dtype(x.t)
+        rows = ops.tensor_size(x.t) // hw
+        dt = ops.tensor_dtype(x.t)
         if self.rows != rows or self.scale.dtype != dt:
             self._prepare(rows, dt)
-        v = rtensor.view2(x.t, rows, hw)
-        y = rtensor.tensor_mul(v, self.scale, rtensor.BC_R_COL)
+        v = ops.view2(x.t, rows, hw)
+        y = ops.tensor_mul(v, self.scale, core.BC_R_COL)
         return x._forward_only(
-            rtensor.tensor_add(y, self.shift, rtensor.BC_R_COL), None)
+            ops.tensor_add(y, self.shift, core.BC_R_COL), None)
 
 
 class MaxPool2d(object):
@@ -783,7 +784,7 @@ class MaxPool2d(object):
         self.w = w
 
     def forward(self, x):
-        return x._forward_only(rtensor.maxpool2(x.t, self.c, self.h, self.w),
+        return x._forward_only(runtime.maxpool2(x.t, self.c, self.h, self.w),
                                None)
 
 
@@ -800,6 +801,6 @@ class CNN(object):
         y = self.bn.forward(y, self.pool.h * self.pool.w)
         y = self.pool.forward(y.relu())
         cols = self.pool.c * (self.pool.h // 2) * (self.pool.w // 2)
-        shape = [rtensor.tensor_size(y.t) // cols]
+        shape = [ops.tensor_size(y.t) // cols]
         shape.append(cols)
         return self.fc.forward(y.reshape(shape))

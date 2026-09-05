@@ -1,11 +1,12 @@
 import math
 from rpython.jit.metainterp.test.support import LLJitMixin
 from rpython.rlib.jit import JitDriver
-from rpython.rlib import rtensor, rtensor_nn
-from rpython.rlib.rtensor import (tensor_add, tensor_mul, tensor_relu,
-    tensor_sum, tensor_item, tensor_size, from_list)
+from rpython.rtensor import core, device, kernels, nn, ops, runtime
+from rpython.rtensor.core import from_list
+from rpython.rtensor.ops import (tensor_add, tensor_mul, tensor_relu,
+    tensor_sum, tensor_item, tensor_size)
 
-rtensor.init_device()
+kernels.init_device()
 
 class TestTensor(LLJitMixin):
 
@@ -22,11 +23,11 @@ class TestTensor(LLJitMixin):
                 n -= 1
             return acc
         import os
-        before = rtensor.counter.n
+        before = kernels.counter.n
         res = self.meta_interp(f, [10])
         assert res == f(10)
         if 'RTENSOR_CPU' not in os.environ:
-            assert rtensor.counter.n > before
+            assert kernels.counter.n > before
         self.check_simple_loop(call_r=1, call_pure_r=0, call_f=1)
 
     def test_guard_inside_region_resumes(self):
@@ -96,12 +97,12 @@ class TestTensorMeta(LLJitMixin):
                 acc += tensor_item(tensor_sum(tensor_relu(tensor_mul(tensor_mul(w, b, 0), b, 0)), -1))
                 n -= 1
             return acc
-        before = rtensor.counter.n
+        before = kernels.counter.n
         res = self.meta_interp(f, [10])
         assert res == f(10)
         import os
         if 'RTENSOR_CPU' not in os.environ:
-            assert rtensor.counter.n - before == 1
+            assert kernels.counter.n - before == 1
 
 
 class TestMultiOutput(LLJitMixin):
@@ -119,82 +120,82 @@ class TestMultiOutput(LLJitMixin):
                 acc += tensor_item(tensor_sum(h, -1))
                 n -= 1
             return acc
-        before = rtensor.counter.n
+        before = kernels.counter.n
         res = self.meta_interp(f, [10])
         assert res == f(10)
         self.check_simple_loop(call_r=2, call_f=1)
         import os
         if 'RTENSOR_CPU' not in os.environ:
-            assert rtensor.counter.n - before == 1
-        assert any(',o' in k for k in rtensor.kernel_cache.kernels)
+            assert kernels.counter.n - before == 1
+        assert any(',o' in k for k in kernels.kernel_cache.kernels)
 
 
 class TestShapeSpecialization(LLJitMixin):
 
     def setup_method(self, meth):
-        rtensor.policy.static = True
-        rtensor.policy.seen = []
+        core.policy.static = True
+        core.policy.seen = []
 
     def test_static_size_kernel_then_demotion(self):
         driver = JitDriver(greens=[], reds=['n', 'size', 'w', 'b', 'acc'])
         def f(n, size):
-            w = rtensor.zeros([size])
-            b = rtensor.zeros([size])
+            w = core.zeros([size])
+            b = core.zeros([size])
             for i in range(size):
                 w.host[i] = i - 2.0
                 b.host[i] = 0.5
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, size=size, acc=acc, w=w, b=b)
-                h = rtensor.relu(rtensor.add(rtensor.mul(w, b), b))
-                if rtensor.tensor_shape(h, 0) == size:
-                    acc += rtensor.item(rtensor.sum(h))
+                h = ops.relu(ops.add(ops.mul(w, b), b))
+                if ops.tensor_shape(h, 0) == size:
+                    acc += ops.item(ops.sum(h))
                 n -= 1
             return acc
         res = self.meta_interp(f, [10, 8])
         assert res == f(10, 8)
         self.check_simple_loop(call_r=1)
         self.check_resops(guard_value=2)
-        keys = [k for k in rtensor.kernel_cache.kernels if k.split(',')[1] == '8']
+        keys = [k for k in kernels.kernel_cache.kernels if k.split(',')[1] == '8']
         assert keys
-        assert rtensor.policy.static
+        assert core.policy.static
         for size in (16, 24, 40):
             assert self.meta_interp(f, [10, size]) == f(10, size)
-        assert not rtensor.policy.static
+        assert not core.policy.static
         res = self.meta_interp(f, [10, 48])
         assert res == f(10, 48)
         self.check_resops(guard_value=0)
-        assert any(k.split(',')[1] == '0' for k in rtensor.kernel_cache.kernels)
+        assert any(k.split(',')[1] == '0' for k in kernels.kernel_cache.kernels)
 
 
 def test_gpu_launch_matches_cpu():
-    k = rtensor.build_kernel(2, [rtensor.MUL, rtensor.ADD, rtensor.RELU, rtensor.SUM],
+    k = kernels.build_kernel(2, [core.MUL, core.ADD, core.RELU, core.SUM],
                              [0, 2, 3, 4], [1, 1, -1, -1],
-                             [0, 0, 0, rtensor.AXIS_ALL])
+                             [0, 0, 0, core.AXIS_ALL])
     if k.fn == 0:
         import py
         py.test.skip("no CUDA device / nvcc")
     a = from_list([1.0, -2.0, 3.0, -4.0]); b = from_list([0.5, 0.5, 0.5, 0.5])
-    gpu = rtensor.launch_gpu(k, [a, b])
-    assert gpu and rtensor.host(gpu)[0] == 3.0
+    gpu = runtime.launch_gpu(k, [a, b])
+    assert gpu and device.host(gpu)[0] == 3.0
     k.fn = 0
-    assert rtensor.host(rtensor.launch(k, a, b, rtensor.NULLTENSOR))[0] == 3.0
-    assert '"tt.reduce"(%v4)' in rtensor.to_ttir(k, 'k')
-    k2 = rtensor.build_kernel(2, [rtensor.ADD, rtensor.RELU], [0, 2], [1, -1],
+    assert device.host(runtime.launch(k, a, b, core.NULLTENSOR))[0] == 3.0
+    assert '"tt.reduce"(%v4)' in kernels.to_ttir(k, 'k')
+    k2 = kernels.build_kernel(2, [core.ADD, core.RELU], [0, 2], [1, -1],
                                    [0, 0])
     assert k2.fn != 0
-    r = rtensor.launch_gpu(k2, [from_list([1.0, -2.0, 3.0]), from_list([0.5, 0.5, -4.0])])
+    r = runtime.launch_gpu(k2, [from_list([1.0, -2.0, 3.0]), from_list([0.5, 0.5, -4.0])])
     assert not r.host and r.dptr != 0
-    assert [rtensor.host(r)[i] for i in range(3)] == [1.5, 0.0, 0.0]
+    assert [device.host(r)[i] for i in range(3)] == [1.5, 0.0, 0.0]
 
 def test_tile_ir_text():
-    k = rtensor.build_kernel(2, [rtensor.MUL, rtensor.ADD, rtensor.RELU, rtensor.SUM],
+    k = kernels.build_kernel(2, [core.MUL, core.ADD, core.RELU, core.SUM],
                              [0, 2, 3, 4], [1, 1, -1, -1],
-                             [0, 0, 0, rtensor.AXIS_ALL])
-    out = rtensor.launch(k, from_list([1.0, -2.0]), from_list([0.5, 0.5]),
-                         rtensor.NULLTENSOR)
-    assert rtensor.host(out)[0] == 1.0
-    text = rtensor.to_tile_ir(k, 'k0', 2)
+                             [0, 0, 0, core.AXIS_ALL])
+    out = runtime.launch(k, from_list([1.0, -2.0]), from_list([0.5, 0.5]),
+                         core.NULLTENSOR)
+    assert device.host(out)[0] == 1.0
+    text = kernels.to_tile_ir(k, 'k0', 2)
     assert 'arith.mulf %v0, %v1' in text
     assert 'cuda_tile.reduce add %v4' in text
     assert text.count('cuda_tile.load_ptr_tko') == 2
@@ -203,14 +204,14 @@ def test_tile_ir_text():
 class TestBroadcast(LLJitMixin):
 
     def setup_method(self, meth):
-        rtensor.policy.static = True
-        rtensor.policy.seen = []
+        core.policy.static = True
+        core.policy.seen = []
 
     def test_row_broadcast_fused(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'v', 'acc'])
         def f(n):
-            x = rtensor.zeros([3, 4])
-            v = rtensor.zeros([4])
+            x = core.zeros([3, 4])
+            v = core.zeros([4])
             for i in range(12):
                 x.host[i] = i - 5.0
             for i in range(4):
@@ -218,8 +219,8 @@ class TestBroadcast(LLJitMixin):
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, acc=acc, x=x, v=v)
-                h = rtensor.relu(rtensor.add(x, v))
-                acc += rtensor.item(rtensor.sum(h))
+                h = ops.relu(ops.add(x, v))
+                acc += ops.item(ops.sum(h))
                 n -= 1
             return acc
         expect = 0.0
@@ -227,27 +228,27 @@ class TestBroadcast(LLJitMixin):
             val = (i - 5.0) + (i % 4) * 0.5
             if val > 0.0:
                 expect += val
-        before = rtensor.counter.n
+        before = kernels.counter.n
         res = self.meta_interp(f, [10])
         assert res == expect * 10
         self.check_simple_loop(call_r=1)
-        assert any('0:0:1:1' in k for k in rtensor.kernel_cache.kernels)
+        assert any('0:0:1:1' in k for k in kernels.kernel_cache.kernels)
         import os
         if 'RTENSOR_CPU' not in os.environ:
-            assert rtensor.counter.n > before
+            assert kernels.counter.n > before
 
     def test_scalar_broadcast_fused(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 's', 'acc'])
         def f(n):
-            x = rtensor.zeros([3, 4])
+            x = core.zeros([3, 4])
             for i in range(12):
                 x.host[i] = i - 5.0
             s = from_list([2.0])
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, acc=acc, x=x, s=s)
-                h = rtensor.relu(rtensor.mul(x, s))
-                acc += rtensor.item(rtensor.sum(h))
+                h = ops.relu(ops.mul(x, s))
+                acc += ops.item(ops.sum(h))
                 n -= 1
             return acc
         expect = 0.0
@@ -262,8 +263,8 @@ class TestBroadcast(LLJitMixin):
     def test_sum_axis0_root(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
         def f(n):
-            x = rtensor.zeros([3, 4])
-            w = rtensor.zeros([4])
+            x = core.zeros([3, 4])
+            w = core.zeros([4])
             for i in range(12):
                 x.host[i] = i - 5.0
             for i in range(4):
@@ -271,8 +272,8 @@ class TestBroadcast(LLJitMixin):
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, acc=acc, x=x, w=w)
-                r = rtensor.sum(rtensor.relu(x), 0)
-                acc += rtensor.item(rtensor.sum(rtensor.mul(r, w)))
+                r = ops.sum(ops.relu(x), 0)
+                acc += ops.item(ops.sum(ops.mul(r, w)))
                 n -= 1
             return acc
         vals = [max(i - 5.0, 0.0) for i in range(12)]
@@ -286,8 +287,8 @@ class TestBroadcast(LLJitMixin):
     def test_sum_axis1_root(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
         def f(n):
-            x = rtensor.zeros([3, 4])
-            w = rtensor.zeros([3])
+            x = core.zeros([3, 4])
+            w = core.zeros([3])
             for i in range(12):
                 x.host[i] = i - 5.0
             for i in range(3):
@@ -295,8 +296,8 @@ class TestBroadcast(LLJitMixin):
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, acc=acc, x=x, w=w)
-                r = rtensor.sum(rtensor.relu(x), 1)
-                acc += rtensor.item(rtensor.sum(rtensor.mul(r, w)))
+                r = ops.sum(ops.relu(x), 1)
+                acc += ops.item(ops.sum(ops.mul(r, w)))
                 n -= 1
             return acc
         vals = [max(i - 5.0, 0.0) for i in range(12)]
@@ -310,8 +311,8 @@ class TestBroadcast(LLJitMixin):
     def test_broadcast_guard_inside_region_resumes(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'v', 'acc'])
         def f(n):
-            x = rtensor.zeros([3, 4])
-            v = rtensor.zeros([4])
+            x = core.zeros([3, 4])
+            v = core.zeros([4])
             for i in range(12):
                 x.host[i] = i - 5.0
             for i in range(4):
@@ -319,10 +320,10 @@ class TestBroadcast(LLJitMixin):
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, acc=acc, x=x, v=v)
-                t = rtensor.mul(x, v)
+                t = ops.mul(x, v)
                 if n % 7 == 0:
-                    t = rtensor.add(t, v)
-                acc += rtensor.item(rtensor.sum(rtensor.relu(t)))
+                    t = ops.add(t, v)
+                acc += ops.item(ops.sum(ops.relu(t)))
                 n -= 1
             return acc
         res = self.meta_interp(f, [30])
@@ -333,18 +334,18 @@ class TestBroadcast(LLJitMixin):
     def test_reshape_then_elementwise(self):
         driver = JitDriver(greens=[], reds=['n', 'm', 'v', 'acc'])
         def f(n):
-            base = rtensor.zeros([12])
+            base = core.zeros([12])
             for i in range(12):
                 base.host[i] = i - 5.0
-            m = rtensor.reshape(base, [3, 4])
-            v = rtensor.zeros([4])
+            m = ops.reshape(base, [3, 4])
+            v = core.zeros([4])
             for i in range(4):
                 v.host[i] = i * 0.5
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, acc=acc, m=m, v=v)
-                h = rtensor.relu(rtensor.add(m, v))
-                acc += rtensor.item(rtensor.sum(h))
+                h = ops.relu(ops.add(m, v))
+                acc += ops.item(ops.sum(h))
                 n -= 1
             return acc
         expect = 0.0
@@ -363,9 +364,9 @@ class TestBroadcast(LLJitMixin):
             b = from_list([0.5, -0.5, 0.25])
             while n > 0:
                 driver.jit_merge_point(n=n, h=h, b=b)
-                h = rtensor.relu(rtensor.add_(h, b))
+                h = ops.relu(ops.add_(h, b))
                 n -= 1
-            return rtensor.item(rtensor.sum(h))
+            return ops.item(ops.sum(h))
         res = self.meta_interp(f, [12])
         assert res == f(12)
         self.check_simple_loop(call_r=3)
@@ -375,12 +376,12 @@ class TestBroadcast(LLJitMixin):
         def f(n):
             x = from_list([1.0, 2.0, 3.0, 4.0])
             b = from_list([0.5, -0.5, 0.25, -0.25])
-            rtensor.dev(x)
-            v = rtensor.reshape(x, [2, 2])
+            device.dev(x)
+            v = ops.reshape(x, [2, 2])
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, x=x, v=v, b=b, acc=acc)
-                rtensor.add_(x, b)
+                ops.add_(x, b)
                 acc += tensor_item(tensor_sum(v, -1))
                 n -= 1
             return acc
@@ -397,18 +398,18 @@ class TestBroadcast(LLJitMixin):
 
 def test_reshape_shares_storage():
     t = from_list([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-    v = rtensor.reshape(t, [2, 3])
+    v = ops.reshape(t, [2, 3])
     assert v.size == 6 and v.shape[0] == 2 and v.shape[1] == 3
     assert v.host is t.host and v.dptr == t.dptr
     t.host[0] = 9.0
-    assert rtensor.host(v)[0] == 9.0
+    assert device.host(v)[0] == 9.0
 
 def test_assign_into_view_updates_base():
     t = from_list([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-    v = rtensor.reshape(t, [2, 3])
+    v = ops.reshape(t, [2, 3])
     other = from_list([10.0, 20.0, 30.0, 40.0, 50.0, 60.0])
-    rtensor.assign(v, other)
-    assert [rtensor.host(t)[i] for i in range(6)] == \
+    ops.assign(v, other)
+    assert [device.host(t)[i] for i in range(6)] == \
         [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
 
 
@@ -416,31 +417,31 @@ def test_assign_shape_mismatch_raises():
     import py
     a = from_list([1.0, 2.0])
     b = from_list([1.0, 2.0, 3.0])
-    py.test.raises(ValueError, rtensor.assign, a, b)
+    py.test.raises(ValueError, ops.assign, a, b)
 
 
 def test_add_on_requires_grad_leaf_raises():
     import py
-    a = rtensor_nn.Tensor(from_list([1.0, 2.0]), True)
-    b = rtensor_nn.Tensor(from_list([0.5, 0.5]))
+    a = nn.Tensor(from_list([1.0, 2.0]), True)
+    b = nn.Tensor(from_list([0.5, 0.5]))
     py.test.raises(ValueError, a.add_, b)
     py.test.raises(ValueError, a.mul_, b)
 
 
 def test_sum_axis_elements():
-    x = rtensor.zeros([3, 4])
+    x = core.zeros([3, 4])
     for i in range(12):
         x.host[i] = i - 5.0
     vals = [i - 5.0 for i in range(12)]
-    r0 = rtensor.sum(x, 0)
+    r0 = ops.sum(x, 0)
     assert r0.size == 4 and r0.shape[0] == 4
     for c in range(4):
-        assert rtensor.host(r0)[c] == sum([vals[r * 4 + c] for r in range(3)])
-    r1 = rtensor.sum(x, 1)
+        assert device.host(r0)[c] == sum([vals[r * 4 + c] for r in range(3)])
+    r1 = ops.sum(x, 1)
     assert r1.size == 3 and r1.shape[0] == 3
     for r in range(3):
-        assert rtensor.host(r1)[r] == sum([vals[r * 4 + c] for c in range(4)])
-    assert rtensor.item(rtensor.sum(x)) == sum(vals)
+        assert device.host(r1)[r] == sum([vals[r * 4 + c] for c in range(4)])
+    assert ops.item(ops.sum(x)) == sum(vals)
 
 
 B, D = 2, 3
@@ -457,14 +458,14 @@ def _fill_bias(b, seed):
         b.host[j] = 0.125 * (j + 1) + seed * 0.0625
 
 def _make_layer(seed):
-    w = rtensor.zeros([D, D])
-    b = rtensor.zeros([D])
+    w = core.zeros([D, D])
+    b = core.zeros([D])
     _fill_matrix(w, D, D, seed)
     _fill_bias(b, seed)
-    return rtensor_nn.Linear(rtensor_nn.Tensor(w), rtensor_nn.Tensor(b))
+    return nn.Linear(nn.Tensor(w), nn.Tensor(b))
 
 def _make_mlp():
-    return rtensor_nn.MLP([_make_layer(1), _make_layer(2), _make_layer(3)])
+    return nn.MLP([_make_layer(1), _make_layer(2), _make_layer(3)])
 
 def _cpu_matrix(seed):
     return [[((seed + i * 3 - j * 2) % 5 - 2) * 0.25 for j in range(D)]
@@ -504,12 +505,12 @@ class TestTensorNN(LLJitMixin):
     def test_mlp_forward_fuses_bias_relu(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'mlp', 'acc'])
         def f(n):
-            x0 = rtensor.zeros([B, D])
+            x0 = core.zeros([B, D])
             for i in range(B):
                 for j in range(D):
                     x0.host[i * D + j] = (i - j) * 0.5
             mlp = _make_mlp()
-            x = rtensor_nn.Tensor(x0)
+            x = nn.Tensor(x0)
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, x=x, mlp=mlp, acc=acc)
@@ -541,11 +542,11 @@ def _autograd_ref():
     return loss, gw, gb
 
 def _autograd_setup():
-    x = rtensor.zeros([AB, AD])
+    x = core.zeros([AB, AD])
     for i in range(AB * AD):
         x.host[i] = i - 2.5
-    w = rtensor.zeros([AD])
-    b = rtensor.zeros([AD])
+    w = core.zeros([AD])
+    b = core.zeros([AD])
     for j in range(AD):
         w.host[j] = AW[j]
         b.host[j] = ABIAS[j]
@@ -553,16 +554,16 @@ def _autograd_setup():
 
 def test_autograd_elementwise_matches_reference():
     x, w, b = _autograd_setup()
-    xt = rtensor_nn.Tensor(x)
-    wt = rtensor_nn.Tensor(w, True)
-    bt = rtensor_nn.Tensor(b, True)
+    xt = nn.Tensor(x)
+    wt = nn.Tensor(w, True)
+    bt = nn.Tensor(b, True)
     loss = xt.mul(wt).add(bt).relu().sum()
     loss.backward()
     eloss, egw, egb = _autograd_ref()
     assert loss.item() == eloss
     for j in range(AD):
-        assert rtensor.host(wt.grad.t)[j] == egw[j]
-        assert rtensor.host(bt.grad.t)[j] == egb[j]
+        assert device.host(wt.grad.t)[j] == egw[j]
+        assert device.host(bt.grad.t)[j] == egb[j]
 
 def _mlp_train_ref(iters, lr):
     x = [[(i - j) * 0.5 for j in range(D)] for i in range(B)]
@@ -602,8 +603,8 @@ def _mlp_train_ref(iters, lr):
 class TestAutograd(LLJitMixin):
 
     def setup_method(self, meth):
-        rtensor.policy.static = True
-        rtensor.policy.seen = []
+        core.policy.static = True
+        core.policy.seen = []
 
     def test_backward_of_relu_mul_add_fuses(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'b', 'acc'])
@@ -612,9 +613,9 @@ class TestAutograd(LLJitMixin):
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, x=x, w=w, b=b, acc=acc)
-                xt = rtensor_nn.Tensor(x)
-                wt = rtensor_nn.Tensor(w, True)
-                bt = rtensor_nn.Tensor(b, True)
+                xt = nn.Tensor(x)
+                wt = nn.Tensor(w, True)
+                bt = nn.Tensor(b, True)
                 loss = xt.mul(wt).add(bt).relu().sum()
                 loss.backward()
                 acc += (loss.item() + 3.0 * wt.grad.sum().item() +
@@ -630,13 +631,13 @@ class TestAutograd(LLJitMixin):
     def test_mlp_train_step_matches_reference(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'mlp', 'lr', 'loss', 'prev'])
         def f(n):
-            x0 = rtensor.zeros([B, D])
+            x0 = core.zeros([B, D])
             for i in range(B):
                 for j in range(D):
                     x0.host[i * D + j] = (i - j) * 0.5
-            mlp = rtensor_nn.MLP([_make_layer(1), _make_layer(2)])
-            x = rtensor_nn.Tensor(x0)
-            lr = rtensor_nn.Tensor(rtensor.from_list([-LR]))
+            mlp = nn.MLP([_make_layer(1), _make_layer(2)])
+            x = nn.Tensor(x0)
+            lr = nn.Tensor(core.from_list([-LR]))
             params = mlp.parameters()
             loss = 0.0
             prev = 1e30
@@ -646,7 +647,7 @@ class TestAutograd(LLJitMixin):
                 y = mlp.forward(x)
                 out = y.reshape([B * D]).sum()
                 out.backward()
-                rtensor_nn.sgd_step(mlp.parameters(), lr)
+                nn.sgd_step(mlp.parameters(), lr)
                 loss = out.item()
                 if loss >= prev:
                     return -1.0
@@ -664,7 +665,7 @@ TEPS = 1e-05
 
 
 def _init_weight(rows, cols):
-    t = rtensor.zeros([rows, cols])
+    t = core.zeros([rows, cols])
     for i in range(rows * cols):
         t.host[i] = float((i * 7) % 13 - 6) / TD
     return t
@@ -742,7 +743,7 @@ def _ref_block(x):
 
 def _qkv_weight():
     dh = TD // TH
-    t = rtensor.zeros([TD, TD])
+    t = core.zeros([TD, TD])
     for r in range(TD):
         for h in range(TH):
             for c in range(dh):
@@ -753,7 +754,7 @@ def _qkv_weight():
 
 def _proj_weight():
     dh = TD // TH
-    t = rtensor.zeros([TD, TD])
+    t = core.zeros([TD, TD])
     for h in range(TH):
         for r in range(dh):
             for c in range(TD):
@@ -763,53 +764,53 @@ def _proj_weight():
 
 
 def _make_block(rg=False):
-    attn = rtensor_nn.MultiHead(
-        rtensor_nn.Tensor(_qkv_weight()), rtensor_nn.Tensor(_qkv_weight()),
-        rtensor_nn.Tensor(_qkv_weight()), rtensor_nn.Tensor(_proj_weight()),
+    attn = nn.MultiHead(
+        nn.Tensor(_qkv_weight()), nn.Tensor(_qkv_weight()),
+        nn.Tensor(_qkv_weight()), nn.Tensor(_proj_weight()),
         TH, rg)
     layers = []
     for _ in range(2):
-        bias = rtensor.zeros([TD])
+        bias = core.zeros([TD])
         for i in range(TD):
             bias.host[i] = 0.01
-        layers.append(rtensor_nn.Linear(
-            rtensor_nn.Tensor(_init_weight(TD, TD)),
-            rtensor_nn.Tensor(bias)))
-    ones = rtensor.zeros([TD])
+        layers.append(nn.Linear(
+            nn.Tensor(_init_weight(TD, TD)),
+            nn.Tensor(bias)))
+    ones = core.zeros([TD])
     for i in range(TD):
         ones.host[i] = 1.0
-    zeros = rtensor.zeros([TD])
+    zeros = core.zeros([TD])
     for i in range(TD):
         zeros.host[i] = 0.0
-    return rtensor_nn.TransformerBlock(
-        attn, rtensor_nn.Tensor(ones), rtensor_nn.Tensor(zeros),
-        rtensor_nn.Tensor(ones), rtensor_nn.Tensor(zeros),
-        rtensor_nn.MLP(layers), TEPS, rg)
+    return nn.TransformerBlock(
+        attn, nn.Tensor(ones), nn.Tensor(zeros),
+        nn.Tensor(ones), nn.Tensor(zeros),
+        nn.MLP(layers), TEPS, rg)
 
 
 class TestTransformer(LLJitMixin):
 
     def setup_method(self, meth):
-        rtensor.policy.static = True
-        rtensor.policy.seen = []
+        core.policy.static = True
+        core.policy.seen = []
 
     def test_softmax_rows(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
         def f(n):
-            x = rtensor.zeros([3, 4])
+            x = core.zeros([3, 4])
             for i in range(12):
                 x.host[i] = ((i * i) % 7) - 3.0 + i * 0.5
-            w = rtensor.zeros([4])
+            w = core.zeros([4])
             for i in range(4):
                 w.host[i] = 1.0 * (1 << i)
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, x=x, w=w, acc=acc)
-                s = rtensor_nn.softmax(rtensor_nn.Tensor(x))
-                acc += rtensor.item(rtensor.sum(rtensor.mul(s.t, w)))
+                s = nn.softmax(nn.Tensor(x))
+                acc += ops.item(ops.sum(ops.mul(s.t, w)))
                 n -= 1
             return acc
-        before = set(rtensor.kernel_cache.kernels)
+        before = set(kernels.kernel_cache.kernels)
         rows = [[((i * 4 + j) * (i * 4 + j)) % 7 - 3.0 + (i * 4 + j) * 0.5
                  for j in range(4)] for i in range(3)]
         ref = _ref_softmax(rows)
@@ -821,19 +822,19 @@ class TestTransformer(LLJitMixin):
         assert abs(res - expect * 10) < 1e-9
         self.check_simple_loop(call_r=1)
         self.check_resops(guard_value=3)
-        added = set(rtensor.kernel_cache.kernels) - before
+        added = set(kernels.kernel_cache.kernels) - before
         assert len(added) == 1
         assert added.pop().split(',')[2] == 'r32'
 
     def test_layernorm_rows(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'g', 'b', 'w', 'acc'])
         def f(n):
-            x = rtensor.zeros([3, 4])
+            x = core.zeros([3, 4])
             for i in range(12):
                 x.host[i] = ((i * i) % 7) - 3.0 + i * 0.5
-            g = rtensor.zeros([4])
-            b = rtensor.zeros([4])
-            w = rtensor.zeros([4])
+            g = core.zeros([4])
+            b = core.zeros([4])
+            w = core.zeros([4])
             for i in range(4):
                 g.host[i] = 1.0 + i * 0.5
                 b.host[i] = i * 0.25
@@ -841,13 +842,13 @@ class TestTransformer(LLJitMixin):
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, x=x, g=g, b=b, w=w, acc=acc)
-                y = rtensor_nn.layernorm(rtensor_nn.Tensor(x),
-                                         rtensor_nn.Tensor(g),
-                                         rtensor_nn.Tensor(b), TEPS)
-                acc += rtensor.item(rtensor.sum(rtensor.mul(y.t, w)))
+                y = nn.layernorm(nn.Tensor(x),
+                                         nn.Tensor(g),
+                                         nn.Tensor(b), TEPS)
+                acc += ops.item(ops.sum(ops.mul(y.t, w)))
                 n -= 1
             return acc
-        before = set(rtensor.kernel_cache.kernels)
+        before = set(kernels.kernel_cache.kernels)
         rows = [[((i * 4 + j) * (i * 4 + j)) % 7 - 3.0 + (i * 4 + j) * 0.5
                  for j in range(4)] for i in range(3)]
         ref = _ref_layernorm(rows, [1.0 + j * 0.5 for j in range(4)],
@@ -859,7 +860,7 @@ class TestTransformer(LLJitMixin):
         res = self.meta_interp(f, [10])
         assert abs(res - expect * 10) < 1e-9
         self.check_simple_loop(call_r=1)
-        added = set(rtensor.kernel_cache.kernels) - before
+        added = set(kernels.kernel_cache.kernels) - before
         assert len(added) == 1
         key = added.pop()
         assert key.split(',')[2] == 'r32' and key.split(',')[0] == '6'
@@ -867,11 +868,11 @@ class TestTransformer(LLJitMixin):
     def test_transformer_block_forward(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'block', 'acc'])
         def f(n):
-            x0 = rtensor.zeros([TROWS, TD])
+            x0 = core.zeros([TROWS, TD])
             for i in range(TROWS * TD):
                 x0.host[i] = (i % 7) - 3.0
             block = _make_block()
-            x = rtensor_nn.Tensor(x0)
+            x = nn.Tensor(x0)
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, x=x, block=block, acc=acc)
@@ -881,51 +882,51 @@ class TestTransformer(LLJitMixin):
             return acc
         ref = _ref_block(_ref_input(TROWS, TD))
         expect = sum([sum(row) for row in ref]) * 5
-        before = set(rtensor.kernel_cache.kernels)
+        before = set(kernels.kernel_cache.kernels)
         res = self.meta_interp(f, [5])
         assert abs(res - expect) < 1e-9
         self.check_simple_loop(call_r=14)
-        added = set(rtensor.kernel_cache.kernels) - before
+        added = set(kernels.kernel_cache.kernels) - before
         assert len([k for k in added if k.split(',')[2].startswith('r')]) == 3
 
     def test_row_kernel_specialised_per_column_count(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'acc'])
         def f(n, c):
-            x = rtensor.zeros([2, c])
+            x = core.zeros([2, c])
             for i in range(2 * c):
                 x.host[i] = (i % 5) - 2.0
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, x=x, acc=acc)
-                s = rtensor_nn.softmax(rtensor_nn.Tensor(x))
-                acc += rtensor.item(rtensor.sum(s.t))
+                s = nn.softmax(nn.Tensor(x))
+                acc += ops.item(ops.sum(s.t))
                 n -= 1
             return acc
-        rtensor.policy.static_cols = True
-        rtensor.policy.seen_cols = []
+        core.policy.static_cols = True
+        core.policy.seen_cols = []
         try:
             tiles = []
             for c in (4, 40, 5, 48, 9):
-                before = set(rtensor.kernel_cache.kernels)
+                before = set(kernels.kernel_cache.kernels)
                 res = self.meta_interp(f, [10, c])
                 assert abs(res - 20.0) < 1e-9
                 assert abs(f(10, c) - 20.0) < 1e-9
-                added = set(rtensor.kernel_cache.kernels) - before
+                added = set(kernels.kernel_cache.kernels) - before
                 for key in added:
                     part = key.split(',')[2]
                     if part.startswith('r'):
                         tiles.append(part)
             assert 'r32' in tiles
             assert 'r64' in tiles
-            assert not rtensor.policy.static_cols
-            assert tiles[len(tiles) - 1] == 'r%d' % rtensor.config.block
+            assert not core.policy.static_cols
+            assert tiles[len(tiles) - 1] == 'r%d' % core.config.block
         finally:
-            rtensor.policy.static_cols = True
-            rtensor.policy.seen_cols = []
+            core.policy.static_cols = True
+            core.policy.seen_cols = []
 
 
 def _filled(shape, base):
-    t = rtensor.zeros(shape)
+    t = core.zeros(shape)
     for i in range(t.size):
         t.host[i] = base + i
     return t
@@ -933,28 +934,28 @@ def _filled(shape, base):
 
 def test_column_broadcast_shapes():
     x = _filled([3, 4], 1.0)
-    assert rtensor.bcast(x, _filled([4], 0.5)) == rtensor.BC_R_ROW
-    assert rtensor.bcast(x, _filled([3], 0.5)) == rtensor.BC_R_COL
-    assert rtensor.bcast(x, _filled([3, 1], 0.5)) == rtensor.BC_R_COL
-    assert rtensor.bcast(_filled([3], 0.5), x) == rtensor.BC_L_COL
-    assert rtensor.bcast(x, _filled([1], 2.0)) == rtensor.BC_R_SCALAR
+    assert ops.bcast(x, _filled([4], 0.5)) == core.BC_R_ROW
+    assert ops.bcast(x, _filled([3], 0.5)) == core.BC_R_COL
+    assert ops.bcast(x, _filled([3, 1], 0.5)) == core.BC_R_COL
+    assert ops.bcast(_filled([3], 0.5), x) == core.BC_L_COL
+    assert ops.bcast(x, _filled([1], 2.0)) == core.BC_R_SCALAR
     sq = _filled([4, 4], 1.0)
-    assert rtensor.bcast(sq, _filled([4], 0.5)) == rtensor.BC_R_ROW
-    assert rtensor.bcast(sq, _filled([4, 1], 0.5)) == rtensor.BC_R_COL
+    assert ops.bcast(sq, _filled([4], 0.5)) == core.BC_R_ROW
+    assert ops.bcast(sq, _filled([4, 1], 0.5)) == core.BC_R_COL
     col = _filled([3, 1], 0.5)
-    r = rtensor.sub(x, col)
+    r = ops.sub(x, col)
     for i in range(3):
         for j in range(4):
-            assert rtensor.host(r)[i * 4 + j] == (1.0 + i * 4 + j) - (0.5 + i)
-    d = rtensor.div(x, col)
-    assert rtensor.host(d)[5] == (1.0 + 5) / (0.5 + 1)
-    assert rtensor.item(rtensor.max(x)) == 12.0
-    m = rtensor.max(x, 1)
-    assert [rtensor.host(m)[i] for i in range(3)] == [4.0, 8.0, 12.0]
-    assert [rtensor.host(rtensor.max(x, 0))[j] for j in range(4)] == \
+            assert device.host(r)[i * 4 + j] == (1.0 + i * 4 + j) - (0.5 + i)
+    d = ops.div(x, col)
+    assert device.host(d)[5] == (1.0 + 5) / (0.5 + 1)
+    assert ops.item(ops.max(x)) == 12.0
+    m = ops.max(x, 1)
+    assert [device.host(m)[i] for i in range(3)] == [4.0, 8.0, 12.0]
+    assert [device.host(ops.max(x, 0))[j] for j in range(4)] == \
         [9.0, 10.0, 11.0, 12.0]
-    assert rtensor.host(rtensor.sqrt(_filled([2], 4.0)))[0] == 2.0
-    assert rtensor.host(rtensor.exp(_filled([1], 0.0)))[0] == 1.0
+    assert device.host(ops.sqrt(_filled([2], 4.0)))[0] == 2.0
+    assert device.host(ops.exp(_filled([1], 0.0)))[0] == 1.0
 
 
 CN, CC, CH, CW, CO, CNCLS = 2, 3, 8, 8, 4, 10
@@ -1040,7 +1041,7 @@ def _ref_cnn(x, wc, wf):
 
 
 def _load(shape, values):
-    t = rtensor.zeros(shape)
+    t = core.zeros(shape)
     for i in range(len(values)):
         t.host[i] = values[i]
     return t
@@ -1049,27 +1050,27 @@ def _load(shape, values):
 def _make_cnn():
     fan = CC * 9
     feat = CO * (CH // 2) * (CW // 2)
-    bc = rtensor.zeros([CO])
+    bc = core.zeros([CO])
     for i in range(CO):
         bc.host[i] = 0.01
-    bf = rtensor.zeros([CNCLS])
+    bf = core.zeros([CNCLS])
     for i in range(CNCLS):
         bf.host[i] = 0.01
-    conv = rtensor_nn.Conv2d(
-        rtensor_nn.Tensor(_load([fan, CO], _conv_weight(fan, CO))),
-        rtensor_nn.Tensor(bc), CC, CH, CW, CO)
-    fc = rtensor_nn.Linear(
-        rtensor_nn.Tensor(_load([feat, CNCLS], _conv_weight(feat, CNCLS))),
-        rtensor_nn.Tensor(bf))
-    return rtensor_nn.CNN(conv, rtensor_nn.BatchNorm2d(CO, CEPS),
-                          rtensor_nn.MaxPool2d(CO, CH, CW), fc)
+    conv = nn.Conv2d(
+        nn.Tensor(_load([fan, CO], _conv_weight(fan, CO))),
+        nn.Tensor(bc), CC, CH, CW, CO)
+    fc = nn.Linear(
+        nn.Tensor(_load([feat, CNCLS], _conv_weight(feat, CNCLS))),
+        nn.Tensor(bf))
+    return nn.CNN(conv, nn.BatchNorm2d(CO, CEPS),
+                          nn.MaxPool2d(CO, CH, CW), fc)
 
 
 class TestConv(LLJitMixin):
 
     def setup_method(self, meth):
-        rtensor.policy.static = True
-        rtensor.policy.seen = []
+        core.policy.static = True
+        core.policy.seen = []
 
     def test_im2col_matmul_conv(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
@@ -1082,10 +1083,10 @@ class TestConv(LLJitMixin):
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, x=x, w=w, acc=acc)
-                cols = rtensor.im2col(x, 2, 4, 4, 3, 1)
-                y = rtensor.tensor_matmul(cols, w, 16, 3, 18, 0, 0)
-                z = rtensor.col2chw(y, 1, 16, 3)
-                acc += rtensor.item(rtensor.sum(rtensor.mul(z, z)))
+                cols = runtime.im2col(x, 2, 4, 4, 3, 1)
+                y = runtime.tensor_matmul(cols, w, 16, 3, 18, 0, 0)
+                z = runtime.col2chw(y, 1, 16, 3)
+                acc += ops.item(ops.sum(ops.mul(z, z)))
                 n -= 1
             return acc
         cols = _ref_im2col(vals, 1, 2, 4, 4, 3, 1)
@@ -1109,8 +1110,8 @@ class TestConv(LLJitMixin):
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, x=x, acc=acc)
-                y = rtensor.maxpool2(x, 2, 4, 6)
-                acc += rtensor.item(rtensor.sum(rtensor.mul(y, y)))
+                y = runtime.maxpool2(x, 2, 4, 6)
+                acc += ops.item(ops.sum(ops.mul(y, y)))
                 n -= 1
             return acc
         expect = sum([v * v for v in _ref_maxpool2(vals, 2, 2, 4, 6)])
@@ -1123,7 +1124,7 @@ class TestConv(LLJitMixin):
         vals = _conv_input(CN, CC, CH, CW)
 
         def f(n):
-            x = rtensor_nn.Tensor(_load([CN, CC * CH * CW], vals))
+            x = nn.Tensor(_load([CN, CC * CH * CW], vals))
             cnn = _make_cnn()
             acc = 0.0
             while n > 0:
@@ -1139,7 +1140,7 @@ class TestConv(LLJitMixin):
 
     def test_cnn_backward_raises(self):
         cnn = _make_cnn()
-        x = rtensor_nn.Tensor(_load([CN, CC * CH * CW],
+        x = nn.Tensor(_load([CN, CC * CH * CW],
                                     _conv_input(CN, CC, CH, CW)), True)
         y = cnn.forward(x).sum()
         import py
@@ -1152,10 +1153,10 @@ TBLOCKS = 2
 
 
 def _tmk(shape, vals, rg):
-    t = rtensor.zeros(shape)
+    t = core.zeros(shape)
     for i in range(len(vals)):
         t.host[i] = vals[i]
-    return rtensor_nn.Tensor(t, rg)
+    return nn.Tensor(t, rg)
 
 
 def _lossw(n):
@@ -1169,7 +1170,7 @@ def _fd_check(f, vals, shapes, tol=1e-06, h=1e-06, stride=1):
     for k in range(len(vals)):
         grad = ts[k].grad
         assert grad is not None
-        hostg = rtensor.host(grad.t)
+        hostg = device.host(grad.t)
         for i in range(0, len(vals[k]), stride):
             out = []
             for d in (h, -h):
@@ -1183,14 +1184,14 @@ def _fd_check(f, vals, shapes, tol=1e-06, h=1e-06, stride=1):
 
 def _weighted_sum(y, rows, cols):
     return y.mul(_tmk([rows, cols], _lossw(rows * cols), False),
-                 rtensor.BC_NONE).sum()
+                 core.BC_NONE).sum()
 
 
 def test_grad_softmax_rows():
     rows, cols = 3, 4
     vals = [[((i * i) % 7) - 3.0 + i * 0.5 for i in range(rows * cols)]]
     def f(ts):
-        return _weighted_sum(rtensor_nn.softmax(ts[0]), rows, cols)
+        return _weighted_sum(nn.softmax(ts[0]), rows, cols)
     _fd_check(f, vals, [[rows, cols]])
 
 
@@ -1200,7 +1201,7 @@ def test_grad_layernorm():
             [1.0 + i * 0.5 for i in range(cols)],
             [i * 0.25 for i in range(cols)]]
     def f(ts):
-        y = rtensor_nn.layernorm(ts[0], ts[1], ts[2], TEPS)
+        y = nn.layernorm(ts[0], ts[1], ts[2], TEPS)
         return _weighted_sum(y, rows, cols)
     _fd_check(f, vals, [[rows, cols], [cols], [cols]])
 
@@ -1212,7 +1213,7 @@ def test_grad_left_broadcast():
             [2.0 + i * 0.5 for i in range(rows)]]
     shapes = [[cols], [rows, cols], [rows, 1]]
     def f(ts):
-        y = ts[0].sub(ts[1]).div(ts[1]).mul(ts[2], rtensor.BC_R_COL)
+        y = ts[0].sub(ts[1]).div(ts[1]).mul(ts[2], core.BC_R_COL)
         return _weighted_sum(y, rows, cols)
     _fd_check(f, vals, shapes)
 
@@ -1225,7 +1226,7 @@ def test_grad_attention_head():
             w(0), w(1), w(2), w(3)]
     shapes = [[rows, d], [d, d], [d, d], [d, d], [d, d]]
     def f(ts):
-        y = rtensor_nn.mha(ts[0], ts[1], ts[2], ts[3], ts[4], 1)
+        y = nn.mha(ts[0], ts[1], ts[2], ts[3], ts[4], 1)
         return _weighted_sum(y, rows, d)
     _fd_check(f, vals, shapes, stride=5)
 
@@ -1245,11 +1246,11 @@ def test_grad_transformer_block():
     shapes = [[rows, d], [d, d], [d, d], [d, d], [d, d],
               [d], [d], [d], [d], [d, d], [d], [d, d], [d]]
     def f(ts):
-        attn = rtensor_nn.MultiHead(ts[1], ts[2], ts[3], ts[4], heads)
-        layers = [rtensor_nn.Linear(ts[9], ts[10]),
-                  rtensor_nn.Linear(ts[11], ts[12])]
-        block = rtensor_nn.TransformerBlock(attn, ts[5], ts[6], ts[7], ts[8],
-                                            rtensor_nn.MLP(layers), TEPS)
+        attn = nn.MultiHead(ts[1], ts[2], ts[3], ts[4], heads)
+        layers = [nn.Linear(ts[9], ts[10]),
+                  nn.Linear(ts[11], ts[12])]
+        block = nn.TransformerBlock(attn, ts[5], ts[6], ts[7], ts[8],
+                                            nn.MLP(layers), TEPS)
         return _weighted_sum(block.forward(ts[0]), rows, d)
     _fd_check(f, vals, shapes, stride=5)
 
@@ -1258,34 +1259,34 @@ def _make_transformer():
     blocks = []
     for i in range(TBLOCKS):
         blocks.append(_make_block(True))
-    bias = rtensor.zeros([TD])
+    bias = core.zeros([TD])
     for i in range(TD):
         bias.host[i] = 0.01
-    head = rtensor_nn.Linear(rtensor_nn.Tensor(_init_weight(TD, TD)),
-                             rtensor_nn.Tensor(bias))
-    return rtensor_nn.Transformer(blocks, head)
+    head = nn.Linear(nn.Tensor(_init_weight(TD, TD)),
+                             nn.Tensor(bias))
+    return nn.Transformer(blocks, head)
 
 
 class TestTransformerTrain(LLJitMixin):
 
     def setup_method(self, meth):
-        rtensor.policy.static = True
-        rtensor.policy.seen = []
-        rtensor.policy.static_cols = True
-        rtensor.policy.seen_cols = []
+        core.policy.static = True
+        core.policy.seen = []
+        core.policy.static_cols = True
+        core.policy.seen_cols = []
 
     def test_transformer_train_step(self):
         driver = JitDriver(greens=[],
                            reds=['n', 'x', 'model', 'params', 'lr', 'acc',
                                  'prev'])
         def f(n):
-            x0 = rtensor.zeros([TROWS, TD])
+            x0 = core.zeros([TROWS, TD])
             for i in range(TROWS * TD):
                 x0.host[i] = (i % 7) - 3.0
             model = _make_transformer()
-            x = rtensor_nn.Tensor(x0)
+            x = nn.Tensor(x0)
             params = model.parameters()
-            lr = rtensor_nn.Tensor(rtensor.from_list([-TLR]))
+            lr = nn.Tensor(core.from_list([-TLR]))
             acc = 0.0
             prev = 1e30
             while n > 0:
@@ -1293,7 +1294,7 @@ class TestTransformerTrain(LLJitMixin):
                                        lr=lr, acc=acc, prev=prev)
                 out = model.forward(x).sum()
                 out.backward()
-                rtensor_nn.sgd_step(params, lr)
+                nn.sgd_step(params, lr)
                 loss = out.item()
                 if loss >= prev:
                     return -1.0
@@ -1314,16 +1315,16 @@ class TestTransformerTrain(LLJitMixin):
 class TestDtypes(LLJitMixin):
 
     def setup_method(self, meth):
-        rtensor.policy.static = True
-        rtensor.policy.seen = []
-        rtensor.policy.static_cols = True
-        rtensor.policy.seen_cols = []
+        core.policy.static = True
+        core.policy.seen = []
+        core.policy.static_cols = True
+        core.policy.seen_cols = []
 
     def _chain(self, dt, tol):
         driver = JitDriver(greens=[], reds=['n', 'w', 'b', 'acc'])
         def f(n):
-            w = rtensor.from_list([1.0, -2.0, 3.0, -4.0], dt)
-            b = rtensor.from_list([0.5, 0.5, 0.5, 0.5], dt)
+            w = core.from_list([1.0, -2.0, 3.0, -4.0], dt)
+            b = core.from_list([0.5, 0.5, 0.5, 0.5], dt)
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, acc=acc, w=w, b=b)
@@ -1331,31 +1332,31 @@ class TestDtypes(LLJitMixin):
                 acc += tensor_item(tensor_sum(h, -1))
                 n -= 1
             return acc
-        rtensor.init_dtype(dt)
+        kernels.init_dtype(dt)
         res = self.meta_interp(f, [10])
         assert abs(res - 30.0) <= tol * 30.0
         self.check_simple_loop(call_r=1, call_f=1)
 
     def test_fused_chain_float32(self):
-        self._chain(rtensor.F32, 1e-04)
+        self._chain(core.F32, 1e-04)
 
     def test_fused_chain_float16(self):
-        self._chain(rtensor.F16, 1e-02)
+        self._chain(core.F16, 1e-02)
 
     def _softmax(self, dt, tol):
         driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
         def f(n):
-            x = rtensor.zeros([3, 4], dt)
+            x = core.zeros([3, 4], dt)
             for i in range(12):
                 x.host[i] = ((i * i) % 7) - 3.0 + i * 0.5
-            w = rtensor.zeros([4], dt)
+            w = core.zeros([4], dt)
             for i in range(4):
                 w.host[i] = 1.0 * (1 << i)
             acc = 0.0
             while n > 0:
                 driver.jit_merge_point(n=n, x=x, w=w, acc=acc)
-                s = rtensor_nn.softmax(rtensor_nn.Tensor(x))
-                acc += rtensor.item(rtensor.sum(rtensor.mul(s.t, w)))
+                s = nn.softmax(nn.Tensor(x))
+                acc += ops.item(ops.sum(ops.mul(s.t, w)))
                 n -= 1
             return acc
         rows = [[((i * 4 + j) * (i * 4 + j)) % 7 - 3.0 + (i * 4 + j) * 0.5
@@ -1366,42 +1367,42 @@ class TestDtypes(LLJitMixin):
             for j in range(4):
                 expect += ref[i][j] * (1 << j)
         expect *= 10
-        rtensor.init_dtype(dt)
+        kernels.init_dtype(dt)
         res = self.meta_interp(f, [10])
         assert abs(res - expect) <= tol * abs(expect)
         self.check_simple_loop(call_r=1)
 
     def test_softmax_rows_float32(self):
-        self._softmax(rtensor.F32, 1e-04)
+        self._softmax(core.F32, 1e-04)
 
     def test_softmax_rows_float16(self):
-        self._softmax(rtensor.F16, 1e-02)
+        self._softmax(core.F16, 1e-02)
 
 
 def _dtype_matrix(rows, cols, seed, dt):
-    m = rtensor.zeros([rows, cols], dt)
+    m = core.zeros([rows, cols], dt)
     for i in range(rows * cols):
         m.host[i] = ((i * 7 + seed) % 11 - 5) * 0.25
     return m
 
 
 def test_matmul_float32_matches_float64():
-    rtensor.init_dtype(rtensor.F32)
-    ref = rtensor.matmul(_dtype_matrix(4, 5, 1, rtensor.F64),
-                         _dtype_matrix(5, 3, 2, rtensor.F64))
-    got = rtensor.matmul(_dtype_matrix(4, 5, 1, rtensor.F32),
-                         _dtype_matrix(5, 3, 2, rtensor.F32))
-    assert got.dtype == rtensor.F32
-    hr = rtensor.host(ref)
-    hg = rtensor.host(got)
+    kernels.init_dtype(core.F32)
+    ref = ops.matmul(_dtype_matrix(4, 5, 1, core.F64),
+                         _dtype_matrix(5, 3, 2, core.F64))
+    got = ops.matmul(_dtype_matrix(4, 5, 1, core.F32),
+                         _dtype_matrix(5, 3, 2, core.F32))
+    assert got.dtype == core.F32
+    hr = device.host(ref)
+    hg = device.host(got)
     for i in range(12):
         assert abs(hg[i] - hr[i]) <= 1e-04 * (abs(hr[i]) + 1.0)
 
 
 def test_dtype_mismatch_raises():
     import py
-    a = rtensor.from_list([1.0, 2.0], rtensor.F32)
-    b = rtensor.from_list([1.0, 2.0], rtensor.F64)
-    py.test.raises(ValueError, rtensor.add, a, b)
-    py.test.raises(ValueError, rtensor.mul, a, b)
-    rtensor.note_dtype(rtensor.F64)
+    a = core.from_list([1.0, 2.0], core.F32)
+    b = core.from_list([1.0, 2.0], core.F64)
+    py.test.raises(ValueError, ops.add, a, b)
+    py.test.raises(ValueError, ops.mul, a, b)
+    core.note_dtype(core.F64)

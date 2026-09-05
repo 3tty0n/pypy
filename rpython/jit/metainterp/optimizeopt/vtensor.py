@@ -6,7 +6,7 @@ from rpython.jit.metainterp.optimizeopt.util import (
 from rpython.jit.metainterp.resoperation import rop, ResOperation
 from rpython.jit.metainterp.optimizeopt.info import (
     AbstractVirtualPtrInfo, getptrinfo)
-from rpython.rlib import rtensor
+from rpython.rtensor import core, kernels
 from rpython.rlib.objectmodel import specialize
 from rpython.rtyper.lltypesystem import lltype, llmemory
 
@@ -18,7 +18,7 @@ def vtensor_info(box):
 
 class VTensorInfo(AbstractVirtualPtrInfo):
 
-    launched_kernel = lltype.nullptr(rtensor.KERNEL)
+    launched_kernel = lltype.nullptr(core.KERNEL)
     launched_box = None
     node_index = -1
 
@@ -45,15 +45,15 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         if self.opt is not None:
             n = self.opt.static_size(leaves)
             cols = self.opt.static_cols(self.big_leaf())
-        kernel = lltype.malloc(rtensor.KERNEL)
+        kernel = lltype.malloc(core.KERNEL)
         kernel.ninputs = len(leaves)
-        kernel.nodes = lltype.malloc(rtensor.NODEARRAY, len(opcodes))
+        kernel.nodes = lltype.malloc(core.NODEARRAY, len(opcodes))
         kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
         kernel.rowmode = 0
         kernel.n = n
         kernel.cols = cols
-        kernel.dtype = rtensor.policy.dtype
-        kernel.outputs = lltype.malloc(rtensor.SHAPEARRAY, 0)
+        kernel.dtype = core.policy.dtype
+        kernel.outputs = lltype.malloc(core.SHAPEARRAY, 0)
         for i in range(len(opcodes)):
             node = kernel.nodes[i]
             node.opcode = opcodes[i]
@@ -63,12 +63,12 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         if self.opt is not None:
             self.opt.pending.append(kernel)
         else:
-            rtensor.compile_or_reuse(kernel)
+            kernels.compile_or_reuse(kernel)
         gcref = lltype.cast_opaque_ptr(llmemory.GCREF, kernel)
         cic = optforce.optimizer.metainterp_sd.callinfocollection
         calldescr, func = cic.callinfo_for_oopspec(EffectInfo.OS_TENSOR_LAUNCH)
         args = [ConstInt(func), ConstPtr(gcref)] + leaves
-        while len(args) < 2 + rtensor.MAX_INPUTS:
+        while len(args) < 2 + core.MAX_INPUTS:
             args.append(CONST_NULL)
         newop = ResOperation(rop.CALL_R, args, descr=calldescr)
         optforce.emit_extra(newop)
@@ -77,14 +77,14 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         op.set_forwarded(newop)
         for i in range(len(infos)):
             info = infos[i]
-            if info is not self and not rtensor.is_reduction(info.opcode):
+            if info is not self and not core.is_reduction(info.opcode):
                 info.launched_kernel = kernel
                 info.launched_box = newop
                 info.node_index = len(leaves) + i
         return newop
 
     def force_as_extra_output(self, op, optforce):
-        k = rtensor.add_output(self.launched_kernel, self.node_index)
+        k = kernels.add_output(self.launched_kernel, self.node_index)
         cic = optforce.optimizer.metainterp_sd.callinfocollection
         calldescr, func = cic.callinfo_for_oopspec(EffectInfo.OS_TENSOR_OUTPUT)
         newop = ResOperation(rop.CALL_R, [ConstInt(func), self.launched_box,
@@ -96,14 +96,14 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         return newop
 
     def big_arg(self):
-        if (self.param == rtensor.BC_L_ROW or
-                self.param == rtensor.BC_L_SCALAR or
-                self.param == rtensor.BC_L_COL):
+        if (self.param == core.BC_L_ROW or
+                self.param == core.BC_L_SCALAR or
+                self.param == core.BC_L_COL):
             return 1
         return 0
 
     def size_leaf(self):
-        if rtensor.is_reduction(self.opcode):
+        if core.is_reduction(self.opcode):
             return None
         box = self.args[self.big_arg()]
         sub = vtensor_info(box)
@@ -112,7 +112,7 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         return box
 
     def big_leaf(self):
-        if rtensor.is_reduction(self.opcode):
+        if core.is_reduction(self.opcode):
             box = self.args[0]
         else:
             box = self.args[self.big_arg()]
@@ -122,8 +122,8 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         return box
 
     def is_scalar(self):
-        if rtensor.is_reduction(self.opcode):
-            return self.param == rtensor.AXIS_ALL
+        if core.is_reduction(self.opcode):
+            return self.param == core.AXIS_ALL
         sub = vtensor_info(self.args[self.big_arg()])
         if sub is not None:
             return sub.is_scalar()
@@ -189,7 +189,7 @@ class OptTensor(Optimization):
         pending = self.pending
         self.pending = []
         for kernel in pending:
-            rtensor.compile_or_reuse(kernel)
+            kernels.compile_or_reuse(kernel)
         self.sizes = {}
         self.cols = {}
 
@@ -227,9 +227,9 @@ class OptTensor(Optimization):
         idx = effectinfo.oopspecindex
         if EffectInfo.OS_TENSOR_ADD <= idx <= EffectInfo.OS_TENSOR_EQMASK:
             opcode = idx - EffectInfo.OS_TENSOR_ADD
-            nargs = rtensor.ARITY[opcode]
+            nargs = core.ARITY[opcode]
             param = 0
-            if rtensor.HAS_PARAM[opcode]:
+            if core.HAS_PARAM[opcode]:
                 pbox = get_box_replacement(op.getarg(1 + nargs))
                 if not pbox.is_constant():
                     return self.emit(op)
@@ -241,7 +241,7 @@ class OptTensor(Optimization):
                 if sub is not None and sub.launched_kernel:
                     self.optimizer.force_box(box)
             args = [get_box_replacement(box) for box in args]
-            if self._nleaves(args) > rtensor.MAX_INPUTS:
+            if self._nleaves(args) > core.MAX_INPUTS:
                 for box in args:
                     self.optimizer.force_box(box)
             info = VTensorInfo(opcode, args, param, self)

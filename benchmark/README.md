@@ -2,7 +2,7 @@
 
 Measures one loop iteration of `h <- relu(h * b + b)` repeated `K` times over
 rank-1 float64 tensors of `N` elements, under the PyPy meta-tracing JIT with
-tensor ops kept virtual and fused into one Triton kernel (`rpython/rlib/rtensor.py`,
+tensor ops kept virtual and fused into one Triton kernel (`rpython/rtensor/`,
 `rpython/jit/metainterp/optimizeopt/vtensor.py`).  `h` is loop-carried so the
 chain cannot be hoisted out of the loop.  The same computation in PyTorch
 (eager and `torch.compile`) is the baseline.
@@ -28,7 +28,7 @@ Environment variables read at run time:
 | `RTENSOR_BLOCK` | `4096` | elements per Triton program |
 | `RTENSOR_WARPS` | `8` | warps per program |
 | `RTENSOR_CPU` | unset | set to force the CPU evaluator (no GPU) |
-| `RTENSOR_BUDGET_MB` | `64` | live device memory above which a launch first runs a GC to recycle buffers |
+| `RTENSOR_BUDGET_MB` | `8` | live device memory above which a launch first runs a GC to recycle buffers |
 | `RTENSOR_CUBLAS` | PyTorch wheel's bundled `libcublas.so.13` | path to `libcublas.so`, dlopen'd lazily for `matmul` (variant 6) |
 | `CUDA_HOME` | `/usr/local/cuda` | CUDA include directory |
 | `TMPDIR` | `/tmp` | where `.ttir`, `.ptx`, `.meta` files are written |
@@ -51,10 +51,10 @@ the translator.
 | `MODE` | `fused` (tensor ops fused into one kernel), `eager` (the `tensor` optimization disabled, one GPU kernel per op, JIT otherwise on), `nojit` (interpreter, one GPU kernel per op) |
 | `VARIANT` | `0` plain chain; `1` a branch `if i % 7 == 0: h = h + b` inside the fused region (a guard, no force); `2` the same branch after an explicit force of `h`, modelling a graph break; `3` a data-dependent branch `if sum(h).item() > 0` (a true force in every system); `4` the chain continued inside `try/except` with an exception raised every 5th iteration; `5` a host-side write to `/dev/null` every 50th iteration between tensor ops; `6` an MLP forward (see below), `K` unused; `7` the same MLP with a reverse-mode backward pass and an SGD step per iteration, `K` unused; `8` a Transformer block forward per iteration (see below), `K` unused; `9` a small CNN forward per iteration (see below), `K` unused; `10` a 2-block Transformer training step (forward, backward and SGD) per iteration (see below), `K` unused |
 
-`VARIANT 6` runs a 3-layer MLP forward (`rpython/rlib/rtensor_nn.py`) each
+`VARIANT 6` runs a 3-layer MLP forward (`rpython/rtensor/nn.py`) each
 iteration: `x` is `(B, 256)` with `B = N / 256`, each layer is `256x256`.
 Matrix multiply is delegated to cuBLAS (`rt_cuda_matmul` in
-`rpython/rlib/rtensor_cuda.c`, `nvidia-cublas`'s `cublasDgemm_v2`) as a
+`rpython/rtensor/cuda.c`, `nvidia-cublas`'s `cublasDgemm_v2`) as a
 non-fusible library call: it is `@jit.dont_look_inside`, so it is never part
 of a fused Triton kernel, and its tensor arguments are always forced before
 the call. The bias add and relu after each matmul stay virtual and fuse into
@@ -65,7 +65,7 @@ also folds in the final `sum`). `RTENSOR_CUBLAS` overrides the path to
 under `nvidia/cu13/lib`.
 
 `VARIANT 7` adds the backward pass and a plain SGD step to variant 6.  The
-autograd tape is ordinary RPython host code in `rpython/rlib/rtensor_nn.py`:
+autograd tape is ordinary RPython host code in `rpython/rtensor/nn.py`:
 each forward method records a small `Node` object, `Tensor.backward()` walks
 the tape in reverse and issues the gradient formulas through the same
 `rtensor` primitives, so the backward pass is traced and fused by the same
@@ -84,8 +84,8 @@ image per row of a `(B, C*H*W)` matrix.  The convolution is
 `Wcol` is `(C*3*3, O)`, the matmul is the same cuBLAS call as variant 6, and
 `col2chw` transposes the `(B*H*W, O)` result back to channel-major
 `(B, O*H*W)`.  `im2col`, `col2chw` and `maxpool2` are hand-written Triton IR
-gather kernels (`to_ttir_gather` in `rpython/rlib/rtensor.py`) compiled through
-the same `rtensor_triton.py` path and cached per (op, geometry); the geometry
+gather kernels (`to_ttir_gather` in `rpython/rtensor/kernels.py`) compiled through
+the same `triton_compile.py` path and cached per (op, geometry); the geometry
 is baked into the kernel text as constants, so they launch through the
 existing `rt_cuda_launch` shim with no extra arguments.  Like `matmul` they are
 `@jit.dont_look_inside`, so they force their arguments and are never fused.
@@ -319,7 +319,7 @@ followed by `x + MLP(LN2(x))` with two `relu` layers.  Heads are kept as
 separate `(D, D/H)` projections and recombined through per-head `(D/H, D)`
 output projections, so no column slicing of a `(rows, D)` matrix is needed.
 `layernorm`, `softmax` and `attention` are ordinary host code in
-`rpython/rlib/rtensor_nn.py` built from the primitives `sub`, `div`, `exp`,
+`rpython/rtensor/nn.py` built from the primitives `sub`, `div`, `exp`,
 `sqrt`, `sum(axis)` and `maxr(axis)`; the six matmuls per head go to cuBLAS.
 Every weight uses the same deterministic init as the MLP variants (element
 `i` is `((i * 7) % 13 - 6) / D`), MLP biases are `0.01`, `gamma = 1`,
@@ -362,7 +362,7 @@ gather kernels (8 forward, 8 backward).
 
 `benchmark/applevel/transformer.py ROWS ITERS` and `benchmark/applevel/cnn.py
 IMAGES ITERS` reproduce variants 8 and 9 through the app-level `_tensor` API
-and `lib_pypy/tensorlite.py` instead of `rtensor_nn.py`, using the same
+and `lib_pypy/tensorlite.py` instead of `nn.py`, using the same
 `TB_D`/`TB_H`/`CNN_*` sizes and deterministic weight init, so their printed
 `checksum` matches `rtensor_bench.py`'s for the same `ROWS*TB_D`/`IMAGES*3072`
 and `ITERS`; each does 10 warmup iterations on a throwaway model before timing
@@ -396,10 +396,12 @@ Axis-0/1 max therefore falls back to `eval_op_cpu`, and only a whole-tensor
 - Tensor ops are elidable, so a chain over loop-invariant inputs is hoisted
   out of the loop.  The benchmark carries `h` across iterations for that reason.
 - Device buffers are owned by finalizable objects and recycled through a
-  free list; a launch first runs a GC when live device memory exceeds
-  `RTENSOR_BUDGET_MB` and no buffer of the requested size is free.  A budget
-  larger than the working set means fresh `cuMemAlloc` calls every iteration,
-  which is several times slower than the kernel for medium sizes.
+  free list.  When no buffer of the requested size is free, an allocation
+  first runs a GC once `max(RTENSOR_BUDGET_MB, live-after-last-GC)` bytes or
+  an adaptive number of fresh buffers (64 to 65536, doubled after a GC that
+  recycled nothing, halved after one that did) have been allocated since the
+  last GC.  Retained activations in training therefore do not trigger a GC
+  per allocation, while short-lived chains recycle every iteration.
 
 To verify what a run actually launches, an `LD_PRELOAD` shim that counts
 `cuLaunchKernel` calls is the quickest check; launches must grow by exactly
@@ -407,7 +409,7 @@ one per iteration in `fused` mode.
 
 ## App-level `_tensor` module
 
-`rpython/rlib/rtensor_nn.py` (autograd `Tensor`, `Linear`, `MLP`, `sgd_step`)
+`rpython/rtensor/nn.py` (autograd `Tensor`, `Linear`, `MLP`, `sgd_step`)
 is also exposed to app-level Python as the built-in module `_tensor`
 (`pypy/module/_tensor/`), so a translated PyPy can run
 
@@ -431,7 +433,7 @@ backpropagated through; `backward` over the others raises `ValueError`. This PyP
 so matrix multiplication is the `matmul` method only, no `__matmul__`.
 `lib_pypy/tensorlite.py` is a pure app-level `Linear`/`MLP`/`sgd_step`,
 `softmax`/`layernorm`/`attention`/`Head`/`TransformerBlock` built
-on that API (mirroring `rtensor_nn.py`), for `torch`-style user code.
+on that API (mirroring `nn.py`), for `torch`-style user code.
 
 Build a PyPy with the module:
 

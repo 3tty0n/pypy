@@ -118,7 +118,9 @@ static int inited;
 typedef struct { CUdeviceptr p; long n; } buf_t;
 static buf_t *allocs, *freed;
 static long nallocs, capallocs, nfreed, capfreed;
-static long live_bytes, budget_bytes = 64L << 20, launches, fresh_since_gc;
+static long live_bytes, budget_bytes = 8L << 20, launches, fresh_since_gc;
+static long allocated_since_gc, live_after_gc;
+static long count_threshold = 64, just_collected;
 
 static int rt_init(void)
 {
@@ -201,6 +203,8 @@ RPY_EXPORTED long rt_cuda_alloc(long nbytes, long zero)
         if (cuMemAlloc(&p, nbytes) != CUDA_SUCCESS) return 0;
         push(&allocs, &nallocs, &capallocs, p, nbytes);
         fresh_since_gc++;
+        if (live_after_gc < 0) live_after_gc = live_bytes;
+        allocated_since_gc += nbytes;
     }
     live_bytes += nbytes;
     if (zero) cuMemsetD8(p, 0, nbytes);
@@ -218,6 +222,11 @@ RPY_EXPORTED long rt_cuda_launch_count(void)
     return launches;
 }
 
+RPY_EXPORTED long rt_cuda_live_bytes(void)
+{
+    return live_bytes;
+}
+
 RPY_EXPORTED void rt_cuda_set_budget(long bytes)
 {
     budget_bytes = bytes;
@@ -225,11 +234,21 @@ RPY_EXPORTED void rt_cuda_set_budget(long bytes)
 
 RPY_EXPORTED int rt_cuda_needs_gc(long nbytes)
 {
-    long i;
-    if (live_bytes <= budget_bytes && fresh_since_gc < 64) return 0;
+    long i, threshold = budget_bytes > live_after_gc ? budget_bytes : live_after_gc;
+    int reusable = 0;
     for (i = 0; i < nfreed; i++)
-        if (freed[i].n == nbytes) return 0;
+        if (freed[i].n == nbytes) { reusable = 1; break; }
+    if (just_collected) {
+        just_collected = 0;
+        if (!reusable && count_threshold < 65536) count_threshold *= 2;
+        else if (reusable && count_threshold > 64) count_threshold /= 2;
+    }
+    if (reusable) return 0;
+    if (allocated_since_gc < threshold && fresh_since_gc < count_threshold) return 0;
+    allocated_since_gc = 0;
     fresh_since_gc = 0;
+    live_after_gc = -1;
+    just_collected = 1;
     return 1;
 }
 

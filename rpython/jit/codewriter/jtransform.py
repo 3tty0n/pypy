@@ -2207,11 +2207,11 @@ class Transformer(object):
         self.callcontrol.callinfocollection.add(oopspecindex, calldescr, func)
 
     def _handle_tensor_call(self, op, oopspec_name, args):
-        from rpython.rlib import rtensor
+        from rpython.rtensor import core
         T = args[0].concretetype
         self._register_analyzed_helper(EffectInfo.OS_TENSOR_LAUNCH,
                                        "tensor.launch",
-                                       [rtensor.KERNELPTR, T, T, T, T, T, T],
+                                       [core.KERNELPTR, T, T, T, T, T, T],
                                        T,
                                        EffectInfo.EF_ELIDABLE_OR_MEMORYERROR)
         self._register_analyzed_helper(EffectInfo.OS_TENSOR_OUTPUT,

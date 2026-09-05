@@ -1169,14 +1169,14 @@ class ResumeDataBoxReader(AbstractResumeDataReader):
             rop.CALL_R, [ConstInt(func), str1box, str2box], calldescr)
 
     def tensor_op(self, opcode, param, fieldnums):
-        from rpython.rlib import rtensor
+        from rpython.rtensor import core, runtime
         cic = self.metainterp.staticdata.callinfocollection
         calldescr, func = cic.callinfo_for_oopspec(
             EffectInfo.OS_TENSOR_ADD + opcode)
         args = [ConstInt(func)]
         for num in fieldnums:
             args.append(self.decode_box(num, REF))
-        if rtensor.HAS_PARAM[opcode]:
+        if core.HAS_PARAM[opcode]:
             args.append(ConstInt(param))
         return self.metainterp.execute_and_record_varargs(
             rop.CALL_R, args, calldescr)
@@ -1503,15 +1503,15 @@ class ResumeDataDirectReader(AbstractResumeDataReader):
         return lltype.cast_opaque_ptr(llmemory.GCREF, result)
 
     def tensor_op(self, opcode, param, fieldnums):
-        from rpython.rlib import rtensor
-        a = lltype.cast_opaque_ptr(rtensor.TENSORPTR,
+        from rpython.rtensor import core, runtime
+        a = lltype.cast_opaque_ptr(core.TENSORPTR,
                                    self.decode_ref(fieldnums[0]))
-        b = rtensor.NULLTENSOR
+        b = core.NULLTENSOR
         if len(fieldnums) > 1:
-            b = lltype.cast_opaque_ptr(rtensor.TENSORPTR,
+            b = lltype.cast_opaque_ptr(core.TENSORPTR,
                                        self.decode_ref(fieldnums[1]))
         assert opcode >= 0
-        result = rtensor.eval_op(opcode, a, b, param)
+        result = runtime.eval_op(opcode, a, b, param)
         return lltype.cast_opaque_ptr(llmemory.GCREF, result)
 
     def slice_string(self, strnum, startnum, lengthnum):

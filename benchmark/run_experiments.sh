@@ -3,7 +3,7 @@ set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 BIN=${BIN:-$HERE/rtensor-bench}
 TORCH_PYTHON=${TORCH_PYTHON:-$RTENSOR_PYTHON}
-export RTENSOR_BUDGET_MB=${RTENSOR_BUDGET_MB:-64}
+export RTENSOR_BUDGET_MB=${RTENSOR_BUDGET_MB:-8}
 OUT=${OUT:-$HERE/results/$(date +%F)-$(hostname)}
 REPS=${REPS:-3}
 ITERS=${ITERS:-200}
