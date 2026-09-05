@@ -119,19 +119,19 @@ RPY_EXPORTED void rt_cuda_sync(void)
 }
 
 RPY_EXPORTED int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
-                                long out, int threads, long elems_per_block,
-                                int shared, int nextra)
+                                long *outs, int nouts, int threads,
+                                long elems_per_block, int shared, int nextra)
 {
-    void *params[16];
+    void *params[24];
     void *null = 0;
     long argn = n;
-    int i;
+    int i, k = 0;
     unsigned blocks = (unsigned)((n + elems_per_block - 1) / elems_per_block);
-    if (!rt_init() || ninputs > 7 || nextra > 6) return 0;
-    for (i = 0; i < ninputs; i++) params[i] = &inputs[i];
-    params[ninputs] = &out;
-    params[ninputs + 1] = &argn;
-    for (i = 0; i < nextra; i++) params[ninputs + 2 + i] = &null;
+    if (!rt_init() || ninputs > 7 || nouts > 8 || nextra > 6) return 0;
+    for (i = 0; i < ninputs; i++) params[k++] = &inputs[i];
+    for (i = 0; i < nouts; i++) params[k++] = &outs[i];
+    params[k++] = &argn;
+    for (i = 0; i < nextra; i++) params[k++] = &null;
     return cuLaunchKernel((CUfunction)fn, blocks ? blocks : 1, 1, 1,
                           threads, 1, 1, shared, 0, params, 0) == CUDA_SUCCESS;
 }

@@ -5,11 +5,14 @@ from rpython.translator.tool.cbuild import ExternalCompilationInfo
 
 HOSTARRAY = lltype.GcArray(lltype.Float)
 SHAPEARRAY = lltype.GcArray(lltype.Signed)
-TENSOR = lltype.GcStruct('TENSOR', ('size', lltype.Signed),
-                         ('shape', lltype.Ptr(SHAPEARRAY)),
-                         ('dptr', lltype.Signed),
-                         ('host', lltype.Ptr(HOSTARRAY)))
+TENSOR = lltype.GcForwardReference()
 TENSORPTR = lltype.Ptr(TENSOR)
+TENSORARRAY = lltype.GcArray(TENSORPTR)
+TENSOR.become(lltype.GcStruct('TENSOR', ('size', lltype.Signed),
+                              ('shape', lltype.Ptr(SHAPEARRAY)),
+                              ('dptr', lltype.Signed),
+                              ('host', lltype.Ptr(HOSTARRAY)),
+                              ('extra', lltype.Ptr(TENSORARRAY))))
 NULLTENSOR = lltype.nullptr(TENSOR)
 
 ADD, MUL, RELU, SUM = 0, 1, 2, 3
@@ -27,7 +30,8 @@ KERNEL = lltype.GcStruct('TENSOR_KERNEL', ('ninputs', lltype.Signed),
                          ('threads', lltype.Signed),
                          ('shared', lltype.Signed),
                          ('nextra', lltype.Signed),
-                         ('n', lltype.Signed))
+                         ('n', lltype.Signed),
+                         ('outputs', lltype.Ptr(SHAPEARRAY)))
 KERNELPTR = lltype.Ptr(KERNEL)
 
 def _shape1(n):
@@ -41,6 +45,7 @@ def new_tensor(n, shape=lltype.nullptr(SHAPEARRAY)):
     t.shape = shape if shape else _shape1(n)
     t.dptr = 0
     t.host = lltype.malloc(HOSTARRAY, n)
+    t.extra = lltype.nullptr(TENSORARRAY)
     return t
 
 def device_tensor(n, dptr, shape=lltype.nullptr(SHAPEARRAY)):
@@ -49,6 +54,7 @@ def device_tensor(n, dptr, shape=lltype.nullptr(SHAPEARRAY)):
     t.shape = shape if shape else _shape1(n)
     t.dptr = dptr
     t.host = lltype.nullptr(HOSTARRAY)
+    t.extra = lltype.nullptr(TENSORARRAY)
     return t
 
 def zeros(shape_list):
@@ -124,6 +130,7 @@ def _empty_kernel():
     k.nodes = lltype.malloc(NODEARRAY, 0)
     k.fn = k.sumroot = k.threads = k.shared = k.nextra = 0
     k.n = 0
+    k.outputs = lltype.malloc(SHAPEARRAY, 0)
     return k
 single_kernels = SingleKernels()
 
@@ -215,6 +222,9 @@ def sum(a):
 def item(a):
     return tensor_item(a)
 
+def tensor_output(t, k):
+    return t.extra[k]
+
 @jit.dont_look_inside
 def tensor_force(a):
     return a
@@ -240,6 +250,39 @@ def new_kernel(ninputs, nnodes):
     kernel.nodes = lltype.malloc(NODEARRAY, nnodes)
     kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
     kernel.n = 0
+    kernel.outputs = lltype.malloc(SHAPEARRAY, 0)
+    return kernel
+
+def add_output(kernel, node):
+    old = kernel.outputs
+    new = lltype.malloc(SHAPEARRAY, len(old) + 1)
+    for i in range(len(old)):
+        new[i] = old[i]
+    new[len(old)] = node
+    kernel.outputs = new
+    return len(old)
+
+def kernel_key(kernel):
+    parts = [str(kernel.ninputs), str(kernel.n)]
+    for i in range(len(kernel.nodes)):
+        node = kernel.nodes[i]
+        parts.append('%d:%d:%d' % (node.opcode, node.a, node.b))
+    for i in range(len(kernel.outputs)):
+        parts.append('o%d' % kernel.outputs[i])
+    return ','.join(parts)
+
+def compile_or_reuse(kernel):
+    key = kernel_key(kernel)
+    cached = cached_kernel(key)
+    if cached:
+        kernel.fn = cached.fn
+        kernel.threads = cached.threads
+        kernel.shared = cached.shared
+        kernel.nextra = cached.nextra
+        kernel.sumroot = cached.sumroot
+        return kernel
+    finish_kernel(kernel)
+    cache_kernel(key, kernel)
     return kernel
 
 def set_node(kernel, i, opcode, a, b):
@@ -277,7 +320,13 @@ def launch(kernel, a, b, c):
         assert opcode >= 0
         right = values[node.b] if node.b >= 0 else NULLTENSOR
         values.append(eval_op(opcode, values[node.a], right))
-    return values[len(values) - 1]
+    result = values[len(values) - 1]
+    nout = len(kernel.outputs)
+    if nout > 0:
+        result.extra = lltype.malloc(TENSORARRAY, nout)
+        for k in range(nout):
+            result.extra[k] = values[kernel.outputs[k]]
+    return result
 
 def to_tile_ir(kernel, name, n):
     tile = 'tile<%dxf64>' % n
@@ -337,8 +386,8 @@ RPY_EXTERN void rt_cuda_release_since(long mark);
 RPY_EXTERN void rt_cuda_release_range(long from, long to);
 RPY_EXTERN void rt_cuda_sync(void);
 RPY_EXTERN int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
-                              long out, int threads, long elems_per_block,
-                              int shared, int nextra);
+                              long *outs, int nouts, int threads,
+                              long elems_per_block, int shared, int nextra);
 """],
     libraries=['cuda'])
 rt_cuda_load = rffi.llexternal('rt_cuda_load', [rffi.CCHARP, rffi.CCHARP],
@@ -347,7 +396,8 @@ rt_cuda_load = rffi.llexternal('rt_cuda_load', [rffi.CCHARP, rffi.CCHARP],
 rt_cuda_launch = rffi.llexternal(
     'rt_cuda_launch',
     [lltype.Signed, rffi.CArrayPtr(lltype.Signed), rffi.INT, lltype.Signed,
-     lltype.Signed, rffi.INT, lltype.Signed, rffi.INT, rffi.INT],
+     rffi.CArrayPtr(lltype.Signed), rffi.INT, rffi.INT, lltype.Signed,
+     rffi.INT, rffi.INT],
     rffi.INT, compilation_info=eci,
                                 releasegil=False)
 rt_cuda_available = rffi.llexternal('rt_cuda_available', [], rffi.INT,
@@ -434,8 +484,11 @@ def to_ttir(kernel, name):
     T = 'tensor<%dxf64>' % BLOCK
     P = 'tensor<%dx!tt.ptr<f64>>' % BLOCK
     params = ['%%in%d: !tt.ptr<f64>' % i for i in range(nin)]
+    params.append('%out: !tt.ptr<f64>')
+    for k in range(len(kernel.outputs)):
+        params.append('%%out%d: !tt.ptr<f64>' % k)
     lines = ['module {',
-             '  tt.func public @%s(%s, %%out: !tt.ptr<f64>, %%n: i64) '
+             '  tt.func public @%s(%s, %%n: i64) '
              'attributes {noinline = false} {' % (name, ', '.join(params)),
              '    %%zero = arith.constant dense<0.0> : %s' % T,
              '    %%bs = arith.constant %d : i32' % BLOCK,
@@ -492,6 +545,15 @@ def to_ttir(kernel, name):
             lines.append('    tt.store %%qo, %%v%d, %%mask : %s' % (last, P))
         else:
             lines.append('    tt.store %%qo, %%v%d : %s' % (last, P))
+    for k in range(len(kernel.outputs)):
+        lines.append('    %%po%d = tt.splat %%out%d : !tt.ptr<f64> -> %s' % (k, k, P))
+        lines.append('    %%qo%d = tt.addptr %%po%d, %%offs : %s, tensor<%dxi32>'
+                     % (k, k, P, BLOCK))
+        if masked:
+            lines.append('    tt.store %%qo%d, %%v%d, %%mask : %s'
+                         % (k, kernel.outputs[k], P))
+        else:
+            lines.append('    tt.store %%qo%d, %%v%d : %s' % (k, kernel.outputs[k], P))
     lines.append('    tt.return')
     lines.append('  }')
     lines.append('}')
@@ -555,22 +617,35 @@ def launch_gpu(kernel, inputs):
     n = inputs[0].size
     outlen = 1 if kernel.sumroot else n
     shape = lltype.nullptr(SHAPEARRAY) if kernel.sumroot else inputs[0].shape
+    nout = 1 + len(kernel.outputs)
     dptrs = lltype.malloc(SIGNEDARRAY, nin, flavor='raw')
+    outs = lltype.malloc(SIGNEDARRAY, nout, flavor='raw')
     ok = True
     for k in range(nin):
         dptrs[k] = dev(inputs[k])
         if dptrs[k] == 0:
             ok = False
-    out = rt_cuda_alloc(outlen) if ok else 0
-    if out != 0:
+    outs[0] = rt_cuda_alloc(outlen) if ok else 0
+    if outs[0] == 0:
+        ok = False
+    for k in range(1, nout):
+        outs[k] = rt_cuda_alloc(n) if ok else 0
+        if outs[k] == 0:
+            ok = False
+    if ok:
         ok = rffi.cast(lltype.Signed, rt_cuda_launch(
-            kernel.fn, dptrs, rffi.cast(rffi.INT, nin), n, out,
+            kernel.fn, dptrs, rffi.cast(rffi.INT, nin), n,
+            outs, rffi.cast(rffi.INT, nout),
             rffi.cast(rffi.INT, kernel.threads), config.block,
             rffi.cast(rffi.INT, kernel.shared),
             rffi.cast(rffi.INT, kernel.nextra))) != 0
-    else:
-        ok = False
+    result = NULLTENSOR
+    if ok:
+        result = device_tensor(outlen, outs[0], shape)
+        if nout > 1:
+            result.extra = lltype.malloc(TENSORARRAY, nout - 1)
+            for k in range(1, nout):
+                result.extra[k - 1] = device_tensor(n, outs[k], inputs[0].shape)
     lltype.free(dptrs, flavor='raw')
-    if not ok:
-        return NULLTENSOR
-    return device_tensor(outlen, out, shape)
+    lltype.free(outs, flavor='raw')
+    return result

@@ -2194,6 +2194,10 @@ class Transformer(object):
                                     "tensor.launch",
                                     [rtensor.KERNELPTR, T, T, T], T,
                                     EffectInfo.EF_ELIDABLE_OR_MEMORYERROR)
+        self._register_extra_helper(EffectInfo.OS_TENSOR_OUTPUT,
+                                    "tensor.output",
+                                    [T, lltype.Signed], T,
+                                    EffectInfo.EF_ELIDABLE_CANNOT_RAISE)
         os = getattr(EffectInfo, 'OS_' + oopspec_name.replace('.', '_').upper())
         return self._handle_oopspec_call(op, args, os,
                                          EffectInfo.EF_ELIDABLE_OR_MEMORYERROR)

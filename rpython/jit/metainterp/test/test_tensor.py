@@ -103,6 +103,31 @@ class TestTensorMeta(LLJitMixin):
             assert rtensor.counter.n - before == 1
 
 
+class TestMultiOutput(LLJitMixin):
+
+    def test_intermediate_forced_later_becomes_extra_output(self):
+        driver = JitDriver(greens=[], reds=['n', 'w', 'b', 'h', 'acc'])
+        def f(n):
+            w = from_list([1.0, -2.0, 3.0, -4.0])
+            b = from_list([0.5, 0.5, 0.5, 0.5])
+            h = w
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, acc=acc, w=w, b=b, h=h)
+                h = tensor_relu(tensor_add(tensor_mul(h, b), w))
+                acc += tensor_item(tensor_sum(h))
+                n -= 1
+            return acc
+        before = rtensor.counter.n
+        res = self.meta_interp(f, [10])
+        assert res == f(10)
+        self.check_simple_loop(call_r=2, call_f=1)
+        import os
+        if 'RTENSOR_CPU' not in os.environ:
+            assert rtensor.counter.n - before == 1
+        assert any(',o' in k for k in rtensor.kernel_cache.kernels)
+
+
 class TestShapeSpecialization(LLJitMixin):
 
     def setup_method(self, meth):

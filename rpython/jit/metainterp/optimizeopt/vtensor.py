@@ -18,6 +18,10 @@ def vtensor_info(box):
 
 class VTensorInfo(AbstractVirtualPtrInfo):
 
+    launched_kernel = lltype.nullptr(rtensor.KERNEL)
+    launched_box = None
+    node_index = -1
+
     def __init__(self, opcode, args, opt=None):
         self.opcode = opcode
         self.args = args
@@ -31,27 +35,26 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         if not self._is_virtual:
             return op
         self._is_virtual = False
-        leaves, opcodes, lefts, rights = [], [], [], []
-        _collect_indexed(self, leaves, opcodes, lefts, rights)
+        if self.launched_kernel:
+            return self.force_as_extra_output(op, optforce)
+        leaves, opcodes, lefts, rights, infos = [], [], [], [], []
+        _collect_indexed(self, leaves, opcodes, lefts, rights, infos)
         n = self.opt.static_size(leaves) if self.opt is not None else 0
-        parts = [str(len(leaves)), str(n)]
+        kernel = lltype.malloc(rtensor.KERNEL)
+        kernel.ninputs = len(leaves)
+        kernel.nodes = lltype.malloc(rtensor.NODEARRAY, len(opcodes))
+        kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
+        kernel.n = n
+        kernel.outputs = lltype.malloc(rtensor.SHAPEARRAY, 0)
         for i in range(len(opcodes)):
-            parts.append('%d:%d:%d' % (opcodes[i], lefts[i], rights[i]))
-        key = ','.join(parts)
-        kernel = rtensor.cached_kernel(key)
-        if not kernel:
-            kernel = lltype.malloc(rtensor.KERNEL)
-            kernel.ninputs = len(leaves)
-            kernel.nodes = lltype.malloc(rtensor.NODEARRAY, len(opcodes))
-            kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
-            kernel.n = n
-            for i in range(len(opcodes)):
-                node = kernel.nodes[i]
-                node.opcode = opcodes[i]
-                node.a = lefts[i]
-                node.b = rights[i]
-            rtensor.finish_kernel(kernel)
-            rtensor.cache_kernel(key, kernel)
+            node = kernel.nodes[i]
+            node.opcode = opcodes[i]
+            node.a = lefts[i]
+            node.b = rights[i]
+        if self.opt is not None:
+            self.opt.pending.append(kernel)
+        else:
+            rtensor.compile_or_reuse(kernel)
         gcref = lltype.cast_opaque_ptr(llmemory.GCREF, kernel)
         cic = optforce.optimizer.metainterp_sd.callinfocollection
         calldescr, func = cic.callinfo_for_oopspec(EffectInfo.OS_TENSOR_LAUNCH)
@@ -59,6 +62,24 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         while len(args) < 2 + rtensor.MAX_INPUTS:
             args.append(CONST_NULL)
         newop = ResOperation(rop.CALL_R, args, descr=calldescr)
+        optforce.emit_extra(newop)
+        newop = optforce.optimizer.getlastop()
+        op = get_box_replacement(op)
+        op.set_forwarded(newop)
+        for i in range(len(infos)):
+            info = infos[i]
+            if info is not self and info.opcode != rtensor.SUM:
+                info.launched_kernel = kernel
+                info.launched_box = newop
+                info.node_index = len(leaves) + i
+        return newop
+
+    def force_as_extra_output(self, op, optforce):
+        k = rtensor.add_output(self.launched_kernel, self.node_index)
+        cic = optforce.optimizer.metainterp_sd.callinfocollection
+        calldescr, func = cic.callinfo_for_oopspec(EffectInfo.OS_TENSOR_OUTPUT)
+        newop = ResOperation(rop.CALL_R, [ConstInt(func), self.launched_box,
+                                          ConstInt(k)], descr=calldescr)
         optforce.emit_extra(newop)
         newop = optforce.optimizer.getlastop()
         op = get_box_replacement(op)
@@ -85,9 +106,9 @@ class VTensorInfo(AbstractVirtualPtrInfo):
     def visitor_dispatch_virtual_type(self, visitor):
         return visitor.visit_vtensor(self.opcode)
 
-def _collect_indexed(info, leaves, opcodes, lefts, rights):
+def _collect_indexed(info, leaves, opcodes, lefts, rights, infos):
     _collect_leaves(info, leaves)
-    _emit_nodes(info, leaves, opcodes, lefts, rights)
+    _emit_nodes(info, leaves, opcodes, lefts, rights, infos)
 
 def _collect_leaves(info, leaves):
     for box in info.args:
@@ -103,13 +124,13 @@ def _contains(leaves, box):
             return True
     return False
 
-def _emit_nodes(info, leaves, opcodes, lefts, rights):
+def _emit_nodes(info, leaves, opcodes, lefts, rights, infos):
     idx = [-1, -1]
     for i in range(len(info.args)):
         box = info.args[i]
         sub = vtensor_info(box)
         if sub is not None:
-            idx[i] = _emit_nodes(sub, leaves, opcodes, lefts, rights)
+            idx[i] = _emit_nodes(sub, leaves, opcodes, lefts, rights, infos)
         else:
             for j in range(len(leaves)):
                 if leaves[j] is box:
@@ -117,17 +138,23 @@ def _emit_nodes(info, leaves, opcodes, lefts, rights):
     opcodes.append(info.opcode)
     lefts.append(idx[0])
     rights.append(idx[1])
+    infos.append(info)
     return len(leaves) + len(opcodes) - 1
 
 class OptTensor(Optimization):
 
     def setup(self):
         self.sizes = {}
+        self.pending = []
 
     def propagate_forward(self, op):
         return dispatch_opt(self, op)
 
     def flush(self):
+        pending = self.pending
+        self.pending = []
+        for kernel in pending:
+            rtensor.compile_or_reuse(kernel)
         self.sizes = {}
 
     def static_size(self, leaves):
@@ -154,6 +181,11 @@ class OptTensor(Optimization):
             opcode = idx - EffectInfo.OS_TENSOR_ADD
             args = [get_box_replacement(op.getarg(i))
                     for i in range(1, op.numargs())]
+            for box in args:
+                sub = vtensor_info(box)
+                if sub is not None and sub.launched_kernel:
+                    self.optimizer.force_box(box)
+            args = [get_box_replacement(box) for box in args]
             if self._nleaves(args) > rtensor.MAX_INPUTS:
                 for box in args:
                     self.optimizer.force_box(box)
