@@ -239,6 +239,23 @@ heads (8 cuBLAS calls instead of 14 small ones).  Row kernels compiled with
 the tile width of the promoted column count (64 for layernorm, 1024 for the
 attention softmax) then halved the 1024-row time again.
 
+Precision (`RTENSOR_DTYPE` / `TORCH_DTYPE`, 100 iterations, per-iteration
+microseconds, fused mode; torch uses the same dtype end to end):
+
+| model | size | dtype | fused | torch.compile | torch eager |
+|---|---|---|---|---|---|
+| Transformer | 64 rows | float32 | 79.8 | 228.5 | 365.4 |
+| Transformer | 64 rows | float16 | 60.1 | 214.5 | 376.0 |
+| Transformer | 1024 rows | float32 | 251.2 | 336.0 | 423.5 |
+| Transformer | 1024 rows | float16 | 108.9 | 273.5 | 415.9 |
+| CNN | 1 image | float32 | 60.6 | 194.0 | 136.5 |
+| CNN | 21 images | float32 | 67.3 | 240.3 | 189.8 |
+
+Below fp64 the GPU is no longer compute bound on this card and the launch
+count decides: nine fused kernels plus eight cuBLAS calls per Transformer
+iteration against several dozen kernels in PyTorch.  Checksums agree with
+torch to the printed digits in float32 and within 1e-2 relative in float16.
+
 Variant 3 is a real force in every system (the value is needed on the host),
 so both produce two kernels.  Variants 1 and 4 depend on the loop counter;
 Dynamo specialises on the integer, hits its recompilation limit and falls back

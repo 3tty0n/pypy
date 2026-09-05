@@ -1,6 +1,7 @@
 import math
 import os
 from rpython.rlib import jit, rgc
+from rpython.rlib.rarithmetic import intmask
 from rpython.rlib.rfloat import INFINITY, NAN
 from rpython.rtyper.annlowlevel import cast_instance_to_base_ptr
 from rpython.rtyper.rclass import OBJECTPTR
@@ -328,6 +329,7 @@ def init_device():
     try:
         config.block = int(_env('RTENSOR_BLOCK', '4096'))
         config.num_warps = int(_env('RTENSOR_WARPS', '8'))
+        profile.enabled = os.environ.get('RTENSOR_PROFILE') is not None
         rt_cuda_set_budget(int(_env('RTENSOR_BUDGET_MB', '64')) << 20)
     except ValueError:
         pass
@@ -653,7 +655,7 @@ def matmul_cpu(a, b, rows, cols, inner, ta, tb):
     return r
 
 @jit.dont_look_inside
-def tensor_matmul(a, b, rows, cols, inner, ta, tb):
+def _tensor_matmul_impl(a, b, rows, cols, inner, ta, tb):
     if gpu_enabled() and a.dtype == b.dtype:
         dt = a.dtype
         dptr_a = dev(a)
@@ -676,7 +678,7 @@ def tensor_matmul(a, b, rows, cols, inner, ta, tb):
     return matmul_cpu(a, b, rows, cols, inner, ta, tb)
 
 @jit.dont_look_inside
-def tensor_assign(dst, src):
+def _tensor_assign_impl(dst, src):
     if dst.dptr != 0 and gpu_enabled():
         dptr_src = dev(src)
         if dptr_src != 0:
@@ -829,9 +831,12 @@ def launch(kernel, a, b, c, d=NULLTENSOR, e=NULLTENSOR, f=NULLTENSOR):
         if values[k].size > nmax:
             nmax = values[k].size
     if kernel.fn != 0 and (kernel.n == 0 or kernel.n == nmax):
+        t0 = prof_begin()
         r = launch_gpu(kernel, values)
         if r:
+            prof_end(intmask(0), intmask(kernel.fn % 1000000000), t0)
             return r
+    t0 = prof_begin()
     nodes = kernel.nodes
     for i in range(len(nodes)):
         node = nodes[i]
@@ -840,6 +845,7 @@ def launch(kernel, a, b, c, d=NULLTENSOR, e=NULLTENSOR, f=NULLTENSOR):
         right = values[node.b] if node.b >= 0 else NULLTENSOR
         values.append(eval_op(opcode, values[node.a], right, node.p))
     result = values[len(values) - 1]
+    prof_end(intmask(1), intmask(len(kernel.nodes)), t0)
     nout = len(kernel.outputs)
     if nout > 0:
         result.extra = lltype.malloc(TENSORARRAY, nout)
@@ -910,6 +916,7 @@ RPY_EXTERN void rt_cuda_set_budget(long bytes);
 RPY_EXTERN long rt_cuda_launch_count(void);
 RPY_EXTERN int rt_cuda_needs_gc(long nbytes);
 RPY_EXTERN void rt_cuda_sync(void);
+RPY_EXTERN double rt_cuda_now(void);
 RPY_EXTERN int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
                               long *outs, int nouts, int threads,
                               long elems_per_block, int shared, int nextra,
@@ -951,6 +958,8 @@ rt_cuda_download = rffi.llexternal('rt_cuda_download',
 rt_cuda_reset = rffi.llexternal('rt_cuda_reset', [], lltype.Void,
                                 compilation_info=eci,
                                 releasegil=False)
+rt_cuda_now = rffi.llexternal('rt_cuda_now', [], rffi.DOUBLE,
+                              compilation_info=eci, releasegil=False)
 rt_cuda_sync = rffi.llexternal('rt_cuda_sync', [], lltype.Void,
                                compilation_info=eci,
                                 releasegil=False)
@@ -1022,6 +1031,47 @@ rt_cuda_launch_count = rffi.llexternal('rt_cuda_launch_count', [],
 
 def launch_count():
     return rt_cuda_launch_count()
+
+class Profile(object):
+    def __init__(self):
+        self.enabled = False
+        self.times = {}
+        self.counts = {}
+profile = Profile()
+
+def prof_begin():
+    if not profile.enabled:
+        return 0.0
+    rt_cuda_sync()
+    return rt_cuda_now()
+
+PROF_NAMES = ['fused', 'per-node', 'matmul', 'bmm', 'im2col', 'col2chw',
+              'maxpool2', 'head_split', 'head_merge', 'assign']
+
+def prof_end(kind, extra, t0):
+    if not profile.enabled:
+        return
+    rt_cuda_sync()
+    dt = rt_cuda_now() - t0
+    key = kind * 1000000000 + extra
+    profile.times[key] = profile.times.get(key, 0.0) + dt
+    profile.counts[key] = profile.counts.get(key, 0) + 1
+
+def profile_report():
+    if not profile.enabled:
+        return
+    total = 0.0
+    for name in profile.times:
+        total += profile.times[name]
+    items = [(profile.times[key], key) for key in profile.times]
+    items.sort()
+    items.reverse()
+    print 'profile total %f s' % total
+    for i in range(len(items)):
+        t, key = items[i]
+        print '%9.4f s %7d calls  %s %d' % (t, profile.counts[key],
+                                           PROF_NAMES[key // 1000000000],
+                                           key % 1000000000)
 
 def reset_device():
     for i in range(NDTYPES):
@@ -1928,7 +1978,7 @@ def im2col_cpu(x, n, c, h, w, k, pad):
 
 
 @jit.dont_look_inside
-def im2col(x, c, h, w, k, pad):
+def _im2col_impl(x, c, h, w, k, pad):
     n = x.size // (c * h * w)
     rows = n * h * w
     cols = c * k * k
@@ -1960,7 +2010,7 @@ def col2chw_cpu(y, n, hw, o):
 
 
 @jit.dont_look_inside
-def col2chw(y, n, hw, o):
+def _col2chw_impl(y, n, hw, o):
     outn = n * o * hw
     if gpu_enabled():
         params = [n]
@@ -1995,7 +2045,7 @@ def maxpool2_cpu(x, n, c, h, w):
 
 
 @jit.dont_look_inside
-def maxpool2(x, c, h, w):
+def _maxpool2_impl(x, c, h, w):
     n = x.size // (c * h * w)
     outn = n * c * (h // 2) * (w // 2)
     if gpu_enabled():
@@ -2037,7 +2087,7 @@ def head_merge_cpu(x, rows, dh, heads):
 
 
 @jit.dont_look_inside
-def head_split(x, rows, dh, heads):
+def _head_split_impl(x, rows, dh, heads):
     outn = rows * dh * heads
     if gpu_enabled():
         params = [rows]
@@ -2051,7 +2101,7 @@ def head_split(x, rows, dh, heads):
 
 
 @jit.dont_look_inside
-def head_merge(x, rows, dh, heads):
+def _head_merge_impl(x, rows, dh, heads):
     outn = rows * dh * heads
     if gpu_enabled():
         params = [rows]
@@ -2091,7 +2141,7 @@ def bmm_cpu(a, b, batch, rows, cols, inner, ta, tb):
 
 
 @jit.dont_look_inside
-def tensor_bmm(a, b, batch, rows, cols, inner, ta, tb):
+def _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb):
     if gpu_enabled() and a.dtype == b.dtype:
         dt = a.dtype
         dptr_a = dev(a)
@@ -2110,3 +2160,59 @@ def tensor_bmm(a, b, batch, rows, cols, inner, ta, tb):
                                          _shape2(batch * rows, cols), dt)
                 rt_cuda_free(outptr, nb)
     return bmm_cpu(a, b, batch, rows, cols, inner, ta, tb)
+
+@jit.dont_look_inside
+def tensor_matmul(a, b, rows, cols, inner, ta, tb):
+    t0 = prof_begin()
+    r = _tensor_matmul_impl(a, b, rows, cols, inner, ta, tb)
+    prof_end(intmask(2), intmask(rows * 1000000 + inner * 1000 + cols), t0)
+    return r
+
+@jit.dont_look_inside
+def tensor_bmm(a, b, batch, rows, cols, inner, ta, tb):
+    t0 = prof_begin()
+    r = _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb)
+    prof_end(intmask(3), intmask(rows * 1000000 + inner * 1000 + cols), t0)
+    return r
+
+@jit.dont_look_inside
+def im2col(x, c, h, w, k, pad):
+    t0 = prof_begin()
+    r = _im2col_impl(x, c, h, w, k, pad)
+    prof_end(intmask(4), intmask(0), t0)
+    return r
+
+@jit.dont_look_inside
+def col2chw(y, n, hw, o):
+    t0 = prof_begin()
+    r = _col2chw_impl(y, n, hw, o)
+    prof_end(intmask(5), intmask(0), t0)
+    return r
+
+@jit.dont_look_inside
+def maxpool2(x, c, h, w):
+    t0 = prof_begin()
+    r = _maxpool2_impl(x, c, h, w)
+    prof_end(intmask(6), intmask(0), t0)
+    return r
+
+@jit.dont_look_inside
+def head_split(x, rows, dh, heads):
+    t0 = prof_begin()
+    r = _head_split_impl(x, rows, dh, heads)
+    prof_end(intmask(7), intmask(0), t0)
+    return r
+
+@jit.dont_look_inside
+def head_merge(x, rows, dh, heads):
+    t0 = prof_begin()
+    r = _head_merge_impl(x, rows, dh, heads)
+    prof_end(intmask(8), intmask(0), t0)
+    return r
+
+@jit.dont_look_inside
+def tensor_assign(dst, src):
+    t0 = prof_begin()
+    r = _tensor_assign_impl(dst, src)
+    prof_end(intmask(9), intmask(0), t0)
+    return r

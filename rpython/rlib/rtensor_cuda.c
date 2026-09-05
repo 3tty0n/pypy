@@ -291,6 +291,14 @@ RPY_EXPORTED void rt_cuda_reset(void)
     live_bytes = 0;
 }
 
+#include <time.h>
+RPY_EXPORTED double rt_cuda_now(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec * 1e-9;
+}
+
 RPY_EXPORTED void rt_cuda_sync(void)
 {
     cuCtxSynchronize();
