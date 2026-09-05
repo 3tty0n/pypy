@@ -504,6 +504,8 @@ class Transformer(object):
             prepare = self._handle_rgc_call
         elif oopspec_name.startswith('rvmprof.'):
             prepare = self._handle_rvmprof_call
+        elif oopspec_name.startswith('tensor.'):
+            prepare = self._handle_tensor_call
         elif oopspec_name.endswith('dict.lookup'):
             # also ordereddict.lookup
             prepare = self._handle_dict_lookup_call
@@ -2184,6 +2186,17 @@ class Transformer(object):
 
     # ---------
     # ll_math.sqrt_nonneg()
+
+    def _handle_tensor_call(self, op, oopspec_name, args):
+        from rpython.rlib import rtensor
+        T = args[0].concretetype
+        self._register_extra_helper(EffectInfo.OS_TENSOR_LAUNCH,
+                                    "tensor.launch",
+                                    [rtensor.KERNELPTR, T, T, T], T,
+                                    EffectInfo.EF_ELIDABLE_OR_MEMORYERROR)
+        os = getattr(EffectInfo, 'OS_' + oopspec_name.replace('.', '_').upper())
+        return self._handle_oopspec_call(op, args, os,
+                                         EffectInfo.EF_ELIDABLE_OR_MEMORYERROR)
 
     def _handle_math_sqrt_call(self, op, oopspec_name, args):
         return self._handle_oopspec_call(op, args, EffectInfo.OS_MATH_SQRT,

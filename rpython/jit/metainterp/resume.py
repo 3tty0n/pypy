@@ -356,6 +356,9 @@ class ResumeDataVirtualAdder(VirtualVisitor):
         else:
             return VStrSliceInfo()
 
+    def visit_vtensor(self, opcode):
+        return VTensorInfo(opcode)
+
     def register_virtual_fields(self, virtualbox, _fieldboxes):
         tagged = self.liveboxes_from_env.get(virtualbox, UNASSIGNEDVIRTUAL)
         self.liveboxes[virtualbox] = tagged
@@ -814,6 +817,22 @@ class VStrSliceInfo(AbstractVirtualInfo):
             debug_print("\t\t", str(untag(i)))
 
 
+class VTensorInfo(AbstractVirtualInfo):
+    def __init__(self, opcode):
+        self.opcode = opcode
+
+    @specialize.argtype(1)
+    def allocate(self, decoder, index):
+        tensor = decoder.tensor_op(self.opcode, self.fieldnums)
+        decoder.virtuals_cache.set_ptr(index, tensor)
+        return tensor
+
+    def debug_prints(self):
+        debug_print("\tvtensorinfo opcode", self.opcode, " at ",  compute_unique_id(self))
+        for i in self.fieldnums:
+            debug_print("\t\t", str(untag(i)))
+
+
 class VUniPlainInfo(AbstractVirtualInfo):
     """Stands for the unicode string made out of the characters of all
     fieldnums."""
@@ -1148,6 +1167,16 @@ class ResumeDataBoxReader(AbstractResumeDataReader):
         return self.metainterp.execute_and_record_varargs(
             rop.CALL_R, [ConstInt(func), str1box, str2box], calldescr)
 
+    def tensor_op(self, opcode, fieldnums):
+        cic = self.metainterp.staticdata.callinfocollection
+        calldescr, func = cic.callinfo_for_oopspec(
+            EffectInfo.OS_TENSOR_ADD + opcode)
+        args = [ConstInt(func)]
+        for num in fieldnums:
+            args.append(self.decode_box(num, REF))
+        return self.metainterp.execute_and_record_varargs(
+            rop.CALL_R, args, calldescr)
+
     def slice_string(self, strnum, startnum, lengthnum):
         cic = self.metainterp.staticdata.callinfocollection
         calldescr, func = cic.callinfo_for_oopspec(EffectInfo.OS_STR_SLICE)
@@ -1467,6 +1496,18 @@ class ResumeDataDirectReader(AbstractResumeDataReader):
         cic = self.callinfocollection
         funcptr = cic.funcptr_for_oopspec(EffectInfo.OS_STR_CONCAT)
         result = funcptr(str1, str2)
+        return lltype.cast_opaque_ptr(llmemory.GCREF, result)
+
+    def tensor_op(self, opcode, fieldnums):
+        from rpython.rlib import rtensor
+        a = lltype.cast_opaque_ptr(rtensor.TENSORPTR,
+                                   self.decode_ref(fieldnums[0]))
+        b = rtensor.NULLTENSOR
+        if len(fieldnums) > 1:
+            b = lltype.cast_opaque_ptr(rtensor.TENSORPTR,
+                                       self.decode_ref(fieldnums[1]))
+        assert opcode >= 0
+        result = rtensor.eval_op(opcode, a, b)
         return lltype.cast_opaque_ptr(llmemory.GCREF, result)
 
     def slice_string(self, strnum, startnum, lengthnum):

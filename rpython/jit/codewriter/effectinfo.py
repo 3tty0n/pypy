@@ -104,6 +104,12 @@ class EffectInfo(object):
     OS_JIT_FORCE_VIRTUAL        = 120
     OS_JIT_FORCE_VIRTUALIZABLE  = 121
 
+    OS_TENSOR_ADD               = 130
+    OS_TENSOR_MUL               = 131
+    OS_TENSOR_RELU              = 132
+    OS_TENSOR_SUM               = 133
+    OS_TENSOR_LAUNCH            = 134
+
     # for debugging:
     _OS_CANRAISE = set([
         OS_NONE, OS_STR2UNICODE, OS_LIBFFI_CALL, OS_RAW_MALLOC_VARSIZE_CHAR,

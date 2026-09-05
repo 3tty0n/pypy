@@ -683,6 +683,10 @@ class LLtypeHelpers:
         llop.gc_add_memory_pressure(lltype.Void, num, obj)
 
 
+def _ll_4_tensor_launch(kernel, a, b, c):
+    from rpython.rlib import rtensor
+    return rtensor.launch(kernel, a, b, c)
+
 def setup_extra_builtin(rtyper, oopspec_name, nb_args, extra=None):
     name = '_ll_%d_%s' % (nb_args, oopspec_name.replace('.', '_'))
     if extra is not None:
