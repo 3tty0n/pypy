@@ -194,3 +194,54 @@ class AppTestTensor(object):
                 acc += flat[i] * wf[i * NC + j]
             exp += max(acc, 0.0)
         assert abs(y.sum().item() - exp) < 1e-9
+
+    def test_backward_new_ops(self):
+        import _tensor, math
+        x = _tensor.tensor([1.0, 4.0, 9.0], requires_grad=True)
+        x.sqrt().sum().backward()
+        assert abs(x.grad.sum().item() - (0.5 + 0.25 + 1.0 / 6.0)) < 1e-12
+
+        e = _tensor.tensor([0.0, 1.0], requires_grad=True)
+        e.exp().sum().backward()
+        assert abs(e.grad.sum().item() - (1.0 + math.e)) < 1e-12
+
+        a = _tensor.tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
+        b = _tensor.tensor([2.0], requires_grad=True)
+        a.div(b).sum().backward()
+        assert abs(a.grad.sum().item() - 2.0) < 1e-12
+        assert abs(b.grad.sum().item() + 2.5) < 1e-12
+
+        s = _tensor.tensor([[1.0, 2.0]], requires_grad=True)
+        t = _tensor.tensor([[0.25, 0.5]], requires_grad=True)
+        s.sub(t).sum().backward()
+        assert s.grad.sum().item() == 2.0
+        assert t.grad.sum().item() == -2.0
+
+        m = _tensor.tensor([[1.0, 5.0], [7.0, 2.0]], requires_grad=True)
+        m.max(1).sum().backward()
+        assert m.grad.sum().item() == 2.0
+
+        p = _tensor.tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
+        q = _tensor.tensor([[1.0, 10.0], [100.0, 1000.0]])
+        p.matmul(q, True).sum().backward()
+        assert p.grad.sum().item() == 2222.0
+
+        h = _tensor.tensor([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]],
+                           requires_grad=True)
+        h.head_split(2).head_merge(2).sum().backward()
+        assert h.grad.sum().item() == 8.0
+
+        u = _tensor.tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
+        eye = _tensor.tensor([[1.0, 0.0], [0.0, 1.0]])
+        u.bmm(eye, 1).sum().backward()
+        assert u.grad.sum().item() == 4.0
+
+    def test_backward_softmax_rows(self):
+        import _tensor, tensorlite
+        x = _tensor.tensor([[1.0, 2.0, 3.0], [0.5, -1.0, 2.5]],
+                           requires_grad=True)
+        w = _tensor.tensor([[1.0, -2.0, 0.5], [0.25, 1.5, -1.0]])
+        tensorlite.softmax(x).mul(w).sum().backward()
+        g = x.grad
+        rows = g.mul(_tensor.tensor([1.0, 1.0, 1.0])).sum(1)
+        assert abs(rows.mul(_tensor.tensor([1.0, 1.0])).sum().item()) < 1e-12

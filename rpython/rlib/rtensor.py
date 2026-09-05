@@ -22,12 +22,13 @@ NULLTENSOR = lltype.nullptr(TENSOR)
 
 ADD, MUL, RELU, SUM, RELUGRAD = 0, 1, 2, 3, 4
 SUB, DIV, EXP, SQRT, MAXR = 5, 6, 7, 8, 9
-NOPCODES = 10
-ARITY = [2, 2, 1, 1, 2, 2, 2, 1, 1, 1]
+EQMASK = 10
+NOPCODES = 11
+ARITY = [2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 2]
 NAMES = ['add', 'mul', 'relu', 'sum', 'relugrad',
-         'sub', 'div', 'exp', 'sqrt', 'maxr']
+         'sub', 'div', 'exp', 'sqrt', 'maxr', 'eqmask']
 HAS_PARAM = [True, True, False, True, True,
-             True, True, False, False, True]
+             True, True, False, False, True, True]
 MAX_INPUTS = 6
 BC_NONE, BC_R_ROW, BC_R_SCALAR, BC_L_ROW, BC_L_SCALAR = 0, 1, 2, 3, 4
 BC_R_COL, BC_L_COL = 5, 6
@@ -204,6 +205,8 @@ def eval_op_cpu(opcode, a, b, p):
             hr[i] = ha[ia] - hb[ib]
         elif opcode == DIV:
             hr[i] = _div(ha[ia], hb[ib])
+        elif opcode == EQMASK:
+            hr[i] = 1.0 if ha[ia] == hb[ib] else 0.0
         else:
             hr[i] = hb[ib] if ha[ia] > 0.0 else 0.0
     return r
@@ -346,6 +349,10 @@ def tensor_sqrt(a):
 @jit.oopspec("tensor.maxr(a, axis)")
 def tensor_maxr(a, axis):
     return eval_op(MAXR, a, NULLTENSOR, axis)
+
+@jit.oopspec("tensor.eqmask(a, b, bcast)")
+def tensor_eqmask(a, b, bcast):
+    return eval_op(EQMASK, a, b, bcast)
 
 @jit.oopspec("tensor.ndim(a)")
 def tensor_ndim(a):
@@ -823,7 +830,7 @@ RPY_EXTERN int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
 RPY_EXTERN int rt_cuda_matmul(long a, long b, long c, long rows, long inner,
                               long cols, long ta, long tb);
 RPY_EXTERN int rt_cuda_bmm(long a, long b, long c, long batch, long rows,
-                           long inner, long cols, long tb);
+                           long inner, long cols, long ta, long tb);
 """],
     libraries=['cuda', 'dl'])
 rt_cuda_load = rffi.llexternal('rt_cuda_load', [rffi.CCHARP, rffi.CCHARP],
@@ -866,7 +873,8 @@ rt_cuda_matmul = rffi.llexternal(
 rt_cuda_bmm = rffi.llexternal(
     'rt_cuda_bmm',
     [lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
-     lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed],
+     lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
+     lltype.Signed],
     rffi.INT, compilation_info=eci,
                                 releasegil=False)
 
@@ -1039,6 +1047,11 @@ def _elementwise(lines, node, v, T, I1):
         lines.append('    %%v%d = math.exp %%v%d : %s' % (v, node.a, T))
     elif node.opcode == SQRT:
         lines.append('    %%v%d = math.sqrt %%v%d : %s' % (v, node.a, T))
+    elif node.opcode == EQMASK:
+        lines.append('    %%c%d = arith.cmpf oeq, %%v%d, %%v%d : %s'
+                     % (v, node.a, node.b, T))
+        lines.append('    %%v%d = arith.select %%c%d, %%one, %%zero : %s, %s'
+                     % (v, v, I1, T))
     else:
         return False
     return True
@@ -1080,6 +1093,7 @@ def to_ttir_row(kernel, name, modes):
              '  tt.func public @%s(%s, %%n: i64, %%c: i64) '
              'attributes {noinline = false} {' % (name, ', '.join(params)),
              '    %%zero = arith.constant dense<0.0> : %s' % T,
+             '    %%one = arith.constant dense<1.0> : %s' % T,
              '    %pid = tt.get_program_id x : i32',
              '    %rowi = arith.extsi %pid : i32 to i64',
              '    %%range = tt.make_range {end = %d : i32, start = 0 : i32} '
@@ -1192,6 +1206,7 @@ def to_ttir_flat(kernel, name):
              '  tt.func public @%s(%s, %%n: i64, %%c: i64) '
              'attributes {noinline = false} {' % (name, ', '.join(params)),
              '    %%zero = arith.constant dense<0.0> : %s' % T,
+             '    %%one = arith.constant dense<1.0> : %s' % T,
              '    %%bs = arith.constant %d : i32' % BLOCK,
              '    %pid = tt.get_program_id x : i32',
              '    %start = arith.muli %pid, %bs : i32',
@@ -1870,7 +1885,7 @@ def head_merge(x, rows, dh, heads):
     return head_merge_cpu(x, rows, dh, heads)
 
 
-def bmm_cpu(a, b, batch, rows, cols, inner, tb):
+def bmm_cpu(a, b, batch, rows, cols, inner, ta, tb):
     ha = host(a)
     hb = host(b)
     r = new_tensor(batch * rows * cols, _shape2(batch * rows, cols))
@@ -1887,13 +1902,17 @@ def bmm_cpu(a, b, batch, rows, cols, inner, tb):
                         vb = hb[bbase + j * inner + k]
                     else:
                         vb = hb[bbase + k * cols + j]
-                    acc += ha[abase + i * inner + k] * vb
+                    if ta:
+                        va = ha[abase + k * rows + i]
+                    else:
+                        va = ha[abase + i * inner + k]
+                    acc += va * vb
                 hr[cbase + i * cols + j] = acc
     return r
 
 
 @jit.dont_look_inside
-def tensor_bmm(a, b, batch, rows, cols, inner, tb):
+def tensor_bmm(a, b, batch, rows, cols, inner, ta, tb):
     if gpu_enabled():
         dptr_a = dev(a)
         dptr_b = dev(b)
@@ -1904,9 +1923,9 @@ def tensor_bmm(a, b, batch, rows, cols, inner, tb):
             if outptr != 0:
                 ok = rffi.cast(lltype.Signed, rt_cuda_bmm(
                     dptr_a, dptr_b, outptr, batch, rows, inner, cols,
-                    tb)) != 0
+                    ta, tb)) != 0
                 if ok:
                     return device_tensor(n, outptr,
                                          _shape2(batch * rows, cols))
                 rt_cuda_free(outptr, n)
-    return bmm_cpu(a, b, batch, rows, cols, inner, tb)
+    return bmm_cpu(a, b, batch, rows, cols, inner, ta, tb)

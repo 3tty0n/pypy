@@ -714,11 +714,11 @@ def _proj_weight():
     return t
 
 
-def _make_block():
+def _make_block(rg=False):
     attn = rtensor_nn.MultiHead(
         rtensor_nn.Tensor(_qkv_weight()), rtensor_nn.Tensor(_qkv_weight()),
         rtensor_nn.Tensor(_qkv_weight()), rtensor_nn.Tensor(_proj_weight()),
-        TH)
+        TH, rg)
     layers = []
     for _ in range(2):
         bias = rtensor.zeros([TD])
@@ -736,7 +736,7 @@ def _make_block():
     return rtensor_nn.TransformerBlock(
         attn, rtensor_nn.Tensor(ones), rtensor_nn.Tensor(zeros),
         rtensor_nn.Tensor(ones), rtensor_nn.Tensor(zeros),
-        rtensor_nn.MLP(layers), TEPS)
+        rtensor_nn.MLP(layers), TEPS, rg)
 
 
 class TestTransformer(LLJitMixin):
@@ -1096,3 +1096,168 @@ class TestConv(LLJitMixin):
         y = cnn.forward(x).sum()
         import py
         py.test.raises(ValueError, y.backward)
+
+
+TLR = 0.001
+TRAIN_CALL_R = 152
+TBLOCKS = 2
+
+
+def _tmk(shape, vals, rg):
+    t = rtensor.zeros(shape)
+    for i in range(len(vals)):
+        t.host[i] = vals[i]
+    return rtensor_nn.Tensor(t, rg)
+
+
+def _lossw(n):
+    return [(((i * 5) % 9) - 4) * 0.25 + 0.3 for i in range(n)]
+
+
+def _fd_check(f, vals, shapes, tol=1e-06, h=1e-06, stride=1):
+    ts = [_tmk(shapes[k], vals[k], True) for k in range(len(vals))]
+    loss = f(ts)
+    loss.backward()
+    for k in range(len(vals)):
+        grad = ts[k].grad
+        assert grad is not None
+        hostg = rtensor.host(grad.t)
+        for i in range(0, len(vals[k]), stride):
+            out = []
+            for d in (h, -h):
+                pert = [list(v) for v in vals]
+                pert[k][i] += d
+                out.append(f([_tmk(shapes[j], pert[j], False)
+                              for j in range(len(pert))]).item())
+            num = (out[0] - out[1]) / (2.0 * h)
+            assert abs(num - hostg[i]) <= tol * (1.0 + abs(num))
+
+
+def _weighted_sum(y, rows, cols):
+    return y.mul(_tmk([rows, cols], _lossw(rows * cols), False),
+                 rtensor.BC_NONE).sum()
+
+
+def test_grad_softmax_rows():
+    rows, cols = 3, 4
+    vals = [[((i * i) % 7) - 3.0 + i * 0.5 for i in range(rows * cols)]]
+    def f(ts):
+        return _weighted_sum(rtensor_nn.softmax(ts[0]), rows, cols)
+    _fd_check(f, vals, [[rows, cols]])
+
+
+def test_grad_layernorm():
+    rows, cols = 3, 4
+    vals = [[((i * i) % 7) - 3.0 + i * 0.5 for i in range(rows * cols)],
+            [1.0 + i * 0.5 for i in range(cols)],
+            [i * 0.25 for i in range(cols)]]
+    def f(ts):
+        y = rtensor_nn.layernorm(ts[0], ts[1], ts[2], TEPS)
+        return _weighted_sum(y, rows, cols)
+    _fd_check(f, vals, [[rows, cols], [cols], [cols]])
+
+
+def test_grad_left_broadcast():
+    rows, cols = 3, 4
+    vals = [[0.5 + i * 0.25 for i in range(cols)],
+            [1.5 + ((i * 3) % 5) for i in range(rows * cols)],
+            [2.0 + i * 0.5 for i in range(rows)]]
+    shapes = [[cols], [rows, cols], [rows, 1]]
+    def f(ts):
+        y = ts[0].sub(ts[1]).div(ts[1]).mul(ts[2], rtensor.BC_R_COL)
+        return _weighted_sum(y, rows, cols)
+    _fd_check(f, vals, shapes)
+
+
+def test_grad_attention_head():
+    rows, d = 3, 4
+    def w(seed):
+        return [(((i * 7 + seed) % 13) - 6) * 0.125 for i in range(d * d)]
+    vals = [[((i * 3) % 5) - 2.0 + i * 0.25 for i in range(rows * d)],
+            w(0), w(1), w(2), w(3)]
+    shapes = [[rows, d], [d, d], [d, d], [d, d], [d, d]]
+    def f(ts):
+        y = rtensor_nn.mha(ts[0], ts[1], ts[2], ts[3], ts[4], 1)
+        return _weighted_sum(y, rows, d)
+    _fd_check(f, vals, shapes, stride=5)
+
+
+def test_grad_transformer_block():
+    rows, d, heads = 2, 4, 2
+    def w(seed):
+        return [(((i * 7 + seed) % 13) - 6) * 0.125 for i in range(d * d)]
+    vals = [[((i * 3) % 5) - 2.0 + i * 0.25 for i in range(rows * d)],
+            w(0), w(1), w(2), w(3),
+            [1.0 + i * 0.25 for i in range(d)],
+            [i * 0.125 for i in range(d)],
+            [1.0 - i * 0.125 for i in range(d)],
+            [0.25 - i * 0.125 for i in range(d)],
+            w(5), [0.375 + i * 0.25 for i in range(d)],
+            w(9), [0.5 - i * 0.125 for i in range(d)]]
+    shapes = [[rows, d], [d, d], [d, d], [d, d], [d, d],
+              [d], [d], [d], [d], [d, d], [d], [d, d], [d]]
+    def f(ts):
+        attn = rtensor_nn.MultiHead(ts[1], ts[2], ts[3], ts[4], heads)
+        layers = [rtensor_nn.Linear(ts[9], ts[10]),
+                  rtensor_nn.Linear(ts[11], ts[12])]
+        block = rtensor_nn.TransformerBlock(attn, ts[5], ts[6], ts[7], ts[8],
+                                            rtensor_nn.MLP(layers), TEPS)
+        return _weighted_sum(block.forward(ts[0]), rows, d)
+    _fd_check(f, vals, shapes, stride=5)
+
+
+def _make_transformer():
+    blocks = []
+    for i in range(TBLOCKS):
+        blocks.append(_make_block(True))
+    bias = rtensor.zeros([TD])
+    for i in range(TD):
+        bias.host[i] = 0.01
+    head = rtensor_nn.Linear(rtensor_nn.Tensor(_init_weight(TD, TD)),
+                             rtensor_nn.Tensor(bias))
+    return rtensor_nn.Transformer(blocks, head)
+
+
+class TestTransformerTrain(LLJitMixin):
+
+    def setup_method(self, meth):
+        rtensor.policy.static = True
+        rtensor.policy.seen = []
+        rtensor.policy.static_cols = True
+        rtensor.policy.seen_cols = []
+
+    def test_transformer_train_step(self):
+        driver = JitDriver(greens=[],
+                           reds=['n', 'x', 'model', 'params', 'lr', 'acc',
+                                 'prev'])
+        def f(n):
+            x0 = rtensor.zeros([TROWS, TD])
+            for i in range(TROWS * TD):
+                x0.host[i] = (i % 7) - 3.0
+            model = _make_transformer()
+            x = rtensor_nn.Tensor(x0)
+            params = model.parameters()
+            lr = rtensor_nn.Tensor(rtensor.from_list([-TLR]))
+            acc = 0.0
+            prev = 1e30
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, model=model, params=params,
+                                       lr=lr, acc=acc, prev=prev)
+                out = model.forward(x).sum()
+                out.backward()
+                rtensor_nn.sgd_step(params, lr)
+                loss = out.item()
+                if loss >= prev:
+                    return -1.0
+                prev = loss
+                acc += loss
+                n -= 1
+            return acc
+        import os
+        expect = f(5)
+        assert expect != -1.0
+        res = self.meta_interp(f, [5])
+        assert res != -1.0
+        tol = 1e-09 if 'RTENSOR_CPU' in os.environ else 1e-04
+        assert abs(res - expect) <= tol * abs(expect)
+        self.check_simple_loop(call_r=TRAIN_CALL_R)

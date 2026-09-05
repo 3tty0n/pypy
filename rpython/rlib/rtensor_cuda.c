@@ -201,16 +201,17 @@ RPY_EXPORTED int rt_cuda_matmul(long a, long b, long c, long rows,
 }
 
 RPY_EXPORTED int rt_cuda_bmm(long a, long b, long c, long batch, long rows,
-                             long inner, long cols, long tb)
+                             long inner, long cols, long ta, long tb)
 {
     double alpha = 1.0, beta = 0.0;
     int ldb = tb ? (int)inner : (int)cols;
+    int lda = ta ? (int)rows : (int)inner;
     if (!rt_cublas_init() || !p_cublasDgemmStridedBatched) return 0;
-    return p_cublasDgemmStridedBatched(cublas_handle, tb ? 1 : 0, 0,
+    return p_cublasDgemmStridedBatched(cublas_handle, tb ? 1 : 0, ta ? 1 : 0,
                                        (int)cols, (int)rows, (int)inner, &alpha,
                                        (const double *)b, ldb,
                                        (long long)(inner * cols),
-                                       (const double *)a, (int)inner,
+                                       (const double *)a, lda,
                                        (long long)(rows * inner),
                                        &beta, (double *)c, (int)cols,
                                        (long long)(rows * cols),

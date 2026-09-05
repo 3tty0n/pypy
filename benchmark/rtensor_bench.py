@@ -13,12 +13,14 @@ mlp_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 train_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 block_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 cnn_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
+tf_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 
 MLP_D = 256
 LR = 1e-06
 TB_D = 64
 TB_H = 4
 TB_EPS = 1e-05
+TF_BLOCKS = 2
 
 def make_mlp_layer(d):
     w = rtensor.zeros([d, d])
@@ -136,6 +138,44 @@ def run_block(n, iters):
         i += 1
     return tensor_item(tensor_sum(x.t, -1))
 
+def make_train_block():
+    attn = rtensor_nn.MultiHead(tb_qkv(), tb_qkv(), tb_qkv(), tb_proj(),
+                                TB_H, True)
+    layers = []
+    for i in range(2):
+        layers.append(rtensor_nn.Linear(tb_weight(TB_D, TB_D),
+                                        tb_vector(0.01)))
+    return rtensor_nn.TransformerBlock(attn, tb_vector(1.0), tb_vector(0.0),
+                                       tb_vector(1.0), tb_vector(0.0),
+                                       rtensor_nn.MLP(layers), TB_EPS, True)
+
+def make_transformer():
+    blocks = []
+    for i in range(TF_BLOCKS):
+        blocks.append(make_train_block())
+    head = rtensor_nn.Linear(tb_weight(TB_D, TB_D), tb_vector(0.01))
+    return rtensor_nn.Transformer(blocks, head)
+
+def run_transformer_train(n, iters):
+    rows = n // TB_D
+    if rows <= 0:
+        rows = 1
+    model = make_transformer()
+    x = make_mlp_input(rows, TB_D)
+    params = model.parameters()
+    lr = rtensor_nn.Tensor(rtensor.from_list([-LR]))
+    rtensor.dev(lr.t)
+    loss = 0.0
+    i = 0
+    while i < iters:
+        tf_driver.jit_merge_point()
+        out = model.forward(x).sum()
+        out.backward()
+        rtensor_nn.sgd_step(params, lr)
+        loss = out.item()
+        i += 1
+    return loss
+
 CNN_C, CNN_HW, CNN_O, CNN_CLS = 3, 32, 8, 10
 
 def cnn_weight(rows, cols):
@@ -177,6 +217,8 @@ def run_cnn(n, iters):
     return acc
 
 def run_model(variant, n, iters):
+    if variant == 10:
+        return run_transformer_train(n, iters)
     if variant == 9:
         return run_cnn(n, iters)
     if variant == 7:
@@ -229,7 +271,7 @@ def run(variant, k, h, b, iters):
 
 def entry_point(argv):
     if len(argv) != 6:
-        print 'usage: rtensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..9)'
+        print 'usage: rtensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..10)'
         return 1
     mode = argv[1]
     variant = int(argv[2])

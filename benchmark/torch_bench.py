@@ -8,6 +8,7 @@ LR = 1e-06
 TB_D = 64
 TB_H = 4
 TB_EPS = 1e-05
+TF_BLOCKS = 2
 
 def mlp_layer():
     W = torch.tensor([float((i * 7) % 13 - 6) / MLP_D for i in range(MLP_D * MLP_D)],
@@ -116,6 +117,80 @@ def run_block(iters):
     torch.cuda.synchronize()
     return x.sum().item()
 
+def run_transformer_train(iters):
+    rows = n // TB_D
+    if rows <= 0:
+        rows = 1
+    x = torch.tensor([(i % 7) - 3.0 for i in range(rows * TB_D)],
+                     dtype=torch.float64, device=dev).reshape(rows, TB_D)
+    dh = TB_D // TB_H
+    scale = 1.0 / math.sqrt(dh)
+    params = []
+
+    def param(t):
+        t.requires_grad_(True)
+        params.append(t)
+        return t
+
+    blocks = []
+    for _ in range(TF_BLOCKS):
+        WQ = param(torch.cat([tb_weight(TB_D, dh) for _ in range(TB_H)], dim=1))
+        WK = param(torch.cat([tb_weight(TB_D, dh) for _ in range(TB_H)], dim=1))
+        WV = param(torch.cat([tb_weight(TB_D, dh) for _ in range(TB_H)], dim=1))
+        WO = param(torch.cat([tb_weight(dh, TB_D) for _ in range(TB_H)], dim=0))
+        g1 = param(torch.ones(TB_D, dtype=torch.float64, device=dev))
+        b1 = param(torch.zeros(TB_D, dtype=torch.float64, device=dev))
+        g2 = param(torch.ones(TB_D, dtype=torch.float64, device=dev))
+        b2 = param(torch.zeros(TB_D, dtype=torch.float64, device=dev))
+        mlp = [(param(tb_weight(TB_D, TB_D)),
+                param(torch.full((TB_D,), 0.01, dtype=torch.float64,
+                                 device=dev)))
+               for _ in range(2)]
+        blocks.append((WQ, WK, WV, WO, g1, b1, g2, b2, mlp))
+    HW = param(tb_weight(TB_D, TB_D))
+    HB = param(torch.full((TB_D,), 0.01, dtype=torch.float64, device=dev))
+
+    def ln(t, g, b):
+        mu = t.mean(1, keepdim=True)
+        var = ((t - mu) * (t - mu)).mean(1, keepdim=True)
+        return (t - mu) / torch.sqrt(var + TB_EPS) * g + b
+
+    def split(t):
+        return t.reshape(rows, TB_H, dh).transpose(0, 1)
+
+    def block(t, bl):
+        WQ, WK, WV, WO, g1, b1, g2, b2, mlp = bl
+        h = ln(t, g1, b1)
+        q, k, v = split(h @ WQ), split(h @ WK), split(h @ WV)
+        p = torch.softmax(torch.bmm(q, k.transpose(1, 2)) * scale, dim=2)
+        o = torch.bmm(p, v).transpose(0, 1).reshape(rows, TB_D)
+        t = t + o @ WO
+        y = ln(t, g2, b2)
+        for W, bb in mlp:
+            y = torch.relu(y @ W + bb)
+        return t + y
+
+    def step():
+        y = x
+        for bl in blocks:
+            y = block(y, bl)
+        return torch.relu(y @ HW + HB).sum()
+
+    if mode == "compile":
+        step = torch.compile(step, dynamic=False)
+    loss = 0.0
+    for _ in range(iters):
+        out = step()
+        out.backward()
+        with torch.no_grad():
+            for p in params:
+                p -= LR * p.grad
+                p.grad = None
+        loss = out.item()
+    torch.cuda.synchronize()
+    return loss
+
+
 CNN_C, CNN_HW, CNN_O, CNN_CLS = 3, 32, 8, 10
 
 def run_cnn(iters):
@@ -152,6 +227,13 @@ def run_cnn(iters):
             acc += step(x).sum().item()
     torch.cuda.synchronize()
     return acc
+
+if variant == 10:
+    t0 = time.time(); run_transformer_train(20); warm = time.time() - t0
+    t0 = time.time(); acc = run_transformer_train(iters); steady = (time.time() - t0) / iters * 1e6
+    print("torch-%s %d %d %d %d %f %f 0 %f 0 -1 -1" % (mode, variant, k, n, iters,
+        warm, steady, acc))
+    sys.exit(0)
 
 if variant == 9:
     t0 = time.time(); run_cnn(20); warm = time.time() - t0

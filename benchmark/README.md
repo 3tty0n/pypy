@@ -49,7 +49,7 @@ the translator.
 | argument | values |
 |---|---|
 | `MODE` | `fused` (tensor ops fused into one kernel), `eager` (the `tensor` optimization disabled, one GPU kernel per op, JIT otherwise on), `nojit` (interpreter, one GPU kernel per op) |
-| `VARIANT` | `0` plain chain; `1` a branch `if i % 7 == 0: h = h + b` inside the fused region (a guard, no force); `2` the same branch after an explicit force of `h`, modelling a graph break; `3` a data-dependent branch `if sum(h).item() > 0` (a true force in every system); `4` the chain continued inside `try/except` with an exception raised every 5th iteration; `5` a host-side write to `/dev/null` every 50th iteration between tensor ops; `6` an MLP forward (see below), `K` unused; `7` the same MLP with a reverse-mode backward pass and an SGD step per iteration, `K` unused; `8` a Transformer block forward per iteration (see below), `K` unused; `9` a small CNN forward per iteration (see below), `K` unused |
+| `VARIANT` | `0` plain chain; `1` a branch `if i % 7 == 0: h = h + b` inside the fused region (a guard, no force); `2` the same branch after an explicit force of `h`, modelling a graph break; `3` a data-dependent branch `if sum(h).item() > 0` (a true force in every system); `4` the chain continued inside `try/except` with an exception raised every 5th iteration; `5` a host-side write to `/dev/null` every 50th iteration between tensor ops; `6` an MLP forward (see below), `K` unused; `7` the same MLP with a reverse-mode backward pass and an SGD step per iteration, `K` unused; `8` a Transformer block forward per iteration (see below), `K` unused; `9` a small CNN forward per iteration (see below), `K` unused; `10` a 2-block Transformer training step (forward, backward and SGD) per iteration (see below), `K` unused |
 
 `VARIANT 6` runs a 3-layer MLP forward (`rpython/rlib/rtensor_nn.py`) each
 iteration: `x` is `(B, 256)` with `B = N / 256`, each layer is `256x256`.
@@ -308,6 +308,36 @@ Every weight uses the same deterministic init as the MLP variants (element
     $RTENSOR_PYTHON benchmark/torch_bench.py eager 8 1 256 2
 
 both print `51.262221`.
+
+`VARIANT 10` trains a `B = 2` block Transformer end to end, `D = 64`, `H = 4`,
+`rows = N / 64`, forward, backward and one SGD step per iteration.  The model
+is variant 8's block repeated twice followed by a final `Linear` to `D`
+outputs, the loss is `sum(y)` and the update is `p = p + (-lr) * p.grad` with
+`lr = 1e-6`, the same as variant 7.  Every parameter (`Wq`, `Wk`, `Wv`, `Wo`,
+both `gamma`/`beta` pairs, the two MLP layers of each block and the head)
+requires a gradient, so the autograd tape covers the whole block: `softmax`
+and `layernorm` are compositions of primitives and need no dedicated backward
+nodes, while `sub`, `div`, `exp`, `sqrt`, `max(axis=1)`, `matmul` with
+transpose flags, batched `bmm` and `head_split`/`head_merge` each have a
+`Node` whose `apply` is written in the same primitives as the forward, so the
+backward pass fuses the same way.  `max(axis=1)` routes its gradient with a
+new fusible `eqmask(a, b)` opcode (`1.0` where `a == b`, else `0.0`) and a
+column broadcast; ties are not divided by their multiplicity, so a row with
+two equal maxima sends the gradient to both, unlike torch's `argmax`
+behaviour.  The softmax `max` gradient cancels analytically anyway, so the
+loss trajectory still matches torch:
+
+    PYTHONPATH=. python2 benchmark/rtensor_bench.py nojit 10 1 256 2
+    $RTENSOR_PYTHON benchmark/torch_bench.py eager 10 1 256 2
+
+both print `64.778154`, and after 40 steps at `N = 1024` both print
+`200.537667`.  One unfused training step is 254 Triton launches (cuBLAS
+matmuls are not counted).  Traced, one step of the same model shape
+(`test_transformer_train_step` in `rpython/jit/metainterp/test/test_tensor.py`)
+is 78 fused Triton launches plus 22 intermediates read back out of earlier
+kernels as extra outputs, 39 cuBLAS `matmul`s (13 forward, 26 backward),
+12 batched `bmm`s (4 forward, 8 backward) and 16 `head_split`/`head_merge`
+gather kernels (8 forward, 8 backward).
 
 `benchmark/applevel/transformer.py ROWS ITERS` and `benchmark/applevel/cnn.py
 IMAGES ITERS` reproduce variants 8 and 9 through the app-level `_tensor` API
