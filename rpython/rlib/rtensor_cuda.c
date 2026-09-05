@@ -32,7 +32,7 @@ static int inited;
 typedef struct { CUdeviceptr p; long n; } buf_t;
 static buf_t *allocs, *freed;
 static long nallocs, capallocs, nfreed, capfreed;
-static long live_bytes, budget_bytes = 64L << 20, launches;
+static long live_bytes, budget_bytes = 64L << 20, launches, fresh_since_gc;
 
 static int rt_init(void)
 {
@@ -108,6 +108,7 @@ RPY_EXPORTED long rt_cuda_alloc(long n, long zero)
     if (!p) {
         if (cuMemAlloc(&p, n * sizeof(double)) != CUDA_SUCCESS) return 0;
         push(&allocs, &nallocs, &capallocs, p, n);
+        fresh_since_gc++;
     }
     live_bytes += n * sizeof(double);
     if (zero) cuMemsetD8(p, 0, n * sizeof(double));
@@ -133,9 +134,10 @@ RPY_EXPORTED void rt_cuda_set_budget(long bytes)
 RPY_EXPORTED int rt_cuda_needs_gc(long n)
 {
     long i;
-    if (live_bytes <= budget_bytes) return 0;
+    if (live_bytes <= budget_bytes && fresh_since_gc < 64) return 0;
     for (i = 0; i < nfreed; i++)
         if (freed[i].n == n) return 0;
+    fresh_since_gc = 0;
     return 1;
 }
 

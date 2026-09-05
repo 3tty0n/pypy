@@ -91,15 +91,20 @@ def run_block(iters):
         var = ((t - mu) * (t - mu)).mean(1, keepdim=True)
         return (t - mu) / torch.sqrt(var + TB_EPS) * g + b
 
+    WQ = torch.cat([hd[0] for hd in heads], dim=1)
+    WK = torch.cat([hd[1] for hd in heads], dim=1)
+    WV = torch.cat([hd[2] for hd in heads], dim=1)
+    WO = torch.cat([hd[3] for hd in heads], dim=0)
+
+    def split(t):
+        return t.reshape(rows, TB_H, dh).transpose(0, 1)
+
     def forward(t):
         h = ln(t)
-        a = None
-        for wq, wk, wv, wo in heads:
-            q, k, v = h @ wq, h @ wk, h @ wv
-            p = torch.softmax((q @ k.transpose(0, 1)) * scale, dim=1)
-            o = (p @ v) @ wo
-            a = o if a is None else a + o
-        t = t + a
+        q, k, v = split(h @ WQ), split(h @ WK), split(h @ WV)
+        p = torch.softmax(torch.bmm(q, k.transpose(1, 2)) * scale, dim=2)
+        o = torch.bmm(p, v).transpose(0, 1).reshape(rows, TB_D)
+        t = t + o @ WO
         y = ln(t)
         for W, bb in mlp:
             y = torch.relu(y @ W + bb)
