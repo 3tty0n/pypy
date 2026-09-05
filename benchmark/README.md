@@ -208,6 +208,26 @@ The backward pass fuses into the same kind of kernels as the forward pass
 because the tape is host code the tracer sees; the remaining launches are the
 matmuls and the per-parameter updates.
 
+Model demos (variants 8 and 9, forward only, float64, 100 iterations).  The
+Transformer block has D=64, H=4 heads with per-head projections, softmax and
+layernorm written as host code and fused into row-tiled kernels (one Triton
+program per row, reductions along the row inside the kernel); the CNN is
+conv3x3 (im2col + cuBLAS) -> batchnorm -> relu -> maxpool2 -> linear.
+Per-iteration microseconds and launches (matmuls not counted):
+
+| model | size | fused (launches) | eager, ours (launches) | torch.compile | torch eager |
+|---|---|---|---|---|---|
+| Transformer | 64 rows | 978 (33) | 1094 (55) | 588 | 663 |
+| Transformer | 1024 rows | 4077 (33) | 4413 (55) | 1999 | 1963 |
+| CNN | 1 image | 99.7 (6) | 105.1 (10) | 202.9 | 135.6 |
+| CNN | 21 images | 247.0 (6) | 268.2 (10) | 354.5 | 265.1 |
+
+The Transformer gap is the 14 small per-head cuBLAS fp64 matmuls per
+iteration (D/H = 16) against PyTorch's batched attention; before the
+row-tiled kernels the axis-1 max ran on the host and the block took 39.6 ms
+at 1024 rows.  Row kernels use a fixed 4096-lane tile, so at D=64 most lanes
+are masked; compiling row kernels per column count is the next step.
+
 Variant 3 is a real force in every system (the value is needed on the host),
 so both produce two kernels.  Variants 1 and 4 depend on the loop counter;
 Dynamo specialises on the integer, hits its recompilation limit and falls back
