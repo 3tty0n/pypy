@@ -1,7 +1,7 @@
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import os
-from rpython.metatensor.core import (ADD, ARITY, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, F64, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, KERNEL, MAXR, MUL, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, RELU, RELUGRAD, SHAPEARRAY, SQRT, STORE_TYPE, SUB, SUM, config, is_reduction, param_slot, slot_param, slot_used)
+from rpython.metatensor.core import (ADD, ARITY, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, F64, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_ROTHALF, KERNEL, MAXR, MUL, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, RELU, RELUGRAD, SHAPEARRAY, SQRT, STORE_TYPE, SUB, SUM, config, is_reduction, param_slot, slot_param, slot_used)
 from rpython.metatensor.device import (_env, _here, gpu_enabled, profile, rt_cuda_load, rt_cuda_set_budget)
 
 class SingleKernels(object):
@@ -796,6 +796,14 @@ def _gather_index(e, op, params, I64, I1):
         pos = _gmod(e, rem, hw, I64)
         row = _gbin(e, 'addi', _gmul(e, img, hw, I64), pos, I64)
         srcs.append(_gbin(e, 'addi', _gmul(e, row, o, I64), ch, I64))
+        return srcs, ''
+    if op == GA_ROTHALF:
+        dh = params[0]
+        half = dh // 2
+        blk = _gdiv(e, off, dh, I64)
+        c = _gmod(e, off, dh, I64)
+        rc = _gmod(e, _gaddc(e, c, half, I64), dh, I64)
+        srcs.append(_gbin(e, 'addi', _gmul(e, blk, dh, I64), rc, I64))
         return srcs, ''
     if op == GA_HEADSPLIT or op == GA_HEADMERGE:
         rows, dh, heads = params[0], params[1], params[2]

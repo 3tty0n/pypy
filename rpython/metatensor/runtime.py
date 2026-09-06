@@ -5,7 +5,7 @@ from rpython.rlib.rfloat import NAN
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import math
-from rpython.metatensor.core import (ADD, ARITY, F16, GA_ROWS, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_MAXPOOL, HOSTARRAY, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, _shape2, cols, config, nbytes, new_tensor, policy)
+from rpython.metatensor.core import (ADD, ARITY, F16, GA_ROWS, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_ROTHALF, GA_MAXPOOL, HOSTARRAY, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, _shape2, cols, config, nbytes, new_tensor, policy)
 from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, gpu_enabled, host, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_bmm, rt_cuda_copy, rt_cuda_free, rt_cuda_launch, rt_cuda_matmul, rt_cuda_reset)
 from rpython.metatensor.kernels import (gather_kernel, needs_zero, row_tile, single_kernel)
 
@@ -552,6 +552,30 @@ def head_merge_cpu(x, rows, dh, heads):
     return r
 
 
+def rot_half_cpu(x, dh):
+    hx = host(x)
+    n = x.size
+    half = dh // 2
+    r = new_tensor(n, _shape2(n // cols(x), cols(x)), x.dtype)
+    hr = r.host
+    for i in range(n):
+        idx = i // dh * dh + (i % dh + half) % dh
+        assert idx >= 0
+        hr[i] = hx[idx]
+    return r
+
+
+@jit.dont_look_inside
+def _rot_half_impl(x, dh):
+    if gpu_enabled():
+        params = [dh]
+        r = gather_gpu(GA_ROTHALF, params, x, x.size,
+                       _shape2(x.size // cols(x), cols(x)))
+        if r:
+            return r
+    return rot_half_cpu(x, dh)
+
+
 @jit.dont_look_inside
 def _head_split_impl(x, rows, dh, heads):
     outn = rows * dh * heads
@@ -597,7 +621,7 @@ def _lds(rows, cols, inner, ta, tb, lda, ldb, ldc, sa, sb, sc):
 
 
 def bmm_cpu(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
-            sa, sb, sc, outn, outrows):
+            sa, sb, sc, outn, outrows, oa, ob, oc):
     lda, ldb, ldc, sa, sb, sc = _lds(rows, cols, inner, ta, tb, lda, ldb,
                                      ldc, sa, sb, sc)
     ha = host(a)
@@ -612,17 +636,17 @@ def bmm_cpu(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
                 acc = 0.0
                 for k in range(inner):
                     if ta:
-                        ia = t * sa + k * lda + i
+                        ia = oa + t * sa + k * lda + i
                     else:
-                        ia = t * sa + i * lda + k
+                        ia = oa + t * sa + i * lda + k
                     if tb:
-                        ib = t * sb + j * ldb + k
+                        ib = ob + t * sb + j * ldb + k
                     else:
-                        ib = t * sb + k * ldb + j
+                        ib = ob + t * sb + k * ldb + j
                     assert ia >= 0
                     assert ib >= 0
                     acc += ha[ia] * hb[ib]
-                ic = t * sc + i * ldc + j
+                ic = oc + t * sc + i * ldc + j
                 assert ic >= 0
                 hr[ic] = acc
     return r
@@ -630,7 +654,7 @@ def bmm_cpu(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
 
 @jit.dont_look_inside
 def _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
-                     sa, sb, sc, outn, outrows):
+                     sa, sb, sc, outn, outrows, oa, ob, oc, zc):
     if gpu_enabled() and a.dtype == b.dtype:
         dt = a.dtype
         dptr_a = dev(a)
@@ -638,10 +662,12 @@ def _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
         if dptr_a != 0 and dptr_b != 0:
             nb = nbytes(outn, dt)
             collect_if_needed(nb)
-            outptr = rt_cuda_alloc(nb, 0)
+            outptr = rt_cuda_alloc(nb, zc)
             if outptr != 0:
+                isz = nbytes(1, dt)
                 ok = rffi.cast(lltype.Signed, rt_cuda_bmm(
-                    dptr_a, dptr_b, outptr, batch, rows, inner, cols,
+                    dptr_a + oa * isz, dptr_b + ob * isz,
+                    outptr + oc * isz, batch, rows, inner, cols,
                     ta, tb, dt, lda, ldb, ldc, sa, sb, sc)) != 0
                 if ok:
                     return device_tensor(outn, outptr,
@@ -649,7 +675,7 @@ def _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
                                          dt)
                 rt_cuda_free(outptr, nb)
     return bmm_cpu(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
-                   sa, sb, sc, outn, outrows)
+                   sa, sb, sc, outn, outrows, oa, ob, oc)
 
 @jit.dont_look_inside
 def tensor_matmul(a, b, rows, cols, inner, ta, tb):
@@ -660,14 +686,14 @@ def tensor_matmul(a, b, rows, cols, inner, ta, tb):
 
 @jit.dont_look_inside
 def tensor_bmm(a, b, batch, rows, cols, inner, ta, tb, lda=0, ldb=0, ldc=0,
-               sa=0, sb=0, sc=0, outn=0, outrows=0):
+               sa=0, sb=0, sc=0, outn=0, outrows=0, oa=0, ob=0, oc=0, zc=0):
     if outn <= 0:
         outn = batch * rows * cols
     if outrows <= 0:
         outrows = batch * rows
     t0 = prof_begin()
     r = _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb, lda, ldb,
-                         ldc, sa, sb, sc, outn, outrows)
+                         ldc, sa, sb, sc, outn, outrows, oa, ob, oc, zc)
     prof_end(intmask(3), intmask(rows * 1000000 + inner * 1000 + cols), t0)
     return r
 
@@ -690,6 +716,13 @@ def maxpool2(x, c, h, w):
     t0 = prof_begin()
     r = _maxpool2_impl(x, c, h, w)
     prof_end(intmask(6), intmask(0), t0)
+    return r
+
+@jit.dont_look_inside
+def rot_half(x, dh):
+    t0 = prof_begin()
+    r = _rot_half_impl(x, dh)
+    prof_end(intmask(10), intmask(0), t0)
     return r
 
 @jit.dont_look_inside

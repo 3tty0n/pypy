@@ -14,8 +14,8 @@ unless noted, steady-state microseconds per iteration.
 Other env vars: `RTENSOR_DTYPE` (`float64|float32|float16`), `RTENSOR_CPU=1`
 (no GPU), `RTENSOR_BUDGET_MB` (device GC byte threshold, default 8),
 `RTENSOR_FLAT_BLOCK` (elements per block of the elementwise and gather
-kernels, default 4096; `256` is 6% faster on distilgpt2 and 4% on SmolLM2,
-19% slower on a 1e6-element chain),
+kernels, default 4096; `256` is 3% faster on distilgpt2 and 2.5% on
+SmolLM2, 19% slower on a 1e6-element chain),
 `RTENSOR_PROFILE=1`, `CUDA_HOME`, `RTENSOR_CUBLAS` (path to `libcublas.so`; read at
 run time, and if set at translation time it becomes the compiled-in default,
 otherwise `libcublas.so` is looked up through the dynamic loader).
@@ -52,17 +52,17 @@ Output columns: `mode variant k n iters warm_s steady_us kernels acc compiled_in
 | chain + host write (variant 5) | 68.7 | 333.6 (graph break) | 343.0 |
 | reduction, 1000 rows (variant 11) | 63.6 | 284.0 | 221.2 |
 | matmul + fused epilogue, 1000 rows (variant 12) | 382.9 | 637.4 | 622.3 |
-| attention, 1000 rows (variant 13) | 4844.3 | 6497.0 | 5097.5 |
+| attention, 1024 rows (variant 13) | 4789.3 | 6497.0 | 5097.5 |
 | MLP forward, 1000 rows | 1064.9 | 1269.5 | 1256.1 |
 | MLP training, 1000 rows | 2862.5 | 3054.1 | 3083.2 |
-| Transformer forward, 1024 rows | 1690.5 | 1883.6 | 1874.2 |
+| Transformer forward, 1024 rows | 1684.0 | 1883.6 | 1874.2 |
 | Transformer forward, 1024 rows, float16 | 108.9 | 273.5 | 415.9 |
-| Transformer training, 64 rows | 1933.1 | 1816.0 | 3210.0 |
-| Transformer training, 1024 rows | 13625.5 | 9531.5 | 10513.4 |
+| Transformer training, 64 rows | 1905.0 | 1816.0 | 3210.0 |
+| Transformer training, 1024 rows | 14089.3 | 9531.5 | 10513.4 |
 | CNN forward, 21 images | 228.1 | 354.5 | 265.1 |
 
-Launches per iteration in fused mode: chain 1, Transformer forward 9, CNN 6,
-Transformer training 112 (eager mode: 38, 10, 251).  Where we win it is
+Launches per iteration in fused mode: chain 1, Transformer forward 5,
+attention-only 1, CNN 6, Transformer training 96 (eager mode: 38, 10, 251).  Where we win it is
 fewer launches and no graph breaks at Python control flow; where we lose
 (large training steps) the cuBLAS matmul share dominates and the residual
 is not yet attributed.  Raw runs are in `results/`.
@@ -71,22 +71,31 @@ Real HuggingFace checkpoints (`applevel/gpt2_export.py` writes the weights,
 `applevel/gpt2.py` runs them on our PyPy, `applevel/gpt2_torch.py` runs
 `transformers.GPT2LMHeadModel` on the same token ids; the `llama_*.py`
 triple does the same for Llama-architecture models; seq 64, float32,
-argmax agrees at every position, max logits difference 1.7e-4 for GPT-2
-and 1.9e-4 for SmolLM2):
+argmax agrees at every position, max logits difference 1.6e-4 for GPT-2
+and 1.5e-4 for SmolLM2):
 
 | model | ours (PyPy) | torch.compile | torch eager |
 |---|---|---|---|
-| distilgpt2 (6 layers, 768, 12 heads) | 1543 | 1296 | 2418 |
-| sshleifer/tiny-gpt2 (2 layers, width 2) | 558 | 373 | 1418 |
-| SmolLM2-135M (Llama, 30 layers, 576, 9/3 heads) | 5662 | 5202 | 14434 |
+| distilgpt2 (6 layers, 768, 12 heads) | 1372 | 1297 | 2461 |
+| sshleifer/tiny-gpt2 (2 layers, width 2) | 189 | 371 | 1431 |
+| SmolLM2-135M (Llama, 30 layers, 576, 9/3 heads) | 4097 | 5342 | 14755 |
 
-distilgpt2 now launches 9 non-GEMM kernels per layer (was 23: reductions
-were forced by app-level `reshape` and inferred broadcasts, and attention
-went through head split/merge gathers; the app-level `softmax`, `layer_norm`,
-`rms_norm`, `gelu`, `silu` now call the fused RPython row kernels and
-attention reads the (rows, heads*dh) layout through strided-batched cuBLAS).
-The remaining gap to torch.compile is the q/k/v bias adds that feed a GEMM
-directly (needs a cuBLAS epilogue) and the per-kernel launch floor.
+q, k and v are one GEMM against a weight concatenated at model build time,
+so attention reads q, k and v as column slices of one (rows, 3d) buffer
+through the `lda`/`ldb` and offset arguments of the strided-batched cuBLAS
+call: per layer GPT-2 went from 3 GEMMs plus 3 bias launches to 1 GEMM plus
+1 bias launch, and Llama from 5 GEMMs (q, k, v and the two 576x576 RoPE
+permutation matmuls) plus 2 RoPE chains to 1 GEMM, 1 `rot_half` gather and
+1 fused chain -- RoPE now rotates through a gather kernel with the sign
+folded into the sine table, over the whole (rows, 3d) buffer at once
+(`cos` is 1 and `sin` is 0 over the v columns).  Before that the app-level
+`softmax`, `layer_norm`, `rms_norm`, `gelu` and `silu` were routed to the
+fused RPython row kernels and attention was moved onto strided-batched
+cuBLAS without head gathers, which took distilgpt2 from 23 non-GEMM
+launches per layer to 9; it is 7 now.  What is left against torch.compile
+is the per-kernel launch floor: `RTENSOR_FLAT_BLOCK=256` still buys about
+3% on distilgpt2 and 2.5% on SmolLM2, so a size-dependent elementwise block
+is worth roughly that much.
 
 App-level scripts in `applevel/` (Transformer, CNN, chains) run on a PyPy
 translated with `--withmod-_metatensor` and track the RPython numbers within

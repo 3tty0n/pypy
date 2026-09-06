@@ -8,7 +8,6 @@ class AppTestLlama(object):
     def test_llama_rmsnorm(self):
         import _metatensor, math
         from tensorpypy.functional import rms_norm, silu
-        from tensorpypy.models import rope
         rows, cols, eps = 3, 4, 1e-5
         data = [[0.5, -1.5, 2.0, 0.25], [1.0, 1.0, 1.0, 1.0],
                 [-3.0, 0.5, 0.125, 2.0]]
@@ -24,7 +23,6 @@ class AppTestLlama(object):
     def test_llama_silu(self):
         import _metatensor, math
         from tensorpypy.functional import rms_norm, silu
-        from tensorpypy.models import rope
         xs = [-4.0, -0.5, 0.0, 0.5, 3.0, 7.0]
         y = silu(_metatensor.tensor(xs)).tolist()
         for i, x in enumerate(xs):
@@ -32,8 +30,6 @@ class AppTestLlama(object):
 
     def test_llama_rope(self):
         import _metatensor, math
-        from tensorpypy.functional import rms_norm, silu
-        from tensorpypy.models import rope
         heads, dh, seq, theta = 2, 4, 3, 10000.0
         d = heads * dh
         half = dh // 2
@@ -43,25 +39,25 @@ class AppTestLlama(object):
             c = [math.cos(pos * f) for f in inv]
             s = [math.sin(pos * f) for f in inv]
             cos.extend((c + c) * heads)
-            sin.extend((s + s) * heads)
-        p = [0.0] * (d * d)
-        for h in range(heads):
-            o = h * dh
-            for j in range(dh):
-                if j < half:
-                    p[(o + j + half) * d + o + j] = -1.0
-                else:
-                    p[(o + j - half) * d + o + j] = 1.0
+            sin.extend(([-v for v in s] + s) * heads)
         x = [(i * 37 % 17) * 0.1 - 0.8 for i in range(seq * d)]
-        y = rope(_metatensor.tensor(x, [seq, d]),
-                            _metatensor.tensor(cos, [seq, d]),
-                            _metatensor.tensor(sin, [seq, d]),
-                            _metatensor.tensor(p, [d, d])).tolist()
+        xt = _metatensor.tensor(x, [seq, d])
+        y = xt.mul(_metatensor.tensor(cos, [seq, d])).add(
+            xt.rot_half(dh).mul(
+                _metatensor.tensor(sin, [seq, d]))).tolist()
         for pos in range(seq):
             for h in range(heads):
                 o = pos * d + h * dh
                 for j in range(dh):
                     rot = (-x[o + j + half] if j < half else x[o + j - half])
                     want = (x[o + j] * cos[pos * d + h * dh + j] +
-                            rot * sin[pos * d + h * dh + j])
+                            rot * abs(sin[pos * d + h * dh + j]))
                     assert abs(y[o + j] - want) < 1e-6
+
+    def test_rot_half_involution(self):
+        import _metatensor
+        x = [float(i) for i in range(12)]
+        t = _metatensor.tensor(x, [2, 6])
+        assert t.rot_half(6).rot_half(6).tolist() == x
+        assert t.rot_half(6).tolist() == [3.0, 4.0, 5.0, 0.0, 1.0, 2.0,
+                                          9.0, 10.0, 11.0, 6.0, 7.0, 8.0]

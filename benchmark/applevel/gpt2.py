@@ -21,12 +21,32 @@ def load(outdir):
 def build(cfg, buf, dtype):
     index = cfg['index']
 
-    def get(name):
+    def raw(name):
         off, shape = index[name]
         n = 1
         for d in shape:
             n *= d
-        return _metatensor.tensor(list(buf[off:off + n]), shape, False, dtype)
+        return list(buf[off:off + n]), shape
+
+    def get(name):
+        values, shape = raw(name)
+        return _metatensor.tensor(values, shape, False, dtype)
+
+    def cat(names):
+        parts = [raw(n) for n in names]
+        shape = parts[0][1]
+        if len(shape) == 1:
+            out = []
+            for values, _ in parts:
+                out.extend(values)
+            return _metatensor.tensor(out, [len(out)], False, dtype)
+        rows, cols = shape
+        out = []
+        for r in range(rows):
+            for values, _ in parts:
+                out.extend(values[r * cols:(r + 1) * cols])
+        return _metatensor.tensor(out, [rows, cols * len(parts)], False,
+                                  dtype)
 
     t = cfg['seq']
     h = cfg['n_head']
@@ -48,9 +68,8 @@ def build(cfg, buf, dtype):
     for i in range(cfg['n_layer']):
         p = 'h.%d.' % i
         attn = CausalSelfAttention(
-            get(p + 'attn.q.w'), get(p + 'attn.q.b'),
-            get(p + 'attn.k.w'), get(p + 'attn.k.b'),
-            get(p + 'attn.v.w'), get(p + 'attn.v.b'),
+            cat([p + 'attn.q.w', p + 'attn.k.w', p + 'attn.v.w']),
+            cat([p + 'attn.q.b', p + 'attn.k.b', p + 'attn.v.b']),
             get(p + 'attn.proj.w'), get(p + 'attn.proj.b'), h, mask)
         mlp = GPT2MLP(get(p + 'mlp.fc.w'), get(p + 'mlp.fc.b'),
                                  get(p + 'mlp.proj.w'), get(p + 'mlp.proj.b'))

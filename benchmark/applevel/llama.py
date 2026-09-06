@@ -20,12 +20,26 @@ def load(outdir):
 def build(cfg, buf, dtype):
     index = cfg['index']
 
-    def get(name):
+    def raw(name):
         off, shape = index[name]
         n = 1
         for d in shape:
             n *= d
-        return _metatensor.tensor(list(buf[off:off + n]), shape, False, dtype)
+        return list(buf[off:off + n]), shape
+
+    def get(name):
+        values, shape = raw(name)
+        return _metatensor.tensor(values, shape, False, dtype)
+
+    def cat(names):
+        parts = [raw(n) for n in names]
+        rows, cols = parts[0][1]
+        out = []
+        for r in range(rows):
+            for values, _ in parts:
+                out.extend(values[r * cols:(r + 1) * cols])
+        return _metatensor.tensor(out, [rows, cols * len(parts)], False,
+                                  dtype)
 
     t = cfg['seq']
     h = cfg['n_head']
@@ -38,14 +52,26 @@ def build(cfg, buf, dtype):
             for j in range(i + 1, t):
                 mask[(head * t + i) * t + j] = -1e9
     mask = _metatensor.tensor(mask, [h * t, t], False, dtype)
-    cos, sin, p = get('rope.cos'), get('rope.sin'), get('rope.p')
+    dh = cfg['head_dim']
+    cvals, cshape = raw('rope.cos')
+    svals, _ = raw('rope.sin')
+    d = cshape[1]
+    c3, s3 = [], []
+    for r in range(cshape[0]):
+        row = cvals[r * d:(r + 1) * d]
+        srow = svals[r * d:(r + 1) * d]
+        srow = [-v if (i % dh) < dh // 2 else v
+                for i, v in enumerate(srow)]
+        c3.extend(row + row + [1.0] * d)
+        s3.extend(srow + srow + [0.0] * d)
+    cos = _metatensor.tensor(c3, [cshape[0], 3 * d], False, dtype)
+    sin = _metatensor.tensor(s3, [cshape[0], 3 * d], False, dtype)
     blocks = []
     for i in range(cfg['n_layer']):
         pre = 'h.%d.' % i
         attn = LlamaAttention(
-            get(pre + 'attn.q.w'), get(pre + 'attn.k.w'),
-            get(pre + 'attn.v.w'), get(pre + 'attn.proj.w'), h, mask,
-            cos, sin, p)
+            cat([pre + 'attn.q.w', pre + 'attn.k.w', pre + 'attn.v.w']),
+            get(pre + 'attn.proj.w'), h, mask, cos, sin, dh)
         mlp = LlamaMLP(get(pre + 'mlp.gate.w'),
                                   get(pre + 'mlp.up.w'),
                                   get(pre + 'mlp.down.w'))

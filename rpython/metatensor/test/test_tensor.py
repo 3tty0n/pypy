@@ -988,6 +988,51 @@ class TestTransformer(LLJitMixin):
         for i in range(rows * d):
             assert abs(hr[i] - hg[i]) < 1e-9
 
+    def test_attn_strided_matches_dense(self):
+        heads, rows, dh = 3, 4, 2
+        d = heads * dh
+        q = core.zeros([rows, d])
+        k = core.zeros([rows, d])
+        v = core.zeros([rows, d])
+        qkv = core.zeros([rows, 3 * d])
+        for i in range(rows * d):
+            q.host[i] = (i % 5) - 2.0
+            k.host[i] = ((i * 3) % 7) - 3.0
+            v.host[i] = ((i * 5) % 11) - 5.0
+        for r in range(rows):
+            for j in range(d):
+                qkv.host[r * 3 * d + j] = q.host[r * d + j]
+                qkv.host[r * 3 * d + d + j] = k.host[r * d + j]
+                qkv.host[r * 3 * d + 2 * d + j] = v.host[r * d + j]
+        ref_s = nn.Tensor(q).attn_scores(nn.Tensor(k), heads, rows, dh)
+        f = nn.Tensor(qkv)
+        got_s = f.attn_scores(f, heads, rows, dh, 3 * d, 3 * d, 0, d)
+        hr = device.host(ref_s.t)
+        hg = device.host(got_s.t)
+        for i in range(heads * rows * rows):
+            assert abs(hr[i] - hg[i]) < 1e-9
+        ref_c = ref_s.attn_context(nn.Tensor(v), heads, rows, dh)
+        got_c = got_s.attn_context(f, heads, rows, dh, 3 * d, 2 * d)
+        hr = device.host(ref_c.t)
+        hg = device.host(got_c.t)
+        assert ops.tensor_size(got_c.t) == rows * d
+        for i in range(rows * d):
+            assert abs(hr[i] - hg[i]) < 1e-9
+
+    def test_rot_half_matches_permutation(self):
+        rows, dh, blocks = 3, 4, 2
+        d = dh * blocks
+        x = core.zeros([rows, d])
+        for i in range(rows * d):
+            x.host[i] = (i % 9) - 4.0
+        y = device.host(runtime.rot_half(x, dh))
+        half = dh // 2
+        for r in range(rows):
+            for b in range(blocks):
+                o = r * d + b * dh
+                for j in range(dh):
+                    assert y[o + j] == x.host[o + (j + half) % dh]
+
     def test_transformer_block_forward(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'block', 'acc'])
         def f(n):

@@ -174,6 +174,7 @@ config = Config()
 GA_IM2COL, GA_COL2CHW, GA_MAXPOOL = 0, 1, 2
 GA_HEADSPLIT, GA_HEADMERGE = 3, 4
 GA_ROWS = 5
+GA_ROTHALF = 6
 
 
 def _shape2(rows, cols):

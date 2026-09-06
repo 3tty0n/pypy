@@ -136,37 +136,51 @@ class W_Tensor(W_Root):
         except ValueError:
             raise oefmt(space.w_ValueError, "shape mismatch")
 
-    @unwrap_spec(heads=int)
-    def descr_attn_scores(self, space, w_other, heads):
+    @unwrap_spec(heads=int, dcols=int, off_a=int, off_b=int)
+    def descr_attn_scores(self, space, w_other, heads, dcols=-1, off_a=0,
+                          off_b=0):
         t = self.tensor.t
         other = self._other(space, w_other)
         if (heads <= 0 or ops.tensor_ndim(t) != 2 or
                 ops.tensor_ndim(other.t) != 2):
             raise oefmt(space.w_ValueError, "shape mismatch")
         rows = ops.tensor_shape(t, 0)
-        d = ops.tensor_shape(t, 1)
-        if (d % heads != 0 or ops.tensor_shape(other.t, 0) != rows or
-                ops.tensor_shape(other.t, 1) != d or
+        lda = ops.tensor_shape(t, 1)
+        ldb = ops.tensor_shape(other.t, 1)
+        d = lda if dcols <= 0 else dcols
+        if (d % heads != 0 or off_a < 0 or off_b < 0 or
+                off_a + d > lda or off_b + d > ldb or
+                ops.tensor_shape(other.t, 0) != rows or
                 ops.tensor_dtype(other.t) != ops.tensor_dtype(t)):
             raise oefmt(space.w_ValueError, "shape mismatch")
-        return W_Tensor(self.tensor.attn_scores(other, heads, rows,
-                                                d // heads))
+        return W_Tensor(self.tensor.attn_scores(
+            other, heads, rows, d // heads, lda, ldb, off_a, off_b))
 
-    @unwrap_spec(heads=int)
-    def descr_attn_context(self, space, w_other, heads):
+    @unwrap_spec(heads=int, dcols=int, off_b=int)
+    def descr_attn_context(self, space, w_other, heads, dcols=-1, off_b=0):
         t = self.tensor.t
         other = self._other(space, w_other)
         if (heads <= 0 or ops.tensor_ndim(t) != 2 or
                 ops.tensor_ndim(other.t) != 2):
             raise oefmt(space.w_ValueError, "shape mismatch")
         rows = ops.tensor_shape(t, 1)
-        d = ops.tensor_shape(other.t, 1)
+        ldb = ops.tensor_shape(other.t, 1)
+        d = ldb if dcols <= 0 else dcols
         if (ops.tensor_shape(t, 0) != heads * rows or d % heads != 0 or
+                off_b < 0 or off_b + d > ldb or
                 ops.tensor_shape(other.t, 0) != rows or
                 ops.tensor_dtype(other.t) != ops.tensor_dtype(t)):
             raise oefmt(space.w_ValueError, "shape mismatch")
-        return W_Tensor(self.tensor.attn_context(other, heads, rows,
-                                                 d // heads))
+        return W_Tensor(self.tensor.attn_context(
+            other, heads, rows, d // heads, ldb, off_b))
+
+    @unwrap_spec(dh=int)
+    def descr_rot_half(self, space, dh):
+        t = self.tensor.t
+        if (dh <= 1 or dh % 2 != 0 or ops.tensor_ndim(t) != 2 or
+                ops.tensor_shape(t, 1) % dh != 0):
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        return W_Tensor(self.tensor.rot_half(dh))
 
     @unwrap_spec(heads=int)
     def descr_head_split(self, space, heads):
@@ -331,6 +345,7 @@ W_Tensor.typedef = TypeDef(
     reshape=interp2app(W_Tensor.descr_reshape),
     attn_scores=interp2app(W_Tensor.descr_attn_scores),
     attn_context=interp2app(W_Tensor.descr_attn_context),
+    rot_half=interp2app(W_Tensor.descr_rot_half),
     head_split=interp2app(W_Tensor.descr_head_split),
     head_merge=interp2app(W_Tensor.descr_head_merge),
     bmm=interp2app(W_Tensor.descr_bmm),

@@ -315,9 +315,14 @@ class AppTestTensor(object):
                 for j in range(i + 1, t):
                     mask[(head * t + i) * t + j] = -1e9
         mask = _metatensor.tensor(mask, [h * t, t])
+        wqkv = []
+        for r in range(d):
+            for k in [3, 5, 2]:
+                wqkv.extend([float(((i * k) % 7) - 3) / 8.0
+                             for i in range(r * d, (r + 1) * d)])
         attn = CausalSelfAttention(
-            mat(d, d, 3), vec(d, 0.0), mat(d, d, 5), vec(d, 0.0),
-            mat(d, d, 2), vec(d, 0.0), mat(d, d, 4), vec(d, 0.0), h, mask)
+            _metatensor.tensor(wqkv, [d, 3 * d]), vec(3 * d, 0.0),
+            mat(d, d, 4), vec(d, 0.0), h, mask)
         mlp = GPT2MLP(mat(d, 4 * d, 3), vec(4 * d, 0.0),
                                  mat(4 * d, d, 5), vec(d, 0.0))
         block = GPT2Block(attn, vec(d, 1.0), vec(d, 0.0),
@@ -337,6 +342,33 @@ class AppTestTensor(object):
         assert abs(a.mul(pick).sum().item() -
                    b.mul(pick).sum().item()) < 1e-12
         assert abs(a.sum().item() - b.sum().item()) > 1e-9
+
+    def test_attn_strided_slices(self):
+        import _metatensor
+        rows, d, h = 3, 4, 2
+
+        def gen(k):
+            return [float(((i * k) % 11) - 5) / 8.0 for i in range(rows * d)]
+
+        q, k, v = gen(3), gen(5), gen(2)
+        fused = []
+        for r in range(rows):
+            for part in (q, k, v):
+                fused.extend(part[r * d:(r + 1) * d])
+        qkv = _metatensor.tensor(fused, [rows, 3 * d])
+        qt = _metatensor.tensor(q, [rows, d])
+        kt = _metatensor.tensor(k, [rows, d])
+        vt = _metatensor.tensor(v, [rows, d])
+        s0 = qt.attn_scores(kt, h).tolist()
+        s1 = qkv.attn_scores(qkv, h, d, 0, d).tolist()
+        assert len(s0) == len(s1)
+        for a, b in zip(s0, s1):
+            assert abs(a - b) < 1e-9
+        p0 = _metatensor.tensor(s0, [h * rows, rows])
+        c0 = p0.attn_context(vt, h).tolist()
+        c1 = p0.attn_context(qkv, h, d, 2 * d).tolist()
+        for a, b in zip(c0, c1):
+            assert abs(a - b) < 1e-9
 
     def test_take_rows(self):
         import _metatensor

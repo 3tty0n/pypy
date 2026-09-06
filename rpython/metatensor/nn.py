@@ -135,26 +135,39 @@ class Tensor(object):
                                0, tb),
             node, needs)
 
-    def attn_scores(self, k, heads, rows, dh):
+    def attn_scores(self, k, heads, rows, dh, lda=0, ldb=0, oa=0, ob=0):
         d = heads * dh
+        if lda <= 0:
+            lda = d
+        if ldb <= 0:
+            ldb = d
         node = None
         needs = self.requires_grad or k.requires_grad
         if needs:
-            node = AttnScoresNode(self, k, heads, rows, dh)
+            node = AttnScoresNode(self, k, heads, rows, dh, lda, ldb, oa, ob)
         return self._wrap(runtime.tensor_bmm(
-            self.t, k.t, heads, rows, rows, dh, 0, 1, d, d, rows,
-            dh, dh, rows * rows, heads * rows * rows, heads * rows),
-            node, needs)
+            self.t, k.t, heads, rows, rows, dh, 0, 1, lda, ldb, rows,
+            dh, dh, rows * rows, heads * rows * rows, heads * rows,
+            oa, ob), node, needs)
 
-    def attn_context(self, v, heads, rows, dh):
+    def attn_context(self, v, heads, rows, dh, ldb=0, ob=0):
         d = heads * dh
+        if ldb <= 0:
+            ldb = d
         node = None
         needs = self.requires_grad or v.requires_grad
         if needs:
-            node = AttnContextNode(self, v, heads, rows, dh)
+            node = AttnContextNode(self, v, heads, rows, dh, ldb, ob)
         return self._wrap(runtime.tensor_bmm(
-            self.t, v.t, heads, rows, dh, rows, 0, 0, rows, d, d,
-            rows * rows, dh, dh, rows * d, rows), node, needs)
+            self.t, v.t, heads, rows, dh, rows, 0, 0, rows, ldb, d,
+            rows * rows, dh, dh, rows * d, rows, 0, ob), node, needs)
+
+    def rot_half(self, dh):
+        node = None
+        if self.requires_grad:
+            node = RotHalfNode(self, dh)
+        return self._wrap(runtime.rot_half(self.t, dh), node,
+                          self.requires_grad)
 
     def head_split(self, rows, dh, heads):
         node = None
@@ -295,6 +308,12 @@ def _lp(p):
 def _neg(t):
     return ops.tensor_mul(t, runtime.scalar(-1.0),
                               core.BC_R_SCALAR)
+
+
+def _z(ld, d):
+    if ld != d:
+        return 1
+    return 0
 
 
 class Node(object):
@@ -536,61 +555,83 @@ class BmmNode(Node):
 
 
 class AttnScoresNode(Node):
-    def __init__(self, q, k, heads, rows, dh):
+    def __init__(self, q, k, heads, rows, dh, lda, ldb, oa, ob):
         inputs = [q]
         inputs.append(k)
         Node.__init__(self, inputs)
         self.heads = heads
         self.rows = rows
         self.dh = dh
+        self.lda = lda
+        self.ldb = ldb
+        self.oa = oa
+        self.ob = ob
 
     def apply(self, g):
         q = self.inputs[0]
         k = self.inputs[1]
         h, rows, dh = self.heads, self.rows, self.dh
         d = h * dh
+        la, lb = self.lda, self.ldb
         gq = None
         gk = None
         if q.requires_grad:
             gq = Tensor(runtime.tensor_bmm(
-                g.t, k.t, h, rows, dh, rows, 0, 0, rows, d, d,
-                rows * rows, dh, dh, rows * d, rows))
+                g.t, k.t, h, rows, dh, rows, 0, 0, rows, lb, la,
+                rows * rows, dh, dh, rows * la, rows,
+                0, self.ob, self.oa, _z(la, d)))
         if k.requires_grad:
             gk = Tensor(runtime.tensor_bmm(
-                g.t, q.t, h, rows, dh, rows, 1, 0, rows, d, d,
-                rows * rows, dh, dh, rows * d, rows))
+                g.t, q.t, h, rows, dh, rows, 1, 0, rows, la, lb,
+                rows * rows, dh, dh, rows * lb, rows,
+                0, self.oa, self.ob, _z(lb, d)))
         grads = [gq]
         grads.append(gk)
         return grads
 
 
 class AttnContextNode(Node):
-    def __init__(self, p, v, heads, rows, dh):
+    def __init__(self, p, v, heads, rows, dh, ldb, ob):
         inputs = [p]
         inputs.append(v)
         Node.__init__(self, inputs)
         self.heads = heads
         self.rows = rows
         self.dh = dh
+        self.ldb = ldb
+        self.ob = ob
 
     def apply(self, g):
         p = self.inputs[0]
         v = self.inputs[1]
         h, rows, dh = self.heads, self.rows, self.dh
         d = h * dh
+        lb = self.ldb
         gp = None
         gv = None
         if p.requires_grad:
             gp = Tensor(runtime.tensor_bmm(
-                g.t, v.t, h, rows, rows, dh, 0, 1, d, d, rows,
-                dh, dh, rows * rows, h * rows * rows, h * rows))
+                g.t, v.t, h, rows, rows, dh, 0, 1, d, lb, rows,
+                dh, dh, rows * rows, h * rows * rows, h * rows,
+                0, self.ob))
         if v.requires_grad:
             gv = Tensor(runtime.tensor_bmm(
-                p.t, g.t, h, rows, dh, rows, 1, 0, rows, d, d,
-                rows * rows, dh, dh, rows * d, rows))
+                p.t, g.t, h, rows, dh, rows, 1, 0, rows, d, lb,
+                rows * rows, dh, dh, rows * lb, rows,
+                0, 0, self.ob, _z(lb, d)))
         grads = [gp]
         grads.append(gv)
         return grads
+
+
+class RotHalfNode(Node):
+    def __init__(self, x, dh):
+        inputs = [x]
+        Node.__init__(self, inputs)
+        self.dh = dh
+
+    def apply(self, g):
+        return [Tensor(runtime.rot_half(g.t, self.dh))]
 
 
 class HeadSplitNode(Node):
@@ -728,14 +769,14 @@ def mha(x, wq, wk, wv, wo, heads):
     rows = ops.tensor_shape(x.t, 0)
     d = ops.tensor_shape(x.t, 1)
     dh = d // heads
-    q = x._matmul(wq, rows, d, d, 0).head_split(rows, dh, heads)
-    k = x._matmul(wk, rows, d, d, 0).head_split(rows, dh, heads)
-    v = x._matmul(wv, rows, d, d, 0).head_split(rows, dh, heads)
-    scores = q.bmm(k, heads, rows, rows, dh, 1)
+    q = x._matmul(wq, rows, d, d, 0)
+    k = x._matmul(wk, rows, d, d, 0)
+    v = x._matmul(wv, rows, d, d, 0)
+    scores = q.attn_scores(k, heads, rows, dh)
     scale = Tensor(runtime.scalar(1.0 / math.sqrt(dh)))
     scaled = scores.mul(scale, core.BC_R_SCALAR)
-    ctx = softmax(scaled).bmm(v, heads, rows, dh, rows, 0)
-    return ctx.head_merge(rows, dh, heads)._matmul(wo, rows, d, d, 0)
+    ctx = softmax(scaled).attn_context(v, heads, rows, dh)
+    return ctx._matmul(wo, rows, d, d, 0)
 
 
 class MultiHead(object):

@@ -42,13 +42,9 @@ class CNN(Module):
 
 
 class CausalSelfAttention(Module):
-    def __init__(self, wq, bq, wk, bk, wv, bv, wo, bo, heads, mask):
-        self.wq = wq
-        self.bq = bq
-        self.wk = wk
-        self.bk = bk
-        self.wv = wv
-        self.bv = bv
+    def __init__(self, wqkv, bqkv, wo, bo, heads, mask):
+        self.wqkv = wqkv
+        self.bqkv = bqkv
         self.wo = wo
         self.bo = bo
         self.heads = heads
@@ -57,13 +53,12 @@ class CausalSelfAttention(Module):
     def forward(self, x):
         import math
         h = self.heads
-        dh = x.shape[1] // h
-        q = x.matmul(self.wq).add(self.bq)
-        k = x.matmul(self.wk).add(self.bk)
-        v = x.matmul(self.wv).add(self.bv)
-        s = q.attn_scores(k, h).mul(
+        d = x.shape[1]
+        dh = d // h
+        qkv = x.matmul(self.wqkv).add(self.bqkv)
+        s = qkv.attn_scores(qkv, h, d, 0, d).mul(
             _scalar(1.0 / math.sqrt(dh), x.dtype)).add(self.mask)
-        c = softmax(s).attn_context(v, h)
+        c = softmax(s).attn_context(qkv, h, d, 2 * d)
         return c.matmul(self.wo).add(self.bo)
 
 
@@ -110,32 +105,26 @@ class GPT2(Module):
         return x.matmul(self.wte, True)
 
 
-def rope(x, cos, sin, p):
-    return x.mul(cos).add(x.matmul(p).mul(sin))
-
-
 class LlamaAttention(Module):
-    def __init__(self, wq, wk, wv, wo, heads, mask, cos, sin, p):
-        self.wq = wq
-        self.wk = wk
-        self.wv = wv
+    def __init__(self, wqkv, wo, heads, mask, cos, sin, head_dim):
+        self.wqkv = wqkv
         self.wo = wo
         self.heads = heads
         self.mask = mask
         self.cos = cos
         self.sin = sin
-        self.p = p
+        self.head_dim = head_dim
 
     def forward(self, x):
         import math
         h = self.heads
-        dh = x.shape[1] // h
-        q = rope(x.matmul(self.wq), self.cos, self.sin, self.p)
-        k = rope(x.matmul(self.wk), self.cos, self.sin, self.p)
-        v = x.matmul(self.wv)
-        s = q.attn_scores(k, h).mul(
+        d = x.shape[1]
+        dh = d // h
+        qkv = x.matmul(self.wqkv)
+        qkv = qkv.mul(self.cos).add(qkv.rot_half(self.head_dim).mul(self.sin))
+        s = qkv.attn_scores(qkv, h, d, 0, d).mul(
             _scalar(1.0 / math.sqrt(dh), x.dtype)).add(self.mask)
-        c = softmax(s).attn_context(v, h)
+        c = softmax(s).attn_context(qkv, h, d, 2 * d)
         return c.matmul(self.wo)
 
 
