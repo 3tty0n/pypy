@@ -283,7 +283,7 @@ def launch_gpu(kernel, inputs):
     c = cols(inputs[big])
     outlen = n
     shape = inputs[big].shape
-    elems = config.block
+    elems = config.flat
     if kernel.rowmode:
         if c <= 0 or c > row_tile(kernel) or n % c != 0:
             return NULLTENSOR
@@ -356,7 +356,7 @@ def gather_gpu(op, params, x, outn, shape):
         ok = rffi.cast(lltype.Signed, rt_cuda_launch(
             kernel.fn, ins, rffi.cast(rffi.INT, 1), outn, outs,
             rffi.cast(rffi.INT, 1), rffi.cast(rffi.INT, kernel.threads),
-            config.block, rffi.cast(rffi.INT, kernel.shared),
+            config.flat, rffi.cast(rffi.INT, kernel.shared),
             rffi.cast(rffi.INT, kernel.nextra), 0)) != 0
     result = NULLTENSOR
     if ok:
@@ -387,7 +387,7 @@ def rowgather_gpu(table, idx, rows, cols):
         ok = rffi.cast(lltype.Signed, rt_cuda_launch(
             kernel.fn, ins, rffi.cast(rffi.INT, 2), outn, outs,
             rffi.cast(rffi.INT, 1), rffi.cast(rffi.INT, kernel.threads),
-            config.block, rffi.cast(rffi.INT, kernel.shared),
+            config.flat, rffi.cast(rffi.INT, kernel.shared),
             rffi.cast(rffi.INT, kernel.nextra), 0)) != 0
     result = NULLTENSOR
     if ok:

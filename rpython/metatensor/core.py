@@ -168,6 +168,7 @@ def note_cols(c):
 
 class Config(object):
     block = 4096
+    flat = 4096
     num_warps = 8
 config = Config()
 GA_IM2COL, GA_COL2CHW, GA_MAXPOOL = 0, 1, 2

@@ -30,6 +30,7 @@ def single_kernel(opcode, p, dtype):
 def init_device():
     try:
         config.block = int(_env('RTENSOR_BLOCK', '4096'))
+        config.flat = int(_env('RTENSOR_FLAT_BLOCK', '4096'))
         config.num_warps = int(_env('RTENSOR_WARPS', '8'))
         profile.enabled = os.environ.get('RTENSOR_PROFILE') is not None
         rt_cuda_set_budget(int(_env('RTENSOR_BUDGET_MB', '8')) << 20)
@@ -460,7 +461,7 @@ def to_ttir_row(kernel, name, modes):
 def to_ttir_flat(kernel, name):
     nodes = kernel.nodes
     nin = kernel.ninputs
-    BLOCK = config.block
+    BLOCK = config.flat
     masked = kernel.n == 0 or kernel.n % BLOCK != 0
     dt = kernel.dtype
     S = STORE_TYPE[dt]
@@ -831,7 +832,7 @@ def _gather_index(e, op, params, I64, I1):
 
 
 def to_ttir_rowgather(params, name, dtype):
-    BLOCK = config.block
+    BLOCK = config.flat
     S = STORE_TYPE[dtype]
     cols = params[0]
     T = 'tensor<%dx%s>' % (BLOCK, S)
@@ -882,7 +883,7 @@ def to_ttir_rowgather(params, name, dtype):
 def to_ttir_gather(op, params, name, dtype):
     if op == GA_ROWS:
         return to_ttir_rowgather(params, name, dtype)
-    BLOCK = config.block
+    BLOCK = config.flat
     S = STORE_TYPE[dtype]
     C = COMP_TYPE[dtype]
     half = S != C

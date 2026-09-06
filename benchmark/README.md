@@ -13,6 +13,9 @@ unless noted, steady-state microseconds per iteration.
 
 Other env vars: `RTENSOR_DTYPE` (`float64|float32|float16`), `RTENSOR_CPU=1`
 (no GPU), `RTENSOR_BUDGET_MB` (device GC byte threshold, default 8),
+`RTENSOR_FLAT_BLOCK` (elements per block of the elementwise and gather
+kernels, default 4096; `256` is 6% faster on distilgpt2 and 4% on SmolLM2,
+19% slower on a 1e6-element chain),
 `RTENSOR_PROFILE=1`, `CUDA_HOME`, `RTENSOR_CUBLAS` (path to `libcublas.so`; read at
 run time, and if set at translation time it becomes the compiled-in default,
 otherwise `libcublas.so` is looked up through the dynamic loader).
@@ -91,6 +94,11 @@ about 1.3x:
 ## Pitfalls
 
 - The JIT loop threshold is 1039 by default; the bench sets `threshold=3`.
+- `RTENSOR_BLOCK` bounds the row-kernel tile as well as being the default
+  elementwise block, so lowering it past the widest row silently routes row
+  kernels to the CPU (10x slower).  `RTENSOR_FLAT_BLOCK` moves the
+  elementwise and gather block on its own.  A 64x768 tensor at the default
+  4096 fills 12 of the GPU's 82 SMs.
 - Tensor ops are elidable, so a chain over loop-invariant inputs is hoisted;
   carry the result across iterations.
 - Device buffers under 8 MB are carved from 32 MB slabs; a fresh `cuMemAlloc`
