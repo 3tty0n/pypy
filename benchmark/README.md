@@ -65,7 +65,10 @@ Launches per iteration in fused mode: chain 1, Transformer forward 5,
 attention-only 1, CNN 6, Transformer training 96 (eager mode: 38, 10, 251).  Where we win it is
 fewer launches and no graph breaks at Python control flow; where we lose
 (large training steps) the cuBLAS matmul share dominates and the residual
-is not yet attributed.  Raw runs are in `results/`.
+is not yet attributed.  A fused elementwise chain only runs as one row
+kernel when its row fits a tile, so a column broadcast over a row wider
+than `RTENSOR_BLOCK` is compiled flat instead of falling back to the
+per-node CPU path.  Raw runs are in `results/`.
 
 Real HuggingFace checkpoints (`applevel/gpt2_export.py` writes the weights,
 `applevel/gpt2.py` runs them on our PyPy, `applevel/gpt2_torch.py` runs
@@ -83,8 +86,8 @@ and 1.5e-4 for SmolLM2):
 | bert_uncased_L-4_H-256_A-4 (4 layers, 256, 4 heads) | 664 | 781 | 1590 |
 | vit-tiny-patch16-224 (12 layers, 192, 3 heads, 197 tokens) | 1649 | 2086 | 3383 |
 | mixer_b16_224 (12 layers, 768, 196 tokens) | 3793 | 3126 | 2872 |
-| resnet18, batch 1 | 7069 | 972 | 1402 |
-| resnet18, batch 8 | 151300 | 2244 | 2352 |
+| resnet18, batch 1 | 961 | 959 | 1400 |
+| resnet18, batch 8 | 3688 | 2201 | 2240 |
 
 The BERT, ViT, Mixer and ResNet triples are `applevel/{bert,vit,mixer,resnet}
 {_export,,_torch}.py` and follow the GPT-2 pattern: the export script writes
@@ -99,7 +102,7 @@ and Mixer identical top-5 with 1.2e-5 and 3.7e-5; ResNet-18 identical top-5
 with 5.3e-3 against torch on the GPU but 7.6e-6 against a plain fp32 numpy
 reference of the same arithmetic, so the gap is torch's TF32 convolutions,
 not ours.  Launches per iteration: BERT-mini 68 (17 per layer), ViT 172,
-Mixer 243, ResNet-18 80.
+Mixer 243, ResNet-18 81.
 
 New primitives per model: BERT needed none -- the exact (erf) GELU is built
 app-level out of `relu`/`mul`/`add`/`div`/`exp` with the Abramowitz-Stegun

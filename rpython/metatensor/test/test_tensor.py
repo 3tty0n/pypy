@@ -1100,6 +1100,18 @@ def _filled(shape, base):
     return t
 
 
+def test_wide_column_broadcast_stays_on_gpu():
+    assert not kernels.single_kernel(core.MUL, core.BC_R_COL,
+                                     core.policy.dtype).rowmode
+    c = kernels.config.block + 1
+    x = _filled([2, c], 1.0)
+    col = _filled([2, 1], 0.5)
+    r = ops.mul(x, col)
+    h = device.host(r)
+    assert h[0] == 1.0 * 0.5
+    assert h[c] == (1.0 + c) * 1.5
+
+
 def test_column_broadcast_shapes():
     x = _filled([3, 4], 1.0)
     assert ops.bcast(x, _filled([4], 0.5)) == core.BC_R_ROW

@@ -258,6 +258,8 @@ def row_mode(kernel, modes):
         if is_reduction(node.opcode) and node.p == 1:
             if k == len(nodes) - 1 or modes[nin + k] == 3:
                 return True
+    if kernel.cols <= 0 or kernel.cols > config.block:
+        return False
     for i in range(nin):
         if modes[i] == 3:
             return True
