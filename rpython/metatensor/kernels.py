@@ -755,21 +755,30 @@ def _gaddc(e, a, v, ty):
     return _gbin(e, 'addi', a, _gconst(e, v, ty), ty)
 
 
+def _gclamp(e, a, hi, ty):
+    a = _gbin(e, 'maxsi', a, _gconst(e, 0, ty), ty)
+    return _gbin(e, 'minsi', a, _gconst(e, hi, ty), ty)
+
+
 def _gather_index(e, op, params, I64, I1):
     off = '%offs64'
     srcs = []
     if op == GA_IM2COL:
-        n, c, h, w, k, pad = (params[0], params[1], params[2], params[3],
-                              params[4], params[5])
+        n, c, h, w, k, pad, stride = (params[0], params[1], params[2],
+                                      params[3], params[4], params[5],
+                                      params[6])
         hw = h * w
         kk = k * k
         ckk = c * kk
+        oh = (h + 2 * pad - k) // stride + 1
+        ow = (w + 2 * pad - k) // stride + 1
+        ohw = oh * ow
         row = _gdiv(e, off, ckk, I64)
         col = _gmod(e, off, ckk, I64)
-        img = _gdiv(e, row, hw, I64)
-        pos = _gmod(e, row, hw, I64)
-        ph = _gdiv(e, pos, w, I64)
-        pw = _gmod(e, pos, w, I64)
+        img = _gdiv(e, row, ohw, I64)
+        pos = _gmod(e, row, ohw, I64)
+        ph = _gmul(e, _gdiv(e, pos, ow, I64), stride, I64)
+        pw = _gmul(e, _gmod(e, pos, ow, I64), stride, I64)
         ch = _gdiv(e, col, kk, I64)
         rk = _gmod(e, col, kk, I64)
         ih = _gaddc(e, _gbin(e, 'addi', ph, _gdiv(e, rk, k, I64), I64),
@@ -819,23 +828,22 @@ def _gather_index(e, op, params, I64, I1):
                           _gbin(e, 'addi', _gmul(e, ii, sstride, I64),
                                 _gmul(e, oi, dh, I64), I64), ci, I64))
         return srcs, ''
-    n, c, h, w = params[0], params[1], params[2], params[3]
-    oh = h // 2
-    ow = w // 2
-    pw = _gmod(e, off, ow, I64)
+    n, c, h, w, k, stride, pad = (params[0], params[1], params[2], params[3],
+                                  params[4], params[5], params[6])
+    oh = (h + 2 * pad - k) // stride + 1
+    ow = (w + 2 * pad - k) // stride + 1
+    pw = _gmul(e, _gmod(e, off, ow, I64), stride, I64)
     q = _gdiv(e, off, ow, I64)
-    ph = _gmod(e, q, oh, I64)
-    q2 = _gdiv(e, q, oh, I64)
-    ch = _gmod(e, q2, c, I64)
-    img = _gdiv(e, q2, c, I64)
-    base = _gbin(e, 'addi', _gmul(e, img, c * h * w, I64),
-                 _gmul(e, ch, h * w, I64), I64)
-    base = _gbin(e, 'addi', base, _gmul(e, ph, 2 * w, I64), I64)
-    base = _gbin(e, 'addi', base, _gmul(e, pw, 2, I64), I64)
-    srcs.append(base)
-    srcs.append(_gaddc(e, base, 1, I64))
-    srcs.append(_gaddc(e, base, w, I64))
-    srcs.append(_gaddc(e, base, w + 1, I64))
+    ph = _gmul(e, _gmod(e, q, oh, I64), stride, I64)
+    plane = _gdiv(e, q, oh, I64)
+    base = _gmul(e, plane, h * w, I64)
+    for a in range(k):
+        ih = _gclamp(e, _gaddc(e, ph, a - pad, I64), h - 1, I64)
+        for b in range(k):
+            iw = _gclamp(e, _gaddc(e, pw, b - pad, I64), w - 1, I64)
+            srcs.append(_gbin(e, 'addi', base,
+                              _gbin(e, 'addi', _gmul(e, ih, w, I64), iw,
+                                    I64), I64))
     return srcs, ''
 
 

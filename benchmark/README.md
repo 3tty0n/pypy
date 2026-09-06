@@ -79,6 +79,57 @@ and 1.5e-4 for SmolLM2):
 | distilgpt2 (6 layers, 768, 12 heads) | 1372 | 1297 | 2461 |
 | sshleifer/tiny-gpt2 (2 layers, width 2) | 189 | 371 | 1431 |
 | SmolLM2-135M (Llama, 30 layers, 576, 9/3 heads) | 4097 | 5342 | 14755 |
+| prajjwal1/bert-tiny (2 layers, 128, 2 heads) | 393 | 483 | 968 |
+| bert_uncased_L-4_H-256_A-4 (4 layers, 256, 4 heads) | 664 | 781 | 1590 |
+| vit-tiny-patch16-224 (12 layers, 192, 3 heads, 197 tokens) | 1649 | 2086 | 3383 |
+| mixer_b16_224 (12 layers, 768, 196 tokens) | 3793 | 3126 | 2872 |
+| resnet18, batch 1 | 7069 | 972 | 1402 |
+| resnet18, batch 8 | 151300 | 2244 | 2352 |
+
+The BERT, ViT, Mixer and ResNet triples are `applevel/{bert,vit,mixer,resnet}
+{_export,,_torch}.py` and follow the GPT-2 pattern: the export script writes
+the real checkpoint to `weights.bin` plus `index.json`, our runner runs it on
+our PyPy and dumps the logits, the torch runner runs the reference model
+(`BertForMaskedLM`, `ViTForImageClassification`, `timm`) on the same ids or
+the same pixel tensor and reports `maxabsdiff` against them.  Medians of 3
+interleaved rounds, 200 iterations after 30 warmup, float32, seq 64 for BERT
+and one real 224x224 photo for the vision models.  Agreement: BERT argmax at
+all 64 positions, max logits difference 3.1e-5 (tiny) and 2.1e-5 (mini); ViT
+and Mixer identical top-5 with 1.2e-5 and 3.7e-5; ResNet-18 identical top-5
+with 5.3e-3 against torch on the GPU but 7.6e-6 against a plain fp32 numpy
+reference of the same arithmetic, so the gap is torch's TF32 convolutions,
+not ours.  Launches per iteration: BERT-mini 68 (17 per layer), ViT 172,
+Mixer 243, ResNet-18 80.
+
+New primitives per model: BERT needed none -- the exact (erf) GELU is built
+app-level out of `relu`/`mul`/`add`/`div`/`exp` with the Abramowitz-Stegun
+7.1.26 approximation (max error 1.4e-7) and fuses into the surrounding
+elementwise chain, and bidirectional attention is the causal one with the
+mask argument left out.  ViT needed none: the 16x16 stride-16 patch
+embedding is a row gather (`take`) over the image viewed as a (rows, 16)
+table, and the CLS token is one extra all-zero gathered row plus a constant,
+so patch embedding, CLS and position embeddings are one gather, one GEMM and
+one add.  Mixer needed none beyond the strided `im2col` below: token mixing
+is `W @ X` with the bias broadcast down a column, so the (patches, channels)
+activation is never transposed.  ResNet-18 needed the only interp-level
+change in this batch: `im2col` grew a `stride` parameter and `maxpool2` grew
+`k`, `stride` and `pad` (max pooling clamps out-of-range window positions
+instead of masking them, which is exact because a clamped position is always
+another position of the same window), so `conv2d`, `Conv2d` and `MaxPool2d`
+now take `k`, `stride` and `pad` and cover the 7x7 stride-2 stem, the
+stride-2 3x3 and 1x1 downsample convolutions and the 3x3 stride-2 pad-1 pool.
+
+What fuses in ResNet: every BatchNorm (a column-broadcast multiply and add),
+its ReLU and the residual addition collapse into a single elementwise kernel
+per convolution -- the 80 launches are 3 per convolution (im2col gather,
+cuBLAS GEMM, col2chw scatter) for 20 convolutions plus one per fused
+epilogue.  What does not fuse is the
+convolution itself: im2col materializes a (rows, c*k*k) buffer, so the
+gather, the GEMM and the scatter stay three separate launches and the
+9x memory blow-up of the 3x3 stem-resolution convolutions is why we are 5x
+slower than torch's cudnn here, and why batch 8 is 20x worse per image
+(same 86 launches per iteration, so it is bandwidth and allocation, not
+launch count -- unresolved).
 
 q, k and v are one GEMM against a weight concatenated at model build time,
 so attention reads q, k and v as column slices of one (rows, 3d) buffer

@@ -243,42 +243,45 @@ class W_Tensor(W_Root):
         cols = ops.tensor_shape(t, 1)
         return W_Tensor(nn.Tensor(runtime.rowgather(t, idx, rows, cols)))
 
-    @unwrap_spec(c=int, h=int, w=int, k=int, pad=int)
-    def descr_im2col(self, space, c, h, w, k=3, pad=1):
+    @unwrap_spec(c=int, h=int, w=int, k=int, pad=int, stride=int)
+    def descr_im2col(self, space, c, h, w, k=3, pad=1, stride=1):
         t = self.tensor.t
-        if c <= 0 or h <= 0 or w <= 0 or k <= 0 or pad < 0:
-            raise oefmt(space.w_ValueError, "shape mismatch")
-        if ops.tensor_size(t) % (c * h * w) != 0:
-            raise oefmt(space.w_ValueError, "shape mismatch")
-        return W_Tensor(nn.Tensor(runtime.im2col(t, c, h, w, k, pad)))
+        self._conv_check(space, c, h, w, k, pad, stride)
+        return W_Tensor(nn.Tensor(runtime.im2col(t, c, h, w, k, pad, stride)))
 
-    @unwrap_spec(c=int, h=int, w=int)
-    def descr_maxpool2(self, space, c, h, w):
+    def _conv_check(self, space, c, h, w, k, pad, stride):
         t = self.tensor.t
-        if c <= 0 or h <= 1 or w <= 1:
+        if (c <= 0 or h <= 0 or w <= 0 or k <= 0 or pad < 0 or stride <= 0 or
+                h + 2 * pad < k or w + 2 * pad < k or
+                ops.tensor_size(t) % (c * h * w) != 0):
             raise oefmt(space.w_ValueError, "shape mismatch")
-        if ops.tensor_size(t) % (c * h * w) != 0:
-            raise oefmt(space.w_ValueError, "shape mismatch")
-        return W_Tensor(nn.Tensor(runtime.maxpool2(t, c, h, w)))
 
-    @unwrap_spec(c=int, h=int, w=int)
-    def descr_conv2d(self, space, w_weight, c, h, w, w_bias=None):
+    @unwrap_spec(c=int, h=int, w=int, k=int, stride=int, pad=int)
+    def descr_maxpool2(self, space, c, h, w, k=2, stride=2, pad=0):
+        t = self.tensor.t
+        self._conv_check(space, c, h, w, k, pad, stride)
+        return W_Tensor(nn.Tensor(runtime.maxpool2(t, c, h, w, k, stride,
+                                                   pad)))
+
+    @unwrap_spec(c=int, h=int, w=int, k=int, stride=int, pad=int)
+    def descr_conv2d(self, space, w_weight, c, h, w, w_bias=None, k=3,
+                     stride=1, pad=1):
         weight = self._other(space, w_weight).t
         t = self.tensor.t
-        hw = h * w
-        if c <= 0 or h <= 0 or w <= 0 or ops.tensor_size(t) % (c * hw) != 0:
-            raise oefmt(space.w_ValueError, "shape mismatch")
+        self._conv_check(space, c, h, w, k, pad, stride)
         if (ops.tensor_ndim(weight) != 2 or
-                ops.tensor_shape(weight, 0) != c * 9):
+                ops.tensor_shape(weight, 0) != c * k * k):
             raise oefmt(space.w_ValueError, "shape mismatch")
         o = ops.tensor_shape(weight, 1)
-        rows = ops.tensor_size(t) // (c * hw)
-        y = runtime.tensor_matmul(runtime.im2col(t, c, h, w, 3, 1), weight,
-                                  rows * hw, o, c * 9, 0, 0)
+        ohw = ((h + 2 * pad - k) // stride + 1) * ((w + 2 * pad - k) //
+                                                   stride + 1)
+        rows = ops.tensor_size(t) // (c * h * w)
+        y = runtime.tensor_matmul(runtime.im2col(t, c, h, w, k, pad, stride),
+                                  weight, rows * ohw, o, c * k * k, 0, 0)
         if w_bias is not None and not space.is_none(w_bias):
             y = ops.tensor_add(y, self._other(space, w_bias).t,
                                    core.BC_R_ROW)
-        return W_Tensor(nn.Tensor(runtime.col2chw(y, rows, hw, o)))
+        return W_Tensor(nn.Tensor(runtime.col2chw(y, rows, ohw, o)))
 
     def descr_detach(self, space):
         return W_Tensor(nn.Tensor(self.tensor.t, self.tensor.requires_grad))

@@ -418,25 +418,27 @@ def rowgather(table, idx, rows, cols):
     return rowgather_cpu(table, idx, rows, cols)
 
 
-def im2col_cpu(x, n, c, h, w, k, pad):
+def im2col_cpu(x, n, c, h, w, k, pad, stride):
     hx = host(x)
-    hw = h * w
-    chw = c * hw
+    oh = (h + 2 * pad - k) // stride + 1
+    ow = (w + 2 * pad - k) // stride + 1
+    ohw = oh * ow
+    chw = c * h * w
     kk = k * k
-    rows = n * hw
+    rows = n * ohw
     cols = c * kk
     r = new_tensor(rows * cols, _shape2(rows, cols), x.dtype)
     hr = r.host
     for i in range(rows * cols):
         row = i // cols
         col = i % cols
-        img = row // hw
-        pos = row % hw
-        ih = pos // w + col % kk // k - pad
-        iw = pos % w + col % k - pad
+        img = row // ohw
+        pos = row % ohw
+        ih = pos // ow * stride + col % kk // k - pad
+        iw = pos % ow * stride + col % k - pad
         v = 0.0
         if ih >= 0 and ih < h and iw >= 0 and iw < w:
-            idx = img * chw + col // kk * hw + ih * w + iw
+            idx = img * chw + col // kk * h * w + ih * w + iw
             assert idx >= 0
             v = hx[idx]
         hr[i] = v
@@ -444,9 +446,11 @@ def im2col_cpu(x, n, c, h, w, k, pad):
 
 
 @jit.dont_look_inside
-def _im2col_impl(x, c, h, w, k, pad):
+def _im2col_impl(x, c, h, w, k, pad, stride):
     n = x.size // (c * h * w)
-    rows = n * h * w
+    oh = (h + 2 * pad - k) // stride + 1
+    ow = (w + 2 * pad - k) // stride + 1
+    rows = n * oh * ow
     cols = c * k * k
     if gpu_enabled():
         params = [n]
@@ -455,11 +459,12 @@ def _im2col_impl(x, c, h, w, k, pad):
         params.append(w)
         params.append(k)
         params.append(pad)
+        params.append(stride)
         r = gather_gpu(GA_IM2COL, params, x, rows * cols,
                        _shape2(rows, cols))
         if r:
             return r
-    return im2col_cpu(x, n, c, h, w, k, pad)
+    return im2col_cpu(x, n, c, h, w, k, pad, stride)
 
 
 def col2chw_cpu(y, n, hw, o):
@@ -488,42 +493,57 @@ def _col2chw_impl(y, n, hw, o):
     return col2chw_cpu(y, n, hw, o)
 
 
-def maxpool2_cpu(x, n, c, h, w):
+def maxpool2_cpu(x, n, c, h, w, k, stride, pad):
     hx = host(x)
-    oh = h // 2
-    ow = w // 2
+    oh = (h + 2 * pad - k) // stride + 1
+    ow = (w + 2 * pad - k) // stride + 1
     outn = n * c * oh * ow
     r = new_tensor(outn, _shape2(n, c * oh * ow), x.dtype)
     hr = r.host
     for i in range(outn):
-        q = i // ow
-        base = (i // (oh * ow) * h + q % oh * 2) * w + i % ow * 2
-        assert base >= 0
-        v = hx[base]
-        if hx[base + 1] > v:
-            v = hx[base + 1]
-        if hx[base + w] > v:
-            v = hx[base + w]
-        if hx[base + w + 1] > v:
-            v = hx[base + w + 1]
+        pw = i % ow
+        ph = i // ow % oh
+        plane = i // (oh * ow)
+        v = NEG_INF
+        for a in range(k):
+            ih = ph * stride + a - pad
+            if ih < 0:
+                ih = 0
+            elif ih >= h:
+                ih = h - 1
+            for b in range(k):
+                iw = pw * stride + b - pad
+                if iw < 0:
+                    iw = 0
+                elif iw >= w:
+                    iw = w - 1
+                idx = (plane * h + ih) * w + iw
+                assert idx >= 0
+                if hx[idx] > v:
+                    v = hx[idx]
         hr[i] = v
     return r
 
 
 @jit.dont_look_inside
-def _maxpool2_impl(x, c, h, w):
+def _maxpool2_impl(x, c, h, w, k, stride, pad):
     n = x.size // (c * h * w)
-    outn = n * c * (h // 2) * (w // 2)
+    oh = (h + 2 * pad - k) // stride + 1
+    ow = (w + 2 * pad - k) // stride + 1
+    outn = n * c * oh * ow
     if gpu_enabled():
         params = [n]
         params.append(c)
         params.append(h)
         params.append(w)
+        params.append(k)
+        params.append(stride)
+        params.append(pad)
         r = gather_gpu(GA_MAXPOOL, params, x, outn,
-                       _shape2(n, c * (h // 2) * (w // 2)))
+                       _shape2(n, c * oh * ow))
         if r:
             return r
-    return maxpool2_cpu(x, n, c, h, w)
+    return maxpool2_cpu(x, n, c, h, w, k, stride, pad)
 
 
 def head_split_cpu(x, rows, dh, heads):
@@ -698,9 +718,9 @@ def tensor_bmm(a, b, batch, rows, cols, inner, ta, tb, lda=0, ldb=0, ldc=0,
     return r
 
 @jit.dont_look_inside
-def im2col(x, c, h, w, k, pad):
+def im2col(x, c, h, w, k, pad, stride=1):
     t0 = prof_begin()
-    r = _im2col_impl(x, c, h, w, k, pad)
+    r = _im2col_impl(x, c, h, w, k, pad, stride)
     prof_end(intmask(4), intmask(0), t0)
     return r
 
@@ -712,9 +732,9 @@ def col2chw(y, n, hw, o):
     return r
 
 @jit.dont_look_inside
-def maxpool2(x, c, h, w):
+def maxpool2(x, c, h, w, k=2, stride=2, pad=0):
     t0 = prof_begin()
-    r = _maxpool2_impl(x, c, h, w)
+    r = _maxpool2_impl(x, c, h, w, k, stride, pad)
     prof_end(intmask(6), intmask(0), t0)
     return r
 
