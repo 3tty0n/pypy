@@ -44,7 +44,7 @@ Output columns: `mode variant k n iters warm_s steady_us kernels acc compiled_in
 
 | workload | fused (ours) | torch.compile | torch eager |
 |---|---|---|---|
-| chain K=4, N=1e6 | 67.9 | 68.7 | 312.4 |
+| chain K=4, N=1e6 | 39.9 | 68.7 | 312.4 |
 | chain + loop-counter branch (variant 1) | 53.3 | 308.2 (recompiles, falls back) | 317.3 |
 | chain + host write (variant 5) | 68.7 | 333.6 (graph break) | 343.0 |
 | reduction, 1000 rows (variant 11) | 63.6 | 284.0 | 221.2 |
@@ -73,12 +73,14 @@ and 1.9e-4 for SmolLM2):
 
 | model | ours (PyPy) | torch.compile | torch eager |
 |---|---|---|---|
-| distilgpt2 (6 layers, 768, 12 heads) | 2984 | 1356 | 2521 |
+| distilgpt2 (6 layers, 768, 12 heads) | 1903 | 1301 | 2423 |
 | sshleifer/tiny-gpt2 (2 layers, width 2) | 558 | 373 | 1418 |
-| SmolLM2-135M (Llama, 30 layers, 576, 9/3 heads) | 11593 | 6304 | 14855 |
+| SmolLM2-135M (Llama, 30 layers, 576, 9/3 heads) | 6729 | 5242 | 14977 |
 
-distilgpt2 takes 157 launches per iteration (cuBLAS included), SmolLM2-135M
-576; the gap to torch.compile is the open item.
+distilgpt2 takes 145 launches per iteration (cuBLAS included), SmolLM2-135M
+about 570.  Both models are measured at 200 iterations after 30 warmup;
+the remaining gap to torch.compile is device-buffer recycling, which still
+depends on GC finalizers, and the launch count.
 
 App-level scripts in `applevel/` (Transformer, CNN, chains) run on a PyPy
 translated with `--withmod-_tensor` and track the RPython numbers within
@@ -91,6 +93,8 @@ about 1.3x:
 - The JIT loop threshold is 1039 by default; the bench sets `threshold=3`.
 - Tensor ops are elidable, so a chain over loop-invariant inputs is hoisted;
   carry the result across iterations.
+- Device buffers under 8 MB are carved from 32 MB slabs; a fresh `cuMemAlloc`
+  costs about 15 us and was half of distilgpt2's time.
 - Device buffers are recycled by GC finalizers.  A GC runs when no buffer of
   the requested size is free and either `max(RTENSOR_BUDGET_MB, live after
   last GC)` bytes or an adaptive count of fresh allocations (1..65536,
