@@ -65,6 +65,7 @@ RPY_EXTERN void rt_cuda_set_budget(long bytes);
 RPY_EXTERN long rt_cuda_live_bytes(void);
 RPY_EXTERN long rt_cuda_launch_count(void);
 RPY_EXTERN int rt_cuda_needs_gc(long nbytes);
+RPY_EXTERN int rt_cuda_has_free(long nbytes);
 RPY_EXTERN void rt_cuda_sync(void);
 RPY_EXTERN double rt_cuda_now(void);
 RPY_EXTERN int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
@@ -187,6 +188,8 @@ rt_cuda_live_bytes = rffi.llexternal('rt_cuda_live_bytes', [], lltype.Signed,
                                      compilation_info=eci, releasegil=False)
 rt_cuda_needs_gc = rffi.llexternal('rt_cuda_needs_gc', [lltype.Signed], rffi.INT,
                                    compilation_info=eci, releasegil=False)
+rt_cuda_has_free = rffi.llexternal('rt_cuda_has_free', [lltype.Signed], rffi.INT,
+                                   compilation_info=eci, releasegil=False)
 
 rt_cuda_launch_count = rffi.llexternal('rt_cuda_launch_count', [],
                                        lltype.Signed, compilation_info=eci,
@@ -236,10 +239,8 @@ def profile_report():
 def collect_if_needed(nb):
     if rffi.cast(lltype.Signed, rt_cuda_needs_gc(nb)) != 0:
         rgc.collect(0)
-        if rffi.cast(lltype.Signed, rt_cuda_needs_gc(nb)) != 0:
+        if rffi.cast(lltype.Signed, rt_cuda_has_free(nb)) == 0:
             rgc.collect()
-            if rffi.cast(lltype.Signed, rt_cuda_needs_gc(nb)) != 0:
-                rt_cuda_set_budget(rt_cuda_live_bytes() * 2)
 
 def sync_device():
     rt_cuda_sync()

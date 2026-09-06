@@ -195,6 +195,17 @@ RPY_EXPORTED long rt_cuda_load(const char *ptx, const char *name)
     return (long)fn;
 }
 
+static long alloc_failed(long nbytes)
+{
+    static int warned;
+    if (!warned) {
+        warned = 1;
+        fprintf(stderr, "metatensor: cuMemAlloc(%ld) failed with %ld MB live, falling back to CPU\n",
+                nbytes, live_bytes >> 20);
+    }
+    return 0;
+}
+
 RPY_EXPORTED long rt_cuda_alloc(long nbytes, long zero)
 {
     CUdeviceptr p = 0;
@@ -212,7 +223,7 @@ RPY_EXPORTED long rt_cuda_alloc(long nbytes, long zero)
         if (need <= SLAB_BYTES / 4) {
             if (slab_left < need) {
                 CUdeviceptr s;
-                if (cuMemAlloc(&s, SLAB_BYTES) != CUDA_SUCCESS) return 0;
+                if (cuMemAlloc(&s, SLAB_BYTES) != CUDA_SUCCESS) return alloc_failed(SLAB_BYTES);
                 push(&allocs, &nallocs, &capallocs, s, SLAB_BYTES);
                 slab_ptr = s;
                 slab_left = SLAB_BYTES;
@@ -221,7 +232,7 @@ RPY_EXPORTED long rt_cuda_alloc(long nbytes, long zero)
             slab_ptr += need;
             slab_left -= need;
         } else {
-            if (cuMemAlloc(&p, nbytes) != CUDA_SUCCESS) return 0;
+            if (cuMemAlloc(&p, nbytes) != CUDA_SUCCESS) return alloc_failed(nbytes);
             push(&allocs, &nallocs, &capallocs, p, nbytes);
         }
         fresh_since_gc++;
@@ -254,12 +265,18 @@ RPY_EXPORTED void rt_cuda_set_budget(long bytes)
     budget_bytes = bytes;
 }
 
+RPY_EXPORTED int rt_cuda_has_free(long nbytes)
+{
+    long i;
+    for (i = 0; i < nfreed; i++)
+        if (freed[i].n == nbytes) return 1;
+    return 0;
+}
+
 RPY_EXPORTED int rt_cuda_needs_gc(long nbytes)
 {
-    long i, threshold = budget_bytes > live_after_gc ? budget_bytes : live_after_gc;
-    int reusable = 0;
-    for (i = 0; i < nfreed; i++)
-        if (freed[i].n == nbytes) { reusable = 1; break; }
+    long threshold = budget_bytes > live_after_gc ? budget_bytes : live_after_gc;
+    int reusable = rt_cuda_has_free(nbytes);
     if (just_collected) {
         just_collected = 0;
         if (!reusable && count_threshold < 65536) count_threshold *= 2;

@@ -100,4 +100,9 @@ about 1.3x:
   last GC)` bytes or an adaptive count of fresh allocations (1..65536,
   doubled when a GC recycles nothing) has accumulated.  Touching this needs
   chain, CNN and both training sizes re-measured together.
+- Three conditions silently route work to the CPU evaluator: no `libcublas`
+  found (matmul only), a missing `triton_compile.py` next to `kernels.py`
+  in the tree the binary was built from, and a failed `cuMemAlloc` (the
+  shim prints one warning).  A run that is 50x slower than the tables is
+  one of these, not a JIT problem.
 - The host is noisy; interleave ours and torch runs when comparing.
