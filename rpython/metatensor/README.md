@@ -1,7 +1,7 @@
-# rtensor
+# metatensor
 
 Tensors whose ops are JIT virtuals: a traced chain of ops becomes one fused
-Triton kernel (`rpython/jit/metainterp/optimizeopt/vtensor.py`).
+Triton kernel (`rpython/jit/metainterp/optimizeopt/metatensor.py`).
 
 Modules, bottom-up, no cycles:
 
@@ -16,4 +16,4 @@ Modules, bottom-up, no cycles:
 
 `cuda.c` is the CUDA driver shim; `triton_compile.py` runs under `RTENSOR_PYTHON`.
 
-Tests: `RTENSOR_PYTHON=... python2 pytest.py rpython/rtensor/test/` (`RTENSOR_CPU=1` for no GPU).
+Tests: `RTENSOR_PYTHON=... python2 pytest.py rpython/metatensor/test/` (`RTENSOR_CPU=1` for no GPU).

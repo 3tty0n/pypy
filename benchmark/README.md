@@ -1,6 +1,6 @@
 # Virtual-tensor JIT benchmark
 
-RPython benchmark (`rtensor_bench.py`) for the tensor-as-virtual JIT, with
+RPython benchmark (`metatensor_bench.py`) for the tensor-as-virtual JIT, with
 PyTorch baselines (`torch_bench.py`).  All numbers: RTX 3090, float64
 unless noted, steady-state microseconds per iteration.
 
@@ -9,7 +9,7 @@ unless noted, steady-state microseconds per iteration.
     python3 -m venv ~/.venvs/triton
     ~/.venvs/triton/bin/pip install triton torch --index-url https://download.pytorch.org/whl/cu130
     export RTENSOR_PYTHON=~/.venvs/triton/bin/python   # compiles .ttir to PTX
-    benchmark/build.sh                                  # -> benchmark/rtensor-bench, ~10 min, needs python2
+    benchmark/build.sh                                  # -> benchmark/metatensor-bench, ~10 min, needs python2
 
 Other env vars: `RTENSOR_DTYPE` (`float64|float32|float16`), `RTENSOR_CPU=1`
 (no GPU), `RTENSOR_BUDGET_MB` (device GC byte threshold, default 8),
@@ -19,7 +19,7 @@ otherwise `libcublas.so` is looked up through the dynamic loader).
 
 ## Run
 
-    benchmark/rtensor-bench MODE VARIANT K N ITERS
+    benchmark/metatensor-bench MODE VARIANT K N ITERS
     $RTENSOR_PYTHON benchmark/torch_bench.py {eager|compile} VARIANT K N ITERS
     benchmark/run_experiments.sh        # full grid -> benchmark/results/<date>-<host>/summary.txt
 
@@ -83,7 +83,7 @@ the remaining gap to torch.compile is device-buffer recycling, which still
 depends on GC finalizers, and the launch count.
 
 App-level scripts in `applevel/` (Transformer, CNN, chains) run on a PyPy
-translated with `--withmod-_tensor` and track the RPython numbers within
+translated with `--withmod-_metatensor` and track the RPython numbers within
 about 1.3x:
 
     ./pypy-c -S --jit threshold=3,function_threshold=3,trace_eagerness=2 benchmark/applevel/transformer.py

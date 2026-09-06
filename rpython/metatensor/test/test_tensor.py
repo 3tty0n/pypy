@@ -1,9 +1,9 @@
 import math
 from rpython.jit.metainterp.test.support import LLJitMixin
 from rpython.rlib.jit import JitDriver
-from rpython.rtensor import core, device, kernels, nn, ops, runtime
-from rpython.rtensor.core import from_list
-from rpython.rtensor.ops import (tensor_add, tensor_mul, tensor_relu,
+from rpython.metatensor import core, device, kernels, nn, ops, runtime
+from rpython.metatensor.core import from_list
+from rpython.metatensor.ops import (tensor_add, tensor_mul, tensor_relu,
     tensor_sum, tensor_item, tensor_size)
 
 kernels.init_device()

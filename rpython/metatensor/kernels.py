@@ -1,8 +1,8 @@
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import os
-from rpython.rtensor.core import (ADD, ARITY, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, F64, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, KERNEL, MAXR, MUL, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, RELU, RELUGRAD, SHAPEARRAY, SQRT, STORE_TYPE, SUB, SUM, config, is_reduction, param_slot, slot_param, slot_used)
-from rpython.rtensor.device import (_env, _here, gpu_enabled, profile, rt_cuda_load, rt_cuda_set_budget)
+from rpython.metatensor.core import (ADD, ARITY, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, F64, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, KERNEL, MAXR, MUL, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, RELU, RELUGRAD, SHAPEARRAY, SQRT, STORE_TYPE, SUB, SUM, config, is_reduction, param_slot, slot_param, slot_used)
+from rpython.metatensor.device import (_env, _here, gpu_enabled, profile, rt_cuda_load, rt_cuda_set_budget)
 
 class SingleKernels(object):
     def __init__(self):

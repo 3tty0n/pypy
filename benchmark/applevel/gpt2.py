@@ -3,7 +3,8 @@ import array, json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 '..', '..', 'lib_pypy'))
 
-import _tensor, tensorlite
+import _metatensor
+from tensorpypy.models import CausalSelfAttention, GPT2MLP, GPT2Block, GPT2
 
 
 def load(outdir):
@@ -25,7 +26,7 @@ def build(cfg, buf, dtype):
         n = 1
         for d in shape:
             n *= d
-        return _tensor.tensor(list(buf[off:off + n]), shape, False, dtype)
+        return _metatensor.tensor(list(buf[off:off + n]), shape, False, dtype)
 
     t = cfg['seq']
     h = cfg['n_head']
@@ -33,30 +34,30 @@ def build(cfg, buf, dtype):
     v = cfg['vocab']
     d = cfg['n_embd']
     eps = cfg['eps']
-    idx = _tensor.tensor([float(tok) for tok in tokens], [t], False, dtype)
+    idx = _metatensor.tensor([float(tok) for tok in tokens], [t], False, dtype)
     wpe_off = index['wpe'][0]
-    pos = _tensor.tensor(list(buf[wpe_off:wpe_off + t * d]), [t, d], False,
+    pos = _metatensor.tensor(list(buf[wpe_off:wpe_off + t * d]), [t, d], False,
                          dtype)
     mask = [0.0] * (h * t * t)
     for head in range(h):
         for i in range(t):
             for j in range(i + 1, t):
                 mask[(head * t + i) * t + j] = -1e9
-    mask = _tensor.tensor(mask, [h * t, t], False, dtype)
+    mask = _metatensor.tensor(mask, [h * t, t], False, dtype)
     blocks = []
     for i in range(cfg['n_layer']):
         p = 'h.%d.' % i
-        attn = tensorlite.CausalSelfAttention(
+        attn = CausalSelfAttention(
             get(p + 'attn.q.w'), get(p + 'attn.q.b'),
             get(p + 'attn.k.w'), get(p + 'attn.k.b'),
             get(p + 'attn.v.w'), get(p + 'attn.v.b'),
             get(p + 'attn.proj.w'), get(p + 'attn.proj.b'), h, mask)
-        mlp = tensorlite.GPT2MLP(get(p + 'mlp.fc.w'), get(p + 'mlp.fc.b'),
+        mlp = GPT2MLP(get(p + 'mlp.fc.w'), get(p + 'mlp.fc.b'),
                                  get(p + 'mlp.proj.w'), get(p + 'mlp.proj.b'))
-        blocks.append(tensorlite.GPT2Block(
+        blocks.append(GPT2Block(
             attn, get(p + 'ln_1.g'), get(p + 'ln_1.b'),
             get(p + 'ln_2.g'), get(p + 'ln_2.b'), mlp, eps))
-    model = tensorlite.GPT2(get('wte'), blocks, get('ln_f.g'), get('ln_f.b'),
+    model = GPT2(get('wte'), blocks, get('ln_f.g'), get('ln_f.b'),
                             eps)
     return model, idx, pos
 

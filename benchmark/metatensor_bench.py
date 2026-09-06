@@ -1,7 +1,7 @@
 import sys, os, time
 from rpython.rlib import jit
-from rpython.rtensor import core, device, kernels, nn, ops, runtime
-from rpython.rtensor.ops import (tensor_add, tensor_mul, tensor_relu,
+from rpython.metatensor import core, device, kernels, nn, ops, runtime
+from rpython.metatensor.ops import (tensor_add, tensor_mul, tensor_relu,
     tensor_sum, tensor_item, tensor_force)
 
 class Sink(object):
@@ -345,7 +345,7 @@ def _bench_env(name, default):
 
 def entry_point(argv):
     if len(argv) != 6:
-        print 'usage: rtensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..13)'
+        print 'usage: metatensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..13)'
         return 1
     mode = argv[1]
     variant = int(argv[2])

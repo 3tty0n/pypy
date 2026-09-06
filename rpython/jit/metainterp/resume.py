@@ -1169,7 +1169,7 @@ class ResumeDataBoxReader(AbstractResumeDataReader):
             rop.CALL_R, [ConstInt(func), str1box, str2box], calldescr)
 
     def tensor_op(self, opcode, param, fieldnums):
-        from rpython.rtensor import core, runtime
+        from rpython.metatensor import core, runtime
         cic = self.metainterp.staticdata.callinfocollection
         calldescr, func = cic.callinfo_for_oopspec(
             EffectInfo.OS_TENSOR_ADD + opcode)
@@ -1503,7 +1503,7 @@ class ResumeDataDirectReader(AbstractResumeDataReader):
         return lltype.cast_opaque_ptr(llmemory.GCREF, result)
 
     def tensor_op(self, opcode, param, fieldnums):
-        from rpython.rtensor import core, runtime
+        from rpython.metatensor import core, runtime
         a = lltype.cast_opaque_ptr(core.TENSORPTR,
                                    self.decode_ref(fieldnums[0]))
         b = core.NULLTENSOR

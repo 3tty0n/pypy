@@ -3,7 +3,8 @@ import array, json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 '..', '..', 'lib_pypy'))
 
-import _tensor, tensorlite
+import _metatensor
+from tensorpypy.models import LlamaAttention, LlamaMLP, LlamaBlock, Llama
 
 
 def load(outdir):
@@ -24,34 +25,34 @@ def build(cfg, buf, dtype):
         n = 1
         for d in shape:
             n *= d
-        return _tensor.tensor(list(buf[off:off + n]), shape, False, dtype)
+        return _metatensor.tensor(list(buf[off:off + n]), shape, False, dtype)
 
     t = cfg['seq']
     h = cfg['n_head']
     eps = cfg['eps']
-    idx = _tensor.tensor([float(tok) for tok in cfg['tokens']], [t], False,
+    idx = _metatensor.tensor([float(tok) for tok in cfg['tokens']], [t], False,
                          dtype)
     mask = [0.0] * (h * t * t)
     for head in range(h):
         for i in range(t):
             for j in range(i + 1, t):
                 mask[(head * t + i) * t + j] = -1e9
-    mask = _tensor.tensor(mask, [h * t, t], False, dtype)
+    mask = _metatensor.tensor(mask, [h * t, t], False, dtype)
     cos, sin, p = get('rope.cos'), get('rope.sin'), get('rope.p')
     blocks = []
     for i in range(cfg['n_layer']):
         pre = 'h.%d.' % i
-        attn = tensorlite.LlamaAttention(
+        attn = LlamaAttention(
             get(pre + 'attn.q.w'), get(pre + 'attn.k.w'),
             get(pre + 'attn.v.w'), get(pre + 'attn.proj.w'), h, mask,
             cos, sin, p)
-        mlp = tensorlite.LlamaMLP(get(pre + 'mlp.gate.w'),
+        mlp = LlamaMLP(get(pre + 'mlp.gate.w'),
                                   get(pre + 'mlp.up.w'),
                                   get(pre + 'mlp.down.w'))
-        blocks.append(tensorlite.LlamaBlock(attn, get(pre + 'norm1.g'),
+        blocks.append(LlamaBlock(attn, get(pre + 'norm1.g'),
                                             get(pre + 'norm2.g'), mlp, eps))
     head = None if cfg['tied'] else get('lm_head.w')
-    return tensorlite.Llama(get('wte'), blocks, get('norm_f.g'), head,
+    return Llama(get('wte'), blocks, get('norm_f.g'), head,
                             eps), idx
 
 

@@ -5,7 +5,7 @@ from rpython.jit.metainterp.optimizeopt.intbounds import OptIntBounds
 from rpython.jit.metainterp.optimizeopt.virtualize import OptVirtualize
 from rpython.jit.metainterp.optimizeopt.heap import OptHeap
 from rpython.jit.metainterp.optimizeopt.vstring import OptString
-from rpython.jit.metainterp.optimizeopt.vtensor import OptTensor
+from rpython.jit.metainterp.optimizeopt.metatensor import OptTensor
 from rpython.jit.metainterp.optimizeopt.simplify import OptSimplify
 from rpython.jit.metainterp.optimizeopt.pure import OptPure
 from rpython.jit.metainterp.optimizeopt.earlyforce import OptEarlyForce

@@ -1,8 +1,8 @@
 from rpython.rlib import jit
 from rpython.rtyper.lltypesystem import lltype
-from rpython.rtensor.core import (ADD, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_NONE, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, MAXR, MUL, NDTYPES, NULLTENSOR, RELU, RELUGRAD, SHAPEARRAY, SQRT, SUB, SUM, TENSOR, TENSORARRAY, _shape2, cols, new_tensor, note_cols, note_dtype, note_size, policy)
-from rpython.rtensor.device import (host)
-from rpython.rtensor.runtime import (_make_ones, eval_op, ones, tensor_assign, tensor_matmul)
+from rpython.metatensor.core import (ADD, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_NONE, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, MAXR, MUL, NDTYPES, NULLTENSOR, RELU, RELUGRAD, SHAPEARRAY, SQRT, SUB, SUM, TENSOR, TENSORARRAY, _shape2, cols, new_tensor, note_cols, note_dtype, note_size, policy)
+from rpython.metatensor.device import (host)
+from rpython.metatensor.runtime import (_make_ones, eval_op, ones, tensor_assign, tensor_matmul)
 
 def astype(t, dtype):
     if t.dtype == dtype:

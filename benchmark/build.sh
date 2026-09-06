@@ -7,5 +7,5 @@ if [ -z "$RTENSOR_CUBLAS" ] && [ -n "$RTENSOR_PYTHON" ]; then
   done
 fi
 ROOT=$(dirname "$HERE")
-OUT=${1:-$HERE/rtensor-bench}
-PYTHONPATH=$ROOT ${PYTHON2:-python2} "$ROOT/rpython/bin/rpython" --batch --make-jobs=${MAKE_JOBS:-4} -Ojit --output="$OUT" "$HERE/rtensor_bench.py"
+OUT=${1:-$HERE/metatensor-bench}
+PYTHONPATH=$ROOT ${PYTHON2:-python2} "$ROOT/rpython/bin/rpython" --batch --make-jobs=${MAKE_JOBS:-4} -Ojit --output="$OUT" "$HERE/metatensor_bench.py"

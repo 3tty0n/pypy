@@ -6,7 +6,7 @@ from rpython.jit.metainterp.optimizeopt.util import (
 from rpython.jit.metainterp.resoperation import rop, ResOperation
 from rpython.jit.metainterp.optimizeopt.info import (
     AbstractVirtualPtrInfo, getptrinfo)
-from rpython.rtensor import core, kernels
+from rpython.metatensor import core, kernels
 from rpython.rlib.objectmodel import specialize
 from rpython.rtyper.lltypesystem import lltype, llmemory
 

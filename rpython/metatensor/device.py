@@ -5,7 +5,7 @@ from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 from rpython.translator.tool.cbuild import ExternalCompilationInfo
 import os
-from rpython.rtensor.core import (F64, HOSTARRAY, SHAPEARRAY, TENSOR, TENSORARRAY, _shape1, nbytes)
+from rpython.metatensor.core import (F64, HOSTARRAY, SHAPEARRAY, TENSOR, TENSORARRAY, _shape1, nbytes)
 
 class DeviceBuffer(object):
     def __init__(self, dptr, n):

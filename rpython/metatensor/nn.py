@@ -1,6 +1,6 @@
 import math
 from rpython.rlib import jit
-from rpython.rtensor import core, device, ops, runtime
+from rpython.metatensor import core, device, ops, runtime
 
 
 class Tensor(object):

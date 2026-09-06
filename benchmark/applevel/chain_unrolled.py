@@ -1,7 +1,7 @@
-import sys, time, _tensor
+import sys, time, _metatensor
 n, iters = int(sys.argv[1]), int(sys.argv[2])
-w = _tensor.tensor([float((i % 7) - 3) for i in range(n)])
-b = _tensor.tensor([0.5] * n)
+w = _metatensor.tensor([float((i % 7) - 3) for i in range(n)])
+b = _metatensor.tensor([0.5] * n)
 def run(h, iters):
     for i in range(iters):
         h = (h * b + b).relu()

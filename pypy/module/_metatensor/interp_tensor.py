@@ -1,4 +1,4 @@
-from rpython.rtensor import core, device, kernels, nn, ops, runtime
+from rpython.metatensor import core, device, kernels, nn, ops, runtime
 from pypy.interpreter.baseobjspace import W_Root
 from pypy.interpreter.typedef import TypeDef, GetSetProperty
 from pypy.interpreter.gateway import interp2app, unwrap_spec

@@ -3,7 +3,9 @@ import sys, os, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 '..', '..', 'lib_pypy'))
 
-import _tensor, tensorlite
+import _metatensor
+from tensorpypy import nn
+from tensorpypy.models import CNN
 
 images, iters = int(sys.argv[1]), int(sys.argv[2])
 TB_EPS = 1e-05
@@ -12,26 +14,26 @@ CNN_C, CNN_HW, CNN_O, CNN_CLS = 3, 32, 8, 10
 
 def cnn_weight(nrows, ncols):
     data = [float((i * 7) % 13 - 6) / nrows for i in range(nrows * ncols)]
-    return _tensor.tensor(data, [nrows, ncols])
+    return _metatensor.tensor(data, [nrows, ncols])
 
 
 def cnn_bias(m):
-    return _tensor.tensor([0.01] * m)
+    return _metatensor.tensor([0.01] * m)
 
 
 def make_cnn():
     fan = CNN_C * 9
     feat = CNN_O * (CNN_HW // 2) * (CNN_HW // 2)
-    conv = tensorlite.Conv2d(cnn_weight(fan, CNN_O), cnn_bias(CNN_O),
-                             CNN_C, CNN_HW, CNN_HW)
-    fc = tensorlite.Linear(cnn_weight(feat, CNN_CLS), cnn_bias(CNN_CLS))
-    return tensorlite.CNN(conv, tensorlite.BatchNorm2d(CNN_O, eps=TB_EPS),
-                          tensorlite.MaxPool2d(CNN_O, CNN_HW, CNN_HW), fc)
+    conv = nn.Conv2d(cnn_weight(fan, CNN_O), cnn_bias(CNN_O),
+                     CNN_C, CNN_HW, CNN_HW)
+    fc = nn.Linear(cnn_weight(feat, CNN_CLS), cnn_bias(CNN_CLS))
+    return CNN(conv, nn.BatchNorm2d(CNN_O, eps=TB_EPS),
+              nn.MaxPool2d(CNN_O, CNN_HW, CNN_HW), fc)
 
 
 def make_input(nrows, pixels):
     data = [(i % 7) - 3.0 for i in range(nrows * pixels)]
-    return _tensor.tensor(data, [nrows, pixels])
+    return _metatensor.tensor(data, [nrows, pixels])
 
 
 pixels = CNN_C * CNN_HW * CNN_HW

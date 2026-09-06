@@ -3,7 +3,9 @@ import sys, os, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 '..', '..', 'lib_pypy'))
 
-import _tensor, tensorlite
+import _metatensor
+from tensorpypy import nn
+from tensorpypy.models import MLP, TransformerBlock
 
 rows, iters = int(sys.argv[1]), int(sys.argv[2])
 TB_D = 64
@@ -13,11 +15,11 @@ TB_EPS = 1e-05
 
 def tb_weight(nrows, ncols):
     data = [float((i * 7) % 13 - 6) / TB_D for i in range(nrows * ncols)]
-    return _tensor.tensor(data, [nrows, ncols])
+    return _metatensor.tensor(data, [nrows, ncols])
 
 
 def tb_vector(v):
-    return _tensor.tensor([v] * TB_D)
+    return _metatensor.tensor([v] * TB_D)
 
 
 def tb_qkv():
@@ -28,7 +30,7 @@ def tb_qkv():
             for c in range(dh):
                 data[r * TB_D + h * dh + c] = float(
                     ((r * dh + c) * 7) % 13 - 6) / TB_D
-    return _tensor.tensor(data, [TB_D, TB_D])
+    return _metatensor.tensor(data, [TB_D, TB_D])
 
 
 def tb_proj():
@@ -39,22 +41,22 @@ def tb_proj():
             for c in range(TB_D):
                 data[(h * dh + r) * TB_D + c] = float(
                     ((r * TB_D + c) * 7) % 13 - 6) / TB_D
-    return _tensor.tensor(data, [TB_D, TB_D])
+    return _metatensor.tensor(data, [TB_D, TB_D])
 
 
 def make_block():
-    attn = tensorlite.MultiHead(tb_qkv(), tb_qkv(), tb_qkv(), tb_proj(), TB_H)
+    attn = nn.MultiheadAttention(tb_qkv(), tb_qkv(), tb_qkv(), tb_proj(), TB_H)
     layers = []
     for i in range(2):
-        layers.append(tensorlite.Linear(tb_weight(TB_D, TB_D), tb_vector(0.01)))
-    return tensorlite.TransformerBlock(attn, tb_vector(1.0), tb_vector(0.0),
+        layers.append(nn.Linear(tb_weight(TB_D, TB_D), tb_vector(0.01)))
+    return TransformerBlock(attn, tb_vector(1.0), tb_vector(0.0),
                                        tb_vector(1.0), tb_vector(0.0),
-                                       tensorlite.MLP(layers), TB_EPS)
+                                       MLP(layers), TB_EPS)
 
 
 def make_input(nrows, d):
     data = [(i % 7) - 3.0 for i in range(nrows * d)]
-    return _tensor.tensor(data, [nrows, d])
+    return _metatensor.tensor(data, [nrows, d])
 
 
 warmup_block = make_block()

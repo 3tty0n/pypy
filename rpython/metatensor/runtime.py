@@ -5,9 +5,9 @@ from rpython.rlib.rfloat import NAN
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import math
-from rpython.rtensor.core import (ADD, ARITY, F16, GA_ROWS, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_MAXPOOL, HOSTARRAY, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, _shape2, cols, config, nbytes, new_tensor, policy)
-from rpython.rtensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, gpu_enabled, host, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_bmm, rt_cuda_copy, rt_cuda_free, rt_cuda_launch, rt_cuda_matmul, rt_cuda_reset)
-from rpython.rtensor.kernels import (gather_kernel, needs_zero, row_tile, single_kernel)
+from rpython.metatensor.core import (ADD, ARITY, F16, GA_ROWS, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_MAXPOOL, HOSTARRAY, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, _shape2, cols, config, nbytes, new_tensor, policy)
+from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, gpu_enabled, host, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_bmm, rt_cuda_copy, rt_cuda_free, rt_cuda_launch, rt_cuda_matmul, rt_cuda_reset)
+from rpython.metatensor.kernels import (gather_kernel, needs_zero, row_tile, single_kernel)
 
 class Ones(object):
     def __init__(self):
