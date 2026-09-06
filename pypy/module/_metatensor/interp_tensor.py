@@ -249,6 +249,13 @@ class W_Tensor(W_Root):
         self._conv_check(space, c, h, w, k, pad, stride)
         return W_Tensor(nn.Tensor(runtime.im2col(t, c, h, w, k, pad, stride)))
 
+    @unwrap_spec(c=int, h=int, w=int, k=int, pad=int, stride=int)
+    def descr_im2col_nhwc(self, space, c, h, w, k=3, pad=1, stride=1):
+        t = self.tensor.t
+        self._conv_check(space, c, h, w, k, pad, stride)
+        return W_Tensor(nn.Tensor(runtime.im2col_nhwc(t, c, h, w, k, pad,
+                                                      stride)))
+
     def _conv_check(self, space, c, h, w, k, pad, stride):
         t = self.tensor.t
         if (c <= 0 or h <= 0 or w <= 0 or k <= 0 or pad < 0 or stride <= 0 or
@@ -262,6 +269,13 @@ class W_Tensor(W_Root):
         self._conv_check(space, c, h, w, k, pad, stride)
         return W_Tensor(nn.Tensor(runtime.maxpool2(t, c, h, w, k, stride,
                                                    pad)))
+
+    @unwrap_spec(c=int, h=int, w=int, k=int, stride=int, pad=int)
+    def descr_maxpool2_nhwc(self, space, c, h, w, k=2, stride=2, pad=0):
+        t = self.tensor.t
+        self._conv_check(space, c, h, w, k, pad, stride)
+        return W_Tensor(nn.Tensor(runtime.maxpool2_nhwc(t, c, h, w, k,
+                                                        stride, pad)))
 
     @unwrap_spec(c=int, h=int, w=int, k=int, stride=int, pad=int)
     def descr_conv2d(self, space, w_weight, c, h, w, w_bias=None, k=3,
@@ -355,7 +369,9 @@ W_Tensor.typedef = TypeDef(
     take=interp2app(W_Tensor.descr_take),
     tolist=interp2app(W_Tensor.descr_tolist),
     im2col=interp2app(W_Tensor.descr_im2col),
+    im2col_nhwc=interp2app(W_Tensor.descr_im2col_nhwc),
     maxpool2=interp2app(W_Tensor.descr_maxpool2),
+    maxpool2_nhwc=interp2app(W_Tensor.descr_maxpool2_nhwc),
     conv2d=interp2app(W_Tensor.descr_conv2d),
     detach=interp2app(W_Tensor.descr_detach),
     backward=interp2app(W_Tensor.descr_backward),

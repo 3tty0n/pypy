@@ -5,7 +5,7 @@ from rpython.rlib.rfloat import NAN
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import math
-from rpython.metatensor.core import (ADD, ARITY, F16, GA_ROWS, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_ROTHALF, GA_MAXPOOL, HOSTARRAY, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, _shape2, cols, config, nbytes, new_tensor, policy)
+from rpython.metatensor.core import (ADD, ARITY, F16, GA_ROWS, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_ROTHALF, GA_MAXPOOL, GA_MAXPOOL_NHWC, HOSTARRAY, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, _shape2, cols, config, nbytes, new_tensor, policy)
 from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, gpu_enabled, host, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_bmm, rt_cuda_copy, rt_cuda_free, rt_cuda_launch, rt_cuda_matmul, rt_cuda_reset)
 from rpython.metatensor.kernels import (gather_kernel, needs_zero, row_tile, single_kernel)
 
@@ -467,6 +467,113 @@ def _im2col_impl(x, c, h, w, k, pad, stride):
     return im2col_cpu(x, n, c, h, w, k, pad, stride)
 
 
+def im2col_nhwc_cpu(x, n, c, h, w, k, pad, stride):
+    hx = host(x)
+    oh = (h + 2 * pad - k) // stride + 1
+    ow = (w + 2 * pad - k) // stride + 1
+    ohw = oh * ow
+    kk = k * k
+    rows = n * ohw
+    cols = kk * c
+    r = new_tensor(rows * cols, _shape2(rows, cols), x.dtype)
+    hr = r.host
+    for i in range(rows * cols):
+        row = i // cols
+        col = i % cols
+        ci = col % c
+        rk = col // c
+        img = row // ohw
+        pos = row % ohw
+        ih = pos // ow * stride + rk // k - pad
+        iw = pos % ow * stride + rk % k - pad
+        v = 0.0
+        if ih >= 0 and ih < h and iw >= 0 and iw < w:
+            idx = ((img * h + ih) * w + iw) * c + ci
+            assert idx >= 0
+            v = hx[idx]
+        hr[i] = v
+    return r
+
+
+@jit.dont_look_inside
+def _im2col_nhwc_impl(x, c, h, w, k, pad, stride):
+    n = x.size // (c * h * w)
+    oh = (h + 2 * pad - k) // stride + 1
+    ow = (w + 2 * pad - k) // stride + 1
+    rows = n * oh * ow
+    cols = k * k * c
+    if gpu_enabled():
+        params = [n]
+        params.append(c)
+        params.append(h)
+        params.append(w)
+        params.append(k)
+        params.append(pad)
+        params.append(stride)
+        r = gather_gpu(GA_IM2COL_NHWC, params, x, rows * cols,
+                       _shape2(rows, cols))
+        if r:
+            return r
+    return im2col_nhwc_cpu(x, n, c, h, w, k, pad, stride)
+
+
+def maxpool2_nhwc_cpu(x, n, c, h, w, k, stride, pad):
+    hx = host(x)
+    oh = (h + 2 * pad - k) // stride + 1
+    ow = (w + 2 * pad - k) // stride + 1
+    ohw = oh * ow
+    rows = n * ohw
+    r = new_tensor(rows * c, _shape2(rows, c), x.dtype)
+    hr = r.host
+    for i in range(rows * c):
+        ci = i % c
+        row = i // c
+        img = row // ohw
+        pos = row % ohw
+        ph = pos // ow * stride
+        pw = pos % ow * stride
+        v = NEG_INF
+        for a in range(k):
+            ih = ph + a - pad
+            if ih < 0:
+                ih = 0
+            elif ih >= h:
+                ih = h - 1
+            for b in range(k):
+                iw = pw + b - pad
+                if iw < 0:
+                    iw = 0
+                elif iw >= w:
+                    iw = w - 1
+                idx = ((img * h + ih) * w + iw) * c + ci
+                assert idx >= 0
+                if hx[idx] > v:
+                    v = hx[idx]
+        hr[i] = v
+    return r
+
+
+@jit.dont_look_inside
+def _maxpool2_nhwc_impl(x, c, h, w, k, stride, pad):
+    n = x.size // (c * h * w)
+    oh = (h + 2 * pad - k) // stride + 1
+    ow = (w + 2 * pad - k) // stride + 1
+    rows = n * oh * ow
+    if gpu_enabled():
+        params = [n]
+        params.append(c)
+        params.append(h)
+        params.append(w)
+        params.append(k)
+        params.append(stride)
+        params.append(pad)
+        r = gather_gpu(GA_MAXPOOL_NHWC, params, x, rows * c,
+                       _shape2(rows, c))
+        if r:
+            return r
+    return maxpool2_nhwc_cpu(x, n, c, h, w, k, stride, pad)
+
+
 def col2chw_cpu(y, n, hw, o):
     hy = host(y)
     r = new_tensor(n * o * hw, _shape2(n, o * hw), y.dtype)
@@ -722,6 +829,20 @@ def im2col(x, c, h, w, k, pad, stride=1):
     t0 = prof_begin()
     r = _im2col_impl(x, c, h, w, k, pad, stride)
     prof_end(intmask(4), intmask(0), t0)
+    return r
+
+@jit.dont_look_inside
+def im2col_nhwc(x, c, h, w, k, pad, stride=1):
+    t0 = prof_begin()
+    r = _im2col_nhwc_impl(x, c, h, w, k, pad, stride)
+    prof_end(intmask(4), intmask(0), t0)
+    return r
+
+@jit.dont_look_inside
+def maxpool2_nhwc(x, c, h, w, k=2, stride=2, pad=0):
+    t0 = prof_begin()
+    r = _maxpool2_nhwc_impl(x, c, h, w, k, stride, pad)
+    prof_end(intmask(6), intmask(0), t0)
     return r
 
 @jit.dont_look_inside

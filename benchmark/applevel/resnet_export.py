@@ -33,7 +33,7 @@ def hf_weights(model_id, cfg):
 
     def conv(key, t):
         o, c, k, _ = t.shape
-        put(key, t.reshape(o, c * k * k), True)
+        put(key, t.permute(2, 3, 1, 0).reshape(k * k * c, o))
 
     def bn(key, p):
         put(key + '.g', sd[p + '.weight'])
@@ -41,7 +41,7 @@ def hf_weights(model_id, cfg):
         put(key + '.m', sd[p + '.running_mean'])
         put(key + '.v', sd[p + '.running_var'])
 
-    put('image', px[0])
+    put('image', px[0].permute(1, 2, 0))
     conv('conv1.w', sd['conv1.weight'])
     bn('bn1', 'bn1')
     layers = []

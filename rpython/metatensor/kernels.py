@@ -1,7 +1,7 @@
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import os
-from rpython.metatensor.core import (ADD, ARITY, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, F64, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_ROTHALF, KERNEL, MAXR, MUL, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, RELU, RELUGRAD, SHAPEARRAY, SQRT, STORE_TYPE, SUB, SUM, config, is_reduction, param_slot, slot_param, slot_used)
+from rpython.metatensor.core import (ADD, ARITY, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, F64, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_MAXPOOL_NHWC, GA_ROTHALF, KERNEL, MAXR, MUL, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, RELU, RELUGRAD, SHAPEARRAY, SQRT, STORE_TYPE, SUB, SUM, config, is_reduction, param_slot, slot_param, slot_used)
 from rpython.metatensor.device import (_env, _here, gpu_enabled, profile, rt_cuda_load, rt_cuda_set_budget)
 
 class SingleKernels(object):
@@ -799,6 +799,60 @@ def _gather_index(e, op, params, I64, I1):
                     _gbin(e, 'addi', _gmul(e, ih, w, I64), iw, I64), I64)
         srcs.append(src)
         return srcs, ok
+    if op == GA_IM2COL_NHWC:
+        n, c, h, w, k, pad, stride = (params[0], params[1], params[2],
+                                      params[3], params[4], params[5],
+                                      params[6])
+        kk = k * k
+        kkc = kk * c
+        oh = (h + 2 * pad - k) // stride + 1
+        ow = (w + 2 * pad - k) // stride + 1
+        ohw = oh * ow
+        row = _gdiv(e, off, kkc, I64)
+        col = _gmod(e, off, kkc, I64)
+        ci = _gmod(e, col, c, I64)
+        rk = _gdiv(e, col, c, I64)
+        img = _gdiv(e, row, ohw, I64)
+        pos = _gmod(e, row, ohw, I64)
+        ph = _gmul(e, _gdiv(e, pos, ow, I64), stride, I64)
+        pw = _gmul(e, _gmod(e, pos, ow, I64), stride, I64)
+        ih = _gaddc(e, _gbin(e, 'addi', ph, _gdiv(e, rk, k, I64), I64),
+                    -pad, I64)
+        iw = _gaddc(e, _gbin(e, 'addi', pw, _gmod(e, rk, k, I64), I64),
+                    -pad, I64)
+        zero = _gconst(e, 0, I64)
+        ok = _gbin(e, 'andi',
+                   _gbin(e, 'andi', _gcmp(e, 'sge', ih, zero, I64),
+                         _gcmp(e, 'slt', ih, _gconst(e, h, I64), I64), I1),
+                   _gbin(e, 'andi', _gcmp(e, 'sge', iw, zero, I64),
+                         _gcmp(e, 'slt', iw, _gconst(e, w, I64), I64), I1), I1)
+        pix = _gbin(e, 'addi',
+                    _gbin(e, 'addi', _gmul(e, img, h * w, I64),
+                          _gmul(e, ih, w, I64), I64), iw, I64)
+        srcs.append(_gbin(e, 'addi', _gmul(e, pix, c, I64), ci, I64))
+        return srcs, ok
+    if op == GA_MAXPOOL_NHWC:
+        n, c, h, w, k, stride, pad = (params[0], params[1], params[2],
+                                      params[3], params[4], params[5],
+                                      params[6])
+        oh = (h + 2 * pad - k) // stride + 1
+        ow = (w + 2 * pad - k) // stride + 1
+        ohw = oh * ow
+        ci = _gmod(e, off, c, I64)
+        row = _gdiv(e, off, c, I64)
+        img = _gdiv(e, row, ohw, I64)
+        pos = _gmod(e, row, ohw, I64)
+        ph = _gmul(e, _gdiv(e, pos, ow, I64), stride, I64)
+        pw = _gmul(e, _gmod(e, pos, ow, I64), stride, I64)
+        base = _gmul(e, img, h * w, I64)
+        for a in range(k):
+            ih = _gclamp(e, _gaddc(e, ph, a - pad, I64), h - 1, I64)
+            rh = _gbin(e, 'addi', base, _gmul(e, ih, w, I64), I64)
+            for b in range(k):
+                iw = _gclamp(e, _gaddc(e, pw, b - pad, I64), w - 1, I64)
+                pix = _gbin(e, 'addi', rh, iw, I64)
+                srcs.append(_gbin(e, 'addi', _gmul(e, pix, c, I64), ci, I64))
+        return srcs, ''
     if op == GA_COL2CHW:
         n, hw, o = params[0], params[1], params[2]
         img = _gdiv(e, off, o * hw, I64)

@@ -86,8 +86,8 @@ and 1.5e-4 for SmolLM2):
 | bert_uncased_L-4_H-256_A-4 (4 layers, 256, 4 heads) | 664 | 781 | 1590 |
 | vit-tiny-patch16-224 (12 layers, 192, 3 heads, 197 tokens) | 1649 | 2086 | 3383 |
 | mixer_b16_224 (12 layers, 768, 196 tokens) | 3793 | 3126 | 2872 |
-| resnet18, batch 1 | 961 | 959 | 1400 |
-| resnet18, batch 8 | 3688 | 2201 | 2240 |
+| resnet18, batch 1 | 787 | 970 | 1393 |
+| resnet18, batch 8 | 3191 | 2173 | 2242 |
 
 The BERT, ViT, Mixer and ResNet triples are `applevel/{bert,vit,mixer,resnet}
 {_export,,_torch}.py` and follow the GPT-2 pattern: the export script writes
@@ -99,10 +99,10 @@ interleaved rounds, 200 iterations after 30 warmup, float32, seq 64 for BERT
 and one real 224x224 photo for the vision models.  Agreement: BERT argmax at
 all 64 positions, max logits difference 3.1e-5 (tiny) and 2.1e-5 (mini); ViT
 and Mixer identical top-5 with 1.2e-5 and 3.7e-5; ResNet-18 identical top-5
-with 5.3e-3 against torch on the GPU but 7.6e-6 against a plain fp32 numpy
+with 5.2e-3 against torch on the GPU but 8.6e-6 against a plain fp32 numpy
 reference of the same arithmetic, so the gap is torch's TF32 convolutions,
 not ours.  Launches per iteration: BERT-mini 68 (17 per layer), ViT 172,
-Mixer 243, ResNet-18 81.
+Mixer 243, ResNet-18 60 (was 101).
 
 New primitives per model: BERT needed none -- the exact (erf) GELU is built
 app-level out of `relu`/`mul`/`add`/`div`/`exp` with the Abramowitz-Stegun
@@ -121,18 +121,36 @@ instead of masking them, which is exact because a clamped position is always
 another position of the same window), so `conv2d`, `Conv2d` and `MaxPool2d`
 now take `k`, `stride` and `pad` and cover the 7x7 stride-2 stem, the
 stride-2 3x3 and 1x1 downsample convolutions and the 3x3 stride-2 pad-1 pool.
+Two more gathers followed, `im2col_nhwc` and `maxpool2_nhwc`, the
+channels-last forms of those two; the CHW `im2col`, `col2chw`, `maxpool2` and
+`conv2d` stay as they are for the RPython CNN benchmark (variant 9) and the
+app-level `CNN` model.
 
-What fuses in ResNet: every BatchNorm (a column-broadcast multiply and add),
-its ReLU and the residual addition collapse into a single elementwise kernel
-per convolution -- the 80 launches are 3 per convolution (im2col gather,
-cuBLAS GEMM, col2chw scatter) for 20 convolutions plus one per fused
-epilogue.  What does not fuse is the
-convolution itself: im2col materializes a (rows, c*k*k) buffer, so the
-gather, the GEMM and the scatter stay three separate launches and the
-9x memory blow-up of the 3x3 stem-resolution convolutions is why we are 5x
-slower than torch's cudnn here, and why batch 8 is 20x worse per image
-(same 86 launches per iteration, so it is bandwidth and allocation, not
-launch count -- unresolved).
+What fuses in ResNet: the activation stays channels-last, shaped
+`(N*H*W, C)`, from the exported image to the last block, so a convolution is
+one `im2col_nhwc` gather into `(N*Ho*Wo, k*k*C)` and one GEMM against the
+weight the export script already permuted to `(k, k, C, O)` -- the result is
+`(N*Ho*Wo, O)`, the next activation, with no scatter back to planes.  That
+kills the `col2chw` launch per convolution outright, and it also makes every
+BatchNorm a plain row broadcast of `gamma`/`beta` over the `C` columns, which
+fuses with its ReLU and with the residual addition into one elementwise
+kernel per convolution instead of two.  1x1 stride-1 convolutions skip the
+gather entirely (the activation already is the GEMM operand) and the 1x1
+stride-2 downsamples reuse `im2col_nhwc` with `k=1` as a row subsample, so
+they need no separate primitive; max pooling gained an NHWC variant with the
+same clamped padding, and global average pooling is a GEMM against a constant
+`(N, N*H*W)` averaging matrix, so it needs no axis-0 reduction.  Per
+iteration the counted (Triton) launches went from 81.3 to 39.6 -- 41 gathers
+to 21, 40.3 elementwise kernels to 18.6 -- with the 20 cuBLAS GEMMs on top,
+so 101 to 60; device time per iteration, batch 1: im2col 221 us -> 208,
+col2chw 138 -> 0, elementwise 223 -> 120, total counted 590 -> 336.  At
+batch 8: im2col 987 -> 968, col2chw 337 -> 0, elementwise 519 -> 280, total
+1885 -> 1294.  What still does not fuse is the convolution itself: im2col
+materializes a `(rows, k*k*C)` buffer, so the gather and the GEMM stay two
+launches and the 9x memory blow-up of the 3x3 stem-resolution convolutions is
+why batch 8 is still 1.5x torch -- at that size we are bandwidth-bound on the
+im2col buffer (75% of our device time), which an implicit-GEMM convolution
+that gathers inside the GEMM's k-loop would remove.
 
 q, k and v are one GEMM against a weight concatenated at model build time,
 so attention reads q, k and v as column slices of one (rows, 3d) buffer

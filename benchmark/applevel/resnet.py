@@ -36,30 +36,38 @@ def build(cfg, buf, dtype, batch):
     def bn(name, c):
         return BatchNorm2d(c, raw(name + '.g')[0], raw(name + '.b')[0],
                            raw(name + '.m')[0], raw(name + '.v')[0], eps,
-                           dtype)
+                           dtype, True)
 
     s = cfg['image_size']
     pixels, _ = raw('image')
-    x = _metatensor.tensor(pixels * batch, [batch, len(pixels)], False, dtype)
+    x = _metatensor.tensor(pixels * batch, [batch * s * s, 3], False, dtype)
     ow, ok = cfg['stem'][0][0], cfg['stem'][1]
-    conv1 = Conv2d(get('conv1.w'), None, 3, s, s, ok, 2, ok // 2)
-    pool = MaxPool2d(ow, conv1.oh, conv1.ow, 3, 2, 1)
+    conv1 = Conv2d(get('conv1.w'), None, 3, s, s, ok, 2, ok // 2, True)
+    pool = MaxPool2d(ow, conv1.oh, conv1.ow, 3, 2, 1, True)
     h = pool.oh
     blocks = []
     for li, n, shape, k, stride, down in cfg['layers']:
         p = 'l%d.%d.' % (li, n)
         o, c = shape[0], shape[1]
-        c1 = Conv2d(get(p + 'conv1.w'), None, c, h, h, k, stride, k // 2)
-        c2 = Conv2d(get(p + 'conv2.w'), None, o, c1.oh, c1.ow, k, 1, k // 2)
+        c1 = Conv2d(get(p + 'conv1.w'), None, c, h, h, k, stride, k // 2,
+                    True)
+        c2 = Conv2d(get(p + 'conv2.w'), None, o, c1.oh, c1.ow, k, 1, k // 2,
+                    True)
         d = bnd = None
         if down:
-            d = Conv2d(get(p + 'down.w'), None, c, h, h, 1, stride, 0)
+            d = Conv2d(get(p + 'down.w'), None, c, h, h, 1, stride, 0, True)
             bnd = bn(p + 'bnd', o)
         blocks.append(ResNetBlock(c1, bn(p + 'bn1', o), c2,
                                   bn(p + 'bn2', o), d, bnd))
         h = c2.oh
-    model = ResNet(conv1, bn('bn1', ow), pool, blocks, shape[0], h * h,
-                   get('fc.w'), get('fc.b'))
+    hw = h * h
+    avg = [0.0] * (batch * batch * hw)
+    for i in range(batch):
+        for j in range(hw):
+            avg[i * (batch * hw) + i * hw + j] = 1.0 / hw
+    mean = _metatensor.tensor(avg, [batch, batch * hw], False, dtype)
+    model = ResNet(conv1, bn('bn1', ow), pool, blocks, shape[0], hw,
+                   get('fc.w'), get('fc.b'), mean)
     return model, x
 
 

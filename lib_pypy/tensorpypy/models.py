@@ -257,7 +257,9 @@ class ResNetBlock(Module):
 
 
 class ResNet(Module):
-    def __init__(self, conv1, bn1, pool, blocks, channels, hw, fcw, fcb):
+    def __init__(self, conv1, bn1, pool, blocks, channels, hw, fcw, fcb,
+                 mean=None):
+        self.mean = mean
         self.conv1 = conv1
         self.bn1 = bn1
         self.pool = pool
@@ -272,6 +274,8 @@ class ResNet(Module):
         y = self.pool(y)
         for block in self.blocks:
             y = block(y)
+        if self.mean is not None:
+            return self.mean.matmul(y).matmul(self.fcw).add(self.fcb)
         n = y.size // (self.channels * self.hw)
         y = y.reshape([n * self.channels, self.hw]).sum(1)
         y = y.reshape([n, self.channels]).mul(

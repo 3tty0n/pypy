@@ -1179,6 +1179,75 @@ def _ref_maxpool2(x, n, c, h, w):
     return out
 
 
+def _ref_im2col_nhwc(x, n, c, h, w, k, pad, stride):
+    oh = (h + 2 * pad - k) // stride + 1
+    ow = (w + 2 * pad - k) // stride + 1
+    out = []
+    for i in range(n):
+        for ph in range(oh):
+            for pw in range(ow):
+                for a in range(k):
+                    for b in range(k):
+                        for cc in range(c):
+                            ih = ph * stride + a - pad
+                            iw = pw * stride + b - pad
+                            if 0 <= ih < h and 0 <= iw < w:
+                                out.append(x[((i * h + ih) * w + iw) * c + cc])
+                            else:
+                                out.append(0.0)
+    return out
+
+
+def _ref_maxpool_nhwc(x, n, c, h, w, k, stride, pad):
+    oh = (h + 2 * pad - k) // stride + 1
+    ow = (w + 2 * pad - k) // stride + 1
+    out = []
+    for i in range(n):
+        for ph in range(oh):
+            for pw in range(ow):
+                for cc in range(c):
+                    m = None
+                    for a in range(k):
+                        ih = min(max(ph * stride + a - pad, 0), h - 1)
+                        for b in range(k):
+                            iw = min(max(pw * stride + b - pad, 0), w - 1)
+                            v = x[((i * h + ih) * w + iw) * c + cc]
+                            if m is None or v > m:
+                                m = v
+                    out.append(m)
+    return out
+
+
+class TestNHWCGathers(object):
+
+    def _check_im2col(self, n, c, h, w, k, pad, stride):
+        vals = [float((i * 7) % 13) - 6.0 for i in range(n * h * w * c)]
+        x = _load([n * h * w, c], vals)
+        got = device.host(runtime.im2col_nhwc(x, c, h, w, k, pad, stride))
+        want = _ref_im2col_nhwc(vals, n, c, h, w, k, pad, stride)
+        assert [got[i] for i in range(len(want))] == want
+
+    def test_im2col_nhwc_k7_s2_p3(self):
+        self._check_im2col(1, 3, 9, 9, 7, 3, 2)
+
+    def test_im2col_nhwc_k3_s1_p1(self):
+        self._check_im2col(2, 4, 5, 6, 3, 1, 1)
+
+    def test_im2col_nhwc_k3_s2_p1(self):
+        self._check_im2col(2, 4, 7, 7, 3, 1, 2)
+
+    def test_im2col_nhwc_k1_s2(self):
+        self._check_im2col(2, 5, 8, 8, 1, 0, 2)
+
+    def test_maxpool_nhwc_k3_s2_p1(self):
+        n, c, h, w, k, stride, pad = 2, 3, 7, 7, 3, 2, 1
+        vals = [float((i * 5) % 11) for i in range(n * h * w * c)]
+        x = _load([n * h * w, c], vals)
+        got = device.host(runtime.maxpool2_nhwc(x, c, h, w, k, stride, pad))
+        want = _ref_maxpool_nhwc(vals, n, c, h, w, k, stride, pad)
+        assert [got[i] for i in range(len(want))] == want
+
+
 def _ref_cnn(x, wc, wf):
     fan = CC * 9
     feat = CO * (CH // 2) * (CW // 2)

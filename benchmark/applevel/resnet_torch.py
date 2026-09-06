@@ -17,7 +17,8 @@ def main():
     buf.fromfile(open(path, 'rb'), os.path.getsize(path) // 4)
     off, shape = cfg['index']['image']
     n = shape[0] * shape[1] * shape[2]
-    px = torch.tensor(buf[off:off + n]).view(1, *shape).to(dev, dtype)
+    px = torch.tensor(buf[off:off + n]).view(1, *shape).permute(
+        0, 3, 1, 2).contiguous().to(dev, dtype)
     px = px.expand(batch, -1, -1, -1).contiguous()
     import timm
     m = timm.create_model(cfg['source'], pretrained=True).to(dev, dtype)
