@@ -8,7 +8,11 @@
 #  define RPY_EXPORTED extern __attribute__((visibility("default")))
 #endif
 
-#ifndef RTENSOR_CUBLAS_DEFAULT
+#ifdef RTENSOR_CUBLAS_PATH
+#  define RT_STR_(x) #x
+#  define RT_STR(x) RT_STR_(x)
+#  define RTENSOR_CUBLAS_DEFAULT RT_STR(RTENSOR_CUBLAS_PATH)
+#else
 #  define RTENSOR_CUBLAS_DEFAULT "libcublas.so"
 #endif
 
@@ -122,6 +126,9 @@ static long nallocs, capallocs, nfreed, capfreed;
 static long live_bytes, budget_bytes = 8L << 20, launches, fresh_since_gc;
 static long allocated_since_gc, live_after_gc;
 static long count_threshold = 1, just_collected;
+#define SLAB_BYTES (32L << 20)
+static CUdeviceptr slab_ptr;
+static long slab_left;
 
 static int rt_init(void)
 {
@@ -201,8 +208,22 @@ RPY_EXPORTED long rt_cuda_alloc(long nbytes, long zero)
         }
     }
     if (!p) {
-        if (cuMemAlloc(&p, nbytes) != CUDA_SUCCESS) return 0;
-        push(&allocs, &nallocs, &capallocs, p, nbytes);
+        long need = (nbytes + 511) & ~511L;
+        if (need <= SLAB_BYTES / 4) {
+            if (slab_left < need) {
+                CUdeviceptr s;
+                if (cuMemAlloc(&s, SLAB_BYTES) != CUDA_SUCCESS) return 0;
+                push(&allocs, &nallocs, &capallocs, s, SLAB_BYTES);
+                slab_ptr = s;
+                slab_left = SLAB_BYTES;
+            }
+            p = slab_ptr;
+            slab_ptr += need;
+            slab_left -= need;
+        } else {
+            if (cuMemAlloc(&p, nbytes) != CUDA_SUCCESS) return 0;
+            push(&allocs, &nallocs, &capallocs, p, nbytes);
+        }
         fresh_since_gc++;
         if (live_after_gc < 0) live_after_gc = live_bytes;
         allocated_since_gc += nbytes;
@@ -308,6 +329,8 @@ RPY_EXPORTED void rt_cuda_reset(void)
     long i;
     for (i = 0; i < nallocs; i++) cuMemFree(allocs[i].p);
     nallocs = nfreed = 0;
+    slab_ptr = 0;
+    slab_left = 0;
     live_bytes = 0;
 }
 

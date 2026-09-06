@@ -65,11 +65,12 @@ def layernorm(x, gamma, beta, eps=1e-5):
     rows, cols = x.shape
     dt = x.dtype
     inv = _scalar(1.0 / cols, dt)
-    mean = x.sum(1).mul(inv).reshape([rows, 1])
-    d = x.sub(mean)
-    var = d.mul(d).sum(1).mul(inv).reshape([rows, 1])
+    s1 = x.sum(1).reshape([rows, 1])
+    s2 = x.mul(x).sum(1).reshape([rows, 1])
+    mean = s1.mul(inv)
+    var = s2.mul(inv).sub(mean.mul(mean))
     denom = var.add(_scalar(eps, dt)).sqrt()
-    return d.div(denom).mul(gamma).add(beta)
+    return x.sub(mean).div(denom).mul(gamma).add(beta)
 
 
 class MultiHead(object):
