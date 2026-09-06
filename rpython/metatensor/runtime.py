@@ -580,52 +580,76 @@ def _head_merge_impl(x, rows, dh, heads):
     return head_merge_cpu(x, rows, dh, heads)
 
 
-def bmm_cpu(a, b, batch, rows, cols, inner, ta, tb):
+def _lds(rows, cols, inner, ta, tb, lda, ldb, ldc, sa, sb, sc):
+    if lda <= 0:
+        lda = rows if ta else inner
+    if ldb <= 0:
+        ldb = inner if tb else cols
+    if ldc <= 0:
+        ldc = cols
+    if sa <= 0:
+        sa = rows * inner
+    if sb <= 0:
+        sb = inner * cols
+    if sc <= 0:
+        sc = rows * cols
+    return lda, ldb, ldc, sa, sb, sc
+
+
+def bmm_cpu(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
+            sa, sb, sc, outn, outrows):
+    lda, ldb, ldc, sa, sb, sc = _lds(rows, cols, inner, ta, tb, lda, ldb,
+                                     ldc, sa, sb, sc)
     ha = host(a)
     hb = host(b)
-    r = new_tensor(batch * rows * cols, _shape2(batch * rows, cols), a.dtype)
+    r = new_tensor(outn, _shape2(outrows, outn // outrows), a.dtype)
     hr = r.host
+    for i in range(outn):
+        hr[i] = 0.0
     for t in range(batch):
-        abase = t * rows * inner
-        bbase = t * inner * cols
-        cbase = t * rows * cols
         for i in range(rows):
             for j in range(cols):
                 acc = 0.0
                 for k in range(inner):
-                    if tb:
-                        vb = hb[bbase + j * inner + k]
-                    else:
-                        vb = hb[bbase + k * cols + j]
                     if ta:
-                        va = ha[abase + k * rows + i]
+                        ia = t * sa + k * lda + i
                     else:
-                        va = ha[abase + i * inner + k]
-                    acc += va * vb
-                hr[cbase + i * cols + j] = acc
+                        ia = t * sa + i * lda + k
+                    if tb:
+                        ib = t * sb + j * ldb + k
+                    else:
+                        ib = t * sb + k * ldb + j
+                    assert ia >= 0
+                    assert ib >= 0
+                    acc += ha[ia] * hb[ib]
+                ic = t * sc + i * ldc + j
+                assert ic >= 0
+                hr[ic] = acc
     return r
 
 
 @jit.dont_look_inside
-def _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb):
+def _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
+                     sa, sb, sc, outn, outrows):
     if gpu_enabled() and a.dtype == b.dtype:
         dt = a.dtype
         dptr_a = dev(a)
         dptr_b = dev(b)
         if dptr_a != 0 and dptr_b != 0:
-            n = batch * rows * cols
-            nb = nbytes(n, dt)
+            nb = nbytes(outn, dt)
             collect_if_needed(nb)
             outptr = rt_cuda_alloc(nb, 0)
             if outptr != 0:
                 ok = rffi.cast(lltype.Signed, rt_cuda_bmm(
                     dptr_a, dptr_b, outptr, batch, rows, inner, cols,
-                    ta, tb, dt)) != 0
+                    ta, tb, dt, lda, ldb, ldc, sa, sb, sc)) != 0
                 if ok:
-                    return device_tensor(n, outptr,
-                                         _shape2(batch * rows, cols), dt)
+                    return device_tensor(outn, outptr,
+                                         _shape2(outrows, outn // outrows),
+                                         dt)
                 rt_cuda_free(outptr, nb)
-    return bmm_cpu(a, b, batch, rows, cols, inner, ta, tb)
+    return bmm_cpu(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
+                   sa, sb, sc, outn, outrows)
 
 @jit.dont_look_inside
 def tensor_matmul(a, b, rows, cols, inner, ta, tb):
@@ -635,9 +659,15 @@ def tensor_matmul(a, b, rows, cols, inner, ta, tb):
     return r
 
 @jit.dont_look_inside
-def tensor_bmm(a, b, batch, rows, cols, inner, ta, tb):
+def tensor_bmm(a, b, batch, rows, cols, inner, ta, tb, lda=0, ldb=0, ldc=0,
+               sa=0, sb=0, sc=0, outn=0, outrows=0):
+    if outn <= 0:
+        outn = batch * rows * cols
+    if outrows <= 0:
+        outrows = batch * rows
     t0 = prof_begin()
-    r = _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb)
+    r = _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb, lda, ldb,
+                         ldc, sa, sb, sc, outn, outrows)
     prof_end(intmask(3), intmask(rows * 1000000 + inner * 1000 + cols), t0)
     return r
 

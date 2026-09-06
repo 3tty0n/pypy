@@ -58,13 +58,13 @@ class CausalSelfAttention(Module):
         import math
         h = self.heads
         dh = x.shape[1] // h
-        q = x.matmul(self.wq).add(self.bq).head_split(h)
-        k = x.matmul(self.wk).add(self.bk).head_split(h)
-        v = x.matmul(self.wv).add(self.bv).head_split(h)
-        s = q.bmm(k, h, True).mul(
+        q = x.matmul(self.wq).add(self.bq)
+        k = x.matmul(self.wk).add(self.bk)
+        v = x.matmul(self.wv).add(self.bv)
+        s = q.attn_scores(k, h).mul(
             _scalar(1.0 / math.sqrt(dh), x.dtype)).add(self.mask)
-        c = softmax(s).bmm(v, h)
-        return c.head_merge(h).matmul(self.wo).add(self.bo)
+        c = softmax(s).attn_context(v, h)
+        return c.matmul(self.wo).add(self.bo)
 
 
 class GPT2MLP(Module):
@@ -130,13 +130,13 @@ class LlamaAttention(Module):
         import math
         h = self.heads
         dh = x.shape[1] // h
-        q = rope(x.matmul(self.wq), self.cos, self.sin, self.p).head_split(h)
-        k = rope(x.matmul(self.wk), self.cos, self.sin, self.p).head_split(h)
-        v = x.matmul(self.wv).head_split(h)
-        s = q.bmm(k, h, True).mul(
+        q = rope(x.matmul(self.wq), self.cos, self.sin, self.p)
+        k = rope(x.matmul(self.wk), self.cos, self.sin, self.p)
+        v = x.matmul(self.wv)
+        s = q.attn_scores(k, h).mul(
             _scalar(1.0 / math.sqrt(dh), x.dtype)).add(self.mask)
-        c = softmax(s).bmm(v, h)
-        return c.head_merge(h).matmul(self.wo)
+        c = softmax(s).attn_context(v, h)
+        return c.matmul(self.wo)
 
 
 class LlamaMLP(Module):

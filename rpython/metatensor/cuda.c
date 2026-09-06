@@ -418,22 +418,27 @@ RPY_EXPORTED int rt_cuda_matmul(long a, long b, long c, long rows,
 
 RPY_EXPORTED int rt_cuda_bmm(long a, long b, long c, long batch, long rows,
                              long inner, long cols, long ta, long tb,
-                             long dtype)
+                             long dtype, long lda_, long ldb_, long ldc_,
+                             long sa, long sb, long sc)
 {
     double alpha = 1.0, beta = 0.0;
     float alphaf = 1.0f, betaf = 0.0f;
     unsigned short alphah = 0x3c00, betah = 0;
-    int ldb = tb ? (int)inner : (int)cols;
-    int lda = ta ? (int)rows : (int)inner;
+    int ldb = ldb_ > 0 ? (int)ldb_ : (tb ? (int)inner : (int)cols);
+    int lda = lda_ > 0 ? (int)lda_ : (ta ? (int)rows : (int)inner);
+    int ldc = ldc_ > 0 ? (int)ldc_ : (int)cols;
+    long long stra = sa > 0 ? (long long)sa : (long long)(rows * inner);
+    long long strb = sb > 0 ? (long long)sb : (long long)(inner * cols);
+    long long strc = sc > 0 ? (long long)sc : (long long)(rows * cols);
     if (!rt_cublas_init()) return 0;
     if (dtype == 1) {
         if (!p_cublasSgemmStridedBatched) return 0;
         return p_cublasSgemmStridedBatched(
             cublas_handle, tb ? 1 : 0, ta ? 1 : 0,
             (int)cols, (int)rows, (int)inner, &alphaf,
-            (const float *)b, ldb, (long long)(inner * cols),
-            (const float *)a, lda, (long long)(rows * inner),
-            &betaf, (float *)c, (int)cols, (long long)(rows * cols),
+            (const float *)b, ldb, strb,
+            (const float *)a, lda, stra,
+            &betaf, (float *)c, ldc, strc,
             (int)batch) == 0;
     }
     if (dtype == 2) {
@@ -441,19 +446,19 @@ RPY_EXPORTED int rt_cuda_bmm(long a, long b, long c, long batch, long rows,
         return p_cublasHgemmStridedBatched(
             cublas_handle, tb ? 1 : 0, ta ? 1 : 0,
             (int)cols, (int)rows, (int)inner, &alphah,
-            (const unsigned short *)b, ldb, (long long)(inner * cols),
-            (const unsigned short *)a, lda, (long long)(rows * inner),
-            &betah, (unsigned short *)c, (int)cols, (long long)(rows * cols),
+            (const unsigned short *)b, ldb, strb,
+            (const unsigned short *)a, lda, stra,
+            &betah, (unsigned short *)c, ldc, strc,
             (int)batch) == 0;
     }
     if (!p_cublasDgemmStridedBatched) return 0;
     return p_cublasDgemmStridedBatched(cublas_handle, tb ? 1 : 0, ta ? 1 : 0,
                                        (int)cols, (int)rows, (int)inner, &alpha,
                                        (const double *)b, ldb,
-                                       (long long)(inner * cols),
+                                       strb,
                                        (const double *)a, lda,
-                                       (long long)(rows * inner),
-                                       &beta, (double *)c, (int)cols,
-                                       (long long)(rows * cols),
+                                       stra,
+                                       &beta, (double *)c, ldc,
+                                       strc,
                                        (int)batch) == 0;
 }

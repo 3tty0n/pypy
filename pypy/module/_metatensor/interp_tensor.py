@@ -75,6 +75,42 @@ class W_Tensor(W_Root):
     def descr_max(self, space, axis=-1):
         return W_Tensor(self.tensor.max(axis))
 
+    def _rowwise(self, space):
+        t = self.tensor.t
+        if ops.tensor_ndim(t) != 2:
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        return ops.tensor_shape(t, 1)
+
+    def _weight(self, space, w_other, cols):
+        other = self._other(space, w_other)
+        if (ops.tensor_size(other.t) != cols or
+                ops.tensor_dtype(other.t) != ops.tensor_dtype(self.tensor.t)):
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        return other
+
+    def descr_softmax(self, space):
+        self._rowwise(space)
+        return W_Tensor(nn.softmax(self.tensor))
+
+    @unwrap_spec(eps=float)
+    def descr_layer_norm(self, space, w_gamma, w_beta, eps=1e-5):
+        cols = self._rowwise(space)
+        gamma = self._weight(space, w_gamma, cols)
+        beta = self._weight(space, w_beta, cols)
+        return W_Tensor(nn.layernorm(self.tensor, gamma, beta, eps))
+
+    @unwrap_spec(eps=float)
+    def descr_rms_norm(self, space, w_gamma, eps=1e-5):
+        cols = self._rowwise(space)
+        gamma = self._weight(space, w_gamma, cols)
+        return W_Tensor(nn.rmsnorm(self.tensor, gamma, eps))
+
+    def descr_gelu(self, space):
+        return W_Tensor(nn.gelu(self.tensor))
+
+    def descr_silu(self, space):
+        return W_Tensor(nn.silu(self.tensor))
+
     def descr_relu(self, space):
         return W_Tensor(self.tensor.relu())
 
@@ -99,6 +135,38 @@ class W_Tensor(W_Root):
             return W_Tensor(self.tensor.reshape(shape))
         except ValueError:
             raise oefmt(space.w_ValueError, "shape mismatch")
+
+    @unwrap_spec(heads=int)
+    def descr_attn_scores(self, space, w_other, heads):
+        t = self.tensor.t
+        other = self._other(space, w_other)
+        if (heads <= 0 or ops.tensor_ndim(t) != 2 or
+                ops.tensor_ndim(other.t) != 2):
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        rows = ops.tensor_shape(t, 0)
+        d = ops.tensor_shape(t, 1)
+        if (d % heads != 0 or ops.tensor_shape(other.t, 0) != rows or
+                ops.tensor_shape(other.t, 1) != d or
+                ops.tensor_dtype(other.t) != ops.tensor_dtype(t)):
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        return W_Tensor(self.tensor.attn_scores(other, heads, rows,
+                                                d // heads))
+
+    @unwrap_spec(heads=int)
+    def descr_attn_context(self, space, w_other, heads):
+        t = self.tensor.t
+        other = self._other(space, w_other)
+        if (heads <= 0 or ops.tensor_ndim(t) != 2 or
+                ops.tensor_ndim(other.t) != 2):
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        rows = ops.tensor_shape(t, 1)
+        d = ops.tensor_shape(other.t, 1)
+        if (ops.tensor_shape(t, 0) != heads * rows or d % heads != 0 or
+                ops.tensor_shape(other.t, 0) != rows or
+                ops.tensor_dtype(other.t) != ops.tensor_dtype(t)):
+            raise oefmt(space.w_ValueError, "shape mismatch")
+        return W_Tensor(self.tensor.attn_context(other, heads, rows,
+                                                 d // heads))
 
     @unwrap_spec(heads=int)
     def descr_head_split(self, space, heads):
@@ -252,10 +320,17 @@ W_Tensor.typedef = TypeDef(
     sqrt=interp2app(W_Tensor.descr_sqrt),
     max=interp2app(W_Tensor.descr_max),
     relu=interp2app(W_Tensor.descr_relu),
+    softmax=interp2app(W_Tensor.descr_softmax),
+    layer_norm=interp2app(W_Tensor.descr_layer_norm),
+    rms_norm=interp2app(W_Tensor.descr_rms_norm),
+    gelu=interp2app(W_Tensor.descr_gelu),
+    silu=interp2app(W_Tensor.descr_silu),
     sum=interp2app(W_Tensor.descr_sum),
     item=interp2app(W_Tensor.descr_item),
     matmul=interp2app(W_Tensor.descr_matmul),
     reshape=interp2app(W_Tensor.descr_reshape),
+    attn_scores=interp2app(W_Tensor.descr_attn_scores),
+    attn_context=interp2app(W_Tensor.descr_attn_context),
     head_split=interp2app(W_Tensor.descr_head_split),
     head_merge=interp2app(W_Tensor.descr_head_merge),
     bmm=interp2app(W_Tensor.descr_bmm),

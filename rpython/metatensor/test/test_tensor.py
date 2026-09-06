@@ -685,6 +685,11 @@ def _ref_transpose(m):
     return [[m[i][j] for i in range(len(m))] for j in range(len(m[0]))]
 
 
+def _ref_gelu(v):
+    u = math.sqrt(2.0 / math.pi) * (v + 0.044715 * v * v * v)
+    return 0.5 * v * (1.0 + math.tanh(u))
+
+
 def _ref_softmax(m):
     out = []
     for row in m:
@@ -864,6 +869,124 @@ class TestTransformer(LLJitMixin):
         assert len(added) == 1
         key = added.pop()
         assert key.split(',')[2] == 'r32' and key.split(',')[0] == '6'
+
+    def test_gelu_fuses_one_kernel(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
+        def f(n):
+            x = core.zeros([3, 4])
+            for i in range(12):
+                x.host[i] = (i % 7) - 3.0
+            w = core.zeros([4])
+            for i in range(4):
+                w.host[i] = 1.0 * (1 << i)
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, w=w, acc=acc)
+                y = nn.gelu(nn.Tensor(x))
+                acc += ops.item(ops.sum(ops.mul(y.t, w)))
+                n -= 1
+            return acc
+        before = set(kernels.kernel_cache.kernels)
+        expect = 0.0
+        for i in range(12):
+            expect += _ref_gelu((i % 7) - 3.0) * (1 << (i % 4))
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+        self.check_simple_loop(call_r=1)
+        assert len(set(kernels.kernel_cache.kernels) - before) == 1
+
+    def test_silu_fuses_one_kernel(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
+        def f(n):
+            x = core.zeros([3, 4])
+            for i in range(12):
+                x.host[i] = (i % 7) - 3.0
+            w = core.zeros([4])
+            for i in range(4):
+                w.host[i] = 1.0 * (1 << i)
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, w=w, acc=acc)
+                y = nn.silu(nn.Tensor(x))
+                acc += ops.item(ops.sum(ops.mul(y.t, w)))
+                n -= 1
+            return acc
+        before = set(kernels.kernel_cache.kernels)
+        expect = 0.0
+        for i in range(12):
+            v = (i % 7) - 3.0
+            expect += v / (1.0 + math.exp(-v)) * (1 << (i % 4))
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+        self.check_simple_loop(call_r=1)
+        assert len(set(kernels.kernel_cache.kernels) - before) == 1
+
+    def test_rmsnorm_rows_one_kernel(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'g', 'w', 'acc'])
+        def f(n):
+            x = core.zeros([3, 4])
+            for i in range(12):
+                x.host[i] = ((i * i) % 7) - 3.0 + i * 0.5
+            g = core.zeros([4])
+            w = core.zeros([4])
+            for i in range(4):
+                g.host[i] = 1.0 + i * 0.5
+                w.host[i] = 1.0 * (1 << i)
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, g=g, w=w, acc=acc)
+                y = nn.rmsnorm(nn.Tensor(x), nn.Tensor(g), TEPS)
+                acc += ops.item(ops.sum(ops.mul(y.t, w)))
+                n -= 1
+            return acc
+        before = set(kernels.kernel_cache.kernels)
+        rows = [[((i * 4 + j) * (i * 4 + j)) % 7 - 3.0 + (i * 4 + j) * 0.5
+                 for j in range(4)] for i in range(3)]
+        expect = 0.0
+        for i in range(3):
+            ms = 0.0
+            for j in range(4):
+                ms += rows[i][j] * rows[i][j]
+            denom = math.sqrt(ms / 4.0 + TEPS)
+            for j in range(4):
+                expect += rows[i][j] / denom * (1.0 + j * 0.5) * (1 << j)
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+        self.check_simple_loop(call_r=1)
+        added = set(kernels.kernel_cache.kernels) - before
+        assert len(added) == 1
+        key = added.pop()
+        assert key.split(',')[0] == '5'
+
+    def test_attn_scores_context_match_head_split(self):
+        heads, rows, dh = 3, 4, 2
+        d = heads * dh
+        q = core.zeros([rows, d])
+        k = core.zeros([rows, d])
+        v = core.zeros([rows, d])
+        for i in range(rows * d):
+            q.host[i] = (i % 5) - 2.0
+            k.host[i] = ((i * 3) % 7) - 3.0
+            v.host[i] = ((i * 5) % 11) - 5.0
+        qs = nn.Tensor(runtime.head_split(q, rows, dh, heads))
+        ks = nn.Tensor(runtime.head_split(k, rows, dh, heads))
+        vs = nn.Tensor(runtime.head_split(v, rows, dh, heads))
+        ref_s = qs.bmm(ks, heads, rows, rows, dh, 1)
+        got_s = nn.Tensor(q).attn_scores(nn.Tensor(k), heads, rows, dh)
+        hr = device.host(ref_s.t)
+        hg = device.host(got_s.t)
+        assert ops.tensor_size(got_s.t) == heads * rows * rows
+        for i in range(heads * rows * rows):
+            assert abs(hr[i] - hg[i]) < 1e-9
+        ref_c = runtime.head_merge(ref_s.bmm(vs, heads, rows, dh, rows, 0).t,
+                                   rows, dh, heads)
+        got_c = got_s.attn_context(nn.Tensor(v), heads, rows, dh)
+        hr = device.host(ref_c)
+        hg = device.host(got_c.t)
+        assert ops.tensor_size(got_c.t) == rows * d
+        assert ops.tensor_shape(got_c.t, 1) == d
+        for i in range(rows * d):
+            assert abs(hr[i] - hg[i]) < 1e-9
 
     def test_transformer_block_forward(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'block', 'acc'])

@@ -76,7 +76,8 @@ RPY_EXTERN int rt_cuda_matmul(long a, long b, long c, long rows, long inner,
                               long cols, long ta, long tb, long dtype);
 RPY_EXTERN int rt_cuda_bmm(long a, long b, long c, long batch, long rows,
                            long inner, long cols, long ta, long tb,
-                           long dtype);
+                           long dtype, long lda, long ldb, long ldc,
+                           long sa, long sb, long sc);
 """],
     libraries=['cuda', 'dl'])
 rt_cuda_load = rffi.llexternal('rt_cuda_load', [rffi.CCHARP, rffi.CCHARP],
@@ -123,9 +124,7 @@ rt_cuda_matmul = rffi.llexternal(
                                 releasegil=False)
 rt_cuda_bmm = rffi.llexternal(
     'rt_cuda_bmm',
-    [lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
-     lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
-     lltype.Signed, lltype.Signed],
+    [lltype.Signed] * 16,
     rffi.INT, compilation_info=eci,
                                 releasegil=False)
 

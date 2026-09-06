@@ -135,6 +135,27 @@ class Tensor(object):
                                0, tb),
             node, needs)
 
+    def attn_scores(self, k, heads, rows, dh):
+        d = heads * dh
+        node = None
+        needs = self.requires_grad or k.requires_grad
+        if needs:
+            node = AttnScoresNode(self, k, heads, rows, dh)
+        return self._wrap(runtime.tensor_bmm(
+            self.t, k.t, heads, rows, rows, dh, 0, 1, d, d, rows,
+            dh, dh, rows * rows, heads * rows * rows, heads * rows),
+            node, needs)
+
+    def attn_context(self, v, heads, rows, dh):
+        d = heads * dh
+        node = None
+        needs = self.requires_grad or v.requires_grad
+        if needs:
+            node = AttnContextNode(self, v, heads, rows, dh)
+        return self._wrap(runtime.tensor_bmm(
+            self.t, v.t, heads, rows, dh, rows, 0, 0, rows, d, d,
+            rows * rows, dh, dh, rows * d, rows), node, needs)
+
     def head_split(self, rows, dh, heads):
         node = None
         if self.requires_grad:
@@ -514,6 +535,64 @@ class BmmNode(Node):
         return grads
 
 
+class AttnScoresNode(Node):
+    def __init__(self, q, k, heads, rows, dh):
+        inputs = [q]
+        inputs.append(k)
+        Node.__init__(self, inputs)
+        self.heads = heads
+        self.rows = rows
+        self.dh = dh
+
+    def apply(self, g):
+        q = self.inputs[0]
+        k = self.inputs[1]
+        h, rows, dh = self.heads, self.rows, self.dh
+        d = h * dh
+        gq = None
+        gk = None
+        if q.requires_grad:
+            gq = Tensor(runtime.tensor_bmm(
+                g.t, k.t, h, rows, dh, rows, 0, 0, rows, d, d,
+                rows * rows, dh, dh, rows * d, rows))
+        if k.requires_grad:
+            gk = Tensor(runtime.tensor_bmm(
+                g.t, q.t, h, rows, dh, rows, 1, 0, rows, d, d,
+                rows * rows, dh, dh, rows * d, rows))
+        grads = [gq]
+        grads.append(gk)
+        return grads
+
+
+class AttnContextNode(Node):
+    def __init__(self, p, v, heads, rows, dh):
+        inputs = [p]
+        inputs.append(v)
+        Node.__init__(self, inputs)
+        self.heads = heads
+        self.rows = rows
+        self.dh = dh
+
+    def apply(self, g):
+        p = self.inputs[0]
+        v = self.inputs[1]
+        h, rows, dh = self.heads, self.rows, self.dh
+        d = h * dh
+        gp = None
+        gv = None
+        if p.requires_grad:
+            gp = Tensor(runtime.tensor_bmm(
+                g.t, v.t, h, rows, rows, dh, 0, 1, d, d, rows,
+                dh, dh, rows * rows, h * rows * rows, h * rows))
+        if v.requires_grad:
+            gv = Tensor(runtime.tensor_bmm(
+                p.t, g.t, h, rows, dh, rows, 1, 0, rows, d, d,
+                rows * rows, dh, dh, rows * d, rows))
+        grads = [gp]
+        grads.append(gv)
+        return grads
+
+
 class HeadSplitNode(Node):
     def __init__(self, x, rows, dh, heads):
         inputs = [x]
@@ -618,6 +697,31 @@ def layernorm(x, gamma, beta, eps):
     denom = var.add(epst, core.BC_R_SCALAR).sqrt()
     y = d.div(denom, core.BC_R_COL)
     return y.mul(gamma, core.BC_R_ROW).add(beta, core.BC_R_ROW)
+
+
+def rmsnorm(x, gamma, eps):
+    c = ops.cols_of(x.t)
+    inv = Tensor(runtime.scalar(1.0 / c))
+    epst = Tensor(runtime.scalar(eps))
+    ms = x.mul(x, core.BC_NONE).sum(1).mul(inv, core.BC_R_SCALAR)
+    denom = ms.add(epst, core.BC_R_SCALAR).sqrt()
+    return x.div(denom, core.BC_R_COL).mul(gamma, core.BC_R_ROW)
+
+
+def gelu(x):
+    c = Tensor(runtime.scalar(-2.0 * math.sqrt(2.0 / math.pi)))
+    k = Tensor(runtime.scalar(0.044715))
+    one = Tensor(runtime.scalar(1.0))
+    x3 = x.mul(x, core.BC_NONE).mul(x, core.BC_NONE).mul(k, core.BC_R_SCALAR)
+    z = x.add(x3, core.BC_NONE).mul(c, core.BC_R_SCALAR)
+    return x.div(z.exp().add(one, core.BC_R_SCALAR), core.BC_NONE)
+
+
+def silu(x):
+    neg = Tensor(runtime.scalar(-1.0))
+    one = Tensor(runtime.scalar(1.0))
+    z = x.mul(neg, core.BC_R_SCALAR).exp().add(one, core.BC_R_SCALAR)
+    return x.div(z, core.BC_NONE)
 
 
 def mha(x, wq, wk, wv, wo, heads):

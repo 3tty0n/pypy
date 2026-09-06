@@ -76,14 +76,17 @@ and 1.9e-4 for SmolLM2):
 
 | model | ours (PyPy) | torch.compile | torch eager |
 |---|---|---|---|
-| distilgpt2 (6 layers, 768, 12 heads) | 1903 | 1301 | 2423 |
+| distilgpt2 (6 layers, 768, 12 heads) | 1543 | 1296 | 2418 |
 | sshleifer/tiny-gpt2 (2 layers, width 2) | 558 | 373 | 1418 |
-| SmolLM2-135M (Llama, 30 layers, 576, 9/3 heads) | 6729 | 5242 | 14977 |
+| SmolLM2-135M (Llama, 30 layers, 576, 9/3 heads) | 5662 | 5202 | 14434 |
 
-distilgpt2 takes 145 launches per iteration (cuBLAS included), SmolLM2-135M
-about 570.  Both models are measured at 200 iterations after 30 warmup;
-the remaining gap to torch.compile is device-buffer recycling, which still
-depends on GC finalizers, and the launch count.
+distilgpt2 now launches 9 non-GEMM kernels per layer (was 23: reductions
+were forced by app-level `reshape` and inferred broadcasts, and attention
+went through head split/merge gathers; the app-level `softmax`, `layer_norm`,
+`rms_norm`, `gelu`, `silu` now call the fused RPython row kernels and
+attention reads the (rows, heads*dh) layout through strided-batched cuBLAS).
+The remaining gap to torch.compile is the q/k/v bias adds that feed a GEMM
+directly (needs a cuBLAS epilogue) and the per-kernel launch floor.
 
 App-level scripts in `applevel/` (Transformer, CNN, chains) run on a PyPy
 translated with `--withmod-_metatensor` and track the RPython numbers within
