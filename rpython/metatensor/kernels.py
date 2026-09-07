@@ -19,6 +19,7 @@ def _empty_kernel():
     k.n = 0
     k.cols = 0
     k.dtype = F64
+    k.modes = 0
     k.outputs = lltype.malloc(SHAPEARRAY, 0)
     return k
 single_kernels = SingleKernels()
@@ -77,6 +78,7 @@ def new_kernel(ninputs, nnodes, dtype=F64):
     kernel.n = 0
     kernel.cols = 0
     kernel.dtype = dtype
+    kernel.modes = 0
     kernel.outputs = lltype.malloc(SHAPEARRAY, 0)
     return kernel
 
@@ -133,6 +135,7 @@ def compile_or_reuse(kernel):
         kernel.nextra = cached.nextra
         kernel.sumroot = cached.sumroot
         kernel.rowmode = cached.rowmode
+        kernel.modes = cached.modes
         return kernel
     finish_kernel(kernel)
     cache_kernel(key, kernel)
@@ -145,10 +148,18 @@ def set_node(kernel, i, opcode, a, b, p):
     node.b = b
     node.p = p
 
+def packed_modes(kernel):
+    modes = input_modes(kernel)
+    packed = 0
+    for i in range(len(modes)):
+        packed |= modes[i] << (2 * i)
+    return packed
+
 def finish_kernel(kernel):
     n = len(kernel.nodes)
     kernel.sumroot = int(n > 0 and is_reduction(kernel.nodes[n - 1].opcode))
     kernel.rowmode = int(kernel_row_mode(kernel))
+    kernel.modes = packed_modes(kernel)
     kernel.fn = compile_gpu(kernel)
     return kernel
 

@@ -6,7 +6,7 @@ from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import math
 from rpython.metatensor.core import (ADD, ARITY, F16, GA_ROWS, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_ROTHALF, GA_MAXPOOL, GA_MAXPOOL_NHWC, HOSTARRAY, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, _shape2, cols, config, nbytes, new_tensor, policy)
-from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, gpu_enabled, host, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_bmm, rt_cuda_copy, rt_cuda_free, rt_cuda_launch, rt_cuda_matmul, rt_cuda_reset)
+from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, gpu_enabled, host, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_bmm, rt_cuda_copy, rt_cuda_free, rt_cuda_launch, rt_cuda_matmul, rt_cuda_reset, rt_cuda_warn_cpu)
 from rpython.metatensor.kernels import (gather_kernel, needs_zero, row_tile, single_kernel)
 
 class Ones(object):
@@ -50,6 +50,7 @@ def eval_op(opcode, a, b, p):
         r = launch_gpu(kernel, inputs)
         if r:
             return r
+        rt_cuda_warn_cpu(kernel.fn)
     return eval_op_cpu(opcode, a, b, p)
 
 def _exp(v):
@@ -242,6 +243,8 @@ def launch(kernel, a, b, c, d=NULLTENSOR, e=NULLTENSOR, f=NULLTENSOR):
         if r:
             prof_end(intmask(0), intmask(kernel.fn % 1000000000), t0)
             return r
+    if kernel.fn != 0:
+        rt_cuda_warn_cpu(kernel.fn)
     t0 = prof_begin()
     nodes = kernel.nodes
     for i in range(len(nodes)):
@@ -269,6 +272,23 @@ def reset_device():
         ones.one[i] = NULLTENSOR
     rt_cuda_reset()
 
+@jit.unroll_safe
+def modes_fit(kernel, inputs, n, c):
+    packed = kernel.modes
+    for k in range(len(inputs)):
+        mode = (packed >> (2 * k)) & 3
+        if mode == 1:
+            need = c
+        elif mode == 2:
+            need = 1
+        elif mode == 3:
+            need = n // c if c > 0 else n
+        else:
+            need = n
+        if inputs[k].size < need:
+            return False
+    return True
+
 def launch_gpu(kernel, inputs):
     nin = len(inputs)
     dt = kernel.dtype
@@ -290,6 +310,8 @@ def launch_gpu(kernel, inputs):
         if kernel.cols > 0 and c != kernel.cols:
             return NULLTENSOR
         elems = c
+    if not modes_fit(kernel, inputs, n, c):
+        return NULLTENSOR
     if kernel.sumroot:
         axis = kernel.nodes[len(kernel.nodes) - 1].p
         if axis == 0:

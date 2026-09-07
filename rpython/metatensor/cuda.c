@@ -127,6 +127,7 @@ static long live_bytes, budget_bytes = 8L << 20, launches, fresh_since_gc;
 static long allocated_since_gc, live_after_gc;
 static long count_threshold = 1, just_collected;
 #define SLAB_BYTES (32L << 20)
+static CUresult rt_last_err;
 static CUdeviceptr slab_ptr;
 static long slab_left;
 
@@ -185,6 +186,21 @@ RPY_EXPORTED int rt_cuda_available(void)
     return rt_init();
 }
 
+static struct { long fn; char name[64]; } rt_names[4096];
+static int rt_nnames;
+static int rt_dbg = -1;
+static int dbg_on(void)
+{
+    if (rt_dbg < 0) rt_dbg = getenv("RTENSOR_DEBUG_LAUNCH") != NULL;
+    return rt_dbg;
+}
+static const char *rt_name_of(long fn)
+{
+    int i;
+    for (i = 0; i < rt_nnames; i++) if (rt_names[i].fn == fn) return rt_names[i].name;
+    return "?";
+}
+
 RPY_EXPORTED long rt_cuda_load(const char *ptx, const char *name)
 {
     CUmodule mod;
@@ -192,6 +208,11 @@ RPY_EXPORTED long rt_cuda_load(const char *ptx, const char *name)
     if (!rt_init()) return 0;
     if (cuModuleLoadData(&mod, ptx) != CUDA_SUCCESS) return 0;
     if (cuModuleGetFunction(&fn, mod, name) != CUDA_SUCCESS) return 0;
+    if (rt_nnames < 4096) {
+        rt_names[rt_nnames].fn = (long)fn;
+        snprintf(rt_names[rt_nnames].name, 64, "%s", name);
+        rt_nnames++;
+    }
     return (long)fn;
 }
 
@@ -199,11 +220,23 @@ static long alloc_failed(long nbytes)
 {
     static int warned;
     if (!warned) {
+        const char *nm = 0;
+        cuGetErrorName(rt_last_err, &nm);
         warned = 1;
-        fprintf(stderr, "metatensor: cuMemAlloc(%ld) failed with %ld MB live, falling back to CPU\n",
-                nbytes, live_bytes >> 20);
+        fprintf(stderr, "metatensor: cuMemAlloc(%ld) failed with %ld MB live (%s), falling back to CPU\n",
+                nbytes, live_bytes >> 20, nm ? nm : "?");
     }
     return 0;
+}
+
+RPY_EXPORTED void rt_cuda_warn_cpu(long fn)
+{
+    static int warned;
+    if (!warned) {
+        warned = 1;
+        fprintf(stderr, "metatensor: kernel %s has GPU code but ran on the CPU\n",
+                rt_name_of(fn));
+    }
 }
 
 RPY_EXPORTED long rt_cuda_alloc(long nbytes, long zero)
@@ -223,7 +256,7 @@ RPY_EXPORTED long rt_cuda_alloc(long nbytes, long zero)
         if (need <= SLAB_BYTES / 4) {
             if (slab_left < need) {
                 CUdeviceptr s;
-                if (cuMemAlloc(&s, SLAB_BYTES) != CUDA_SUCCESS) return alloc_failed(SLAB_BYTES);
+                if ((rt_last_err = cuMemAlloc(&s, SLAB_BYTES)) != CUDA_SUCCESS) return alloc_failed(SLAB_BYTES);
                 push(&allocs, &nallocs, &capallocs, s, SLAB_BYTES);
                 slab_ptr = s;
                 slab_left = SLAB_BYTES;
@@ -232,7 +265,7 @@ RPY_EXPORTED long rt_cuda_alloc(long nbytes, long zero)
             slab_ptr += need;
             slab_left -= need;
         } else {
-            if (cuMemAlloc(&p, nbytes) != CUDA_SUCCESS) return alloc_failed(nbytes);
+            if ((rt_last_err = cuMemAlloc(&p, nbytes)) != CUDA_SUCCESS) return alloc_failed(nbytes);
             push(&allocs, &nallocs, &capallocs, p, nbytes);
         }
         fresh_since_gc++;
@@ -381,8 +414,18 @@ RPY_EXPORTED int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
     params[k++] = &argc;
     for (i = 0; i < nextra; i++) params[k++] = &null;
     launches++;
-    return cuLaunchKernel((CUfunction)fn, blocks ? blocks : 1, 1, 1,
-                          threads, 1, 1, shared, 0, params, 0) == CUDA_SUCCESS;
+    {
+        CUresult r = cuLaunchKernel((CUfunction)fn, blocks ? blocks : 1, 1, 1,
+                                    threads, 1, 1, shared, 0, params, 0);
+        if (dbg_on()) {
+            CUresult sr = cuCtxSynchronize();
+            fprintf(stderr, "launch %s fn=%ld blocks=%u threads=%d n=%ld elems=%ld cols=%ld nin=%d nout=%d shared=%d nextra=%d -> %d/%d\n",
+                    rt_name_of(fn), fn % 1000000000, blocks ? blocks : 1, threads, n,
+                    elems_per_block, cols, ninputs, nouts, shared, nextra,
+                    (int)r, (int)sr);
+        }
+        return r == CUDA_SUCCESS;
+    }
 }
 
 RPY_EXPORTED int rt_cuda_matmul(long a, long b, long c, long rows,

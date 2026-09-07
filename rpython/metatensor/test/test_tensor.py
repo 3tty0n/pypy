@@ -1112,6 +1112,18 @@ def test_wide_column_broadcast_stays_on_gpu():
     assert h[c] == (1.0 + c) * 1.5
 
 
+def test_launch_gpu_rejects_undersized_operand():
+    kernel = kernels.single_kernel(core.DIV, core.BC_NONE, core.policy.dtype)
+    big = _filled([256, 64], 1.0)
+    small = _filled([256, 1], 2.0)
+    before = device.launch_count()
+    assert not runtime.launch_gpu(kernel, [big, small])
+    assert device.launch_count() == before
+    if kernel.fn != 0:
+        assert runtime.launch_gpu(kernel, [big, _filled([256, 64], 2.0)])
+        assert device.launch_count() == before + 1
+
+
 def test_column_broadcast_shapes():
     x = _filled([3, 4], 1.0)
     assert ops.bcast(x, _filled([4], 0.5)) == core.BC_R_ROW
