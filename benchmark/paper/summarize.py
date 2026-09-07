@@ -56,8 +56,8 @@ def main(out_dir):
             torch_rows = gb[key].get("torch-compile", [])
             launches = med([x["launches_per_iter"] for x in fused_rows
                            if x.get("launches_per_iter")])
-            graphs = torch_rows[0].get("graphs", "") if torch_rows else ""
-            breaks = torch_rows[0].get("breaks", "") if torch_rows else ""
+            graphs = torch_rows[0].get("launches_per_iter", "") if torch_rows else ""
+            breaks = torch_rows[0].get("graphs", "") if torch_rows else ""
             lines.append("| %d | %d | %s | %s | %s |" % (
                 key[0], key[1], fmt(launches, "%.1f"), graphs, breaks))
         lines.append("")

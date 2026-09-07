@@ -1,0 +1,100 @@
+# Paper benchmark summary
+
+## Microbenchmarks (median steady_us over rounds)
+
+| variant | k | n | fused (ours) | torch.compile | torch eager | speedup vs compile |
+|---|---|---|---|---|---|---|
+| 0 | 1 | 1000000 | 28.7 | 42.2 | 78.5 | 1.47x |
+| 0 | 4 | 10000 | 12.6 | 41.8 | 53.8 | 3.31x |
+| 0 | 4 | 100000 | 12.8 | 41.9 | 55.8 | 3.29x |
+| 0 | 4 | 1000000 | 39.9 | 68.7 | 312.7 | 1.72x |
+| 0 | 4 | 10000000 | 331.6 | 646.4 | 3045.3 | 1.95x |
+| 0 | 8 | 1000000 | 70.8 | 133.3 | 625.1 | 1.88x |
+| 1 | 4 | 1000000 | 43.3 | 307.8 | 317.1 | 7.11x |
+| 2 | 4 | 1000000 | 44.2 | 308.2 | 317.2 | 6.97x |
+| 3 | 4 | 1000000 | 94.3 | 168.5 | 376.7 | 1.79x |
+| 4 | 4 | 1000000 | 53.3 | 332.9 | 343.1 | 6.24x |
+| 5 | 4 | 1000000 | 56.1 | 333.2 | 342.9 | 5.94x |
+| 6 | 1 | 25600 | 289.9 | 392.1 | 390.2 | 1.35x |
+| 6 | 1 | 256000 | 1062.2 | 1246.4 | 1250.6 | 1.17x |
+| 7 | 1 | 25600 | 671.7 | 830.8 | 793.0 | 1.24x |
+| 7 | 1 | 256000 | 2803.0 | 3024.0 | 3086.8 | 1.08x |
+| 8 | 1 | 25600 | 491.2 | 518.5 | 559.0 | 1.06x |
+| 8 | 1 | 256000 | 12062.3 | 15813.6 | 14886.4 | 1.31x |
+| 9 | 1 | 25600 | 775.9 | 858.8 | 796.4 | 1.11x |
+| 9 | 1 | 256000 | 564.9 | 645.5 | 576.5 | 1.14x |
+| 10 | 1 | 25600 | 292009.9 | 3137.8 | 3568.1 | 0.01x |
+| 10 | 1 | 256000 | 552614.7 | 135389.3 | 135555.1 | 0.24x |
+| 11 | 1 | 25600 | 3.3 | 57.3 | 24.4 | 17.39x |
+| 11 | 1 | 256000 | 15.1 | 153.2 | 117.1 | 10.15x |
+| 12 | 1 | 25600 | 97.8 | 144.0 | 136.6 | 1.47x |
+| 12 | 1 | 256000 | 363.7 | 495.4 | 486.5 | 1.36x |
+| 13 | 1 | 25600 | 439.7 | 592.6 | 582.3 | 1.35x |
+| 13 | 1 | 256000 | 2524.5 | 2767.4 | 2741.0 | 1.10x |
+
+## Guards / graph breaks (launches per iter, torch graph breaks)
+
+| variant | n | launches/iter (fused) | torch graphs | torch breaks |
+|---|---|---|---|---|
+| 1 | 1000000 | 1.1 | 1 | 0 |
+| 2 | 1000000 | 1.1 | 1 | 0 |
+| 3 | 1000000 | 2.0 | 2 | 1 |
+| 4 | 1000000 | 1.0 | 1 | 0 |
+| 5 | 1000000 | 1.1 | 2 | 1 |
+
+## End-to-end models (median steady_us, ratio to torch.compile)
+
+| model | ours | torch.compile | torch eager | ratio ours/compile | correctness |
+|---|---|---|---|---|---|
+| bert-mini | 665.3 | 779.1 | 1586.2 | 0.85x | 2.09808e-05 |
+| bert-tiny | 394.4 | 479.2 | 962.1 | 0.82x | 3.05176e-05 |
+| distilgpt2 | 1384.8 | 1294.4 | 2441.4 | 1.07x | 0.000144958 |
+| mixer_b16 | 3815.8 | 3118.2 | 2870.9 | 1.22x | 3.71933e-05 |
+| resnet18-b1 | 782.6 | 962.5 | 1400.3 | 0.81x | 0.00524807 |
+| resnet18-b8 | 3195.8 | 2180.1 | 2247.1 | 1.47x | 0.00887299 |
+| smollm2-135m | 4083.6 | 5252.4 | 14491.8 | 0.78x | 0.000151277 |
+| tiny-gpt2 | 187.6 | 368.3 | 1460.5 | 0.51x | 2.6077e-08 |
+| vit-tiny | 1681.5 | 2154.4 | 3445.7 | 0.78x | 1.23978e-05 |
+
+## Ablations (median steady_us)
+
+| experiment | variant | model | steady_us | note |
+|---|---|---|---|---|
+| budget_mb | 64 | distilgpt2 | 1375.1 |  |
+| budget_mb | 8 | distilgpt2 | 1374.3 |  |
+| flat_block | 256 | distilgpt2 | 1348.0 |  |
+| flat_block | 256 | resnet18 | 716.6 |  |
+| flat_block | 4096 | distilgpt2 | 1370.7 |  |
+| flat_block | 4096 | resnet18 | 777.4 |  |
+| fusion | off | distilgpt2 | 2026.6 | enable_opts minus tensor |
+| fusion | on | distilgpt2 | 1378.3 |  |
+| precision | float16 | distilgpt2 | 970.5 |  |
+| precision | float16 | smollm2-135m | 2226.7 |  |
+| precision | float32 | distilgpt2 | 1380.2 |  |
+| precision | float32 | smollm2-135m | 4091.4 |  |
+
+## Dynamic sequence length (median steady_us per length)
+
+| system | length | median_us | loops | bridges | recompiles |
+|---|---|---|---|---|---|
+| ours | 32 | 1043.1 | 169 | 168 | 0 |
+| ours | 48 | 1440.0 | 169 | 168 | 0 |
+| ours | 64 | 1509.0 | 169 | 168 | 0 |
+| ours | 96 | 1792.1 | 169 | 168 | 0 |
+| ours | 128 | 2132.2 | 169 | 168 | 0 |
+| torch-compile-dynamic | 32 | 1282.6 | 0 | 0 | 0 |
+| torch-compile-dynamic | 48 | 1722.4 | 0 | 0 | 0 |
+| torch-compile-dynamic | 64 | 1775.2 | 0 | 0 | 0 |
+| torch-compile-dynamic | 96 | 1990.3 | 0 | 0 | 0 |
+| torch-compile-dynamic | 128 | 2271.2 | 0 | 0 | 0 |
+| torch-compile-static | 32 | 1183.9 | 0 | 0 | 4 |
+| torch-compile-static | 48 | 1562.5 | 0 | 0 | 4 |
+| torch-compile-static | 64 | 1601.8 | 0 | 0 | 4 |
+| torch-compile-static | 96 | 1839.2 | 0 | 0 | 4 |
+| torch-compile-static | 128 | 2093.3 | 0 | 0 | 4 |
+| torch-eager | 32 | 2402.1 | 0 | 0 | 0 |
+| torch-eager | 48 | 2564.2 | 0 | 0 | 0 |
+| torch-eager | 64 | 2556.7 | 0 | 0 | 0 |
+| torch-eager | 96 | 2624.8 | 0 | 0 | 0 |
+| torch-eager | 128 | 2735.8 | 0 | 0 | 0 |
+

@@ -1,0 +1,37 @@
+experiment	variant	model	round	steady_us	maxabsdiff	note
+fusion	on	distilgpt2	1	1379.6		
+fusion	off	distilgpt2	1	2013.2		enable_opts minus tensor
+fusion	on	distilgpt2	2	1368.9		
+fusion	off	distilgpt2	2	2026.6		enable_opts minus tensor
+fusion	on	distilgpt2	3	1378.3		
+fusion	off	distilgpt2	3	2032.4		enable_opts minus tensor
+flat_block	256	distilgpt2	1	1349.1		
+flat_block	256	resnet18	1	716.1		
+flat_block	256	distilgpt2	2	1330.7		
+flat_block	256	resnet18	2	716.6		
+flat_block	256	distilgpt2	3	1348.0		
+flat_block	256	resnet18	3	716.9		
+flat_block	4096	distilgpt2	1	1369.5		
+flat_block	4096	resnet18	1	783.9		
+flat_block	4096	distilgpt2	2	1376.3		
+flat_block	4096	resnet18	2	774.3		
+flat_block	4096	distilgpt2	3	1370.7		
+flat_block	4096	resnet18	3	777.4		
+budget_mb	8	distilgpt2	1	1393.4		
+budget_mb	8	distilgpt2	2	1374.3		
+budget_mb	8	distilgpt2	3	1364.2		
+budget_mb	64	distilgpt2	1	1372.5		
+budget_mb	64	distilgpt2	2	1380.8		
+budget_mb	64	distilgpt2	3	1375.1		
+precision	float32	distilgpt2	1	1380.2	0.000144958	
+precision	float32	smollm2-135m	1	4091.4	0.000151277	
+precision	float32	distilgpt2	2	1384.7	0.000144958	
+precision	float32	smollm2-135m	2	4080.8	0.000151277	
+precision	float32	distilgpt2	3	1364.1	0.000144958	
+precision	float32	smollm2-135m	3	4093.4	0.000151277	
+precision	float16	distilgpt2	1	970.5	1.125	
+precision	float16	smollm2-135m	1	2242.7	0.296875	
+precision	float16	distilgpt2	2	968.7	1.125	
+precision	float16	smollm2-135m	2	2226.7	0.296875	
+precision	float16	distilgpt2	3	977.7	1.125	
+precision	float16	smollm2-135m	3	2216.7	0.296875	
