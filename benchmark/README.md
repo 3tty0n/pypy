@@ -24,7 +24,7 @@ otherwise `libcublas.so` is looked up through the dynamic loader).
 
     benchmark/metatensor-bench MODE VARIANT K N ITERS
     $RTENSOR_PYTHON benchmark/torch_bench.py {eager|compile} VARIANT K N ITERS
-    benchmark/run_experiments.sh        # full grid -> benchmark/results/<date>-<host>/summary.txt
+    benchmark/paper/run_all.sh          # full grid -> benchmark/results/paper-<date>-<host>/summary.md
 
 `MODE`: `fused` (ours), `eager` (tensor opt off, one kernel per op), `nojit`.
 `K` is the chain length, `N` the tensor size or row count.
@@ -42,6 +42,10 @@ otherwise `libcublas.so` is looked up through the dynamic loader).
 
 Output columns: `mode variant k n iters warm_s steady_us kernels acc compiled_in_timed launches_per_iter dtype`.
 `launches_per_iter` must be 1.0 for the chain in `fused` mode.
+The variants live in the `benchmark/bench/` package (`chain.py` for 0-5,
+`mlp.py` for 6-7, `transformer.py` for 8/10/13, `cnn.py` for 9, `reduce.py`
+for 11-12, shared setup in `common.py`); `metatensor_bench.py` is the thin
+translation entry point.
 
 ## Results
 

@@ -124,4 +124,5 @@ def main():
     write(a.outdir, cfg, w, a.seq)
 
 
-main()
+if __name__ == '__main__':
+    main()

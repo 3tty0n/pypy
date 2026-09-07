@@ -11,9 +11,6 @@ echo -e "experiment\tvariant\tmodel\tround\tsteady_us\tmaxabsdiff\tnote" > "$TSV
 
 NOFUSE_OPTS="enable_opts=intbounds:rewrite:virtualize:string:pure:earlyforce:heap:unroll"
 
-steady_of() { echo "$1" | grep -o 'steady_us=[0-9.]*' | head -1 | cut -d= -f2; }
-diff_of() { echo "$1" | grep -o 'maxabsdiff=[0-9.eE+-]*' | head -1 | cut -d= -f2; }
-
 run_gpt2() {
   local jitflags=$1 weights=$2
   "$RUN_PYPY" $jitflags "$APP/gpt2.py" "$weights" "$ITERS" "$WARMUP"

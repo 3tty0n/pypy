@@ -7,7 +7,6 @@ import _metatensor
 from tensorpypy import nn
 from tensorpypy.models import MLP, TransformerBlock
 
-rows, iters = int(sys.argv[1]), int(sys.argv[2])
 TB_D = 64
 TB_H = 4
 TB_EPS = 1e-05
@@ -59,17 +58,23 @@ def make_input(nrows, d):
     return _metatensor.tensor(data, [nrows, d])
 
 
-warmup_block = make_block()
-h = make_input(rows, TB_D)
-for i in range(10):
-    h = warmup_block(h)
+def main():
+    rows, iters = int(sys.argv[1]), int(sys.argv[2])
+    warmup_block = make_block()
+    h = make_input(rows, TB_D)
+    for i in range(10):
+        h = warmup_block(h)
 
-block = make_block()
-h = make_input(rows, TB_D)
-t0 = time.time()
-for i in range(iters):
-    h = block(h)
-steady_us = (time.time() - t0) / iters * 1e6
+    block = make_block()
+    h = make_input(rows, TB_D)
+    t0 = time.time()
+    for i in range(iters):
+        h = block(h)
+    steady_us = (time.time() - t0) / iters * 1e6
 
-print("applevel-transformer rows=%d iters=%d steady_us=%.1f checksum=%.6f" %
-      (rows, iters, steady_us, h.sum().item()))
+    print("applevel-transformer rows=%d iters=%d steady_us=%.1f checksum=%.6f" %
+          (rows, iters, steady_us, h.sum().item()))
+
+
+if __name__ == '__main__':
+    main()

@@ -83,4 +83,5 @@ def main():
     write(a.outdir, cfg, hf_weights(a.model, cfg, a.seq))
 
 
-main()
+if __name__ == '__main__':
+    main()

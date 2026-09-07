@@ -16,8 +16,8 @@ run_ours() {
 
 record() {
   local model=$1 system=$2 round=$3 out=$4
-  local steady=$(echo "$out" | grep -o 'steady_us=[0-9.]*' | head -1 | cut -d= -f2)
-  local diff=$(echo "$out" | grep -o 'maxabsdiff=[0-9.eE+-]*' | head -1 | cut -d= -f2)
+  local steady=$(steady_of "$out")
+  local diff=$(diff_of "$out")
   local argmax=$(echo "$out" | grep '^argmax' | sed 's/ maxabsdiff=.*//')
   echo "$argmax" > "$OUT/.last_argmax_$system"
   local match=""

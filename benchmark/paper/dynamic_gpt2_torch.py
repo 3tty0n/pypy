@@ -1,51 +1,23 @@
-import array, json, math, os, sys, time
+import json, os, sys, time
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                '..', 'applevel'))
 
 import torch
 import torch._dynamo
 
+import gpt2_torch
+import torch_common
+
 LENGTHS = [32, 48, 64, 96, 128]
 
 
-def load(outdir):
-    cfg = json.load(open(os.path.join(outdir, 'index.json')))
-    buf = array.array('f')
-    path = os.path.join(outdir, 'weights.bin')
-    buf.fromfile(open(path, 'rb'), os.path.getsize(path) // 4)
-    if sys.byteorder != 'little':
-        buf.byteswap()
-    return cfg, torch.tensor(buf, dtype=torch.float32)
-
-
-class Model(torch.nn.Module):
+class Model(gpt2_torch.Model):
     def __init__(self, cfg, flat, dtype, dev):
-        super().__init__()
-        index = cfg['index']
-
-        def get(name):
-            off, shape = index[name]
-            n = 1
-            for d in shape:
-                n *= d
-            return flat[off:off + n].view(*shape).to(dev, dtype)
-
-        self.cfg = cfg
-        self.h = cfg['n_head']
-        self.eps = cfg['eps']
-        self.wte = get('wte')
-        self.ln_f = (get('ln_f.g'), get('ln_f.b'))
-        self.layers = []
-        for i in range(cfg['n_layer']):
-            p = 'h.%d.' % i
-            self.layers.append(tuple(get(p + k) for k in [
-                'ln_1.g', 'ln_1.b', 'attn.q.w', 'attn.q.b', 'attn.k.w',
-                'attn.k.b', 'attn.v.w', 'attn.v.b', 'attn.proj.w',
-                'attn.proj.b', 'ln_2.g', 'ln_2.b', 'mlp.fc.w', 'mlp.fc.b',
-                'mlp.proj.w', 'mlp.proj.b']))
-        d = cfg['n_embd']
-        wpe_off = index['wpe'][0]
+        super().__init__(cfg, flat, dtype, dev)
         self.wpe_flat = flat
-        self.wpe_off = wpe_off
-        self.d = d
+        self.wpe_off = cfg['index']['wpe'][0]
+        self.d = cfg['n_embd']
         self.dev, self.dtype = dev, dtype
 
     def pos_and_mask(self, t):
@@ -57,31 +29,8 @@ class Model(torch.nn.Module):
             torch.triu(torch.ones(t, t, device=self.dev), 1).bool(), -1e9)
         return pos, mask
 
-    def ln(self, x, g, b):
-        return torch.nn.functional.layer_norm(x, (x.shape[-1],), g, b,
-                                              self.eps)
-
     def forward(self, idx, pos, mask):
-        x = self.wte[idx] + pos
-        t, d = x.shape
-        h = self.h
-        dh = d // h
-        for (g1, b1, wq, bq, wk, bk, wv, bv, wo, bo, g2, b2, wf, bf, wp,
-             bp) in self.layers:
-            n = self.ln(x, g1, b1)
-            q = (n @ wq + bq).view(t, h, dh).transpose(0, 1)
-            k = (n @ wk + bk).view(t, h, dh).transpose(0, 1)
-            v = (n @ wv + bv).view(t, h, dh).transpose(0, 1)
-            s = q @ k.transpose(-1, -2) / math.sqrt(dh) + mask
-            c = (s.softmax(-1) @ v).transpose(0, 1).reshape(t, d)
-            x = x + (c @ wo + bo)
-            n = self.ln(x, g2, b2)
-            u = n @ wf + bf
-            u = 0.5 * u * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) *
-                                            (u + 0.044715 * u * u * u)))
-            x = x + (u @ wp + bp)
-        x = self.ln(x, *self.ln_f)
-        return x @ self.wte.t()
+        return gpt2_torch.blocks_forward(self, self.wte[idx] + pos, mask)
 
 
 def main():
@@ -90,8 +39,9 @@ def main():
     iters = int(sys.argv[3]) if len(sys.argv) > 3 else 200
     dtype = getattr(torch, os.environ.get('RTENSOR_DTYPE', 'float32'))
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
-    cfg, flat = load(outdir)
+    cfg = json.load(open(os.path.join(outdir, 'index.json')))
     tokens = cfg['tokens']
+    flat = torch_common.flat_weights(outdir)
     model = Model(cfg, flat, dtype, dev).to(dev, dtype).eval()
 
     dynamic = mode == 'compile-dynamic'
@@ -134,4 +84,5 @@ def main():
             print('recompiles\t0')
 
 
-main()
+if __name__ == '__main__':
+    main()

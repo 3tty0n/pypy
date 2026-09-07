@@ -82,7 +82,8 @@ echo "wrote $HERE/env.sh"
 
 echo "== translating metatensor-bench =="
 mkdir -p "$BUILD"
-if [ ! -e "$BUILD/metatensor-bench" ] || [ "$HERE/../metatensor_bench.py" -nt "$BUILD/metatensor-bench" ]; then
+BENCH_SRC=$(ls -t "$HERE/../metatensor_bench.py" "$HERE/../bench/"*.py | head -1)
+if [ ! -e "$BUILD/metatensor-bench" ] || [ "$BENCH_SRC" -nt "$BUILD/metatensor-bench" ]; then
   ( cd "$BUILD" && RTENSOR_PYTHON="$RTENSOR_PYTHON" RTENSOR_CUBLAS="$RTENSOR_CUBLAS" \
     PYTHON2="$PYTHON2" MAKE_JOBS="$MAKE_JOBS" \
     "$REPO/benchmark/build.sh" "$BUILD/metatensor-bench" )

@@ -1,16 +1,8 @@
-import array, json, math, os, sys, time
+import math
 
 import torch
 
-
-def load(outdir):
-    cfg = json.load(open(os.path.join(outdir, 'index.json')))
-    buf = array.array('f')
-    path = os.path.join(outdir, 'weights.bin')
-    buf.fromfile(open(path, 'rb'), os.path.getsize(path) // 4)
-    if sys.byteorder != 'little':
-        buf.byteswap()
-    return cfg, torch.tensor(buf, dtype=torch.float32)
+import torch_common
 
 
 class Model(torch.nn.Module):
@@ -51,75 +43,54 @@ class Model(torch.nn.Module):
                                               self.eps)
 
     def forward(self, idx):
-        x = self.wte[idx] + self.pos
-        t, d = x.shape
-        h = self.h
-        dh = d // h
-        for (g1, b1, wq, bq, wk, bk, wv, bv, wo, bo, g2, b2, wf, bf, wp,
-             bp) in self.layers:
-            n = self.ln(x, g1, b1)
-            q = (n @ wq + bq).view(t, h, dh).transpose(0, 1)
-            k = (n @ wk + bk).view(t, h, dh).transpose(0, 1)
-            v = (n @ wv + bv).view(t, h, dh).transpose(0, 1)
-            s = q @ k.transpose(-1, -2) / math.sqrt(dh) + self.mask
-            c = (s.softmax(-1) @ v).transpose(0, 1).reshape(t, d)
-            x = x + (c @ wo + bo)
-            n = self.ln(x, g2, b2)
-            u = n @ wf + bf
-            u = 0.5 * u * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) *
-                                            (u + 0.044715 * u * u * u)))
-            x = x + (u @ wp + bp)
-        x = self.ln(x, *self.ln_f)
-        return x @ self.wte.t()
+        return blocks_forward(self, self.wte[idx] + self.pos, self.mask)
 
 
-def hf_model(cfg, dtype, dev):
-    from transformers import GPT2LMHeadModel
-    m = GPT2LMHeadModel.from_pretrained(cfg['source'])
-    return m.to(dev, dtype).eval()
+def blocks_forward(model, x, mask):
+    t, d = x.shape
+    h = model.h
+    dh = d // h
+    for (g1, b1, wq, bq, wk, bk, wv, bv, wo, bo, g2, b2, wf, bf, wp,
+         bp) in model.layers:
+        n = model.ln(x, g1, b1)
+        q = (n @ wq + bq).view(t, h, dh).transpose(0, 1)
+        k = (n @ wk + bk).view(t, h, dh).transpose(0, 1)
+        v = (n @ wv + bv).view(t, h, dh).transpose(0, 1)
+        s = q @ k.transpose(-1, -2) / math.sqrt(dh) + mask
+        c = (s.softmax(-1) @ v).transpose(0, 1).reshape(t, d)
+        x = x + (c @ wo + bo)
+        n = model.ln(x, g2, b2)
+        u = n @ wf + bf
+        u = 0.5 * u * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) *
+                                        (u + 0.044715 * u * u * u)))
+        x = x + (u @ wp + bp)
+    x = model.ln(x, *model.ln_f)
+    return x @ model.wte.t()
 
 
 def main():
-    mode = sys.argv[1]
-    outdir = sys.argv[2]
-    iters = int(sys.argv[3]) if len(sys.argv) > 3 else 20
-    warmup = int(sys.argv[4]) if len(sys.argv) > 4 else 10
-    dtype = getattr(torch, os.environ.get('RTENSOR_DTYPE', 'float32'))
-    dev = 'cuda' if torch.cuda.is_available() else 'cpu'
-    cfg, flat = load(outdir)
-    idx = torch.tensor(cfg['tokens'], device=dev, dtype=torch.long)
+    a = torch_common.argv()
+    cfg = a.cfg
+    idx = torch.tensor(cfg['tokens'], device=a.dev, dtype=torch.long)
     if cfg['source'] == 'random':
-        model = Model(cfg, flat, dtype, dev)
+        model = Model(cfg, torch_common.flat_weights(a.outdir), a.dtype,
+                      a.dev)
         fwd = model.forward
     else:
-        hf = hf_model(cfg, dtype, dev)
+        from transformers import GPT2LMHeadModel
+        hf = GPT2LMHeadModel.from_pretrained(cfg['source'])
+        hf = hf.to(a.dev, a.dtype).eval()
         fwd = lambda i: hf(i.unsqueeze(0)).logits[0]
-    if mode == 'compile':
+    if a.mode == 'compile':
         fwd = torch.compile(fwd)
-    with torch.no_grad():
-        for i in range(warmup):
-            logits = fwd(idx)
-        if dev == 'cuda':
-            torch.cuda.synchronize()
-        t0 = time.time()
-        for i in range(iters):
-            logits = fwd(idx)
-        acc = logits.double().sum().item()
-        steady_us = (time.time() - t0) / iters * 1e6
-    argmax = logits.argmax(-1).tolist()
-    ref = os.path.join(outdir, 'logits_pypy.bin')
-    diff = ''
-    if os.path.exists(ref):
-        other = torch.frombuffer(open(ref, 'rb').read(),
-                                 dtype=torch.float32).to(dev)
-        other = other.view_as(logits.float())
-        diff = ' maxabsdiff=%.6g' % (logits.float() - other).abs().max().item()
-    print('gpt2 torch-%s layers=%d embd=%d heads=%d seq=%d vocab=%d dtype=%s '
-          'iters=%d steady_us=%.1f checksum=%.6f' %
-          (mode, cfg['n_layer'], cfg['n_embd'], cfg['n_head'], cfg['seq'],
-           cfg['vocab'], os.environ.get('RTENSOR_DTYPE', 'float32'), iters,
-           steady_us, acc))
-    print('argmax %s%s' % (' '.join(str(a) for a in argmax), diff))
+    logits, acc, steady_us = torch_common.timed(fwd, (idx,), a)
+    torch_common.report(
+        'gpt2 torch-%s layers=%d embd=%d heads=%d seq=%d vocab=%d dtype=%s '
+        'iters=%d steady_us=%.1f checksum=%.6f' %
+        (a.mode, cfg['n_layer'], cfg['n_embd'], cfg['n_head'], cfg['seq'],
+         cfg['vocab'], a.dtname, a.iters, steady_us, acc),
+        logits.argmax(-1).tolist(), torch_common.compare(a.outdir, logits))
 
 
-main()
+if __name__ == '__main__':
+    main()

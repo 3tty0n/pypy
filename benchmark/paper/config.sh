@@ -35,6 +35,9 @@ if [ -z "$BENCH" ]; then
   echo "config.sh: BENCH not set (translated metatensor-bench)" >&2
 fi
 
+steady_of() { echo "$1" | grep -o 'steady_us=[0-9.]*' | head -1 | cut -d= -f2; }
+diff_of() { echo "$1" | grep -o 'maxabsdiff=[0-9.eE+-]*' | head -1 | cut -d= -f2; }
+
 PAPER_PYPY_LINK="$REPO/pypy-c-paper"
 paper_setup_pypy() {
   if [ -n "$PYPY" ] && [ "$(dirname "$PYPY")" != "$REPO" ]; then
