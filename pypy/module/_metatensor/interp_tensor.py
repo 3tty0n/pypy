@@ -17,6 +17,14 @@ def _shape_w(space, shape):
     return space.newtuple([space.newint(d) for d in shape])
 
 
+def _mismatch(space):
+    return oefmt(space.w_ValueError, "shape mismatch")
+
+
+def _wrap(t):
+    return W_Tensor(nn.Tensor(t))
+
+
 class W_Tensor(W_Root):
     _immutable_fields_ = ['tensor']
 
@@ -31,13 +39,13 @@ class W_Tensor(W_Root):
         try:
             return W_Tensor(self.tensor.add(self._other(space, w_other)))
         except ValueError:
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
 
     def descr_mul(self, space, w_other):
         try:
             return W_Tensor(self.tensor.mul(self._other(space, w_other)))
         except ValueError:
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
 
     def descr_add_(self, space, w_other):
         try:
@@ -57,13 +65,13 @@ class W_Tensor(W_Root):
         try:
             return W_Tensor(self.tensor.sub(self._other(space, w_other)))
         except ValueError:
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
 
     def descr_div(self, space, w_other):
         try:
             return W_Tensor(self.tensor.div(self._other(space, w_other)))
         except ValueError:
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
 
     def descr_exp(self, space):
         return W_Tensor(self.tensor.exp())
@@ -75,17 +83,21 @@ class W_Tensor(W_Root):
     def descr_max(self, space, axis=-1):
         return W_Tensor(self.tensor.max(axis))
 
-    def _rowwise(self, space):
+    def _rows_cols(self, space):
         t = self.tensor.t
         if ops.tensor_ndim(t) != 2:
-            raise oefmt(space.w_ValueError, "shape mismatch")
-        return ops.tensor_shape(t, 1)
+            raise _mismatch(space)
+        return ops.tensor_shape(t, 0), ops.tensor_shape(t, 1)
+
+    def _rowwise(self, space):
+        rows, cols = self._rows_cols(space)
+        return cols
 
     def _weight(self, space, w_other, cols):
         other = self._other(space, w_other)
         if (ops.tensor_size(other.t) != cols or
                 ops.tensor_dtype(other.t) != ops.tensor_dtype(self.tensor.t)):
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
         return other
 
     def descr_softmax(self, space):
@@ -127,14 +139,14 @@ class W_Tensor(W_Root):
             return W_Tensor(self.tensor.matmul(self._other(space, w_other),
                                                transpose_b))
         except ValueError:
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
 
     def descr_reshape(self, space, w_shape):
         shape = _ints_w(space, w_shape)
         try:
             return W_Tensor(self.tensor.reshape(shape))
         except ValueError:
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
 
     @unwrap_spec(heads=int, dcols=int, off_a=int, off_b=int)
     def descr_attn_scores(self, space, w_other, heads, dcols=-1, off_a=0,
@@ -143,7 +155,7 @@ class W_Tensor(W_Root):
         other = self._other(space, w_other)
         if (heads <= 0 or ops.tensor_ndim(t) != 2 or
                 ops.tensor_ndim(other.t) != 2):
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
         rows = ops.tensor_shape(t, 0)
         lda = ops.tensor_shape(t, 1)
         ldb = ops.tensor_shape(other.t, 1)
@@ -152,7 +164,7 @@ class W_Tensor(W_Root):
                 off_a + d > lda or off_b + d > ldb or
                 ops.tensor_shape(other.t, 0) != rows or
                 ops.tensor_dtype(other.t) != ops.tensor_dtype(t)):
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
         return W_Tensor(self.tensor.attn_scores(
             other, heads, rows, d // heads, lda, ldb, off_a, off_b))
 
@@ -162,7 +174,7 @@ class W_Tensor(W_Root):
         other = self._other(space, w_other)
         if (heads <= 0 or ops.tensor_ndim(t) != 2 or
                 ops.tensor_ndim(other.t) != 2):
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
         rows = ops.tensor_shape(t, 1)
         ldb = ops.tensor_shape(other.t, 1)
         d = ldb if dcols <= 0 else dcols
@@ -170,39 +182,36 @@ class W_Tensor(W_Root):
                 off_b < 0 or off_b + d > ldb or
                 ops.tensor_shape(other.t, 0) != rows or
                 ops.tensor_dtype(other.t) != ops.tensor_dtype(t)):
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
         return W_Tensor(self.tensor.attn_context(
             other, heads, rows, d // heads, ldb, off_b))
 
     @unwrap_spec(dh=int)
     def descr_rot_half(self, space, dh):
-        t = self.tensor.t
-        if (dh <= 1 or dh % 2 != 0 or ops.tensor_ndim(t) != 2 or
-                ops.tensor_shape(t, 1) % dh != 0):
-            raise oefmt(space.w_ValueError, "shape mismatch")
+        if dh <= 1 or dh % 2 != 0:
+            raise _mismatch(space)
+        rows, cols = self._rows_cols(space)
+        if cols % dh != 0:
+            raise _mismatch(space)
         return W_Tensor(self.tensor.rot_half(dh))
 
     @unwrap_spec(heads=int)
     def descr_head_split(self, space, heads):
-        t = self.tensor.t
-        if heads <= 0 or ops.tensor_ndim(t) != 2:
-            raise oefmt(space.w_ValueError, "shape mismatch")
-        d = ops.tensor_shape(t, 1)
+        if heads <= 0:
+            raise _mismatch(space)
+        rows, d = self._rows_cols(space)
         if d % heads != 0:
-            raise oefmt(space.w_ValueError, "shape mismatch")
-        return W_Tensor(self.tensor.head_split(
-            ops.tensor_shape(t, 0), d // heads, heads))
+            raise _mismatch(space)
+        return W_Tensor(self.tensor.head_split(rows, d // heads, heads))
 
     @unwrap_spec(heads=int)
     def descr_head_merge(self, space, heads):
-        t = self.tensor.t
-        if heads <= 0 or ops.tensor_ndim(t) != 2:
-            raise oefmt(space.w_ValueError, "shape mismatch")
-        hr = ops.tensor_shape(t, 0)
+        if heads <= 0:
+            raise _mismatch(space)
+        hr, cols = self._rows_cols(space)
         if hr % heads != 0:
-            raise oefmt(space.w_ValueError, "shape mismatch")
-        return W_Tensor(self.tensor.head_merge(
-            hr // heads, ops.tensor_shape(t, 1), heads))
+            raise _mismatch(space)
+        return W_Tensor(self.tensor.head_merge(hr // heads, cols, heads))
 
     @unwrap_spec(batch=int, transpose_b=bool)
     def descr_bmm(self, space, w_other, batch, transpose_b=False):
@@ -212,7 +221,7 @@ class W_Tensor(W_Root):
                 ops.tensor_ndim(b) != 2 or
                 ops.tensor_shape(a, 0) % batch != 0 or
                 ops.tensor_shape(b, 0) % batch != 0):
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
         rows = ops.tensor_shape(a, 0) // batch
         inner = ops.tensor_shape(a, 1)
         if transpose_b:
@@ -222,7 +231,7 @@ class W_Tensor(W_Root):
             cols = ops.tensor_shape(b, 1)
             ok = ops.tensor_shape(b, 0) // batch == inner
         if not ok:
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
         return W_Tensor(self.tensor.bmm(
             self._other(space, w_other), batch, rows, cols, inner,
             1 if transpose_b else 0))
@@ -236,46 +245,43 @@ class W_Tensor(W_Root):
     def descr_take(self, space, w_idx):
         t = self.tensor.t
         idx = self._other(space, w_idx).t
-        if (ops.tensor_ndim(t) != 2 or
-                ops.tensor_dtype(idx) != ops.tensor_dtype(t)):
-            raise oefmt(space.w_ValueError, "shape mismatch")
+        trows, cols = self._rows_cols(space)
+        if ops.tensor_dtype(idx) != ops.tensor_dtype(t):
+            raise _mismatch(space)
         rows = ops.tensor_size(idx)
-        cols = ops.tensor_shape(t, 1)
-        return W_Tensor(nn.Tensor(runtime.rowgather(t, idx, rows, cols)))
+        return _wrap(runtime.rowgather(t, idx, rows, cols))
 
     @unwrap_spec(c=int, h=int, w=int, k=int, pad=int, stride=int)
     def descr_im2col(self, space, c, h, w, k=3, pad=1, stride=1):
         t = self.tensor.t
         self._conv_check(space, c, h, w, k, pad, stride)
-        return W_Tensor(nn.Tensor(runtime.im2col(t, c, h, w, k, pad, stride)))
+        return _wrap(runtime.im2col(t, c, h, w, k, pad, stride))
 
     @unwrap_spec(c=int, h=int, w=int, k=int, pad=int, stride=int)
     def descr_im2col_nhwc(self, space, c, h, w, k=3, pad=1, stride=1):
         t = self.tensor.t
         self._conv_check(space, c, h, w, k, pad, stride)
-        return W_Tensor(nn.Tensor(runtime.im2col_nhwc(t, c, h, w, k, pad,
-                                                      stride)))
+        return _wrap(runtime.im2col_nhwc(t, c, h, w, k, pad, stride))
 
     def _conv_check(self, space, c, h, w, k, pad, stride):
         t = self.tensor.t
         if (c <= 0 or h <= 0 or w <= 0 or k <= 0 or pad < 0 or stride <= 0 or
                 h + 2 * pad < k or w + 2 * pad < k or
                 ops.tensor_size(t) % (c * h * w) != 0):
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
 
     @unwrap_spec(c=int, h=int, w=int, k=int, stride=int, pad=int)
     def descr_maxpool2(self, space, c, h, w, k=2, stride=2, pad=0):
         t = self.tensor.t
         self._conv_check(space, c, h, w, k, pad, stride)
-        return W_Tensor(nn.Tensor(runtime.maxpool2(t, c, h, w, k, stride,
-                                                   pad)))
+        return _wrap(runtime.maxpool2(t, c, h, w, k, stride, pad))
 
     @unwrap_spec(c=int, h=int, w=int, k=int, stride=int, pad=int)
     def descr_maxpool2_nhwc(self, space, c, h, w, k=2, stride=2, pad=0):
         t = self.tensor.t
         self._conv_check(space, c, h, w, k, pad, stride)
-        return W_Tensor(nn.Tensor(runtime.maxpool2_nhwc(t, c, h, w, k,
-                                                        stride, pad)))
+        return _wrap(runtime.maxpool2_nhwc(t, c, h, w, k, stride,
+                                           pad))
 
     @unwrap_spec(c=int, h=int, w=int, k=int, stride=int, pad=int)
     def descr_conv2d(self, space, w_weight, c, h, w, w_bias=None, k=3,
@@ -285,7 +291,7 @@ class W_Tensor(W_Root):
         self._conv_check(space, c, h, w, k, pad, stride)
         if (ops.tensor_ndim(weight) != 2 or
                 ops.tensor_shape(weight, 0) != c * k * k):
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
         o = ops.tensor_shape(weight, 1)
         ohw = ((h + 2 * pad - k) // stride + 1) * ((w + 2 * pad - k) //
                                                    stride + 1)
@@ -295,7 +301,7 @@ class W_Tensor(W_Root):
         if w_bias is not None and not space.is_none(w_bias):
             y = ops.tensor_add(y, self._other(space, w_bias).t,
                                    core.BC_R_ROW)
-        return W_Tensor(nn.Tensor(runtime.col2chw(y, rows, ohw, o)))
+        return _wrap(runtime.col2chw(y, rows, ohw, o))
 
     def descr_detach(self, space):
         return W_Tensor(nn.Tensor(self.tensor.t, self.tensor.requires_grad))
@@ -426,13 +432,13 @@ def tensor_flat(space, w_data, w_shape, requires_grad=False,
     for d in shape:
         n *= d
     if n != len(values):
-        raise oefmt(space.w_ValueError, "shape mismatch")
+        raise _mismatch(space)
     t = core.from_list(values, dtype)
     if len(shape) != 1 or shape[0] != n:
         try:
             t = ops.reshape(t, shape)
         except ValueError:
-            raise oefmt(space.w_ValueError, "shape mismatch")
+            raise _mismatch(space)
     return W_Tensor(nn.Tensor(t, requires_grad))
 
 

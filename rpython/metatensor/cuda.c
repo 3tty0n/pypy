@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <dlfcn.h>
 
 #ifndef RPY_EXPORTED
@@ -15,6 +16,8 @@
 #else
 #  define RTENSOR_CUBLAS_DEFAULT "libcublas.so"
 #endif
+
+/* ==== cuBLAS entry points, loaded lazily with dlopen ==== */
 
 typedef int (*cublasCreate_v2_t)(void **handle);
 typedef int (*cublasDgemm_v2_t)(void *handle, int transa, int transb,
@@ -52,6 +55,8 @@ static cublasSgemmStridedBatched_t p_cublasSgemmStridedBatched;
 static cublasHgemm_t p_cublasHgemm;
 static cublasHgemmStridedBatched_t p_cublasHgemmStridedBatched;
 static int cublas_inited;
+
+/* ==== half <-> double conversion ==== */
 
 #if defined(__FLT16_MANT_DIG__)
 typedef _Float16 rt_half;
@@ -116,6 +121,9 @@ static double rt_h2f(unsigned short u)
     memcpy(&f, &b, 4);
     return (double)f;
 }
+
+/* ==== device state and initialisation ==== */
+
 #endif
 
 static CUcontext ctx;
@@ -171,6 +179,8 @@ static int rt_cublas_init(void)
     return 1;
 }
 
+/* ==== slab allocator: free list, GC trigger, memory cap ==== */
+
 static void push(buf_t **arr, long *n, long *cap, CUdeviceptr p, long size)
 {
     if (*n == *cap) {
@@ -180,41 +190,6 @@ static void push(buf_t **arr, long *n, long *cap, CUdeviceptr p, long size)
     (*arr)[*n].p = p;
     (*arr)[*n].n = size;
     (*n)++;
-}
-
-RPY_EXPORTED int rt_cuda_available(void)
-{
-    return rt_init();
-}
-
-static struct { long fn; char name[64]; } rt_names[4096];
-static int rt_nnames;
-static int rt_dbg = -1;
-static int dbg_on(void)
-{
-    if (rt_dbg < 0) rt_dbg = getenv("RTENSOR_DEBUG_LAUNCH") != NULL;
-    return rt_dbg;
-}
-static const char *rt_name_of(long fn)
-{
-    int i;
-    for (i = 0; i < rt_nnames; i++) if (rt_names[i].fn == fn) return rt_names[i].name;
-    return "?";
-}
-
-RPY_EXPORTED long rt_cuda_load(const char *ptx, const char *name)
-{
-    CUmodule mod;
-    CUfunction fn;
-    if (!rt_init()) return 0;
-    if (cuModuleLoadData(&mod, ptx) != CUDA_SUCCESS) return 0;
-    if (cuModuleGetFunction(&fn, mod, name) != CUDA_SUCCESS) return 0;
-    if (rt_nnames < 4096) {
-        rt_names[rt_nnames].fn = (long)fn;
-        snprintf(rt_names[rt_nnames].name, 64, "%s", name);
-        rt_nnames++;
-    }
-    return (long)fn;
 }
 
 static long alloc_failed(long nbytes)
@@ -228,16 +203,6 @@ static long alloc_failed(long nbytes)
                 nbytes, live_bytes >> 20, nm ? nm : "?");
     }
     return 0;
-}
-
-RPY_EXPORTED void rt_cuda_warn_cpu(long fn)
-{
-    static int warned;
-    if (!warned) {
-        warned = 1;
-        fprintf(stderr, "metatensor: kernel %s has GPU code but ran on the CPU\n",
-                rt_name_of(fn));
-    }
 }
 
 RPY_EXPORTED long rt_cuda_alloc(long nbytes, long zero)
@@ -284,11 +249,6 @@ RPY_EXPORTED void rt_cuda_free(long dptr, long nbytes)
 {
     live_bytes -= nbytes;
     push(&freed, &nfreed, &capfreed, (CUdeviceptr)dptr, nbytes);
-}
-
-RPY_EXPORTED long rt_cuda_launch_count(void)
-{
-    return launches;
 }
 
 RPY_EXPORTED long rt_cuda_live_bytes(void)
@@ -346,6 +306,70 @@ RPY_EXPORTED int rt_cuda_needs_gc(long nbytes)
     return 1;
 }
 
+RPY_EXPORTED void rt_cuda_reset(void)
+{
+    long i;
+    for (i = 0; i < nallocs; i++) cuMemFree(allocs[i].p);
+    nallocs = nfreed = 0;
+    slab_ptr = 0;
+    slab_left = 0;
+    live_bytes = 0;
+}
+
+/* ==== kernel loading and debug names ==== */
+
+RPY_EXPORTED int rt_cuda_available(void)
+{
+    return rt_init();
+}
+
+static struct { long fn; char name[64]; } rt_names[4096];
+static int rt_nnames;
+static int rt_dbg = -1;
+static int dbg_on(void)
+{
+    if (rt_dbg < 0) rt_dbg = getenv("RTENSOR_DEBUG_LAUNCH") != NULL;
+    return rt_dbg;
+}
+static const char *rt_name_of(long fn)
+{
+    int i;
+    for (i = 0; i < rt_nnames; i++) if (rt_names[i].fn == fn) return rt_names[i].name;
+    return "?";
+}
+
+RPY_EXPORTED long rt_cuda_load(const char *ptx, const char *name)
+{
+    CUmodule mod;
+    CUfunction fn;
+    if (!rt_init()) return 0;
+    if (cuModuleLoadData(&mod, ptx) != CUDA_SUCCESS) return 0;
+    if (cuModuleGetFunction(&fn, mod, name) != CUDA_SUCCESS) return 0;
+    if (rt_nnames < 4096) {
+        rt_names[rt_nnames].fn = (long)fn;
+        snprintf(rt_names[rt_nnames].name, 64, "%s", name);
+        rt_nnames++;
+    }
+    return (long)fn;
+}
+
+RPY_EXPORTED void rt_cuda_warn_cpu(long fn)
+{
+    static int warned;
+    if (!warned) {
+        warned = 1;
+        fprintf(stderr, "metatensor: kernel %s has GPU code but ran on the CPU\n",
+                rt_name_of(fn));
+    }
+}
+
+RPY_EXPORTED long rt_cuda_launch_count(void)
+{
+    return launches;
+}
+
+/* ==== host <-> device transfers ==== */
+
 RPY_EXPORTED long rt_cuda_upload(double *host, long n, long dtype)
 {
     long i, p;
@@ -396,17 +420,8 @@ RPY_EXPORTED int rt_cuda_copy(long dst, long src, long nbytes)
            CUDA_SUCCESS;
 }
 
-RPY_EXPORTED void rt_cuda_reset(void)
-{
-    long i;
-    for (i = 0; i < nallocs; i++) cuMemFree(allocs[i].p);
-    nallocs = nfreed = 0;
-    slab_ptr = 0;
-    slab_left = 0;
-    live_bytes = 0;
-}
+/* ==== timing, launch and gather entry points ==== */
 
-#include <time.h>
 RPY_EXPORTED double rt_cuda_now(void)
 {
     struct timespec ts;
@@ -449,6 +464,8 @@ RPY_EXPORTED int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
         return r == CUDA_SUCCESS;
     }
 }
+
+/* ==== cuBLAS gemm ==== */
 
 RPY_EXPORTED int rt_cuda_matmul(long a, long b, long c, long rows,
                                 long inner, long cols, long ta, long tb,

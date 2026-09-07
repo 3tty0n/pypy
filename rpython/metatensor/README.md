@@ -9,8 +9,10 @@ Modules, bottom-up, no cycles:
 |---|---|
 | `core.py` | dtypes, ll structs, opcode table, shape helpers, size promotion policy |
 | `device.py` | bindings to `cuda.c`, `DeviceBuffer` ownership, host/device copies, GC trigger, profiler |
-| `kernels.py` | kernel DAG build and cache, TTIR emission, compile via `triton_compile.py` |
-| `runtime.py` | `eval_op`, fused launches, cuBLAS/gather ops with CPU fallbacks, constant caches |
+| `ttir.py` | mode analysis and all TTIR emission: flat, row, gather |
+| `kernels.py` | kernel DAG build and cache, `compile_ttir` via `triton_compile.py` |
+| `devops.py` | cuBLAS/gather library ops with their CPU fallbacks, constant caches |
+| `runtime.py` | `eval_op`, fused launches |
 | `ops.py` | `@jit.oopspec` primitives and the traced wrappers (`add`, `matmul`, `sum`, ...) |
 | `nn.py` | autograd `Tensor`, layers, `sgd_step` |
 

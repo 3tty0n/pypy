@@ -23,3 +23,8 @@ downsample convolutions and its 3x3 stride-2 pad-1 max pool need.
 `CausalSelfAttention` takes `mask=None` for the bidirectional (BERT, ViT)
 case, and `GPT2MLP` takes the activation, so the same attention and MLP code
 serves GPT-2, BERT and ViT.
+
+`nn.py`'s `Param` is a live (owner, attribute-name) reference rather than the
+tensor itself, because `sgd_step` replaces a parameter with a new tensor
+instead of mutating it; a list of tensors captured once would go stale after
+the first update, so `parameters()` hands out rebindable slots.

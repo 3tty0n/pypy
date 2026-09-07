@@ -316,6 +316,12 @@ def _z(ld, d):
     return 0
 
 
+def _bmm_slice_grad(a, b, h, rows, dh, ta, ldb, ldc, ob, oc, d):
+    return Tensor(runtime.tensor_bmm(
+        a, b, h, rows, dh, rows, ta, 0, rows, ldb, ldc,
+        rows * rows, dh, dh, rows * ldc, rows, 0, ob, oc, _z(ldc, d)))
+
+
 class Node(object):
     def __init__(self, inputs):
         self.inputs = inputs
@@ -348,6 +354,25 @@ class AddNode(Node):
         return grads
 
 
+class SubNode(Node):
+    def __init__(self, a, b, p):
+        inputs = [a]
+        inputs.append(b)
+        Node.__init__(self, inputs)
+        self.p = p
+
+    def apply(self, g):
+        ga = None
+        if self.inputs[0].requires_grad:
+            ga = _unbroadcast(g, self.p, False)
+        gb = None
+        if self.inputs[1].requires_grad:
+            gb = _unbroadcast(Tensor(_neg(g.t)), self.p, True)
+        grads = [ga]
+        grads.append(gb)
+        return grads
+
+
 class MulNode(Node):
     def __init__(self, a, b, p):
         inputs = [a]
@@ -373,6 +398,32 @@ class MulNode(Node):
         return grads
 
 
+class DivNode(Node):
+    def __init__(self, a, b, p, y):
+        inputs = [a]
+        inputs.append(b)
+        Node.__init__(self, inputs)
+        self.p = p
+        self.y = y
+
+    def apply(self, g):
+        a = self.inputs[0]
+        b = self.inputs[1]
+        ga = None
+        if a.requires_grad:
+            ga = _unbroadcast(
+                Tensor(ops.tensor_div(g.t, b.t, _rp(self.p))),
+                self.p, False)
+        gb = None
+        if b.requires_grad:
+            t = ops.tensor_mul(self.y.t, g.t, core.BC_NONE)
+            t = ops.tensor_div(t, b.t, _rp(self.p))
+            gb = _unbroadcast(Tensor(_neg(t)), self.p, True)
+        grads = [ga]
+        grads.append(gb)
+        return grads
+
+
 class ReluNode(Node):
     def __init__(self, x, y):
         inputs = [x]
@@ -381,6 +432,28 @@ class ReluNode(Node):
 
     def apply(self, g):
         return [Tensor(ops.relugrad(self.y.t, g.t))]
+
+
+class ExpNode(Node):
+    def __init__(self, x, y):
+        inputs = [x]
+        Node.__init__(self, inputs)
+        self.y = y
+
+    def apply(self, g):
+        return [Tensor(ops.tensor_mul(g.t, self.y.t, core.BC_NONE))]
+
+
+class SqrtNode(Node):
+    def __init__(self, x, y):
+        inputs = [x]
+        Node.__init__(self, inputs)
+        self.y = y
+
+    def apply(self, g):
+        h = ops.tensor_mul(g.t, runtime.scalar(0.5),
+                               core.BC_R_SCALAR)
+        return [Tensor(ops.tensor_div(h, self.y.t, core.BC_NONE))]
 
 
 class SumNode(Node):
@@ -399,6 +472,19 @@ class SumNode(Node):
         else:
             p = core.BC_R_SCALAR
         return [Tensor(ops.tensor_mul(ops.ones_like(x.t), g.t, p))]
+
+
+class MaxNode(Node):
+    def __init__(self, x, m):
+        inputs = [x]
+        Node.__init__(self, inputs)
+        self.m = m
+
+    def apply(self, g):
+        x = self.inputs[0]
+        ops.cols_of(x.t)
+        mask = ops.tensor_eqmask(x.t, self.m.t, core.BC_R_COL)
+        return [Tensor(ops.tensor_mul(mask, g.t, core.BC_R_COL))]
 
 
 class MatmulNode(Node):
@@ -433,86 +519,6 @@ class MatmulNode(Node):
         grads = [gx]
         grads.append(gw)
         return grads
-
-
-class SubNode(Node):
-    def __init__(self, a, b, p):
-        inputs = [a]
-        inputs.append(b)
-        Node.__init__(self, inputs)
-        self.p = p
-
-    def apply(self, g):
-        ga = None
-        if self.inputs[0].requires_grad:
-            ga = _unbroadcast(g, self.p, False)
-        gb = None
-        if self.inputs[1].requires_grad:
-            gb = _unbroadcast(Tensor(_neg(g.t)), self.p, True)
-        grads = [ga]
-        grads.append(gb)
-        return grads
-
-
-class DivNode(Node):
-    def __init__(self, a, b, p, y):
-        inputs = [a]
-        inputs.append(b)
-        Node.__init__(self, inputs)
-        self.p = p
-        self.y = y
-
-    def apply(self, g):
-        a = self.inputs[0]
-        b = self.inputs[1]
-        ga = None
-        if a.requires_grad:
-            ga = _unbroadcast(
-                Tensor(ops.tensor_div(g.t, b.t, _rp(self.p))),
-                self.p, False)
-        gb = None
-        if b.requires_grad:
-            t = ops.tensor_mul(self.y.t, g.t, core.BC_NONE)
-            t = ops.tensor_div(t, b.t, _rp(self.p))
-            gb = _unbroadcast(Tensor(_neg(t)), self.p, True)
-        grads = [ga]
-        grads.append(gb)
-        return grads
-
-
-class ExpNode(Node):
-    def __init__(self, x, y):
-        inputs = [x]
-        Node.__init__(self, inputs)
-        self.y = y
-
-    def apply(self, g):
-        return [Tensor(ops.tensor_mul(g.t, self.y.t, core.BC_NONE))]
-
-
-class SqrtNode(Node):
-    def __init__(self, x, y):
-        inputs = [x]
-        Node.__init__(self, inputs)
-        self.y = y
-
-    def apply(self, g):
-        h = ops.tensor_mul(g.t, runtime.scalar(0.5),
-                               core.BC_R_SCALAR)
-        return [Tensor(ops.tensor_div(h, self.y.t, core.BC_NONE))]
-
-
-class MaxNode(Node):
-    def __init__(self, x, m):
-        inputs = [x]
-        Node.__init__(self, inputs)
-        self.m = m
-
-    def apply(self, g):
-        x = self.inputs[0]
-        ops.cols_of(x.t)
-        mask = ops.tensor_eqmask(x.t, self.m.t, core.BC_R_COL)
-        return [Tensor(ops.tensor_mul(mask, g.t, core.BC_R_COL))]
 
 
 class BmmNode(Node):
@@ -576,15 +582,11 @@ class AttnScoresNode(Node):
         gq = None
         gk = None
         if q.requires_grad:
-            gq = Tensor(runtime.tensor_bmm(
-                g.t, k.t, h, rows, dh, rows, 0, 0, rows, lb, la,
-                rows * rows, dh, dh, rows * la, rows,
-                0, self.ob, self.oa, _z(la, d)))
+            gq = _bmm_slice_grad(g.t, k.t, h, rows, dh, 0, lb, la,
+                                 self.ob, self.oa, d)
         if k.requires_grad:
-            gk = Tensor(runtime.tensor_bmm(
-                g.t, q.t, h, rows, dh, rows, 1, 0, rows, la, lb,
-                rows * rows, dh, dh, rows * lb, rows,
-                0, self.oa, self.ob, _z(lb, d)))
+            gk = _bmm_slice_grad(g.t, q.t, h, rows, dh, 1, la, lb,
+                                 self.oa, self.ob, d)
         grads = [gq]
         grads.append(gk)
         return grads
@@ -615,10 +617,8 @@ class AttnContextNode(Node):
                 dh, dh, rows * rows, h * rows * rows, h * rows,
                 0, self.ob))
         if v.requires_grad:
-            gv = Tensor(runtime.tensor_bmm(
-                p.t, g.t, h, rows, dh, rows, 1, 0, rows, d, lb,
-                rows * rows, dh, dh, rows * lb, rows,
-                0, 0, self.ob, _z(lb, d)))
+            gv = _bmm_slice_grad(p.t, g.t, h, rows, dh, 1, d, lb,
+                                 0, self.ob, d)
         grads = [gp]
         grads.append(gv)
         return grads
