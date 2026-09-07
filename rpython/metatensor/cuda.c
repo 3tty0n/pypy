@@ -130,6 +130,7 @@ static long count_threshold = 1, just_collected;
 static CUresult rt_last_err;
 static CUdeviceptr slab_ptr;
 static long slab_left;
+static long mem_cap, device_bytes;
 
 static int rt_init(void)
 {
@@ -258,6 +259,7 @@ RPY_EXPORTED long rt_cuda_alloc(long nbytes, long zero)
                 CUdeviceptr s;
                 if ((rt_last_err = cuMemAlloc(&s, SLAB_BYTES)) != CUDA_SUCCESS) return alloc_failed(SLAB_BYTES);
                 push(&allocs, &nallocs, &capallocs, s, SLAB_BYTES);
+                device_bytes += SLAB_BYTES;
                 slab_ptr = s;
                 slab_left = SLAB_BYTES;
             }
@@ -267,6 +269,7 @@ RPY_EXPORTED long rt_cuda_alloc(long nbytes, long zero)
         } else {
             if ((rt_last_err = cuMemAlloc(&p, nbytes)) != CUDA_SUCCESS) return alloc_failed(nbytes);
             push(&allocs, &nallocs, &capallocs, p, nbytes);
+            device_bytes += nbytes;
         }
         fresh_since_gc++;
         if (live_after_gc < 0) live_after_gc = live_bytes;
@@ -306,9 +309,21 @@ RPY_EXPORTED int rt_cuda_has_free(long nbytes)
     return 0;
 }
 
+static long rt_mem_cap(void)
+{
+    size_t freeb, totalb;
+    if (!mem_cap) {
+        mem_cap = -1;
+        if (rt_init() && cuMemGetInfo(&freeb, &totalb) == CUDA_SUCCESS)
+            mem_cap = (long)(totalb / 10 * 7);
+    }
+    return mem_cap;
+}
+
 RPY_EXPORTED int rt_cuda_needs_gc(long nbytes)
 {
     long threshold = budget_bytes > live_after_gc ? budget_bytes : live_after_gc;
+    long cap = rt_mem_cap();
     int reusable = rt_cuda_has_free(nbytes);
     if (just_collected) {
         just_collected = 0;
@@ -316,6 +331,13 @@ RPY_EXPORTED int rt_cuda_needs_gc(long nbytes)
         else if (reusable && count_threshold > 1) count_threshold /= 2;
     }
     if (reusable) return 0;
+    if (cap > 0 && device_bytes + nbytes > cap) {
+        allocated_since_gc = 0;
+        fresh_since_gc = 0;
+        live_after_gc = -1;
+        just_collected = 1;
+        return 1;
+    }
     if (allocated_since_gc < threshold && fresh_since_gc < count_threshold) return 0;
     allocated_since_gc = 0;
     fresh_since_gc = 0;
