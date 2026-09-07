@@ -24,22 +24,34 @@ def main(out_dir):
     micro = read_tsv(os.path.join(out_dir, "micro.tsv"))
     if micro:
         lines.append("## Microbenchmarks (median steady_us over rounds)\n")
-        lines.append("| variant | k | n | fused (ours) | torch.compile | torch eager | speedup vs compile |")
-        lines.append("|---|---|---|---|---|---|---|")
+        lines.append("| variant | k | n | fused (ours) | eager (ours) | nojit (ours) | torch.compile | torch eager | speedup vs compile |")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
         groups = collections.defaultdict(lambda: collections.defaultdict(list))
         for r in micro:
-            key = (int(r["variant"]), int(r["k"]), int(r["n"]))
+            dtype = r.get("breaks") or r.get("graphs") or "float64"
+            key = (dtype, int(r["variant"]), int(r["k"]), int(r["n"]))
             groups[key][r["mode"]].append(float(r["steady_us"]))
-        for key in sorted(groups):
-            g = groups[key]
+        def row(key, g):
             fused = med(g.get("fused", []))
             compiled = med(g.get("torch-compile", []))
-            eager = med(g.get("torch-eager", []))
             speedup = compiled / fused if fused and compiled else None
-            lines.append("| %d | %d | %d | %s | %s | %s | %s |" % (
-                key[0], key[1], key[2], fmt(fused), fmt(compiled),
-                fmt(eager), fmt(speedup, "%.2fx") if speedup else "n/a"))
+            return "| %d | %d | %d | %s | %s | %s | %s | %s | %s |" % (
+                key[1], key[2], key[3], fmt(fused), fmt(med(g.get("eager", []))),
+                fmt(med(g.get("nojit", []))), fmt(compiled),
+                fmt(med(g.get("torch-eager", []))),
+                fmt(speedup, "%.2fx") if speedup else "n/a")
+        for key in sorted(groups):
+            if key[0] == "float64":
+                lines.append(row(key, groups[key]))
         lines.append("")
+        others = [k for k in sorted(groups) if k[0] != "float64"]
+        if others:
+            lines.append("## Precision sweep (median steady_us)\n")
+            lines.append("| dtype | variant | k | n | fused (ours) | eager (ours) | nojit (ours) | torch.compile | torch eager | speedup vs compile |")
+            lines.append("|---|---|---|---|---|---|---|---|---|---|")
+            for key in others:
+                lines.append("| %s %s" % (key[0], row(key, groups[key])))
+            lines.append("")
 
         lines.append("## Guards / graph breaks (launches per iter, torch graph breaks)\n")
         lines.append("| variant | n | launches/iter (fused) | torch graphs | torch breaks |")
