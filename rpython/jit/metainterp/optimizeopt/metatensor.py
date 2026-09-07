@@ -54,6 +54,7 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         kernel.cols = cols
         kernel.dtype = core.policy.dtype
         kernel.modes = 0
+        kernel.outmodes = 0
         kernel.outputs = lltype.malloc(core.SHAPEARRAY, 0)
         for i in range(len(opcodes)):
             node = kernel.nodes[i]

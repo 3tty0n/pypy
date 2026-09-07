@@ -1124,6 +1124,27 @@ def test_launch_gpu_rejects_undersized_operand():
         assert device.launch_count() == before + 1
 
 
+def test_broadcast_extra_output_keeps_its_own_size():
+    rows, cols = 8, 64
+    kernel = kernels.new_kernel(2, 2, core.policy.dtype)
+    kernels.set_node(kernel, 0, core.MUL, 1, 1, core.BC_NONE)
+    kernels.set_node(kernel, 1, core.DIV, 0, 2, core.BC_R_COL)
+    kernels.add_output(kernel, 2)
+    kernels.compile_or_reuse(kernel)
+    if kernel.fn == 0:
+        return
+    big = _filled([rows, cols], 1.0)
+    col = _filled([rows], 2.0)
+    r = runtime.launch_gpu(kernel, [big, col])
+    assert r
+    assert r.size == rows * cols
+    extra = r.extra[0]
+    assert extra.size == rows
+    h = device.host(extra)
+    for i in range(rows):
+        assert h[i] == (2.0 + i) * (2.0 + i)
+
+
 def test_column_broadcast_shapes():
     x = _filled([3, 4], 1.0)
     assert ops.bcast(x, _filled([4], 0.5)) == core.BC_R_ROW

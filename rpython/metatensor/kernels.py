@@ -20,6 +20,7 @@ def _empty_kernel():
     k.cols = 0
     k.dtype = F64
     k.modes = 0
+    k.outmodes = 0
     k.outputs = lltype.malloc(SHAPEARRAY, 0)
     return k
 single_kernels = SingleKernels()
@@ -79,6 +80,7 @@ def new_kernel(ninputs, nnodes, dtype=F64):
     kernel.cols = 0
     kernel.dtype = dtype
     kernel.modes = 0
+    kernel.outmodes = 0
     kernel.outputs = lltype.malloc(SHAPEARRAY, 0)
     return kernel
 
@@ -136,6 +138,7 @@ def compile_or_reuse(kernel):
         kernel.sumroot = cached.sumroot
         kernel.rowmode = cached.rowmode
         kernel.modes = cached.modes
+        kernel.outmodes = cached.outmodes
         return kernel
     finish_kernel(kernel)
     cache_kernel(key, kernel)
@@ -147,6 +150,22 @@ def set_node(kernel, i, opcode, a, b, p):
     node.a = a
     node.b = b
     node.p = p
+
+def out_modes(kernel):
+    modes = all_modes(kernel)
+    if len(modes) != kernel.ninputs + len(kernel.nodes):
+        return []
+    result = []
+    for k in range(len(kernel.outputs)):
+        result.append(modes[kernel.outputs[k]])
+    return result
+
+def packed_out_modes(kernel):
+    modes = out_modes(kernel)
+    packed = 0
+    for i in range(len(modes)):
+        packed |= modes[i] << (2 * i)
+    return packed
 
 def packed_modes(kernel):
     modes = input_modes(kernel)
@@ -160,6 +179,7 @@ def finish_kernel(kernel):
     kernel.sumroot = int(n > 0 and is_reduction(kernel.nodes[n - 1].opcode))
     kernel.rowmode = int(kernel_row_mode(kernel))
     kernel.modes = packed_modes(kernel)
+    kernel.outmodes = packed_out_modes(kernel)
     kernel.fn = compile_gpu(kernel)
     return kernel
 
@@ -364,6 +384,9 @@ def to_ttir_row(kernel, name, modes):
     for k in range(len(kernel.outputs)):
         if isred[kernel.outputs[k]]:
             return ''
+    omodes = out_modes(kernel)
+    if len(omodes) != len(kernel.outputs):
+        return ''
     params = ['%%in%d: !tt.ptr<%s>' % (i, S) for i in range(nin)]
     params.append('%%out: !tt.ptr<%s>' % S)
     for k in range(len(kernel.outputs)):
@@ -459,10 +482,19 @@ def to_ttir_row(kernel, name, modes):
         lines.append('    tt.store %%qo, %s, %%mask : %s'
                      % (_trunc(lines, 'so', nin + last, half, T, TS), P))
     for k in range(len(kernel.outputs)):
+        ooffs = '%offs'
+        if omodes[k] == 1:
+            ooffs = '%ar'
+        elif omodes[k] == 2:
+            lines.append('    %%zo%d = arith.constant dense<0> : %s' % (k, I64))
+            ooffs = '%%zo%d' % k
+        elif omodes[k] == 3:
+            lines.append('    %%ro%d = tt.splat %%rowi : i64 -> %s' % (k, I64))
+            ooffs = '%%ro%d' % k
         lines.append('    %%po%d = tt.splat %%out%d : !tt.ptr<%s> -> %s'
                      % (k, k, S, P))
-        lines.append('    %%qo%d = tt.addptr %%po%d, %%offs : %s, %s'
-                     % (k, k, P, I64))
+        lines.append('    %%qo%d = tt.addptr %%po%d, %s : %s, %s'
+                     % (k, k, ooffs, P, I64))
         lines.append('    tt.store %%qo%d, %s, %%mask : %s'
                      % (k, _trunc(lines, 'sx%d' % k, kernel.outputs[k], half,
                                   T, TS), P))
@@ -489,6 +521,9 @@ def to_ttir_flat(kernel, name):
     modes = input_modes(kernel)
     if len(modes) != nin:
         return ''
+    omodes = out_modes(kernel)
+    if len(omodes) != len(kernel.outputs):
+        return ''
     axis = AXIS_ALL
     if kernel.sumroot:
         axis = nodes[len(nodes) - 1].p
@@ -501,6 +536,13 @@ def to_ttir_flat(kernel, name):
         elif modes[i] == 2:
             need_zero_off = True
         elif modes[i] == 3:
+            need_div = True
+    for k in range(len(omodes)):
+        if omodes[k] == 1:
+            need_mod = True
+        elif omodes[k] == 2:
+            need_zero_off = True
+        elif omodes[k] == 3:
             need_div = True
     if half and kernel.sumroot and nodes[len(nodes) - 1].opcode == SUM:
         return ''
@@ -626,10 +668,20 @@ def to_ttir_flat(kernel, name):
         else:
             lines.append('    tt.store %%qo, %s : %s' % (val, P))
     for k in range(len(kernel.outputs)):
+        ooffs = '%offs'
+        OI = I32
+        if omodes[k] == 1:
+            ooffs = '%offsm'
+            OI = I64
+        elif omodes[k] == 2:
+            ooffs = '%zoffs'
+        elif omodes[k] == 3:
+            ooffs = '%offsd'
+            OI = I64
         lines.append('    %%po%d = tt.splat %%out%d : !tt.ptr<%s> -> %s'
                      % (k, k, S, P))
-        lines.append('    %%qo%d = tt.addptr %%po%d, %%offs : %s, %s'
-                     % (k, k, P, I32))
+        lines.append('    %%qo%d = tt.addptr %%po%d, %s : %s, %s'
+                     % (k, k, ooffs, P, OI))
         val = _trunc(lines, 'sx%d' % k, kernel.outputs[k], half, T, TS)
         if masked:
             lines.append('    tt.store %%qo%d, %s, %%mask : %s' % (k, val, P))

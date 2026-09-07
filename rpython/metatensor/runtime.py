@@ -272,6 +272,20 @@ def reset_device():
         ones.one[i] = NULLTENSOR
     rt_cuda_reset()
 
+def extra_size(kernel, k, n, c):
+    mode = (kernel.outmodes >> (2 * k)) & 3
+    if mode == 1:
+        m = c
+    elif mode == 2:
+        m = 1
+    elif mode == 3:
+        m = n // c if c > 0 else n
+    else:
+        m = n
+    if m <= 0:
+        m = 1
+    return m
+
 @jit.unroll_safe
 def modes_fit(kernel, inputs, n, c):
     packed = kernel.modes
@@ -336,8 +350,10 @@ def launch_gpu(kernel, inputs):
                             needs_zero(kernel)) if ok else 0
     if outs[0] == 0:
         ok = False
+    esizes = lltype.malloc(SIGNEDARRAY, nout, flavor='raw')
     for k in range(1, nout):
-        outs[k] = rt_cuda_alloc(nbytes(n, dt), 0) if ok else 0
+        esizes[k] = extra_size(kernel, k - 1, n, c)
+        outs[k] = rt_cuda_alloc(nbytes(esizes[k], dt), 0) if ok else 0
         if outs[k] == 0:
             ok = False
     if ok:
@@ -353,8 +369,12 @@ def launch_gpu(kernel, inputs):
         if nout > 1:
             result.extra = lltype.malloc(TENSORARRAY, nout - 1)
             for k in range(1, nout):
-                result.extra[k - 1] = device_tensor(n, outs[k],
-                                                    inputs[big].shape, dt)
+                eshape = inputs[big].shape
+                if esizes[k] != n:
+                    eshape = _shape1(esizes[k])
+                result.extra[k - 1] = device_tensor(esizes[k], outs[k],
+                                                    eshape, dt)
+    lltype.free(esizes, flavor='raw')
     lltype.free(dptrs, flavor='raw')
     lltype.free(outs, flavor='raw')
     return result
