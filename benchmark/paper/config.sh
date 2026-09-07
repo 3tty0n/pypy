@@ -2,8 +2,12 @@
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 
-PYPY=${PYPY:-}
-BENCH=${BENCH:-}
+if [ -f "$HERE/env.sh" ]; then
+  source "$HERE/env.sh"
+fi
+
+PYPY=${PYPY:-$HERE/build/pypy-c}
+BENCH=${BENCH:-$HERE/build/metatensor-bench}
 TORCH_PYTHON=${TORCH_PYTHON:-${RTENSOR_PYTHON:-}}
 RTENSOR_PYTHON=${RTENSOR_PYTHON:-$TORCH_PYTHON}
 export RTENSOR_PYTHON TORCH_PYTHON
@@ -14,7 +18,7 @@ if [ -z "$RTENSOR_CUBLAS" ] && [ -n "$RTENSOR_PYTHON" ]; then
   done
 fi
 
-WEIGHTS=${WEIGHTS:-/tmp/claude-1000/-home-yusuke-src-github-com-3tty0n-pypy-tile-ir/94b95464-f7a8-460d-9be9-5f58f534ceea/scratchpad/paper-weights}
+WEIGHTS=${WEIGHTS:-$HERE/weights}
 ITERS=${ITERS:-200}
 WARMUP=${WARMUP:-30}
 ROUNDS=${ROUNDS:-3}

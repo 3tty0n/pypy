@@ -696,6 +696,9 @@ class Counter(object):
     n = 0
 counter = Counter()
 
+def get_cc():
+    return _env('RTENSOR_CC', 'auto')
+
 def _write(path, data):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0644)
     os.write(fd, data)
@@ -733,7 +736,7 @@ def _compile_gpu(kernel):
     _write(base + '.ttir', src)
     cmd = '%s -P %s %s.ttir %s.ptx %s.meta %s %d' % (
         _env('RTENSOR_PYTHON', 'python3'), _here + '/triton_compile.py',
-        base, base, base, _env('RTENSOR_CC', '86'), warps)
+        base, base, base, get_cc(), warps)
     if os.system(cmd) != 0:
         return 0
     words = _read(base + '.meta').strip().split(' ')
@@ -1113,7 +1116,7 @@ def _gather_compile_gpu(op, params, dtype):
     _write(base + '.ttir', src)
     cmd = '%s -P %s %s.ttir %s.ptx %s.meta %s %d' % (
         _env('RTENSOR_PYTHON', 'python3'), _here + '/triton_compile.py',
-        base, base, base, _env('RTENSOR_CC', '86'), config.num_warps)
+        base, base, base, get_cc(), config.num_warps)
     if os.system(cmd) != 0:
         return GatherKernel(0, 0, 0, 0)
     words = _read(base + '.meta').strip().split(' ')

@@ -1,0 +1,4 @@
+/build/
+/weights/
+/env.sh
+/.toolchain/
