@@ -1,5 +1,7 @@
 
-all: pypy-c cffi_imports
+all: pypy-cogen-c cffi_imports
+
+PYPY_BIN ?= pypy/goal/pypy-cogen-c
 
 PYPY_EXECUTABLE := $(shell which pypy)
 
@@ -13,7 +15,10 @@ URAM := $(shell $(RUNINTERP) -c "import sys; print(4.5 if sys.maxint>1<<32 else 
 
 JOBS=$(subst -j,--make-jobs ,$(filter -j%, $(MAKEFLAGS)))
 
-.PHONY: pypy-c cffi_imports
+.PHONY: pypy-c pypy-cogen-c cffi_imports
+
+pypy-cogen-c:
+	cd pypy/goal && $(RUNINTERP) ../../rpython/bin/rpython $(JOBS) -Ojit targetpypystandalone.py
 
 pypy-c:
 	@echo
@@ -35,7 +40,7 @@ endif
 	@echo "===================================================================="
 	@echo
 	@sleep 5
-	cd pypy/goal && $(RUNINTERP) ../../rpython/bin/rpython $(JOBS) -Ojit targetpypystandalone.py
+	cd pypy/goal && PYPY_PE_COGEN=0 $(RUNINTERP) ../../rpython/bin/rpython $(JOBS) -Ojit targetpypystandalone.py
 
-cffi_imports: pypy-c
-	cd lib_pypy && ../pypy/goal/pypy-c pypy_tools/build_cffi_imports.py || /bin/true
+cffi_imports: pypy-cogen-c
+	cd lib_pypy && ../$(PYPY_BIN) pypy_tools/build_cffi_imports.py || /bin/true

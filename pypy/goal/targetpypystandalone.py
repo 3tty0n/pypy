@@ -21,6 +21,12 @@ try:
 except NameError:
     this_dir = dirname(sys.argv[0])
 
+def pe_cogen_enabled():
+    if os.environ.get('PYPY_PE_REPORT'):
+        return False
+    return os.environ.get('PYPY_PE_COGEN', '1') != '0'
+
+
 def debug(msg):
     try:
         os.write(2, "debug: " + msg + '\n')
@@ -242,7 +248,10 @@ class PyPyTarget(object):
         return pypy_optiondescription
 
     def target(self, driver, args):
-        driver.exe_name = 'pypy-%(backend)s'
+        if pe_cogen_enabled():
+            driver.exe_name = 'pypy-cogen-%(backend)s'
+        else:
+            driver.exe_name = 'pypy-%(backend)s'
 
         config = driver.config
         parser = self.opt_parser(config)
@@ -398,7 +407,7 @@ class PyPyTarget(object):
             driver.translator._pe_linked_setup = report
 
         # PYPY_PE_COGEN: generate a residual program on a trace-start miss.
-        elif os.environ.get('PYPY_PE_COGEN'):
+        elif pe_cogen_enabled():
             from pypy.interpreter import pe_cogen
             def install(codewriter, jitdriver_sd, translator):
                 if jitdriver_sd.jitdriver.name != 'pypyjit':
