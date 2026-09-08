@@ -7,6 +7,7 @@ class SSARepr(object):
     def __init__(self, name):
         self.name = name
         self.insns = []
+        self.sources = {}          # {insn index: (file, line, funcname)}
         self._insns_pos = None     # after being assembled
 
 class Label(object):
@@ -79,6 +80,7 @@ class GraphFlattener(object):
         self.cpu = cpu
         self._include_all_exc_links = _include_all_exc_links
         self.registers = {}
+        self.current_source = None
         if graph:
             name = graph.name
         else:
@@ -104,6 +106,7 @@ class GraphFlattener(object):
         self.make_bytecode_block(self.graph.startblock)
 
     def make_bytecode_block(self, block, handling_ovf=False):
+        self.current_source = None
         if block.exits == ():
             self.make_return(block.inputargs)
             return
@@ -347,10 +350,15 @@ class GraphFlattener(object):
                 self.emitline("last_exc_value", "->", self.getcolor(w))
 
     def emitline(self, *line):
-        self.ssarepr.insns.append(line)
+        insns = self.ssarepr.insns
+        if self.current_source is not None:
+            self.ssarepr.sources[len(insns)] = self.current_source
+        insns.append(line)
 
     def popline(self):
-        return self.ssarepr.insns.pop()
+        insns = self.ssarepr.insns
+        self.ssarepr.sources.pop(len(insns) - 1, None)
+        return insns.pop()
 
     def flatten_list(self, arglist):
         args = []
@@ -371,6 +379,7 @@ class GraphFlattener(object):
         return args
 
     def serialize_op(self, op):
+        self.current_source = op.source
         args = self.flatten_list(op.args)
         if op.result is not None:
             kind = getkind(op.result.concretetype)

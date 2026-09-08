@@ -247,7 +247,9 @@ class BaseInliner(object):
 
     def copy_operation(self, op):
         args = [self.get_new_name(arg) for arg in op.args]
-        result = SpaceOperation(op.opname, args, self.get_new_name(op.result))
+        result = SpaceOperation(op.opname, args, self.get_new_name(op.result),
+                                op.offset)
+        result.source = op.source
         return result
 
     def copy_block(self, block):

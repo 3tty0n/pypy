@@ -1181,3 +1181,20 @@ def check_force_cast(FROM, TO, operations, value):
             assert 0, opname
     #
     assert rffi.cast(lltype.Signed, value) == expected_value
+
+
+class TestSources:
+
+    def test_sources_point_at_this_file(self):
+        def f(n):
+            return n + 10
+        rtyper = support.annotate(f, [5])
+        graph = rtyper.annotator.translator.graphs[0]
+        ssarepr = flatten_graph(graph, fake_regallocs(),
+                                cpu=FakeCPU(rtyper))
+        assert ssarepr.sources
+        first = min(ssarepr.sources)
+        filename, lineno, funcname = ssarepr.sources[first]
+        assert filename.endswith("test_flatten.py")
+        assert funcname == "f"
+        assert lineno == f.func_code.co_firstlineno + 1

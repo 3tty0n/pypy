@@ -399,3 +399,27 @@ def test_the_merge_point_binds_the_driver_to_its_function():
     # and it leaves nothing behind for the evaluator to strip
     assert not [op for block in graph.iterblocks()
                 for op in block.operations if "pe_merge" in op.opname]
+
+
+def test_format_template_shows_holes_and_sources():
+    from rpython.flowspace.model import Constant
+    from rpython.jit.codewriter.flatten import Register
+    from rpython.rtyper.lltypesystem import lltype
+    from rpython.translator.backendopt.jitcode_emitter import (
+        FragmentExit, HoleConstant, TemplateFragment, format_template)
+
+    hole = HoleConstant("pc", lltype.Signed)
+    insns = [("int_add", Register("int", 0), hole, "->", Register("int", 1)),
+             ("int_return", Constant(0, lltype.Signed))]
+    fragment = TemplateFragment(
+        insns, [FragmentExit(0, {"pc": ("int", 2)}, None)],
+        {"int": 3, "ref": 0, "float": 0}, {"pc": ("int", 0)},
+        [("int", 1, "oparg")], {0: ("pypy/interpreter/pyopcode.py", 42, "f")})
+    lines = format_template("LOAD_FAST", 124, True, fragment)
+    assert lines == [
+        "template LOAD_FAST key=124 merge_point=1 regs i=3 r=0 f=0",
+        "  prologue int 1 <- hole(oparg)",
+        "  0: int_add %i0, hole(pc) -> %i1"
+        "\t# pypy/interpreter/pyopcode.py:42 f",
+        "  1: exit 0 [pc=%i2]",
+    ]

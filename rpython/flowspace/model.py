@@ -445,6 +445,7 @@ def const(obj):
     return Constant(obj)
 
 class SpaceOperation(object):
+    source = None      # (file, line, funcname) of the RPython source
 
     def __init__(self, opname, args, result, offset=-1):
         self.opname = intern(opname)      # operation name
@@ -471,7 +472,9 @@ class SpaceOperation(object):
     def replace(self, mapping):
         newargs = [arg.replace(mapping) for arg in self.args]
         newresult = self.result.replace(mapping)
-        return type(self)(self.opname, newargs, newresult, self.offset)
+        newop = type(self)(self.opname, newargs, newresult, self.offset)
+        newop.source = self.source
+        return newop
 
 class Atom(object):
     def __init__(self, name):
@@ -547,7 +550,7 @@ def copygraph(graph, shallow=False, varmap={}, shallowvars=False):
                     copyop = SpaceOperation(op.opname,
                                             [copyvar(v) for v in op.args],
                                             copyvar(op.result), op.offset)
-                    #copyop.offset = op.offset
+                    copyop.source = op.source
                     result.append(copyop)
                 return result
             newblock.operations = copyoplist(block.operations)

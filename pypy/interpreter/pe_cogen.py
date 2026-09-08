@@ -13,6 +13,15 @@ HAVE_ARGUMENT = bytecode_spec.HAVE_ARGUMENT
 EXTENDED_ARG = opcodedesc.EXTENDED_ARG.index
 
 
+def opcode_names():
+    from pypy.interpreter.pyopcode import PE_LEAVE_OPCODE
+
+    names = dict((index, name)
+                 for name, index in bytecode_spec.opmap.items())
+    names[PE_LEAVE_OPCODE] = "PE_LEAVE"
+    return names
+
+
 def opcode_keys():
     from pypy.interpreter.pyopcode import PE_LEAVE_OPCODE
 
@@ -231,6 +240,16 @@ def portal_linker(jitdriver_sd, name="linked-pypy"):
         split_names=LATE_STATIC_ARGUMENTS, hole_names=hole_names(), name=name)
 
 
+class _TemplateDump(object):
+    """Holder: prebuilt template text, printed once at runtime."""
+
+    def __init__(self):
+        self.lines = []
+        self.dumped = False
+
+
+_template_dump = _TemplateDump()
+
 _runtime_cogen_state = [None]
 
 COST_PER_BYTE_NS = 20000
@@ -312,6 +331,21 @@ def stamp_after_make_jitcodes(mainjitcode):
     codewriter, native_table = state
     stamp_descr_indices(codewriter, native_table)
     register_native_insn_coverage(codewriter, native_table)
+
+
+def _report_template_lines(emitter, lines):
+    """Translation-time only: the build log quotes the template dump."""
+    total = 0
+    with_source = 0
+    for fragment in emitter._fragments.values():
+        total += len(fragment.insns)
+        with_source += len(fragment.sources)
+    percent = 100.0 * with_source / total if total else 0.0
+    print >> sys.stdout, "[pe] template lines: %d" % (len(lines),)
+    print >> sys.stdout, "[pe] template insns with source: %d/%d (%.1f%%)" % (
+        with_source, total, percent)
+    for line in lines[:5]:
+        print >> sys.stdout, "[pe] %s" % (line,)
 
 
 def report_template_size(extension, out=None):
@@ -441,6 +475,8 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
     report_unsupported(extension, sys.stdout)
     print >> sys.stdout, report_template_size(extension)
     native_table = emitter.native_table()
+    _template_dump.lines = emitter.template_lines(opcode_names())
+    _report_template_lines(emitter, _template_dump.lines)
     _runtime_cogen_state[0] = (codewriter, native_table)
 
     profiler = jitdriver_sd.warmstate.warmrunnerdesc.metainterp_sd.profiler
@@ -491,11 +527,21 @@ def install_runtime_cogen(codewriter, jitdriver_sd, translator):
             _gate_state.spent_ns += _cogen_ns(profiler) - before_ns
 
     def _register_program(code, program):
+        from rpython.rlib.debug import (
+            debug_print, debug_start, debug_stop, have_debug_prints)
+
         # Gates execute_frame's residual exception recovery.
         code._pe_has_linked_program = True
         # Assembled after finish_setup() froze liveness and jitcode tables.
         register_late_jitcode(program.jitcode,
                               program.jitcode.own_liveness_info)
+        if not _template_dump.dumped:
+            _template_dump.dumped = True
+            debug_start("jit-jitcode-template")
+            if have_debug_prints():
+                for line in _template_dump.lines:
+                    debug_print(line)
+            debug_stop("jit-jitcode-template")
         dump_jitcode(program.jitcode,
                      jitdriver_sd.warmstate.warmrunnerdesc.metainterp_sd)
 

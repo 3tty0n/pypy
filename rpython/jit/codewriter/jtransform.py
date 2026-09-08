@@ -109,6 +109,8 @@ class Transformer(object):
                 oplist = [oplist]
             for op1 in oplist:
                 if isinstance(op1, SpaceOperation):
+                    if op1.source is None:
+                        op1.source = op.source
                     newoperations.append(self._do_renaming(renamings, op1))
                 elif op1 is None:
                     # rewrite_operation() returns None to mean "has no real
@@ -135,7 +137,9 @@ class Transformer(object):
             self._do_renaming_on_link(renamings, link)
 
     def _do_renaming(self, rename, op):
+        source = op.source
         op = SpaceOperation(op.opname, op.args[:], op.result)
+        op.source = source
         for i, v in enumerate(op.args):
             if isinstance(v, Variable):
                 if v in rename:

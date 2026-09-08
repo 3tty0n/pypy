@@ -32,6 +32,42 @@ from rpython.translator.unsimplify import insert_empty_block
 from rpython.translator.sandbox.rsandbox import make_sandbox_trampoline
 
 
+PYPY_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))) + os.sep
+
+_source_tables = {}
+
+
+def _source_table(code):
+    try:
+        return _source_tables[code]
+    except KeyError:
+        import bisect, dis
+        starts = sorted(dis.findlinestarts(code))
+        filename = code.co_filename
+        if filename.startswith(PYPY_ROOT):
+            filename = filename[len(PYPY_ROOT):]
+        table = ([off for off, _line in starts],
+                 [line for _off, line in starts],
+                 filename, code.co_name, bisect.bisect_right)
+        _source_tables[code] = table
+        return table
+
+
+def op_source(graph, offset):
+    """(file, line, funcname) of the RPython source behind a flow op."""
+    if offset < 0:
+        return None
+    code = getattr(getattr(graph, 'func', None), 'func_code', None)
+    if code is None:
+        return None
+    offsets, linenos, filename, funcname, bisect_right = _source_table(code)
+    index = bisect_right(offsets, offset)
+    if index == 0:
+        return (filename, code.co_firstlineno, funcname)
+    return (filename, linenos[index - 1], funcname)
+
+
 class RTyperBackend(object):
     pass
 
@@ -305,12 +341,18 @@ class RPythonTyper(object):
             varmapping[v] = v    # records existing Variables
 
         for hop in self.highlevelops(block, newops):
+            start = len(newops)
             try:
                 hop.setup()  # this is called from here to catch TyperErrors...
                 self.translate_hl_to_ll(hop, varmapping)
             except TyperError as e:
                 self.gottypererror(e, block, hop.spaceop)
                 raise
+            source = op_source(graph, hop.spaceop.offset)
+            if source is not None:
+                for newop in newops[start:]:
+                    if getattr(newop, 'source', None) is None:
+                        newop.source = source
 
         block.operations[:] = newops
         block.renamevariables(varmapping)

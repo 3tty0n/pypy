@@ -68,12 +68,95 @@ class FragmentExit(object):
 class TemplateFragment(object):
     """One template, assembled once and ready to be placed in a program."""
 
-    def __init__(self, insns, exits, num_regs, boundary_entry, prologue=()):
+    def __init__(self, insns, exits, num_regs, boundary_entry, prologue=(),
+                 sources=None):
         self.insns = insns
         self.exits = exits
         self.num_regs = num_regs
         self.boundary_entry = boundary_entry
         self.prologue = tuple(prologue)
+        self.sources = sources or {}
+
+
+def exit_index_of(insn):
+    """The exit number of a fragment's terminating sentinel, or None."""
+    if len(insn) == 2 and insn[0] == "int_return" and \
+            isinstance(insn[1], Constant):
+        return insn[1].value
+    return None
+
+
+def format_template(opname, key, merge_point, fragment):
+    """Text form of one template, mirroring the residual jitcode dump."""
+    from rpython.jit.codewriter.flatten import (
+        Label, ListOfKind, Register, TLabel)
+    from rpython.jit.codewriter.jitcode import SwitchDictDescr
+
+    labels = {}
+
+    def labelname(name):
+        if name not in labels:
+            labels[name] = len(labels) + 1
+        return "L%d" % labels[name]
+
+    def operand(x):
+        if isinstance(x, Register):
+            return "%%%s%d" % (x.kind[0], x.index)
+        if isinstance(x, HoleConstant):
+            return "hole(%s)" % (x.hole_name,)
+        if isinstance(x, Constant):
+            if isinstance(x.concretetype, lltype.Ptr):
+                TO = x.concretetype.TO
+                return "$ref(%s)" % (getattr(TO, "_name", None) or TO,)
+            return "$%r" % (x.value,)
+        if isinstance(x, TLabel):
+            return labelname(x.name)
+        if isinstance(x, ListOfKind):
+            return "%s[%s]" % (x.kind[0].upper(),
+                               ", ".join([operand(i) for i in x]))
+        if isinstance(x, SwitchDictDescr):
+            return "<SwitchDictDescr %s>" % ", ".join(
+                ["%s:%s" % (k, labelname(l.name)) for k, l in x._labels])
+        return "%r" % (x,)
+
+    def insn_text(insn):
+        if isinstance(insn[0], Label):
+            return "%s:" % labelname(insn[0].name)
+        if len(insn) == 1:
+            return insn[0]
+        if insn[-2] == "->":
+            args = ", ".join([operand(x) for x in insn[1:-2]])
+            if args:
+                return "%s %s -> %s" % (insn[0], args, operand(insn[-1]))
+            return "%s -> %s" % (insn[0], operand(insn[-1]))
+        args = [operand(x) for x in insn[1:]]
+        if insn[0] == "-live-":
+            args.sort()
+        return "%s %s" % (insn[0], ", ".join(args))
+
+    regs = fragment.num_regs
+    lines = ["template %s key=%d merge_point=%d regs i=%d r=%d f=%d" % (
+        opname, key, int(merge_point), regs.get("int", 0),
+        regs.get("ref", 0), regs.get("float", 0))]
+    for kind, index, name in fragment.prologue:
+        lines.append("  prologue %s %d <- hole(%s)" % (kind, index, name))
+    for idx, insn in enumerate(fragment.insns):
+        index = exit_index_of(insn)
+        if index is not None:
+            operands = fragment.exits[index].operands
+            items = []
+            for name in sorted(operands):
+                place = operands[name]
+                if place is not None:
+                    items.append("%s=%%%s%d" % (name, place[0][0], place[1]))
+            lines.append("  %d: exit %d [%s]" % (idx, index, ", ".join(items)))
+            continue
+        text = "  %d: %s" % (idx, insn_text(insn))
+        source = fragment.sources.get(idx)
+        if source is not None:
+            text += "\t# %s:%d %s" % source
+        lines.append(text)
+    return lines
 
 
 class FragmentCompiler(object):
@@ -119,7 +202,8 @@ class FragmentCompiler(object):
              if regallocs[kind]._coloring else 0)
             for kind in KINDS)
         return TemplateFragment(ssarepr.insns, exits, num_regs, entry,
-                                self._prologue(ordered, reds))
+                                self._prologue(ordered, reds),
+                                ssarepr.sources)
 
     def _prepare_graph(self, template, bindings, merge_point):
         """Copy the residual graph and thread/patch its boundary values."""
@@ -432,6 +516,15 @@ class ProgramEmitter(object):
             build_native_table)
         return build_native_table(self._fragments)
 
+    def template_lines(self, opcode_names={}):
+        """Text of every compiled fragment, one flat list of lines."""
+        lines = []
+        for key, merge_point in sorted(self._fragments):
+            lines.extend(format_template(
+                opcode_names.get(key, str(key)), key, merge_point,
+                self._fragments[(key, merge_point)]))
+        return lines
+
     def emit(self, program, name="emitted-residual"):
         from rpython.jit.codewriter.assembler import JitCode
         from rpython.jit.codewriter.flatten import Label, SSARepr, TLabel
@@ -542,11 +635,7 @@ class ProgramEmitter(object):
             ssarepr.insns.append(("goto", TLabel(("block", target))))
 
     def _exit_index(self, insn):
-        from rpython.flowspace.model import Constant
-        if len(insn) == 2 and insn[0] == "int_return" and \
-                isinstance(insn[1], Constant):
-            return insn[1].value
-        return None
+        return exit_index_of(insn)
 
     def _localise(self, insn, pc, bindings):
         """Relabels one insn, patching every HoleConstant, even in a list."""
