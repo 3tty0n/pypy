@@ -7,8 +7,8 @@ trap paper_cleanup_pypy EXIT
 
 SERIES="$OUT/dynamic_series.tsv"
 SUMMARY="$OUT/dynamic_summary.tsv"
-echo -e "system\tround\tlength\tus" > "$SERIES"
-echo -e "system\tround\tlength\tmedian_us\tloops\tbridges\trecompiles" > "$SUMMARY"
+tsv_init "$SERIES" "system\tround\tlength\tus"
+tsv_init "$SUMMARY" "system\tround\tlength\tmedian_us\tloops\tbridges\trecompiles"
 
 median() { python3 -c "import sys,statistics;print(statistics.median([float(x) for x in sys.stdin if x.strip()]))"; }
 

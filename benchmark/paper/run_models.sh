@@ -7,7 +7,7 @@ paper_setup_pypy
 trap paper_cleanup_pypy EXIT
 
 TSV="$OUT/models.tsv"
-echo -e "model\tsystem\tround\tsteady_us\tmaxabsdiff\targmax_match" > "$TSV"
+tsv_init "$TSV" "model\tsystem\tround\tsteady_us\tmaxabsdiff\targmax_match"
 
 run_ours() {
   local script=$1; shift
@@ -39,15 +39,29 @@ model() {
   done
 }
 
-model distilgpt2 gpt2.py gpt2_torch.py "$WEIGHTS/distilgpt2"
-model tiny-gpt2 gpt2.py gpt2_torch.py "$WEIGHTS/tiny-gpt2"
-model smollm2-135m llama.py llama_torch.py "$WEIGHTS/smollm2-135m"
-model bert-tiny bert.py bert_torch.py "$WEIGHTS/bert-tiny"
-model bert-mini bert.py bert_torch.py "$WEIGHTS/bert-mini"
-model resnet18-b1 resnet.py resnet_torch.py "$WEIGHTS/resnet18" 1
-model resnet18-b8 resnet.py resnet_torch.py "$WEIGHTS/resnet18" 8
-model mixer_b16 mixer.py mixer_torch.py "$WEIGHTS/mixer_b16"
-model vit-tiny vit.py vit_torch.py "$WEIGHTS/vit-tiny"
+model_distilgpt2() { model distilgpt2 gpt2.py gpt2_torch.py "$WEIGHTS/distilgpt2"; }
+model_tiny-gpt2() { model tiny-gpt2 gpt2.py gpt2_torch.py "$WEIGHTS/tiny-gpt2"; }
+model_smollm2-135m() { model smollm2-135m llama.py llama_torch.py "$WEIGHTS/smollm2-135m"; }
+model_bert-tiny() { model bert-tiny bert.py bert_torch.py "$WEIGHTS/bert-tiny"; }
+model_bert-mini() { model bert-mini bert.py bert_torch.py "$WEIGHTS/bert-mini"; }
+model_resnet18-b1() { model resnet18-b1 resnet.py resnet_torch.py "$WEIGHTS/resnet18" 1; }
+model_resnet18-b8() { model resnet18-b8 resnet.py resnet_torch.py "$WEIGHTS/resnet18" 8; }
+model_mixer_b16() { model mixer_b16 mixer.py mixer_torch.py "$WEIGHTS/mixer_b16"; }
+model_vit-tiny() { model vit-tiny vit.py vit_torch.py "$WEIGHTS/vit-tiny"; }
+
+ALL_MODELS="distilgpt2 tiny-gpt2 smollm2-135m bert-tiny bert-mini resnet18-b1 resnet18-b8 mixer_b16 vit-tiny"
+MODELS=${MODELS:-}
+if [ "$#" -gt 0 ]; then MODELS="$*"; fi
+MODELS=${MODELS:-$ALL_MODELS}
+
+for m in $MODELS; do
+  fn="model_$m"
+  if ! declare -f "$fn" >/dev/null; then
+    echo "run_models.sh: unknown model '$m', valid: $ALL_MODELS" >&2
+    exit 1
+  fi
+  "$fn"
+done
 
 rm -f "$OUT"/.last_argmax_*
 echo "wrote $TSV"

@@ -35,6 +35,11 @@ if [ -z "$BENCH" ]; then
   echo "config.sh: BENCH not set (translated metatensor-bench)" >&2
 fi
 
+tsv_init() {
+  local path=$1 header=$2
+  [ -f "$path" ] || echo -e "$header" > "$path"
+}
+
 steady_of() { echo "$1" | grep -o 'steady_us=[0-9.]*' | head -1 | cut -d= -f2; }
 diff_of() { echo "$1" | grep -o 'maxabsdiff=[0-9.eE+-]*' | head -1 | cut -d= -f2; }
 

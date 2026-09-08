@@ -5,7 +5,7 @@ source "$HERE/config.sh"
 
 HEADER="mode\tvariant\tk\tn\titers\twarm_s\tsteady_us\tkernels\tacc\tcompiled_in_timed\tlaunches_per_iter\tgraphs\tbreaks"
 TSV="$OUT/micro.tsv"
-echo -e "$HEADER" > "$TSV"
+tsv_init "$TSV" "$HEADER"
 
 ours() { "$BENCH" "$@" | tr ' ' '\t' >> "$TSV"; }
 torchrun() { "$TORCH_PYTHON" "$HERE/../torch_bench.py" "$@" 2>/dev/null | tail -1 | tr ' ' '\t' >> "$TSV"; }
@@ -16,6 +16,13 @@ run_point() {
   torchrun compile $variant $k $n $ITERS
   torchrun eager $variant $k $n $ITERS
 }
+
+if [ -n "$1" ]; then
+  v=$1 k=$2 n=$3
+  for rep in $(seq "$ROUNDS"); do run_point "$v" "$k" "$n"; done
+  echo "wrote $TSV"
+  exit 0
+fi
 
 for rep in $(seq "$ROUNDS"); do
   for k in 1 4 8; do run_point 0 $k 1000000; done

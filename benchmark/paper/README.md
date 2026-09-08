@@ -12,23 +12,37 @@
 
 ## Reproduce
 
-    benchmark/paper/setup.sh
-    benchmark/paper/run_all.sh
+    benchmark/paper/bench.sh setup
+    benchmark/paper/bench.sh all
 
-`setup.sh` is idempotent: it creates the venv at `${VENV:-$HOME/.venvs/metatensor}`,
+`bench.sh setup` is idempotent: it creates the venv at `${VENV:-$HOME/.venvs/metatensor}`,
 detects the GPU compute capability with torch and writes it (plus every
 derived path) to `benchmark/paper/env.sh`, translates `metatensor-bench` and
 `pypy-c` into `benchmark/paper/build/` (skipped if already built), and
 exports the eight checkpoints into `${WEIGHTS:-benchmark/paper/weights}`
-(skip with `SKIP_WEIGHTS=1`). `run_all.sh` sources `config.sh`, which sources
+(skip with `SKIP_WEIGHTS=1`). `bench.sh` sources `config.sh`, which sources
 `env.sh` if present, so no manual exports are needed afterwards.
 
 Expected durations: pypy-c translation 15-60 min depending on cores, the
-bench binary about 3 min, the full `run_all.sh` grid about 2 h.
+bench binary about 3 min, the full `bench.sh all` grid about 2 h.
 
 Useful overrides: `VENV`, `BUILD`, `WEIGHTS`, `TORCH_INDEX`, `MAKE_JOBS`,
-and for `run_all.sh`/`run_*.sh`: `ITERS`, `WARMUP`, `ROUNDS`, `OUT`,
+and for `bench.sh`: `ITERS`, `WARMUP`, `ROUNDS`, `OUT`,
 `SKIP_EXPORT`/`SKIP_MICRO`/`SKIP_MODELS`/`SKIP_ABLATION`/`SKIP_DYNAMIC`/`SKIP_SUMMARIZE`.
+
+### Run one piece
+
+`bench.sh` also runs any single piece of the evaluation; each piece appends
+to `$OUT/*.tsv` (writing a header only if the file doesn't exist yet), so
+several piecewise runs plus a final `bench.sh summarize` compose one result
+set. `bench.sh all` clears `$OUT/*.tsv` first for a clean run.
+
+    benchmark/paper/bench.sh micro 8 1 256000        # one microbenchmark point
+    benchmark/paper/bench.sh models distilgpt2 resnet18-b1
+    benchmark/paper/bench.sh ablation fusion
+    benchmark/paper/bench.sh summarize
+
+`bench.sh list` prints the available model and ablation names and the micro grid.
 
 Runtime knobs (see also `benchmark/README.md`): `RTENSOR_FLAT_BLOCK`
 (elements per block for elementwise/gather kernels, default 4096; smaller
