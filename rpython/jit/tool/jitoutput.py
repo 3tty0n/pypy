@@ -9,7 +9,37 @@ import re
 
 REGEXES = [
     (('tracing_no', 'tracing_time'), '^Tracing:\s+([\d.]+)\s+([\d.]+)$'),
+    (('optimizing_no', 'optimizing_time'),
+     '^Optimizing:\s+([\d.]+)\s+([\d.]+)$'),
     (('backend_no', 'backend_time'), '^Backend:\s+([\d.]+)\s+([\d.]+)$'),
+    (('blackhole_no', 'blackhole_time'),
+     '^Blackhole:\s+([\d.]+)\s+([\d.]+)$'),
+    (('blackhole_call_no', 'blackhole_call_time'),
+     '^Blackhole callee:\s+([\d.]+)\s+([\d.]+)$'),
+    (('blackhole_decode_no', 'blackhole_decode_time'),
+     '^Blackhole decode:\s+([\d.]+)\s+([\d.]+)$'),
+    (('guard_fail_hist',), '^guard failures >=2\^k:\s*(.*)$'),
+    (('bridge_at_hist',), '^bridges at 2\^k:\s*(.*)$'),
+    (('bridge_model_c', 'bridge_model_b', 'bridge_model_be'),
+     '^bridge model:\s+C=([-\d.]+) us\s+B=([-\d.]+) ns\s+'
+     'break-even\(100\)=([-\d.]+)$'),
+    (('bridge_attempt_time', 'bridge_attempt_ops', 'bridge_attempt_us'),
+     '^bridge attempts:\s+([\d.]+) s\s+(\d+) rec ops\s+([\d.]+) us/op$'),
+    (('survivor_a', 'survivor_b', 'survivor_saved', 'survivor_reach'),
+     '^survivor:\s+a=([-\d.]+) us\s+b=([-\d.]+) exp\s+'
+     'saved\(32\.\.200\)=([-\d.]+)\s+reach=([-\d.]+)$'),
+    (('pe_cogen_no', 'pe_cogen_overhead_time'),
+     '^PE cogen overhead:\s+([\d.]+)\s+([\d.]+)$'),
+    (('pe_cogen_scan_no', 'pe_cogen_scan_time'),
+     '^PE cogen scan:\s+([\d.]+)\s+([\d.]+)$'),
+    (('pe_cogen_install_no', 'pe_cogen_install_time'),
+     '^PE cogen install:\s+([\d.]+)\s+([\d.]+)$'),
+    (('pe_cogen_generated',), '^pe cogen generated:\s+(\d+)$'),
+    (('pe_cogen_declined',), '^pe cogen declined:\s+(\d+)$'),
+    (('pe_cogen_deferred',), '^pe cogen deferred:\s+(\d+)$'),
+    (('pe_insns_generic',), '^pe insns generic:\s+(\d+)$'),
+    (('pe_insns_portal',), '^pe insns portal:\s+(\d+)$'),
+    (('pe_insns_residual',), '^pe insns residual:\s+(\d+)$'),
     (None, '^TOTAL.*$'),
     (('ops.total',), '^ops:\s+(\d+)$'),
     (('heapcached_ops', ), '^heapcached ops:\s+(\d+)$'),
@@ -50,10 +80,36 @@ class Aborts(object):
     vable_escape = 0
 
 class OutputInfo(object):
+    compilation_time = 0.0
     tracing_no = 0
     tracing_time = 0.0
+    optimizing_no = 0
+    optimizing_time = 0.0
     backend_no = 0
     backend_time = 0.0
+    blackhole_no = 0
+    blackhole_time = 0.0
+    blackhole_call_no = 0
+    blackhole_call_time = 0.0
+    bridge_attempt_time = 0.0
+    bridge_attempt_ops = 0
+    bridge_attempt_us = 0.0
+    bridge_model_c = 0.0
+    bridge_model_b = 0.0
+    bridge_model_be = 0.0
+    pe_cogen_no = 0
+    pe_cogen_time = 0.0
+    pe_cogen_overhead_time = 0.0
+    pe_cogen_scan_no = 0
+    pe_cogen_scan_time = 0.0
+    pe_cogen_install_no = 0
+    pe_cogen_install_time = 0.0
+    pe_cogen_generated = 0
+    pe_cogen_declined = 0
+    pe_cogen_deferred = 0
+    pe_insns_generic = 0
+    pe_insns_portal = 0
+    pe_insns_residual = 0
     asm_no = 0
     asm_time = 0.0
     guards = 0
@@ -81,7 +137,9 @@ def parse_prof(output):
         if attrs:
             for i, a in enumerate(attrs):
                 v = m.group(i + 1)
-                if '.' in v:
+                if a.endswith('_hist'):
+                    v = [int(x) for x in v.split()]
+                elif '.' in v:
                     v = float(v)
                 else:
                     v = int(v)
@@ -90,4 +148,9 @@ def parse_prof(output):
                     setattr(getattr(info, before), after, v)
                 else:
                     setattr(info, a, v)
+    info.compilation_time = (info.tracing_time + info.optimizing_time +
+                             info.backend_time)
+    info.pe_cogen_time = (info.pe_cogen_overhead_time +
+                          info.pe_cogen_scan_time +
+                          info.pe_cogen_install_time)
     return info

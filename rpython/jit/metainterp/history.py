@@ -93,9 +93,13 @@ def repr_rpython(box, typechars):
 
 
 class AbstractDescr(AbstractValue):
-    _attrs_ = []
+    _attrs_ = ['pe_descr_index']
     __slots__ = ()
     llopaque = True
+
+    # pe_descr_index: index into assembler.descrs, stamped by native_table().
+    # -1=unstamped; avoids untested identity-dict keying under translation.
+    pe_descr_index = -1
 
     def get_descr_index(self):
         return -1
@@ -440,6 +444,9 @@ class JitCellToken(AbstractDescr):
     target_tokens = None
     failed_states = None
     retraced_count = 0
+    # True when the root trace started from a linked (residual) program.
+    pe_origin = False
+    greenkey = None
     invalidated = False
     outermost_jitdriver_sd = None
     # and more data specified by the backend when the loop is compiled
@@ -854,12 +861,16 @@ class NoStats(object):
     def add_jitcell_token(self, token):
         pass
 
+    def pe_metadata_used(self):
+        pass
+
 class Stats(object):
     """For tests."""
 
     compiled_count = 0
     enter_count = 0
     aborted_count = 0
+    pe_metadata_count = 0
 
     def __init__(self, metainterp_sd):
         self.loops = []
@@ -879,12 +890,16 @@ class Stats(object):
         self.compiled_count = 0
         self.enter_count = 0
         self.aborted_count = 0
+        self.pe_metadata_count = 0
         for dict in self.jitcell_dicts:
             dict.clear()
 
     def add_jitcell_token(self, token):
         assert isinstance(token, JitCellToken)
         self.jitcell_token_wrefs.append(weakref.ref(token))
+
+    def pe_metadata_used(self):
+        self.pe_metadata_count += 1
 
     def set_history(self, history):
         self.history = history

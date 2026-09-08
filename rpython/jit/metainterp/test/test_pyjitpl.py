@@ -112,3 +112,70 @@ def test_get_name_from_address():
     assert metainterp_sd.get_name_from_address(123) == 'a'
     assert metainterp_sd.get_name_from_address(456) == 'b'
     assert metainterp_sd.get_name_from_address(789) == ''
+
+
+def test_register_late_jitcode_extends_liveness_and_reindexes():
+    """register_late_jitcode extends opcode tables/liveness, reindexes."""
+    from rpython.jit.codewriter.assembler import Assembler
+    from rpython.jit.codewriter.flatten import SSARepr, Register
+    from rpython.jit.codewriter.jitcode import enumerate_vars
+    from rpython.jit.metainterp.blackhole import BlackholeInterpBuilder
+
+    class FakeMetaInterpSd(pyjitpl.MetaInterpStaticData):
+        def __init__(self):
+            pass
+
+    asm = Assembler()
+
+    def make_jitcode(name, live_regs, extra_insns=()):
+        ssarepr = SSARepr(name)
+        ssarepr.insns = [
+            ('-live-',) + tuple(Register('int', i) for i in live_regs),
+        ]
+        ssarepr.insns.extend(extra_insns)
+        num_regs = {'int': (max(live_regs) + 1) if live_regs else 0}
+        return asm.assemble(ssarepr, num_regs=num_regs)
+
+    def decode_liveness(jitcode, liveness_info):
+        offset = jitcode.get_live_vars_info(0, asm.insns['live/'])
+        seen = []
+        enumerate_vars(offset, liveness_info, seen.append,
+                       lambda i: None, lambda i: None, None)
+        return seen
+
+    jitcode_a = make_jitcode("a", [0])
+
+    liveness_info = "".join(asm.all_liveness)
+    assert decode_liveness(jitcode_a, liveness_info) == [0]
+
+    metainterp_sd = FakeMetaInterpSd()
+    metainterp_sd.jitcodes = [jitcode_a]
+    jitcode_a.index = 0
+
+    class FakeCodeWriter:
+        cpu = None
+    codewriter = FakeCodeWriter()
+    codewriter.assembler = asm
+
+    metainterp_sd.setup_insns(asm.insns)
+    metainterp_sd.blackholeinterpbuilder = BlackholeInterpBuilder(
+        codewriter, metainterp_sd)
+    opcodes_before = len(metainterp_sd.opcode_implementations)
+    bh_opcodes_before = len(metainterp_sd.blackholeinterpbuilder._insns)
+
+    jitcode_b = make_jitcode("b", [0, 1],
+                             extra_insns=[('int_return', Register('int', 0))])
+    assert len(asm.insns) > opcodes_before
+
+    metainterp_sd.register_late_jitcode(jitcode_b, codewriter)
+
+    assert jitcode_b.index == 1
+    assert metainterp_sd.jitcodes == [jitcode_a, jitcode_b]
+    assert len(metainterp_sd.opcode_implementations) == len(asm.insns)
+    assert len(metainterp_sd.blackholeinterpbuilder._insns) == len(asm.insns)
+    assert len(metainterp_sd.opcode_implementations) > opcodes_before
+    assert len(metainterp_sd.blackholeinterpbuilder._insns) > bh_opcodes_before
+    assert metainterp_sd.opcode_names[:opcodes_before] == \
+        metainterp_sd.blackholeinterpbuilder._insns[:opcodes_before]
+    assert decode_liveness(jitcode_a, metainterp_sd.liveness_info) == [0]
+    assert decode_liveness(jitcode_b, metainterp_sd.liveness_info) == [0, 1]

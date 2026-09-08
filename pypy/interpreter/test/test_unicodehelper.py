@@ -120,3 +120,9 @@ def test_unicode_escape_incremental_bug(space):
         assert lgt1 + lgt2 == len(data)
         assert input == (result1 + result2).decode("utf-8")
 
+
+def test_decode_utf7_backoff_length():
+    # An unterminated shift sequence is backed off when not final; the
+    # codepoint count must be backed off with it.
+    res, pos, lgt = uh.str_decode_utf_7("a+MMMM", "strict", False, None)
+    assert (res, pos, lgt) == ("a", 1, 1)

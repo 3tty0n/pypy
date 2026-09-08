@@ -49,10 +49,16 @@ NULL = lltype.nullptr(llmemory.GCREF.TO)
 # ____________________________________________________________
 
 
+class _BlackholeStats(object):
+    # Holder: a plain int on the builder would fold to its prebuilt value.
+    insns = 0
+
+
 class BlackholeInterpBuilder(object):
     verbose = True
 
     def __init__(self, codewriter, metainterp_sd=None):
+        self.stats = _BlackholeStats()
         self.cpu = codewriter.cpu
         asm = codewriter.assembler
         self.setup_insns(asm.insns)
@@ -80,9 +86,12 @@ class BlackholeInterpBuilder(object):
             all_funcs.append(self._get_method(name, argcodes))
         all_funcs = unrolling_iterable(enumerate(all_funcs))
         #
+        stats = self.stats
+
         def dispatch_loop(self, code, position):
             assert position >= 0
             while True:
+                stats.insns += 1
                 if (not we_are_translated()
                     and self.jitcode._startpoints is not None):
                     assert position in self.jitcode._startpoints, (
@@ -1092,44 +1101,92 @@ class BlackholeInterpreter(object):
                 self.bhimpl_float_return(x)
             assert False
 
+    # Like bhimpl_jit_merge_point, but the last-level bailout must stay as
+    # counter-invisible as the blackhole run it shortcuts, hence no-tick.
+    @arguments("self", "i", "I", "R", "F", "I", "R", "F")
+    def bhimpl_pe_bailout_point(self, jdindex, *args):
+        if self.nextblackholeinterp is None:    # we are the last level
+            raise jitexc.ContinueRunningNormallyNoTick(*args)
+        else:
+            # Nested-level bailout: ticks normally, unlike the last level.
+            sd = self.builder.metainterp_sd
+            result_type = sd.jitdrivers_sd[jdindex].result_type
+            if result_type == 'v':
+                self.bhimpl_recursive_call_v(jdindex, *args)
+                self.bhimpl_void_return()
+            elif result_type == 'i':
+                x = self.bhimpl_recursive_call_i(jdindex, *args)
+                self.bhimpl_int_return(x)
+            elif result_type == 'r':
+                x = self.bhimpl_recursive_call_r(jdindex, *args)
+                self.bhimpl_ref_return(x)
+            elif result_type == 'f':
+                x = self.bhimpl_recursive_call_f(jdindex, *args)
+                self.bhimpl_float_return(x)
+            assert False
+
     def get_portal_runner(self, jdindex):
         jitdriver_sd = self.builder.metainterp_sd.jitdrivers_sd[jdindex]
         fnptr = adr2int(jitdriver_sd.portal_runner_adr)
         calldescr = jitdriver_sd.mainjitcode.calldescr
         return fnptr, calldescr
 
+    def _portal_call_profile(self):
+        builder = self.builder
+        return builder.metainterp_sd.profiler, builder.stats
+
     @arguments("self", "i", "I", "R", "F", "I", "R", "F", returns="i")
     def bhimpl_recursive_call_i(self, jdindex, greens_i, greens_r, greens_f,
                                                reds_i,   reds_r,   reds_f):
         fnptr, calldescr = self.get_portal_runner(jdindex)
-        return self.cpu.bh_call_i(fnptr,
-                                  greens_i + reds_i,
-                                  greens_r + reds_r,
-                                  greens_f + reds_f, calldescr)
+        profiler, stats = self._portal_call_profile()
+        profiler.start_portal_call(stats.insns)
+        try:
+            return self.cpu.bh_call_i(fnptr,
+                                      greens_i + reds_i,
+                                      greens_r + reds_r,
+                                      greens_f + reds_f, calldescr)
+        finally:
+            profiler.end_portal_call(stats.insns)
     @arguments("self", "i", "I", "R", "F", "I", "R", "F", returns="r")
     def bhimpl_recursive_call_r(self, jdindex, greens_i, greens_r, greens_f,
                                                reds_i,   reds_r,   reds_f):
         fnptr, calldescr = self.get_portal_runner(jdindex)
-        return self.cpu.bh_call_r(fnptr,
-                                  greens_i + reds_i,
-                                  greens_r + reds_r,
-                                  greens_f + reds_f, calldescr)
+        profiler, stats = self._portal_call_profile()
+        profiler.start_portal_call(stats.insns)
+        try:
+            return self.cpu.bh_call_r(fnptr,
+                                      greens_i + reds_i,
+                                      greens_r + reds_r,
+                                      greens_f + reds_f, calldescr)
+        finally:
+            profiler.end_portal_call(stats.insns)
     @arguments("self", "i", "I", "R", "F", "I", "R", "F", returns="f")
     def bhimpl_recursive_call_f(self, jdindex, greens_i, greens_r, greens_f,
                                                reds_i,   reds_r,   reds_f):
         fnptr, calldescr = self.get_portal_runner(jdindex)
-        return self.cpu.bh_call_f(fnptr,
-                                  greens_i + reds_i,
-                                  greens_r + reds_r,
-                                  greens_f + reds_f, calldescr)
+        profiler, stats = self._portal_call_profile()
+        profiler.start_portal_call(stats.insns)
+        try:
+            return self.cpu.bh_call_f(fnptr,
+                                      greens_i + reds_i,
+                                      greens_r + reds_r,
+                                      greens_f + reds_f, calldescr)
+        finally:
+            profiler.end_portal_call(stats.insns)
     @arguments("self", "i", "I", "R", "F", "I", "R", "F")
     def bhimpl_recursive_call_v(self, jdindex, greens_i, greens_r, greens_f,
                                                reds_i,   reds_r,   reds_f):
         fnptr, calldescr = self.get_portal_runner(jdindex)
-        return self.cpu.bh_call_v(fnptr,
-                                  greens_i + reds_i,
-                                  greens_r + reds_r,
-                                  greens_f + reds_f, calldescr)
+        profiler, stats = self._portal_call_profile()
+        profiler.start_portal_call(stats.insns)
+        try:
+            return self.cpu.bh_call_v(fnptr,
+                                      greens_i + reds_i,
+                                      greens_r + reds_r,
+                                      greens_f + reds_f, calldescr)
+        finally:
+            profiler.end_portal_call(stats.insns)
 
     # ----------
     # virtual refs
@@ -1140,6 +1197,10 @@ class BlackholeInterpreter(object):
 
     @arguments("r")
     def bhimpl_virtual_ref_finish(a):
+        pass
+
+    @arguments("r")
+    def bhimpl_virtual_ref_finish_escaped(a):
         pass
 
     # ----------
@@ -1783,17 +1844,28 @@ def resume_in_blackhole(metainterp_sd, jitdriver_sd, resumedescr, deadframe,
                         all_virtuals=None):
     from rpython.jit.metainterp.resume import blackhole_from_resumedata
     #debug_start('jit-blackhole')
-    blackholeinterp = blackhole_from_resumedata(
-        metainterp_sd.blackholeinterpbuilder,
-        metainterp_sd.jitcodes,
-        jitdriver_sd,
-        resumedescr,
-        deadframe,
-        all_virtuals)
-
-    current_exc = blackholeinterp._prepare_resume_from_failure(deadframe)
-
-    _run_forever(blackholeinterp, current_exc)
+    # Timed from here: decoding the resume data is part of what a guard
+    # failure costs without a bridge, and it does not shrink with the tail.
+    profiler = metainterp_sd.profiler
+    stats = metainterp_sd.blackholeinterpbuilder.stats
+    profiler.start_blackhole()
+    insns = stats.insns
+    try:
+        profiler.start_decode()
+        try:
+            blackholeinterp = blackhole_from_resumedata(
+                metainterp_sd.blackholeinterpbuilder,
+                metainterp_sd.jitcodes,
+                jitdriver_sd,
+                resumedescr,
+                deadframe,
+                all_virtuals)
+        finally:
+            profiler.end_decode()
+        current_exc = blackholeinterp._prepare_resume_from_failure(deadframe)
+        _run_forever(blackholeinterp, current_exc)
+    finally:
+        profiler.end_blackhole(stats.insns - insns, resumedescr.tail_ops)
 resume_in_blackhole._dont_inline_ = True
 
 def convert_and_run_from_pyjitpl(metainterp, raising_exception=False):
@@ -1817,5 +1889,12 @@ def convert_and_run_from_pyjitpl(metainterp, raising_exception=False):
         firstbh.exception_last_value = current_exc
         current_exc = lltype.nullptr(rclass.OBJECTPTR.TO)
     #
-    _run_forever(firstbh, current_exc)
+    profiler = metainterp_sd.profiler
+    stats = metainterp_sd.blackholeinterpbuilder.stats
+    profiler.start_blackhole()
+    insns = stats.insns
+    try:
+        _run_forever(firstbh, current_exc)
+    finally:
+        profiler.end_blackhole(stats.insns - insns, -1)
 convert_and_run_from_pyjitpl._dont_inline_ = True

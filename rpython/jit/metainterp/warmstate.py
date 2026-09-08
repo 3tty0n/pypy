@@ -133,6 +133,7 @@ JC_DONT_TRACE_HERE = 0x02
 JC_TEMPORARY       = 0x04
 JC_TRACING_OCCURRED= 0x08
 JC_FORCE_FINISH    = 0x10
+JC_DONT_UNROLL     = 0x20
 
 class BaseJitCell(object):
     """Subclasses of BaseJitCell are used in tandem with the single
@@ -188,6 +189,8 @@ class BaseJitCell(object):
     wref_procedure_token = None
     next = None
 
+    pe_abort_count = 0
+
     def get_procedure_token(self):
         if self.wref_procedure_token is not None:
             token = self.wref_procedure_token()
@@ -234,6 +237,11 @@ class WarmEnterState(object):
         "NOT_RPYTHON"
         self.warmrunnerdesc = warmrunnerdesc
         self.jitdriver_sd = jitdriver_sd
+        # Set by the portal_runner catch site around a bailout replay.
+        self.pe_suppress_ticks = False
+        # Index of "the method"/"the pc" green among REF/INT greens, or -1.
+        self.pe_ref_green_pos = -1
+        self.pe_pc_green_pos = -1
         if warmrunnerdesc is not None:       # for tests
             self.cpu = warmrunnerdesc.cpu
         try:
@@ -328,6 +336,18 @@ class WarmEnterState(object):
     def set_param_vec_cost(self, ivalue):
         self.vec_cost = ivalue
 
+    def set_param_pe_trace_eagerness(self, value):
+        self.increment_pe_trace_eagerness = self._compute_threshold(value)
+
+    def set_param_pe_call_threshold(self, value):
+        if value < 0:
+            raise ValueError
+        self.pe_call_threshold = value
+
+    def disable_unrolling(self, greenkey):
+        cell = self.JitCell.ensure_jit_cell_at_key(greenkey)
+        cell.flags |= JC_DONT_UNROLL
+
     def disable_noninlinable_function(self, greenkey):
         cell = self.JitCell.ensure_jit_cell_at_key(greenkey)
         cell.flags |= JC_DONT_TRACE_HERE
@@ -361,6 +381,71 @@ class WarmEnterState(object):
         vinfo = jitdriver_sd.virtualizable_info
         index_of_virtualizable = jitdriver_sd.index_of_virtualizable
         num_green_args = jitdriver_sd.num_green_args
+        # Unrolled so greens are picked with a constant index.
+        green_ref_args = unrolling_iterable(
+            [(i, TYPE) for i, TYPE in enumerate(jitdriver_sd._green_args_spec)
+             if history.getkind(TYPE) == 'ref'])
+        green_int_args = unrolling_iterable(
+            [(i, TYPE) for i, TYPE in enumerate(jitdriver_sd._green_args_spec)
+             if TYPE is lltype.Signed])
+
+        def pe_method_and_pc(greenargs):
+            wanted_ref = self.pe_ref_green_pos
+            wanted_pc = self.pe_pc_green_pos
+            method_ref = lltype.nullptr(llmemory.GCREF.TO)
+            pc = 0
+            if wanted_ref < 0 or wanted_pc < 0:
+                return method_ref, pc
+            position = 0
+            for i, TYPE in green_ref_args:
+                if position == wanted_ref:
+                    method_ref = lltype.cast_opaque_ptr(
+                        llmemory.GCREF, greenargs[i])
+                position += 1
+            position = 0
+            for i, TYPE in green_int_args:
+                if position == wanted_pc:
+                    pc = greenargs[i]
+                position += 1
+            return method_ref, pc
+
+        def pe_tick_suppressed(greenargs):
+            # Only runs inside a pe_bailout_point replay tail (rare).
+            if not self.pe_suppress_ticks:
+                return False
+            method_ref, pc = pe_method_and_pc(greenargs)
+            if not method_ref:
+                return False
+            metadata = jitdriver_sd.mainjitcode.pe_metadata
+            if metadata is None:
+                return False
+            # Suppress iff bound to this method and pc is not legit/leave.
+            for program in metadata.linked_programs:
+                if program.match_ref and program.match_ref == method_ref:
+                    suppressed = not (program.is_legit_entry_pc(pc) or
+                                      program.is_leave_pc(pc))
+                    if suppressed:
+                        debug_start("jit-pe-suppress")
+                        debug_print("suppressed tick, pc", pc)
+                        debug_stop("jit-pe-suppress")
+                    return suppressed
+            return False
+
+        def pe_entry_increment(greenargs, increment_threshold):
+            # A leave-pc portal entry counts at bridge eagerness.
+            if increment_threshold != self.increment_function_threshold:
+                return increment_threshold
+            method_ref, pc = pe_method_and_pc(greenargs)
+            if pc == 0:
+                return increment_threshold
+            metadata = jitdriver_sd.mainjitcode.pe_metadata
+            if metadata is None:
+                return increment_threshold
+            program = metadata.installed_program_for_ref(method_ref)
+            if program is None or not program.is_leave_pc(pc):
+                return increment_threshold
+            return self.increment_trace_eagerness
+
         JitCell = self.make_jitcell_subclass()
         self.make_jitdriver_callbacks()
         confirm_enter_jit = self.confirm_enter_jit
@@ -387,6 +472,7 @@ class WarmEnterState(object):
         def execute_assembler(loop_token, *args):
             # Call the backend to run the 'looptoken' with the given
             # input args.
+            metainterp_sd.profiler.end_fail_stretch()
 
             # If we have a virtualizable, we have to clear its
             # state, to make sure we enter with vable_token being NONE
@@ -450,20 +536,26 @@ class WarmEnterState(object):
             """
             if increment_threshold == 0:
                 return # jit is off
+            # A bridge would end here too: the failure sample stops.
+            metainterp_sd.profiler.end_fail_stretch()
             # Look for the cell corresponding to the current greenargs.
             # Search for the JitCell that is of the correct subclass of
             # BaseJitCell, and that stores a key that compares equal.
             # These few lines inline some logic that is also on the
             # JitCell class, to avoid computing the hash several times.
             greenargs = args[:num_green_args]
+            increment_threshold = pe_entry_increment(greenargs,
+                                                     increment_threshold)
             hash = JitCell.get_uhash(*greenargs)
             cell = jitcounter.lookup_chain(hash)
             while cell is not None:
                 if isinstance(cell, JitCell) and cell.comparekey(*greenargs):
                     break    # found
                 cell = cell.next
-            else:
-                # not found. increment the counter
+            if cell is None:
+                # not found.
+                if pe_tick_suppressed(greenargs):
+                    return
                 if jitcounter.tick(hash, increment_threshold):
                     bound_reached(hash, None, *args)
                 return
@@ -475,13 +567,21 @@ class WarmEnterState(object):
                     # tracing already happening in some outer invocation of
                     # this function. don't trace a second time.
                     return
-                # attached by compile_tmp_callback().  count normally
+                if pe_tick_suppressed(greenargs):
+                    return
+                # A not-yet-traced dont_trace_here function traces now.
+                if (cell.flags & JC_DONT_TRACE_HERE and
+                        not cell.flags & JC_TRACING_OCCURRED):
+                    bound_reached(hash, cell, *args)
+                    return
                 if jitcounter.tick(hash, increment_threshold):
                     bound_reached(hash, cell, *args)
                 return
             # machine code was already compiled for these greenargs
             procedure_token = cell.get_procedure_token()
             if procedure_token is None:
+                if pe_tick_suppressed(greenargs):
+                    return
                 if cell.flags & JC_DONT_TRACE_HERE:
                     if not cell.has_seen_a_procedure_token():
                         # A JC_DONT_TRACE_HERE, i.e. a non-inlinable function.
@@ -676,6 +776,20 @@ class WarmEnterState(object):
             return True
         self.can_inline_callable = can_inline_callable
 
+        def can_unroll_callable(greenkey):
+            greenargs = unwrap_greenkey(greenkey)
+            if can_never_inline(*greenargs):
+                return False
+            cell = JitCell.get_jitcell(*greenargs)
+            return cell is None or not cell.flags & JC_DONT_UNROLL
+        self.can_unroll_callable = can_unroll_callable
+
+        def has_own_loop(greenkey):
+            cell = JitCell.get_jitcell(*unwrap_greenkey(greenkey))
+            return (cell is not None and not cell.flags & JC_TEMPORARY
+                    and cell.get_procedure_token() is not None)
+        self.has_own_loop = has_own_loop
+
         def dont_trace_here(greenkey):
             # Set greenkey as somewhere that tracing should not occur into;
             # notice that, as per the description of JC_DONT_TRACE_HERE earlier,
@@ -685,6 +799,13 @@ class WarmEnterState(object):
             cell = JitCell.ensure_jit_cell_at_key(greenkey)
             cell.flags |= JC_DONT_TRACE_HERE
         self.dont_trace_here = dont_trace_here
+
+        def bump_pe_abort_count(greenkey):
+            # Only repeat offenders get dont_trace_here()'d.
+            cell = JitCell.ensure_jit_cell_at_key(greenkey)
+            cell.pe_abort_count += 1
+            return cell.pe_abort_count
+        self.bump_pe_abort_count = bump_pe_abort_count
 
         def mark_as_being_traced(greenkey):
             cell = JitCell.ensure_jit_cell_at_key(greenkey)

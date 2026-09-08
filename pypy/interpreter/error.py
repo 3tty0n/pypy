@@ -29,6 +29,9 @@ class OperationError(Exception):
 
     _w_value = None
     _application_traceback = None
+    # The frame whose generic dispatch handled this exception last; a
+    # residual program's escaping exception bypasses that (see pyframe).
+    pe_frame = None
 
     def __init__(self, w_type, w_value, tb=None):
         self.setup(w_type)

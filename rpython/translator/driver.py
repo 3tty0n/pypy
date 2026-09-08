@@ -344,7 +344,15 @@ class TranslationDriver(SimpleTaskEngine):
         rtyper = self.translator.buildrtyper()
         rtyper.specialize(dont_simplify_again=True)
 
-    @taskdef([RTYPE], "JIT compiler generation")
+    PE = 'partialeval_lltype'
+    @taskdef([RTYPE], "Partial evaluation")
+    def task_partialeval_lltype(self):
+        if not self.config.translation.partialeval:
+            return
+
+        pass
+
+    @taskdef([PE], "JIT compiler generation")
     def task_pyjitpl_lltype(self):
         """ Generate bytecodes for JIT and flow the JIT helper functions
         lltype version
@@ -382,7 +390,6 @@ class TranslationDriver(SimpleTaskEngine):
         """
         from rpython.translator.backendopt.all import backend_optimizations
         backend_optimizations(self.translator, replace_we_are_jitted=True)
-
 
     STACKCHECKINSERTION = 'stackcheckinsertion_lltype'
     @taskdef(['?'+BACKENDOPT, RTYPE, 'annotate'], "inserting stack checks")

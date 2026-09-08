@@ -37,6 +37,12 @@ from rpython.rlib.entrypoint import all_jit_entrypoints,\
 
 def apply_jit(translator, backend_name="auto", inline=False,
               vec=False, enable_opts=ALL_OPTS_NAMES, **kwds):
+    pe_linked_setup = getattr(translator, "_pe_linked_setup", None)
+    if pe_linked_setup is not None:
+        kwds["pe_linked_setup"] = pe_linked_setup
+    pe_jitcode_setup = getattr(translator, "_pe_jitcode_setup", None)
+    if pe_jitcode_setup is not None:
+        kwds["pe_jitcode_setup"] = pe_jitcode_setup
     if 'CPUClass' not in kwds:
         from rpython.jit.backend.detect_cpu import getcpuclass
         kwds['CPUClass'] = getcpuclass(backend_name)
@@ -94,6 +100,7 @@ def jittify_and_run(interp, graph, args, repeat=1, graph_and_interp_only=False,
                     disable_unrolling=sys.maxint,
                     enable_opts=ALL_OPTS_NAMES, max_retrace_guards=15,
                     max_unroll_recursion=7, vec=0, vec_all=0, vec_cost=0,
+                    pe_call_threshold=16000,
                     **kwds):
     from rpython.config.config import ConfigError
     translator = interp.typer.annotator.translator
@@ -121,6 +128,7 @@ def jittify_and_run(interp, graph, args, repeat=1, graph_and_interp_only=False,
         jd.warmstate.set_param_vec(vec)
         jd.warmstate.set_param_vec_all(vec_all)
         jd.warmstate.set_param_vec_cost(vec_cost)
+        jd.warmstate.set_param_pe_call_threshold(pe_call_threshold)
     warmrunnerdesc.finish()
     if graph_and_interp_only:
         return interp, graph
@@ -237,6 +245,8 @@ class WarmRunnerDesc(object):
     def __init__(self, translator, policy=None, backendopt=True, CPUClass=None,
                  ProfilerClass=EmptyProfiler, **kwds):
         pyjitpl._warmrunnerdesc = self   # this is a global for debugging only!
+        pe_jitcode_setup = kwds.pop("pe_jitcode_setup", None)
+        pe_linked_setup = kwds.pop("pe_linked_setup", None)
         self.set_translator(translator)
         self.memory_manager = memmgr.MemoryManager()
         self.build_cpu(CPUClass, **kwds)
@@ -278,8 +288,32 @@ class WarmRunnerDesc(object):
         verbose = False # not self.cpu.translate_support_code
         self.rewrite_access_helpers()
         self.create_jit_entry_points()
+        pe_linked_programs = []
+        if pe_linked_setup is not None:
+            for jd in self.jitdrivers_sd:
+                lowered = pe_linked_setup(self.codewriter, jd, translator)
+                if lowered is not None:
+                    if isinstance(lowered, list):
+                        pe_linked_programs.extend(lowered)
+                    else:
+                        pe_linked_programs.append(lowered)
         jitcodes = self.codewriter.make_jitcodes(verbose=verbose)
+        for lowered in pe_linked_programs:
+            lowered.jitcode.index = len(jitcodes)
+            jitcodes.append(lowered.jitcode)
+        if pe_jitcode_setup is not None:
+            # Must run before finish_setup() snapshots blackholeinterpbuilder.
+            assert not hasattr(self.metainterp_sd, 'blackholeinterpbuilder')
+            for jd in self.jitdrivers_sd:
+                pe_jitcode_setup(jd.mainjitcode)
+        for jd in self.jitdrivers_sd:
+            jd.warmstate.pe_ref_green_pos = (
+                self._pe_ref_green_pos(jd))
+            jd.warmstate.pe_pc_green_pos = (
+                self._pe_pc_green_pos(jd))
         self.metainterp_sd.jitcodes = jitcodes
+        from rpython.jit.codewriter.jitcode import set_late_jitcode_base
+        set_late_jitcode_base(len(jitcodes))
         self.rewrite_can_enter_jits()
         self.rewrite_set_param_and_get_stats()
         self.rewrite_force_virtual(vrefinfo)
@@ -683,6 +717,37 @@ class WarmRunnerDesc(object):
         jd._PTR_ASSEMBLER_HELPER_FUNCTYPE = lltype.Ptr(lltype.FuncType(
             [llmemory.GCREF, llmemory.GCREF], ASMRESTYPE))
 
+    def _pe_ref_green_pos(self, jd):
+        """Position of "the method" green among jd's REF greens, or -1."""
+        metadata = jd.mainjitcode.pe_metadata
+        if metadata is None:
+            return -1
+        if metadata.linked_programs:
+            ref_index = metadata.linked_programs[0].match_ref_index
+        else:
+            # Runtime cogen: programs arrive later, the layout is fixed now.
+            ref_index = metadata.match_ref_index
+        green_types = jd._green_args_spec
+        if ref_index < 0 or history.getkind(green_types[ref_index]) != 'ref':
+            return -1
+        return len([T for T in green_types[:ref_index]
+                    if history.getkind(T) == 'ref'])
+
+    def _pe_pc_green_pos(self, jd):
+        """Position of "the pc" green among jd's Signed greens, or -1."""
+        metadata = jd.mainjitcode.pe_metadata
+        if metadata is None:
+            return -1
+        if metadata.linked_programs:
+            pc_index = metadata.linked_programs[0].match_pc_index
+        else:
+            pc_index = metadata.match_pc_index
+        green_types = jd._green_args_spec
+        if pc_index < 0 or green_types[pc_index] is not lltype.Signed:
+            return -1
+        return len([T for T in green_types[:pc_index]
+                    if T is lltype.Signed])
+
     def rewrite_jitcell_accesses(self):
         jitdrivers_by_name = {}
         for jd in self.jitdrivers_sd:
@@ -935,28 +1000,34 @@ class WarmRunnerDesc(object):
         result_kind = history.getkind(RESULT)
         assert result_kind.startswith(jd.result_type)
         state = jd.warmstate
+        profiler = self.metainterp_sd.profiler
         maybe_compile_and_run = jd._maybe_compile_and_run_fn
         EnterJitAssembler = jd._EnterJitAssembler
 
         def ll_portal_runner(*args):
+            profiler.enter_portal()
             try:
-                # maybe enter from the function's start.
-                maybe_compile_and_run(
-                    state.increment_function_threshold, *args)
-                #
-                # then run the normal portal function, i.e. the
-                # interpreter's main loop.  It might enter the jit
-                # via maybe_enter_jit(), which typically ends with
-                # handle_fail() being called, which raises on the
-                # following exceptions --- catched here, because we
-                # want to interrupt the whole interpreter loop.
-                return support.maybe_on_top_of_llinterp(rtyper,
-                                                  portal_ptr)(*args)
-            except jitexc.JitException as e:
-                result = handle_jitexception(e)
-                if result_kind != 'void':
-                    result = specialize_value(RESULT, result)
-                return result
+                try:
+                    # maybe enter from the function's start.
+                    maybe_compile_and_run(
+                        state.increment_function_threshold, *args)
+                    #
+                    # then run the normal portal function, i.e. the
+                    # interpreter's main loop.  It might enter the jit
+                    # via maybe_enter_jit(), which typically ends with
+                    # handle_fail() being called, which raises on the
+                    # following exceptions --- catched here, because we
+                    # want to interrupt the whole interpreter loop.
+                    return support.maybe_on_top_of_llinterp(rtyper,
+                                                      portal_ptr)(*args)
+                except jitexc.JitException as e:
+                    result = handle_jitexception(e)
+                    profiler.end_fail_stretch()
+                    if result_kind != 'void':
+                        result = specialize_value(RESULT, result)
+                    return result
+            finally:
+                profiler.leave_portal()
 
         def handle_jitexception(e):
             # XXX there are too many exceptions all around...
@@ -973,11 +1044,21 @@ class WarmRunnerDesc(object):
                         x = getattr(e, attrname)[count]
                         x = specialize_value(ARGTYPE, x)
                         args = args + (x,)
+                    # ContinueRunningNormallyNoTick: a pe_bailout_point
+                    # re-entry, must stay as counter-invisible as the
+                    # blackhole run it shortcuts (see pe_tick_suppressed).
+                    no_tick = isinstance(
+                        e, jitexc.ContinueRunningNormallyNoTick)
+                    if no_tick:
+                        state.pe_suppress_ticks = True
                     try:
                         result = support.maybe_on_top_of_llinterp(rtyper,
                                                             portal_ptr)(*args)
                     except jitexc.JitException as e:
                         continue
+                    finally:
+                        if no_tick:
+                            state.pe_suppress_ticks = False
                     if result_kind != 'void':
                         result = unspecialize_value(result)
                     return result

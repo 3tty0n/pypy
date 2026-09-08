@@ -1,5 +1,6 @@
 import py
 from rpython.jit.tl.tla import tla
+from rpython.jit.tl.tla import offline
 
 def test_stack():
     f = tla.Frame('')
@@ -178,3 +179,59 @@ class TestLLtype(LLJitMixin):
             return w_result.intvalue
         res = self.meta_interp(interp_w, [42], listops=True)
         assert res == 0
+
+
+class TestOfflineTracing(LLJitMixin):
+    def test_compare_tracing_work(self):
+        from rpython.rlib.jit import Counters
+        from rpython.jit.metainterp.jitprof import Profiler
+        from rpython.jit.metainterp.warmspot import get_stats
+        from rpython.jit.metainterp import pyjitpl
+        from rpython.translator.translator import TranslationContext
+
+        code = [
+            tla.CONST_INT, 1,
+            tla.SUB,
+            tla.DUP,
+            tla.JUMP_IF, 0,
+            tla.RETURN,
+        ]
+        bytecode = assemble(code)
+
+        def interp_w(intvalue):
+            w_result = interp(code, tla.W_IntObject(intvalue))
+            assert isinstance(w_result, tla.W_IntObject)
+            return w_result.intvalue
+
+        baseline = self.meta_interp(
+            interp_w, [42], listops=True, ProfilerClass=Profiler)
+        assert baseline == 0
+        baseline_profiler = pyjitpl._warmrunnerdesc.metainterp_sd.profiler
+        baseline_time = baseline_profiler.get_times(Counters.TRACING)
+        baseline_ops = baseline_profiler.get_counter(Counters.RECORDED_OPS)
+
+        def install_linked(codewriter, jitdriver_sd, translator):
+            return offline.lower_and_install(
+                codewriter, jitdriver_sd, translator, bytecode)
+
+        pe_result = self.meta_interp(
+            interp_w, [42], listops=True, ProfilerClass=Profiler,
+            pe_linked_setup=install_linked)
+        assert pe_result == baseline
+        pe_profiler = pyjitpl._warmrunnerdesc.metainterp_sd.profiler
+        pe_time = pe_profiler.get_times(Counters.TRACING)
+        pe_ops = pe_profiler.get_counter(Counters.RECORDED_OPS)
+
+        assert get_stats().pe_metadata_count > 0
+        print("TLA tracing baseline: %.9fs, %d recorded ops" %
+              (baseline_time, baseline_ops))
+        print("TLA tracing offline PE: %.9fs, %d recorded ops" %
+              (pe_time, pe_ops))
+        assert baseline_ops > 0 and pe_ops > 0
+        assert pe_ops < baseline_ops
+
+
+def test_interp_step_declares_pc_as_split_argument():
+    interp_step = tla.Frame.interp_step.im_func
+    assert interp_step._pe_static_args_ == ('opcode',)
+    assert interp_step._pe_split_args_ == ('pc',)

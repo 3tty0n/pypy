@@ -62,6 +62,16 @@ FASTPATHS_SAME_BOXES = {
     "ge": "history.CONST_TRUE",
 }
 
+# Holder, not a list: a prebuilt list folds to its translation-time seed.
+class _PEInsnCounts(object):
+    generic = 0
+    portal = 0
+    residual = 0
+
+
+_pe_insn_counts = _PEInsnCounts()
+
+
 class MIFrame(object):
     debug = False
 
@@ -70,12 +80,14 @@ class MIFrame(object):
         self.registers_i = None
         self.registers_r = None
         self.registers_f = None
+        self.pe_trace_start_pos = -1
 
     def setup(self, jitcode, greenkey=None):
         # if not translated, fill the registers with MissingValue()
         assert isinstance(jitcode, JitCode)
         self.jitcode = jitcode
         self.bytecode = jitcode.code
+        self.pe_loop_header = jitcode.pe_loop_header_position()
         # this is not None for frames that are recursive portal calls
         self.greenkey = greenkey
         # create registers_* lists and copy the constants in place
@@ -200,7 +212,12 @@ class MIFrame(object):
         if not we_are_translated():
             assert pc in self.jitcode._startpoints
         offset = decode_offset(self.jitcode.code, pc + 1)
-        all_liveness = self.metainterp.staticdata.liveness_info
+        # 'offset' may be relative to own_liveness_info, not global.
+        own_liveness_info = self.jitcode.own_liveness_info
+        if own_liveness_info is not None:
+            all_liveness = own_liveness_info
+        else:
+            all_liveness = self.metainterp.staticdata.liveness_info
         length_i = ord(all_liveness[offset])
         length_r = ord(all_liveness[offset + 1])
         length_f = ord(all_liveness[offset + 2])
@@ -506,6 +523,14 @@ class MIFrame(object):
     @arguments("label")
     def opimpl_goto(self, target):
         self.pc = target
+        if target == self.pe_loop_header:
+            self.reached_pe_loop_header()
+
+    def reached_pe_loop_header(self):
+        boxes = self.metainterp.pe_portal_boxes
+        num_green = self.metainterp.jitdriver_sd.num_green_args
+        self.metainterp.reached_loop_header(
+            boxes[:num_green], boxes[num_green:])
 
     @arguments("box", "label", "orgpc")
     def opimpl_goto_if_not(self, box, target, orgpc, replace=True):
@@ -1111,6 +1136,17 @@ class MIFrame(object):
                                                 mutatefielddescr, box)
         if mutatebox.nonnull():
             from rpython.jit.metainterp.quasiimmut import do_force_quasi_immutable
+            debug_start("jit-quasiimmut-abort")
+            if have_debug_prints():
+                loc = "?"
+                for f in self.metainterp.framestack:
+                    if f.greenkey is not None and f.jitcode.jitdriver_sd:
+                        loc = f.jitcode.jitdriver_sd.warmstate.get_location_str(
+                            f.greenkey)
+                debug_print("force quasi-immut",
+                            mutatefielddescr.repr_of_descr(),
+                            "in", self.jitcode.name, "portal", loc)
+            debug_stop("jit-quasiimmut-abort")
             do_force_quasi_immutable(self.metainterp.cpu, box.getref_base(),
                                      mutatefielddescr)
             raise SwitchToBlackhole(Counters.ABORT_FORCE_QUASIIMMUT)
@@ -1376,20 +1412,56 @@ class MIFrame(object):
     def _opimpl_recursive_call(self, jdindex, greenboxes, redboxes, pc):
         targetjitdriver_sd = self.metainterp.staticdata.jitdrivers_sd[jdindex]
         allboxes = greenboxes + redboxes
+        if self.metainterp.pe_resuming_root(targetjitdriver_sd, redboxes):
+            self.metainterp.pe_tail_enter_root(allboxes)
+            raise ChangeFrame
         warmrunnerstate = targetjitdriver_sd.warmstate
         assembler_call = False
         if warmrunnerstate.inlining:
-            if warmrunnerstate.can_inline_callable(greenboxes):
+            portal_code = targetjitdriver_sd.mainjitcode
+            metadata = portal_code.pe_metadata
+            program = None
+            if metadata is not None:
+                program = metadata.linked_program_for(allboxes)
+            ptoken = None
+            if program is not None:
+                ptoken = self.metainterp.get_procedure_token(
+                    greenboxes, targetjitdriver_sd)
+            # An entry bridge has a procedure_token but no target_tokens.
+            # pe_call_threshold: call instead of inline at/above this size.
+            threshold = warmrunnerstate.pe_call_threshold
+            in_bridge = isinstance(self.metainterp.resumekey,
+                                   compile.ResumeGuardDescr)
+            big = program is not None and \
+                program.code_size >= threshold and \
+                (threshold == 0 or in_bridge or program.has_loops)
+            already_compiled = ptoken is not None and (
+                big or not warmrunnerstate.can_inline_callable(greenboxes))
+            if already_compiled:
+                if have_debug_prints():
+                    debug_start("jit-pe-asmcall")
+                    loc = targetjitdriver_sd.warmstate.get_location_str(
+                        greenboxes)
+                    debug_print("asmcall: compiled target found", loc,
+                               program.code_size)
+                    debug_stop("jit-pe-asmcall")
+            elif big:
+                # Not compiled yet: trace it from its own entry instead.
+                warmrunnerstate.dont_trace_here(greenboxes)
+            elif (warmrunnerstate.can_inline_callable(greenboxes) or
+                  (self.metainterp.recursing_into_root(greenboxes) and
+                   warmrunnerstate.can_unroll_callable(greenboxes))):
                 # We've found a potentially inlinable function; now we need to
                 # see if it's already on the stack. In other words: are we about
                 # to enter recursion? If so, we don't want to inline the
                 # recursion, which would be equivalent to unrolling a while
                 # loop.
-                portal_code = targetjitdriver_sd.mainjitcode
                 count = 0
                 for f in self.metainterp.framestack:
                     if f.jitcode is not portal_code:
-                        continue
+                        if (metadata is None or
+                                not metadata.is_linked_jitcode(f.jitcode)):
+                            continue
                     gk = f.greenkey
                     if gk is None:
                         continue
@@ -1410,10 +1482,34 @@ class MIFrame(object):
                     if have_debug_prints():
                         loc = targetjitdriver_sd.warmstate.get_location_str(greenboxes)
                         debug_print("recursive function (not inlined):", loc)
-                    warmrunnerstate.dont_trace_here(greenboxes)
-                else:
+                    # Only a callee without its own loop must be traced
+                    # separately; one that has it stays inlinable, so a
+                    # later bridge can still inline a shallow subtree.
+                    if not warmrunnerstate.has_own_loop(greenboxes):
+                        warmrunnerstate.dont_trace_here(greenboxes)
+                elif program is None:
                     return self.metainterp.perform_call(portal_code, allboxes,
                                 greenkey=greenboxes)
+                else:
+                    # A linked program below threshold: inline it.
+                    if have_debug_prints():
+                        debug_start("jit-pe-asmcall")
+                        loc = targetjitdriver_sd.warmstate.get_location_str(
+                            greenboxes)
+                        if ptoken is None:
+                            debug_print("inline: no token", loc)
+                        else:
+                            debug_print("inline: token too small", loc,
+                                       program.code_size)
+                        debug_stop("jit-pe-asmcall")
+                    # Same layout as initialize_state_from_start.
+                    call_boxes = program.build_call_boxes(allboxes)
+                    f = self.metainterp.newframe(program.jitcode,
+                                greenkey=greenboxes)
+                    f.setup_call(call_boxes)
+                    # setup_call() defaults pc to 0; override if linked.
+                    f.pc = program.start_position(allboxes)
+                    raise ChangeFrame
             assembler_call = True
             # verify that we have all green args, needed to make sure
             # that assembler that we call is still correct
@@ -1600,6 +1696,12 @@ class MIFrame(object):
             jd_no = old_frame.jitcode.jitdriver_sd.index
             self.metainterp.leave_portal_frame(jd_no)
             raise ChangeFrame
+
+    @arguments("int", "boxes3", "jitcode_position", "boxes3", "orgpc")
+    def opimpl_pe_bailout_point(self, jdindex, greenboxes,
+                                jcposition, redboxes, orgpc):
+        # No-op while tracing; see bhimpl_pe_bailout_point in blackhole.py.
+        pass
 
     def debug_merge_point(self, jitdriver_sd, jd_index, portal_call_depth, current_call_id, greenkey):
         # debugging: produce a DEBUG_MERGE_POINT operation
@@ -1831,6 +1933,19 @@ class MIFrame(object):
             metainterp.history.record2(rop.VIRTUAL_REF_FINISH,
                                        vrefbox, nullbox, None)
 
+    @arguments("box")
+    def opimpl_virtual_ref_finish_escaped(self, box):
+        # Like opimpl_virtual_ref_finish, but keeps the object as forced.
+        metainterp = self.metainterp
+        vrefbox = metainterp.virtualref_boxes.pop()
+        lastbox = metainterp.virtualref_boxes.pop()
+        assert box.getref_base() == lastbox.getref_base()
+        vrefinfo = metainterp.staticdata.virtualref_info
+        vref = vrefbox.getref_base()
+        if vrefinfo.is_virtual_ref(vref):
+            metainterp.history.record2(rop.VIRTUAL_REF_FINISH,
+                                       vrefbox, lastbox, None)
+
     @arguments("int", "box")
     def opimpl_rvmprof_code(self, leaving, box_unique_id):
         from rpython.rlib.rvmprof import cintf
@@ -1890,6 +2005,7 @@ class MIFrame(object):
             return resbox
 
     def run_one_step(self):
+        # Tallies jitcode instructions executed into _pe_insn_counts.
         # Execute the frame forward.  This method contains a loop that leaves
         # whenever the 'opcode_implementations' (which is one of the 'opimpl_'
         # methods) raises ChangeFrame.  This is the case when the current frame
@@ -1900,13 +2016,24 @@ class MIFrame(object):
             while True:
                 bytecode = self.bytecode
                 op = ord(bytecode[pc])
+                if self.jitcode.pe_is_linked:
+                    _pe_insn_counts.residual += 1
+                elif self.greenkey is not None:
+                    _pe_insn_counts.portal += 1
+                else:
+                    _pe_insn_counts.generic += 1
                 if op == staticdata.op_live:
                     pc += OFFSET_SIZE + 1
                     self.pc = pc
                     continue
                 elif op == staticdata.op_goto:
-                    pc = ord(bytecode[pc + 1]) | (ord(bytecode[pc + 2])<<8)
+                    target = (ord(bytecode[pc + 1]) |
+                              (ord(bytecode[pc + 2]) << 8))
                     self.pc = pc
+                    if target == self.pe_loop_header:
+                        self.reached_pe_loop_header()
+                    pc = target
+                    self.pc = target
                     continue
                 staticdata.opcode_implementations[op](self, pc)
                 pc = self.pc
@@ -2284,6 +2411,18 @@ class MetaInterpStaticData(object):
         #
         self.globaldata = MetaInterpGlobalData(self)
 
+    def register_late_jitcode(self, jitcode, codewriter):
+        """Untranslated-only: rebinds opcode tables for a late jitcode."""
+        asm = codewriter.assembler
+        self.setup_insns(asm.insns)
+        self.blackholeinterpbuilder.setup_insns(asm.insns)
+        self.liveness_info = "".join(asm.all_liveness)
+        self.setup_descrs(asm.descrs)
+        self.setup_indirectcalltargets(asm.indirectcalltargets)
+        self.setup_list_of_addr2name(asm.list_of_addr2name)
+        jitcode.index = len(self.jitcodes)
+        self.jitcodes.append(jitcode)
+
     def finish_setup_descrs(self):
         from rpython.jit.codewriter import effectinfo
         self.all_descrs = self.cpu.setup_descrs()
@@ -2398,8 +2537,23 @@ class MetaInterpGlobalData(object):
 
 # ____________________________________________________________
 
+def get_pe_trace_start_position(jitcode):
+    """Return a runtime-linked loop entry, or the regular portal entry."""
+    metadata = jitcode.pe_metadata
+    if metadata is None:
+        return 0
+    if metadata.is_linked_jitcode(jitcode):
+        # Entry wrapper at position 0 sets up late-static constants/args.
+        return 0
+    entry_pc = metadata.entry_pc
+    if not metadata.is_loop_header(entry_pc):
+        return 0
+    return metadata.position_for_pc(entry_pc)
+
+
 class MetaInterp(object):
     portal_call_depth = 0
+    root_greenkey = None
     cancel_count = 0
     exported_state = None
     last_exc_box = None
@@ -2420,6 +2574,10 @@ class MetaInterp(object):
         self.retracing_from = (-1, -1, -1, -1, -1)
         self.call_pure_results = args_dict()
         self.heapcache = HeapCache()
+        self.pe_metadata_consumed = False
+        self.pe_root_linked = False
+        self.pe_trace_start_position = 0
+        self.pe_portal_boxes = []
 
         self.call_ids = []
         self.current_call_id = 0
@@ -2457,8 +2615,8 @@ class MetaInterp(object):
         if jitcode.jitdriver_sd:
             self.portal_call_depth += 1
             self.call_ids.append(self.current_call_id)
-            unique_id = -1
-            if greenkey is not None:
+            # Linked jitcode shares its portal's tracked activation.
+            if greenkey is not None and not jitcode.pe_is_linked:
                 unique_id = jitcode.jitdriver_sd.warmstate.get_unique_id(
                     greenkey)
                 jd_no = jitcode.jitdriver_sd.index
@@ -2472,6 +2630,10 @@ class MetaInterp(object):
         else:
             f = MIFrame(self)
         f.setup(jitcode, greenkey)
+        if greenkey is not None and jitcode.pe_is_linked:
+            f.pe_trace_start_pos = self.history.get_trace_position()[0]
+        else:
+            f.pe_trace_start_pos = -1
         self.framestack.append(f)
         return f
 
@@ -2488,7 +2650,8 @@ class MetaInterp(object):
         jitcode = frame.jitcode
         if jitcode.jitdriver_sd:
             self.portal_call_depth -= 1
-            if leave_portal_frame:
+            # Mirrors the newframe() skip above.
+            if leave_portal_frame and not jitcode.pe_is_linked:
                 self.leave_portal_frame(jitcode.jitdriver_sd.index)
             self.call_ids.pop()
         if frame.greenkey is not None and self.is_main_jitcode(jitcode):
@@ -2529,6 +2692,8 @@ class MetaInterp(object):
 
     def finishframe_exception(self):
         excvalue = self.last_exc_value
+        root_is_linked = bool(self.framestack) and \
+            self.framestack[0].jitcode.pe_program is not None
         while self.framestack:
             frame = self.framestack[-1]
             code = frame.bytecode
@@ -2554,12 +2719,92 @@ class MetaInterp(object):
                     assert arg1 == 1
                     cintf.jit_rvmprof_code(arg1, arg2)
             self.popframe()
+        if root_is_linked and self.pe_recover_in_trace():
+            raise ChangeFrame
         try:
             self.compile_exit_frame_with_exception(self.last_exc_box)
         except SwitchToBlackhole as stb:
             self.aborted_tracing(stb.reason)
         raise jitexc.ExitFrameWithExceptionRef(
             lltype.cast_opaque_ptr(llmemory.GCREF, excvalue))
+
+    def pe_recover_in_trace(self):
+        """Guest exception escaped root linked program: keep tracing it."""
+        jd = self.jitdriver_sd
+        jitcode = jd.pe_recover_jitcode
+        if jitcode is None or jd.virtualizable_info is None:
+            return False
+        real_instance = rclass.ll_cast_to_object(self.last_exc_value)
+        if not rclass.ll_isinstance(real_instance, jd.pe_recover_exc_class):
+            return False
+        excbox = self.last_exc_box
+        self.clear_exception()
+        debug_start("pe-resume")
+        if have_debug_prints():
+            debug_print("recover")
+        debug_stop("pe-resume")
+        f = self.newframe(jitcode)
+        f.setup_call([self.virtualizable_boxes[-1], excbox])
+        return True
+
+    def pe_resuming_root(self, targetjitdriver_sd, redboxes):
+        """Is this pe_resume re-entering the portal on its own virtualizable?"""
+        jd = self.jitdriver_sd
+        if jd.pe_resume_jitcode is None or not self.framestack:
+            return False
+        if targetjitdriver_sd is not jd or jd.virtualizable_info is None:
+            return False
+        # By value: the vbox and virtualizable box may differ in a bridge.
+        vbox = redboxes[jd.index_of_virtualizable]
+        if vbox.getref_base() != self.virtualizable_boxes[-1].getref_base():
+            return False
+        return True
+
+    def pe_tail_enter_root(self, original_boxes):
+        """The resume function's call of the portal re-enters the root."""
+        while self.framestack:
+            self.popframe()
+        f, program, metadata = self.pe_enter_root(original_boxes)
+        debug_start("pe-resume")
+        if have_debug_prints():
+            debug_print("tail-enter:", f.jitcode.name, "pc", f.pc,
+                        "program" if program is not None else "generic")
+        debug_stop("pe-resume")
+
+    def _pe_select_program(self, mainjitcode, original_boxes):
+        """Pick the linked program (or the generic portal) to enter."""
+        metadata = mainjitcode.pe_metadata
+        jitcode = mainjitcode
+        call_boxes = original_boxes
+        program = None
+        if metadata is not None:
+            program = metadata.linked_program_for(original_boxes)
+        if program is not None:
+            jitcode = program.jitcode
+            call_boxes = program.build_call_boxes(original_boxes)
+        return jitcode, call_boxes, program, metadata
+
+    def _pe_root_entry_pc(self, mainjitcode, jitcode, program, metadata,
+                          original_boxes):
+        """Where the new bottom frame's pc should start."""
+        if program is not None and program.match_pc_index >= 0:
+            return program.start_position(original_boxes)
+        if jitcode is mainjitcode and metadata is not None and \
+                metadata.has_linked_programs():
+            # No program for this code+pc: enter the generic portal.
+            return 0
+        return get_pe_trace_start_position(jitcode)
+
+    def pe_enter_root(self, original_boxes):
+        """Trace's bottom frame: linked program, or generic portal."""
+        mainjitcode = self.jitdriver_sd.mainjitcode
+        jitcode, call_boxes, program, metadata = self._pe_select_program(
+            mainjitcode, original_boxes)
+        f = self.newframe(jitcode)
+        f.setup_call(call_boxes)
+        f.pc = self._pe_root_entry_pc(
+            mainjitcode, jitcode, program, metadata, original_boxes)
+        return f, program, metadata
 
     def check_recursion_invariant(self):
         portal_call_depth = -1
@@ -2785,6 +3030,9 @@ class MetaInterp(object):
         self.staticdata.profiler.count(reason)
         debug_print('~~~ ABORTING TRACING %s' % Counters.counter_names[reason])
         jd_sd = self.jitdriver_sd
+        resumekey = self.resumekey
+        if isinstance(resumekey, compile.AbstractResumeGuardDescr):
+            resumekey.note_aborted_bridge()
         if not self.current_merge_points:
             greenkey = None # we're in the bridge
         else:
@@ -2809,11 +3057,58 @@ class MetaInterp(object):
                 self.aborted_tracing_greenkey = None
         self.staticdata.stats.aborted()
 
+    def mark_linked_callees_dont_trace(self):
+        jitdrivers_sd = self.staticdata.jitdrivers_sd
+        current_pos = self.history.get_trace_position()[0]
+        max_size = 0
+        max_frame = None
+        for f in self.framestack:
+            jitcode = f.jitcode
+            if not jitcode.pe_is_linked or f.greenkey is None:
+                continue
+            start_pos = f.pe_trace_start_pos
+            if start_pos < 0:
+                continue
+            size = current_pos - start_pos
+            if size >= max_size:
+                max_size = size
+                max_frame = f
+        if max_frame is None:
+            return
+        jitcode = max_frame.jitcode
+        for jd_sd in jitdrivers_sd:
+            metadata = jd_sd.mainjitcode.pe_metadata
+            if metadata is not None and metadata.is_linked_jitcode(jitcode):
+                count = jd_sd.warmstate.bump_pe_abort_count(max_frame.greenkey)
+                if have_debug_prints():
+                    debug_start("jit-pe-mark-callee")
+                    loc = jd_sd.warmstate.get_location_str(max_frame.greenkey)
+                    debug_print("biggest linked callee at abort", loc,
+                                max_size, "abort_count", count)
+                    debug_stop("jit-pe-mark-callee")
+                if count >= 2:
+                    jd_sd.warmstate.dont_trace_here(max_frame.greenkey)
+                break
+
     def blackhole_if_trace_too_long(self):
         warmrunnerstate = self.jitdriver_sd.warmstate
         length = self.history.length()
         if (length > warmrunnerstate.trace_limit or
                 self.history.trace_tag_overflow()):
+            self.mark_linked_callees_dont_trace()
+            debug_start("jit-segment-decision")
+            num_merge_points = len(self.current_merge_points)
+            from_start = isinstance(self.resumekey,
+                                     compile.ResumeFromInterpDescr)
+            debug_print("abort too long: merge_points", num_merge_points,
+                        "from_start", from_start, "length", length)
+            if self.current_merge_points:
+                jd_sd = self.jitdriver_sd
+                greenkey = self.current_merge_points[0][0][
+                    :jd_sd.num_green_args]
+                loc = jd_sd.warmstate.get_location_str(greenkey)
+                debug_print("abort too long greenkey", loc)
+            debug_stop("jit-segment-decision")
             jd_sd, greenkey_of_huge_function = self.find_biggest_function()
             self.staticdata.stats.record_aborted(greenkey_of_huge_function)
             self.portal_trace_positions = None
@@ -2828,6 +3123,10 @@ class MetaInterp(object):
                     warmrunnerstate.JitCell.trace_next_iteration(greenkey)
             else:
                 self.prepare_trace_segmenting()
+            # A loop retries unboundedly, so its own recursion must stop
+            # unrolling; a bridge's guard already backs off per abort.
+            if self.current_merge_points and self.root_greenkey is not None:
+                warmrunnerstate.disable_unrolling(self.root_greenkey)
             raise SwitchToBlackhole(Counters.ABORT_TOO_LONG)
 
     def prepare_trace_segmenting(self):
@@ -2914,6 +3213,7 @@ class MetaInterp(object):
     def handle_guard_failure(self, resumedescr, deadframe):
         debug_start('jit-tracing')
         self.staticdata.profiler.start_tracing()
+        self.staticdata.profiler.start_bridge_attempt()
         key = resumedescr.get_resumestorage()
         assert isinstance(key, compile.ResumeGuardDescr)
         # store the resumekey.wref_original_loop_token() on 'self' to make
@@ -2921,6 +3221,7 @@ class MetaInterp(object):
         self.resumekey_original_loop_token = resumedescr.rd_loop_token.loop_token_wref()
         if self.resumekey_original_loop_token is None:
             raise compile.giveup() # should be rare
+        self.root_greenkey = self.resumekey_original_loop_token.greenkey
         self.staticdata.try_to_free_some_loops()
         self.create_history(resume.get_max_num_inputargs(key))
         try:
@@ -2931,7 +3232,17 @@ class MetaInterp(object):
             self.run_blackhole_interp_to_cancel_tracing(stb)
         finally:
             self.resumekey_original_loop_token = None
-            self.staticdata.profiler.end_tracing()
+            profiler = self.staticdata.profiler
+            profiler.end_bridge_attempt()
+            profiler.end_tracing()
+            debug_start('jit-bridge-cost')
+            if have_debug_prints():
+                debug_print('bridge-attempt us',
+                            int(profiler.last_bridge_time * 1e6),
+                            'rec ops', profiler.last_bridge_rec_ops,
+                            'tail', resumedescr.tail_ops,
+                            'failures', resumedescr.fail_count)
+            debug_stop('jit-bridge-cost')
             debug_stop('jit-tracing')
 
     def _handle_guard_failure(self, resumedescr, key, inputargs, deadframe, excdata):
@@ -3172,8 +3483,10 @@ class MetaInterp(object):
         else:
             self.history.set_inputargs(inputargs)
 
-    def get_procedure_token(self, greenkey):
-        JitCell = self.jitdriver_sd.warmstate.JitCell
+    def get_procedure_token(self, greenkey, jitdriver_sd=None):
+        if jitdriver_sd is None:
+            jitdriver_sd = self.jitdriver_sd
+        JitCell = jitdriver_sd.warmstate.JitCell
         cell = JitCell.get_jit_cell_at_key(greenkey)
         if cell is None:
             return None
@@ -3287,21 +3600,48 @@ class MetaInterp(object):
             self._fill_original_boxes(jitdriver_sd, original_boxes,
                                       position + 1, *args[1:])
 
+    def recursing_into_root(self, greenboxes):
+        """Is this a call back into the function this trace belongs to?
+        Inlining disabled after a too-long trace elsewhere does not apply
+        to such self-recursion: the unroll budget bounds it."""
+        root = self.root_greenkey
+        if root is None or len(root) != len(greenboxes):
+            return False
+        for i in range(len(root)):
+            if not root[i].same_constant(greenboxes[i]):
+                return False
+        return True
+
     def initialize_state_from_start(self, original_boxes):
         # ----- make a new frame -----
         self.portal_call_depth = -1 # always one portal around
         self.framestack = []
-        f = self.newframe(self.jitdriver_sd.mainjitcode)
-        f.setup_call(original_boxes)
+        f, program, metadata = self.pe_enter_root(original_boxes)
+        self.pe_trace_start_position = f.pc
+        self.pe_metadata_consumed = metadata is not None
+        self.pe_root_linked = program is not None
+        if self.pe_metadata_consumed:
+            self.staticdata.stats.pe_metadata_used()
         assert self.portal_call_depth == 0
         self.virtualref_boxes = []
+        num_green = self.jitdriver_sd.num_green_args
+        num_red = self.jitdriver_sd.num_red_args
+        portal_arg_count = num_green + num_red
+        self.pe_portal_boxes = original_boxes[:portal_arg_count]
+        self.root_greenkey = original_boxes[:num_green]
         self.initialize_withgreenfields(original_boxes)
         self.initialize_virtualizable(original_boxes)
+        debug_start("jit-segment-decision")
+        debug_print("trace start: from-interp linked", program is not None)
+        debug_stop("jit-segment-decision")
 
     def initialize_state_from_guard_failure(self, resumedescr, deadframe):
         # guard failure: rebuild a complete MIFrame stack
         # This is stack-critical code: it must not be interrupted by StackOverflow,
         # otherwise the jit_virtual_refs are left in a dangling state.
+        debug_start("jit-segment-decision")
+        debug_print("trace start: from-guard-failure")
+        debug_stop("jit-segment-decision")
         rstack._stack_criticalcode_start()
         try:
             self.portal_call_depth = -1 # always one portal around

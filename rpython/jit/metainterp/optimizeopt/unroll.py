@@ -213,9 +213,10 @@ class UnrollOptimizer(Optimizer):
             return info, self._newoperations[:]
         warmrunnerdescr = self.metainterp_sd.warmrunnerdesc
         limit = warmrunnerdescr.memory_manager.retrace_limit
-        if cell_token.retraced_count < limit:
-            cell_token.retraced_count += 1
-            debug_print('Retracing (%d/%d)' % (cell_token.retraced_count, limit))
+        retraced = cell_token.get_retraced_count()
+        if retraced < limit:
+            cell_token.set_retraced_count(retraced + 1)
+            debug_print('Retracing (%d/%d)' % (retraced + 1, limit))
         else:
             # Try forcing boxes to avoid jumping to the preamble
             try:
@@ -269,7 +270,8 @@ class OptUnroll(Optimization):
                 count += 1
         if count > maxguards:
             assert isinstance(target_token, TargetToken)
-            target_token.targeting_jitcell_token.retraced_count = sys.maxint
+            target_token.targeting_jitcell_token.set_retraced_count(
+                sys.maxint >> 1)
 
     def pick_virtual_state(self, my_vs, label_vs, target_tokens):
         if target_tokens is None:

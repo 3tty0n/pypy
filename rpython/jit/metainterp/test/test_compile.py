@@ -70,6 +70,7 @@ class FakeMetaInterpStaticData(object):
 
 class FakeMetaInterp:
     call_pure_results = {}
+    pe_root_linked = False
     box_names_memo = {}
     class jitdriver_sd:
         index = 0
@@ -171,3 +172,133 @@ def test_compile_tmp_callback():
         assert lltype.cast_opaque_ptr(lltype.Ptr(EXC), e.value) == llexc
     else:
         assert 0, "should have raised"
+
+
+def test_must_compile_uses_pe_eagerness_for_residual_roots():
+    from rpython.jit.metainterp.compile import ResumeGuardDescr
+    from rpython.jit.backend.model import CompiledLoopToken
+    seen = []
+    class FakeCounter:
+        def tick(self, hash, increment):
+            seen.append(increment)
+            return False
+    class State:
+        increment_trace_eagerness = 1
+        increment_pe_trace_eagerness = 2
+        warmrunnerdesc = None
+    class JD:
+        warmstate = State()
+    class SD:
+        class warmrunnerdesc:
+            jitcounter = FakeCounter()
+        class profiler:
+            @staticmethod
+            def note_guard_failure(count):
+                pass
+            @staticmethod
+            def bridge_break_even(tail_ops):
+                return -1.0
+            @staticmethod
+            def bridge_pays_off(count, tail_ops, horizon):
+                return False
+    descr = ResumeGuardDescr()
+    descr.status = 0
+    for pe_origin in (False, True):
+        descr.rd_loop_token = CompiledLoopToken.__new__(CompiledLoopToken)
+        descr.rd_loop_token.pe_origin = pe_origin
+        seen.append(descr._tick_increment(SD, JD, 1, None))
+    assert seen == [1, 2]
+
+
+def test_must_compile_backs_off_after_aborted_bridges():
+    from rpython.jit.metainterp.compile import ResumeGuardDescr
+    from rpython.jit.backend.model import CompiledLoopToken
+    seen = []
+    class FakeCounter:
+        def tick(self, hash, increment):
+            seen.append(increment)
+            return False
+    class State:
+        increment_trace_eagerness = 1.0
+        increment_pe_trace_eagerness = 1.0
+        warmrunnerdesc = None
+    class JD:
+        warmstate = State()
+    class SD:
+        class warmrunnerdesc:
+            jitcounter = FakeCounter()
+        class profiler:
+            @staticmethod
+            def note_guard_failure(count):
+                pass
+            @staticmethod
+            def bridge_break_even(tail_ops):
+                return -1.0
+            @staticmethod
+            def bridge_pays_off(count, tail_ops, horizon):
+                return False
+    descr = ResumeGuardDescr()
+    descr.status = 0
+    descr.rd_loop_token = CompiledLoopToken.__new__(CompiledLoopToken)
+    seen.append(descr._tick_increment(SD, JD, 1, None))
+    descr.note_aborted_bridge()
+    seen.append(descr._tick_increment(SD, JD, 1, None))
+    descr.note_aborted_bridge()
+    seen.append(descr._tick_increment(SD, JD, 1, None))
+    assert seen == [1.0, 0.5, 0.25]
+    for i in range(100):
+        descr.note_aborted_bridge()
+    assert descr.abort_count == descr.ABORT_COUNT_MAX
+
+
+def test_must_compile_uses_bridge_model_when_more_eager():
+    from rpython.jit.metainterp.compile import ResumeGuardDescr
+    from rpython.jit.backend.model import CompiledLoopToken
+    seen = []
+    class FakeCounter:
+        def tick(self, hash, increment):
+            seen.append(increment)
+            return False
+    class State:
+        increment_trace_eagerness = 1.0 / 200
+        increment_pe_trace_eagerness = 1.0 / 200
+        warmrunnerdesc = None
+    class JD:
+        warmstate = State()
+    class SD:
+        class warmrunnerdesc:
+            jitcounter = FakeCounter()
+        class profiler:
+            @staticmethod
+            def note_guard_failure(count):
+                pass
+            @staticmethod
+            def bridge_break_even(tail_ops):
+                return {10: 4.0, 1000: 400.0, 5: 0.2}[tail_ops]
+            @staticmethod
+            def bridge_pays_off(count, tail_ops, horizon):
+                return False
+    descr = ResumeGuardDescr()
+    descr.status = 0
+    descr.rd_loop_token = CompiledLoopToken.__new__(CompiledLoopToken)
+    for tail in (10, 1000, 5):
+        descr.tail_ops = tail
+        seen.append(descr._tick_increment(SD, JD, 1, None))
+    assert seen == [0.25, 1.0 / 200, 1.0]
+
+
+def test_stamp_guard_tails():
+    from rpython.jit.metainterp.compile import (stamp_guard_tails,
+                                               ResumeGuardDescr)
+    from rpython.jit.metainterp.resoperation import (
+        ResOperation, rop, InputArgInt)
+    from rpython.jit.metainterp.history import ConstInt
+    i0 = InputArgInt()
+    d1, d2 = ResumeGuardDescr(), ResumeGuardDescr()
+    ops = [ResOperation(rop.INT_ADD, [i0, ConstInt(1)]),
+           ResOperation(rop.GUARD_TRUE, [i0], descr=d1),
+           ResOperation(rop.INT_ADD, [i0, ConstInt(1)]),
+           ResOperation(rop.GUARD_TRUE, [i0], descr=d2),
+           ResOperation(rop.FINISH, [i0])]
+    stamp_guard_tails(ops)
+    assert (d1.tail_ops, d2.tail_ops) == (4, 2)

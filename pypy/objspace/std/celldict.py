@@ -4,7 +4,7 @@ indirection is introduced to make the version tag change less often.
 """
 import weakref
 
-from rpython.rlib import jit, rerased, objectmodel
+from rpython.rlib import jit, pe, rerased, objectmodel
 
 from pypy.interpreter.baseobjspace import W_Root
 from pypy.objspace.std.dictmultiobject import (

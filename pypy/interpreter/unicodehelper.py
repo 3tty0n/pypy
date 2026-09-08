@@ -766,6 +766,7 @@ def str_decode_utf_7(s, errors, final=False,
     result = StringBuilder(size)
     pos = 0
     shiftOutStartPos = 0
+    shiftOutStartSize = 0
     startinpos = 0
     while pos < size:
         ch = s[pos]
@@ -855,6 +856,7 @@ def str_decode_utf_7(s, errors, final=False,
                 inShift = 1
                 surrogate = 0
                 shiftOutStartPos = result.getlength()
+                shiftOutStartSize = outsize
                 base64bits = 0
                 base64buffer = 0
 
@@ -888,6 +890,7 @@ def str_decode_utf_7(s, errors, final=False,
     elif inShift:
         pos = startinpos
         final_length = shiftOutStartPos # back off output
+        outsize = shiftOutStartSize
 
     assert final_length >= 0
     return result.build()[:final_length], pos, outsize

@@ -7,6 +7,7 @@ from rpython.rlib.debug import make_sure_not_resized, check_nonneg
 from rpython.rlib.debug import ll_assert_not_none
 from rpython.rlib.jit import hint
 from rpython.rlib.objectmodel import instantiate, specialize, we_are_translated
+from rpython.rlib.objectmodel import dont_inline
 from rpython.rlib.objectmodel import not_rpython
 from rpython.rlib.rarithmetic import intmask, r_uint
 from rpython.tool.pairtype import extendabletype
@@ -43,6 +44,14 @@ class FrameDebugData(object):
         self.f_lineno = pycode.co_firstlineno
         self.w_globals = pycode.w_globals
 
+class W_ResidualExit(W_Root):
+    """A residual program that stopped short of the frame's end."""
+    _immutable_fields_ = ["next_instr"]
+
+    def __init__(self, next_instr):
+        self.next_instr = next_instr
+
+
 class PyFrame(W_Root):
     """Represents a frame for a regular Python function
     that needs to be interpreted.
@@ -69,7 +78,7 @@ class PyFrame(W_Root):
     last_instr               = -1
     last_exception           = None
     f_backref                = jit.vref_None
-    
+
     escaped                  = False  # see mark_as_escaped()
     debugdata                = None
 
@@ -79,7 +88,7 @@ class PyFrame(W_Root):
     lastblock = None
 
     # other fields:
-    
+
     # builtin - builtin cache, only if honor__builtins__ is True
     # defaults to False
 
@@ -252,6 +261,7 @@ class PyFrame(W_Root):
         else:
             return self.execute_frame()
 
+    @jit.unroll_safe
     def execute_frame(self, w_inputvalue=None, operr=None):
         """Execute this frame.  Main entry point to the interpreter.
         The optional arguments are there to handle a generator's frame:
@@ -282,8 +292,21 @@ class PyFrame(W_Root):
                     next_instr = r_uint(self.last_instr + 1)
                     if next_instr != 0:
                         self.pushvalue(w_inputvalue)
-                w_exitvalue = self.dispatch(self.pycode, next_instr,
-                                            executioncontext)
+                # Read once: touching pycode on the exception path forces it.
+                code = self.pycode
+                while True:
+                    try:
+                        w_exitvalue = self.dispatch(code, next_instr,
+                                                    executioncontext)
+                    except OperationError as operr:
+                        # pe_frame is set once dispatch unwound to a handler.
+                        if not code._pe_has_linked_program or \
+                                operr.pe_frame is self:
+                            raise
+                        w_exitvalue = self.pe_recover(operr)
+                    if not isinstance(w_exitvalue, W_ResidualExit):
+                        break
+                    next_instr = w_exitvalue.next_instr
             except OperationError:
                 raise
             except Exception as e:      # general fall-back
@@ -936,6 +959,24 @@ class PyFrame(W_Root):
                     return last
             frame = frame.f_backref()
         return None
+
+    def pe_recover(self, operr):
+        """A guest exception escaped a residual program: find its handler."""
+        # pe_resume gets the plain self, or a hinted self doubles the portal.
+        frame = self
+        self = jit.hint(self, access_directly=True)
+        ec = self.space.getexecutioncontext()
+        next_instr = self.handle_operation_error(ec, operr)
+        return frame.pe_resume(r_uint(jit.promote(intmask(next_instr))))
+
+    @dont_inline
+    def pe_resume(self, next_instr):
+        """Carry on from pe_recover; never inlined, so the tracer sees it."""
+        frame = self
+        self = jit.hint(self, access_directly=True)
+        pycode = jit.promote(self.pycode)
+        ec = self.space.getexecutioncontext()
+        return frame.dispatch(pycode, next_instr, ec)
 
     def _convert_unexpected_exception(self, e):
         from pypy.interpreter import error

@@ -34,6 +34,7 @@ def test_really_run():
     # assert did not crash
     # asserts below are a bit delicate, possibly they might be deleted
     assert info.tracing_no == 1
+    assert info.optimizing_no == 2
     assert info.backend_no == 1
     assert info.ops.total == 2
     assert info.recorded_ops.total == 2
@@ -42,9 +43,28 @@ def test_really_run():
     assert info.opt_ops == 11
     assert info.opt_guards == 2
     assert info.forcings == 0
+    assert info.guard_fail_hist == [1]
 
 DATA = '''Tracing:         1       0.006992
+Optimizing:      1       0.001250
 Backend:        1       0.000525
+Blackhole:      2       0.000300
+Blackhole callee: 1     0.000100
+Blackhole decode: 2     0.000050
+guard failures >=2^k:	5 3 1
+bridges at 2^k:	0 0 1
+bridge model:	C=2.500000 us	B=30.000000 ns	break-even(100)=6.000000
+bridge attempts:	0.100000 s	2000 rec ops	50.000000 us/op
+survivor:	a=-1.000000 us	b=-1.000000 exp	saved(32..200)=0.000000	reach=0.000000
+PE cogen overhead: 4       0.000400
+PE cogen scan:  2       0.000100
+PE cogen install: 1       0.000250
+pe cogen generated:     1
+pe cogen declined:      1
+pe cogen deferred:      2
+pe insns generic:       10
+pe insns portal:        5
+pe insns residual:      20
 TOTAL:                  0.025532
 ops:                    2
 heapcached ops:         111
@@ -77,8 +97,23 @@ def test_parse():
     info = parse_prof(DATA)
     assert info.tracing_no == 1
     assert info.tracing_time == 0.006992
+    assert info.optimizing_no == 1
+    assert info.optimizing_time == 0.001250
     assert info.backend_no == 1
     assert info.backend_time == 0.000525
+    assert abs(info.compilation_time - 0.008767) < 1e-12
+    assert info.pe_cogen_no == 4
+    assert info.pe_cogen_overhead_time == 0.000400
+    assert info.pe_cogen_scan_no == 2
+    assert info.pe_cogen_scan_time == 0.000100
+    assert info.pe_cogen_install_no == 1
+    assert info.pe_cogen_install_time == 0.000250
+    assert abs(info.pe_cogen_time - 0.000750) < 1e-12
+    assert info.pe_cogen_generated == 1
+    assert info.pe_cogen_declined == 1
+    assert info.pe_cogen_deferred == 2
+    assert info.pe_insns_generic == 10
+    assert info.pe_insns_residual == 20
     assert info.ops.total == 2
     assert info.heapcached_ops == 111
     assert info.recorded_ops.total == 6
@@ -98,3 +133,5 @@ def test_parse():
     assert info.nvreused == 15
     assert info.vecopt_tried == 12
     assert info.vecopt_success == 4
+    assert info.guard_fail_hist == [5, 3, 1]
+    assert info.bridge_at_hist == [0, 0, 1]

@@ -85,6 +85,13 @@ class Transformer(object):
                 return
             renamings[var] = var_or_const
             if isinstance(var_or_const, Constant):
+                # HoleConstant is a sentinel: re-type it, don't cast it.
+                from rpython.translator.backendopt.jitcode_emitter import (
+                    HoleConstant)
+                if isinstance(var_or_const, HoleConstant):
+                    renamings_constants[var] = HoleConstant(
+                        var_or_const.hole_name, var.concretetype)
+                    return
                 value = var_or_const.value
                 try:
                     value = lltype._cast_whatever(var.concretetype, value)
@@ -1710,6 +1717,18 @@ class Transformer(object):
         op3 = SpaceOperation('-live-', [], None)
         # and one for inlined short preambles
         return ops + [op3, op1, op2]
+
+    def handle_jit_marker__pe_bailout_point(self, op, jitdriver):
+        # Unlike jit_merge_point, no action while tracing: reds may be Consts.
+        assert self.portal_jd is not None, (
+            "'pe_bailout_point' in non-portal graph!")
+        assert jitdriver is self.portal_jd.jitdriver, (
+            "general mix-up of jitdrivers?")
+        num_green_args = len(jitdriver.greens)
+        args = ([Constant(self.portal_jd.index, lltype.Signed)] +
+                self.make_three_lists(op.args[2:2+num_green_args]) +
+                self.make_three_lists(op.args[2+num_green_args:]))
+        return [SpaceOperation('pe_bailout_point', args, None)]
 
     def handle_jit_marker__loop_header(self, op, jitdriver):
         jd = self.callcontrol.jitdriver_sd_from_jitdriver(jitdriver)

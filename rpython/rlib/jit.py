@@ -265,7 +265,6 @@ def not_in_trace(func):
     func.oopspec = "jit.not_in_trace()"   # note that 'func' may take arguments
     return func
 
-
 @oopspec("jit.isconstant(value)")
 @specialize.call_location()
 def isconstant(value):
@@ -479,6 +478,14 @@ def virtual_ref_finish(vref, x):
     keepalive_until_here(x)   # otherwise the whole function call is removed
     _virtual_ref_finish(vref, x)
 
+@oopspec('virtual_ref_finish_escaped(x)')
+@specialize.argtype(1)
+def virtual_ref_finish_escaped(vref, x):
+    """Like virtual_ref_finish(), but forces 'x' if the vref escaped, so
+    it stays dereferenceable (e.g. a traceback holding a callee's f_back)."""
+    keepalive_until_here(x)
+    _virtual_ref_finish_escaped(vref, x)
+
 def non_virtual_ref(x):
     """Creates a 'vref' that just returns x when called; nothing more special.
     Used for None or for frames outside JIT scope."""
@@ -523,6 +530,11 @@ def _virtual_ref_finish(vref, x):
     assert vref._x is x, "Invalid call to virtual_ref_finish"
     vref._finish()
 
+def _virtual_ref_finish_escaped(vref, x):
+    assert vref._x is x, "Invalid call to virtual_ref_finish_escaped"
+    vref()            # untranslated: always forced, hence always valid
+    vref._finish()
+
 class Entry(ExtRegistryEntry):
     _about_ = (non_virtual_ref, DirectJitVRef)
 
@@ -544,6 +556,15 @@ class Entry(ExtRegistryEntry):
 
 class Entry(ExtRegistryEntry):
     _about_ = _virtual_ref_finish
+
+    def compute_result_annotation(self, s_vref, s_obj):
+        pass
+
+    def specialize_call(self, hop):
+        hop.exception_cannot_occur()
+
+class Entry(ExtRegistryEntry):
+    _about_ = _virtual_ref_finish_escaped
 
     def compute_result_annotation(self, s_vref, s_obj):
         pass
@@ -583,6 +604,13 @@ PARAMETER_DOCS = {
     'vec_cost': 'threshold for which traces to bail. Unpacking increases the counter,'\
                 ' vector operation decrease the cost',
     'vec_all': 'try to vectorize trace loops that occur outside of the numpypy library',
+    'pe_trace_eagerness': 'trace_eagerness for guards in traces rooted in a '
+                          'linked (residual) program',
+    'pe_call_threshold': 'size in bytes of a linked callee\'s residual '
+                         'jitcode above which it is called via '
+                         'CALL_ASSEMBLER instead of inlined, as a coarse '
+                         'cap on top of the abort-history-driven '
+                         'call/inline decision',
 }
 
 PARAMETERS = {'threshold': 1039, # just above 1024, prime
@@ -602,6 +630,10 @@ PARAMETERS = {'threshold': 1039, # just above 1024, prime
               'vec': 0,
               'vec_all': 0,
               'vec_cost': 0,
+              # A compiled callee larger than this is called via
+              # CALL_ASSEMBLER instead of re-inlined.
+              'pe_call_threshold': 3000,
+              'pe_trace_eagerness': 200,
               }
 unroll_parameters = unrolling_iterable(PARAMETERS.items())
 
@@ -1414,7 +1446,14 @@ def leave_portal_frame():
 class Counters(object):
     counters="""
     TRACING
+    OPTIMIZING
     BACKEND
+    BLACKHOLE
+    BLACKHOLE_CALL
+    BLACKHOLE_DECODE
+    PE_COGEN
+    PE_COGEN_SCAN
+    PE_COGEN_INSTALL
     OPS
     HEAPCACHED_OPS
     RECORDED_OPS

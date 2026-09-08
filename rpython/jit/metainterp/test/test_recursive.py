@@ -375,7 +375,8 @@ class RecursiveTests:
         TRACE_LIMIT = 20
         res = self.meta_interp(loop, [100], enable_opts='', inline=True, trace_limit=TRACE_LIMIT)
         self.check_max_trace_length(TRACE_LIMIT)
-        self.check_aborted_count(9)
+        # Each aborted bridge doubles required failures: 4, not 9.
+        self.check_aborted_count(4)
         self.check_enter_count_at_most(30)
 
     def test_trace_limit_with_exception_bug(self):
@@ -603,6 +604,118 @@ class RecursiveTests:
 
         self.meta_interp(portal, [2], inline=True)
         self.check_history(call_assembler_n=1)
+
+    def test_pe_linked_recursive_call_uses_assembler_when_compiled(self):
+        # A compiled linked-program callee must call assembler, not inline.
+        driver = JitDriver(greens=['codeno'], reds=['i'],
+                           get_printable_location=lambda codeno: str(codeno))
+
+        def portal(codeno):
+            i = 0
+            while i < 10:
+                driver.can_enter_jit(codeno=codeno, i=i)
+                driver.jit_merge_point(codeno=codeno, i=i)
+                if codeno == 2:
+                    portal(1)
+                i += 1
+
+        def install_pe_metadata(mainjitcode):
+            # Trivial self-link: any code object, identity arg mapping.
+            from rpython.jit.codewriter.jitcode import PEJitCodeMetadata
+            metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+            metadata.attach_linked_jitcode(mainjitcode, [0, 1], [])
+            mainjitcode.pe_metadata = metadata
+
+        # Tiny synthetic program: force threshold 0 (always call).
+        self.meta_interp(portal, [2], inline=True,
+                         pe_jitcode_setup=install_pe_metadata,
+                         pe_call_threshold=0)
+        # 2 merge points for codeno=2's own loop, none for codeno=1.
+        self.check_history(call_assembler_n=1, enter_portal_frame=0,
+                           leave_portal_frame=0, debug_merge_point=2)
+
+    def test_pe_linked_loopless_callee_uses_assembler_when_compiled(self):
+        # As above, but for a loop-less ("entry bridge") linked callee.
+        from rpython.jit.metainterp import pyjitpl
+        from rpython.jit.metainterp.history import ConstInt
+        driver = JitDriver(greens=['codeno'], reds=['n'],
+                           get_printable_location=lambda codeno: str(codeno))
+
+        def portal(codeno, n):
+            driver.jit_merge_point(codeno=codeno, n=n)
+            if codeno == 2:
+                portal(1, n)
+            return n
+
+        def main(n):
+            # Warm codeno=1 (loop-less entry bridge) before codeno=2 recurses.
+            i = 0
+            while i < 5:
+                portal(1, i)
+                i += 1
+            i = 0
+            while i < 10:
+                portal(2, i)
+                i += 1
+            return 0
+
+        def install_pe_metadata(mainjitcode):
+            from rpython.jit.codewriter.jitcode import PEJitCodeMetadata
+            metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+            metadata.attach_linked_jitcode(mainjitcode, [0, 1], [])
+            mainjitcode.pe_metadata = metadata
+
+        self.meta_interp(main, [0], inline=True,
+                         pe_jitcode_setup=install_pe_metadata,
+                         pe_call_threshold=0)
+
+        # A loop-less callee gets a token but no target_tokens.
+        jd = pyjitpl._warmrunnerdesc.jitdrivers_sd[0]
+        cell = jd.warmstate.JitCell.get_jit_cell_at_key([ConstInt(1)])
+        assert cell is not None
+        token = cell.get_procedure_token()
+        assert token is not None            # H1: a token IS attached ...
+        assert not token.target_tokens      # ... but never has target_tokens
+        assert token.compiled_loop_token is not None   # ... and is callable
+
+        # Must call assembler, not inline codeno=1's body.
+        self.check_history(call_assembler_i=1, enter_portal_frame=0,
+                           debug_merge_point=1)
+
+    def test_pe_call_threshold_forces_inline_even_when_compiled(self):
+        # A high threshold must force inline despite an existing token.
+        driver = JitDriver(greens=['codeno'], reds=['n'],
+                           get_printable_location=lambda codeno: str(codeno))
+
+        def portal(codeno, n):
+            driver.jit_merge_point(codeno=codeno, n=n)
+            if codeno == 2:
+                portal(1, n)
+            return n
+
+        def main(n):
+            i = 0
+            while i < 5:
+                portal(1, i)
+                i += 1
+            i = 0
+            while i < 10:
+                portal(2, i)
+                i += 1
+            return 0
+
+        def install_pe_metadata(mainjitcode):
+            from rpython.jit.codewriter.jitcode import PEJitCodeMetadata
+            metadata = PEJitCodeMetadata(0, [], [], [], [], [0], [0])
+            metadata.attach_linked_jitcode(mainjitcode, [0, 1], [])
+            mainjitcode.pe_metadata = metadata
+
+        self.meta_interp(main, [0], inline=True,
+                         pe_jitcode_setup=install_pe_metadata,
+                         pe_call_threshold=999999999)
+        # Inlines then escapes: one merge point for codeno=1.
+        self.check_history(call_assembler_i=1, enter_portal_frame=0,
+                           debug_merge_point=2)
 
     def test_recursion_cant_call_assembler_directly(self):
         driver = JitDriver(greens = ['codeno'], reds = ['i', 'j'],

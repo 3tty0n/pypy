@@ -1,11 +1,13 @@
-from rpython.jit.metainterp.history import AbstractDescr, getkind
+import math
+
+from rpython.jit.metainterp.history import AbstractDescr, getkind, new_ref_dict
 from rpython.jit.metainterp.support import adr2int, int2adr
 from rpython.jit.codewriter.flatten import Register, Label, TLabel, KINDS
 from rpython.jit.codewriter.flatten import ListOfKind, IndirectCallTargets
 from rpython.jit.codewriter.format import format_assembler
 from rpython.jit.codewriter.jitcode import SwitchDictDescr, JitCode
 from rpython.jit.codewriter import longlong
-from rpython.rlib.objectmodel import ComputedIntSymbolic
+from rpython.rlib.objectmodel import ComputedIntSymbolic, specialize
 from rpython.rlib.rarithmetic import r_int
 from rpython.flowspace.model import Constant
 from rpython.rtyper.lltypesystem import lltype, llmemory, rffi
@@ -16,16 +18,59 @@ class AssemblerError(Exception):
     pass
 
 
+def int_fits_short(value, allow_short):
+    if not allow_short:
+        return False
+    try:
+        return -128 <= value <= 127
+    except TypeError:    # "Symbolics cannot be compared!"
+        return False
+
+
+def _fixed_size_copy(src, empty):
+    # Index-filled copy, not .append(): avoids RPython's list-resize trap.
+    n = len(src)
+    if n == 0:
+        return empty
+    dst = [src[0]] * n
+    for i in range(1, n):
+        dst[i] = src[i]
+    return dst
+_fixed_size_copy._annspecialcase_ = 'specialize:call_location'
+
+
+def _sorted_chars(live):
+    # sorted() isn't RPython-legal here; O(n^2) insertion sort instead.
+    chars = []
+    for char in live:
+        chars.append(char)
+    index = 1
+    while index < len(chars):
+        key = chars[index]
+        gap = index - 1
+        while gap >= 0 and chars[gap] > key:
+            chars[gap + 1] = chars[gap]
+            gap -= 1
+        chars[gap + 1] = key
+        index += 1
+    return chars
+
+
+class _NoDedupKeyGiven(object):
+    pass    # distinct from None: None is itself a legit dedup key
+_NO_DEDUP_KEY = _NoDedupKeyGiven()
+
+
 class Assembler(object):
 
     def __init__(self):
         self.insns = {}
         self.descrs = []
-        self.indirectcalltargets = set()    # set of JitCodes
+        self.indirectcalltargets = {}    # dict-as-set of JitCodes
         self.list_of_addr2name = []
         self._descr_dict = {}
         self._count_jitcodes = 0
-        self._seen_raw_objects = set()
+        self._seen_raw_objects = {}    # dict-as-set
         self.all_liveness = []
         self.all_liveness_length = 0
         self.all_liveness_positions = {}
@@ -55,17 +100,24 @@ class Assembler(object):
 
     def setup(self, name):
         self.code = []
-        self.constants_dict = {}
+        self.constants_dict_i = {}    # int value -> index
+        # rd_hash asserts on a null ref, so it's tracked separately below.
+        self.constants_dict_r = new_ref_dict()
+        self._null_ref_const_index = -1
+        self.constants_dict_f = {}    # (float/longlong value, negzero) -> idx
         self.constants_i = []
         self.constants_r = []
         self.constants_f = []
         self.label_positions = {}
         self.tlabel_positions = []
         self.switchdictdescrs = []
-        self.count_regs = dict.fromkeys(KINDS, 0)
+        count_regs = {}
+        for kind in KINDS:
+            count_regs[kind] = 0
+        self.count_regs = count_regs
         self.liveness = {}
-        self.startpoints = set()
-        self.alllabels = set()
+        self.startpoints = {}    # dict-as-set
+        self.alllabels = {}
         self.resulttypes = {}
         self.ssareprname = name
 
@@ -78,10 +130,14 @@ class Assembler(object):
             self.count_regs[reg.kind] = reg.index + 1
 
     def emit_const(self, const, kind, allow_short=False):
-        value = const.value
-        value_key = value
+        return self.emit_const_value(const.value, const.concretetype, kind,
+                                     allow_short=allow_short)
+
+    def emit_const_value(self, value, concretetype, kind, allow_short=False):
+        # Pre-cast: a post-cast key would miss repeats (adr2int rewraps).
+        dedup_key = value
         if kind == 'int':
-            TYPE = const.concretetype
+            TYPE = concretetype
             if isinstance(TYPE, lltype.Ptr):
                 assert TYPE.TO._gckind == 'raw'
                 self.see_raw_object(value)
@@ -96,42 +152,85 @@ class Assembler(object):
                 value = lltype.cast_primitive(lltype.Signed, value)
                 if type(value) is r_int:
                     value = int(value)
-                if allow_short:
-                    try:
-                        short_num = -128 <= value <= 127
-                    except TypeError:    # "Symbolics cannot be compared!"
-                        short_num = False
-                    if short_num:
-                        # emit the constant as a small integer
-                        self.code.append(chr(value & 0xFF))
-                        return True
-            constants = self.constants_i
         elif kind == 'ref':
             value = lltype.cast_opaque_ptr(llmemory.GCREF, value)
-            constants = self.constants_r
-            if not value:
-                # nullptr
-                value_key = None
-            else:
-                value_key = value._obj.container
+            dedup_key = value    # keyed by the cast ref itself
         elif kind == 'float':
-            if const.concretetype == lltype.Float:
+            if concretetype == lltype.Float:
                 value = longlong.getfloatstorage(value)
             else:
-                assert longlong.is_longlong(const.concretetype)
+                assert longlong.is_longlong(concretetype)
                 value = rffi.cast(lltype.SignedLongLong, value)
-            constants = self.constants_f
         else:
-            raise AssemblerError('unimplemented %r in %r' %
-                                 (const, self.ssareprname))
-        key = (kind, Constant(value_key))
-        try:
-            val = self.constants_dict[key]
-        except KeyError:
-            constants.append(value)
-            val = self.count_regs[kind] + len(constants) - 1
-            assert 0 <= val < 256, "too many constants"
-            self.constants_dict[key] = val
+            raise AssemblerError('unimplemented %r/%r in %r' %
+                                 (value, concretetype, self.ssareprname))
+        return self.emit_resolved_const(value, kind, allow_short=allow_short,
+                                        dedup_key=dedup_key)
+
+    @specialize.arg(2)
+    def emit_resolved_const(self, value, kind, allow_short=False,
+                            dedup_key=_NO_DEDUP_KEY):
+        if dedup_key is _NO_DEDUP_KEY:
+            dedup_key = value
+        if kind == 'int':
+            if int_fits_short(value, allow_short):
+                # emit the constant as a small integer
+                self.code.append(chr(value & 0xFF))
+                return True
+            try:
+                val = self.constants_dict_i[dedup_key]
+            except KeyError:
+                self.constants_i.append(value)
+                val = self.count_regs['int'] + len(self.constants_i) - 1
+                if not 0 <= val < 256:
+                    raise AssemblerError("too many constants")
+                self.constants_dict_i[dedup_key] = val
+            except TypeError:
+                # Unhashable dedup_key (e.g. a Symbolic): fall back to id().
+                idkey = id(dedup_key)
+                try:
+                    val = self.constants_dict_i[idkey]
+                except KeyError:
+                    self.constants_i.append(value)
+                    val = self.count_regs['int'] + len(self.constants_i) - 1
+                    if not 0 <= val < 256:
+                        raise AssemblerError("too many constants")
+                    self.constants_dict_i[idkey] = val
+        elif kind == 'ref':
+            if not value:
+                # never a dict key: rd_hash asserts on a null ref
+                if self._null_ref_const_index < 0:
+                    self.constants_r.append(value)
+                    self._null_ref_const_index = (
+                        self.count_regs['ref'] + len(self.constants_r) - 1)
+                    if not 0 <= self._null_ref_const_index < 256:
+                        raise AssemblerError("too many constants")
+                val = self._null_ref_const_index
+            else:
+                try:
+                    val = self.constants_dict_r[dedup_key]
+                except KeyError:
+                    self.constants_r.append(value)
+                    val = self.count_regs['ref'] + len(self.constants_r) - 1
+                    if not 0 <= val < 256:
+                        raise AssemblerError("too many constants")
+                    self.constants_dict_r[dedup_key] = val
+        elif kind == 'float':
+            # +0.0 and -0.0 hash equal but must not dedup together (cmath)
+            negzero = isinstance(dedup_key, float) and dedup_key == 0.0 and \
+                math.copysign(1.0, dedup_key) < 0.0
+            key = (dedup_key, negzero)
+            try:
+                val = self.constants_dict_f[key]
+            except KeyError:
+                self.constants_f.append(value)
+                val = self.count_regs['float'] + len(self.constants_f) - 1
+                if not 0 <= val < 256:
+                    raise AssemblerError("too many constants")
+                self.constants_dict_f[key] = val
+        else:
+            raise AssemblerError('unimplemented resolved kind %r in %r' %
+                                 (kind, self.ssareprname))
         # emit the constant normally, as one byte that is an index in the
         # list of constants
         self.code.append(chr(val))
@@ -145,7 +244,7 @@ class Assembler(object):
             return
         if insn[0] == '-live-':
             key = len(self.code)
-            self.startpoints.add(key)
+            self.startpoints[key] = True
             self.num_liveness_ops += 1
             live_i = self.get_liveness_info(insn[1:], 'int')
             live_r = self.get_liveness_info(insn[1:], 'ref')
@@ -173,7 +272,7 @@ class Assembler(object):
                 else:
                     argcodes.append(kind[0])
             elif isinstance(x, TLabel):
-                self.alllabels.add(len(self.code))
+                self.alllabels[len(self.code)] = True
                 self.tlabel_positions.append((x.name, len(self.code)))
                 self.code.append("temp 1")
                 self.code.append("temp 2")
@@ -206,7 +305,8 @@ class Assembler(object):
                 self.code.append(chr(num >> 8))
                 argcodes.append('d')
             elif isinstance(x, IndirectCallTargets):
-                self.indirectcalltargets.update(x.lst)
+                for target in x.lst:
+                    self.indirectcalltargets[target] = True
             elif x == '->':
                 assert '>' not in argcodes
                 argcodes.append('>')
@@ -220,7 +320,7 @@ class Assembler(object):
         key = opname + '/' + ''.join(argcodes)
         num = self.insns.setdefault(key, len(self.insns))
         self.code[startposition] = chr(num)
-        self.startpoints.add(startposition)
+        self.startpoints[startposition] = True
 
     def get_liveness_info(self, args, kind):
         """Return a set whose characters are register numbers.
@@ -233,14 +333,19 @@ class Assembler(object):
 
     def _encode_liveness(self, live_i, live_r, live_f):
         from rpython.jit.codewriter.liveness import encode_offset, encode_liveness
-        key = (frozenset(live_i), frozenset(live_r), frozenset(live_f))
+        sorted_i = _sorted_chars(live_i)
+        sorted_r = _sorted_chars(live_r)
+        sorted_f = _sorted_chars(live_f)
+        key = ("".join(sorted_i), "".join(sorted_r), "".join(sorted_f))
         try:
             pos = self.all_liveness_positions[key]
         except KeyError:
             pos = self.all_liveness_positions[key] = self.all_liveness_length
-            self.all_liveness.append(chr(len(live_i)) + chr(len(live_r)) + chr(len(live_f)))
+            self.all_liveness.append(
+                chr(len(sorted_i)) + chr(len(sorted_r)) + chr(len(sorted_f)))
             self.all_liveness_length += 3
-            for live in live_i, live_r, live_f:
+            # List, not a tuple: rtyper only iterates length-1 tuples.
+            for live in [sorted_i, sorted_r, sorted_f]:
                 liveness = encode_liveness(live)
                 if liveness:
                     self.all_liveness.append(liveness)
@@ -263,16 +368,20 @@ class Assembler(object):
             descr.attach(as_dict)
 
     def check_result(self):
-        # Limitation of the number of registers, from the single-byte encoding
-        assert self.count_regs['int'] + len(self.constants_i) <= 256
-        assert self.count_regs['ref'] + len(self.constants_r) <= 256
-        assert self.count_regs['float'] + len(self.constants_f) <= 256
+        # AssemblerError, not assert: a caller may catch and decline.
+        if self.count_regs['int'] + len(self.constants_i) > 256:
+            raise AssemblerError("too many int registers/constants")
+        if self.count_regs['ref'] + len(self.constants_r) > 256:
+            raise AssemblerError("too many ref registers/constants")
+        if self.count_regs['float'] + len(self.constants_f) > 256:
+            raise AssemblerError("too many float registers/constants")
 
     def make_jitcode(self, jitcode):
+        # Fixed-size copy: a resized constants list taints every JitCode.
         jitcode.setup(''.join(self.code),
-                      self.constants_i,
-                      self.constants_r,
-                      self.constants_f,
+                      _fixed_size_copy(self.constants_i, JitCode._empty_i),
+                      _fixed_size_copy(self.constants_r, JitCode._empty_r),
+                      _fixed_size_copy(self.constants_f, JitCode._empty_f),
                       self.count_regs['int'],
                       self.count_regs['ref'],
                       self.count_regs['float'],
@@ -282,7 +391,7 @@ class Assembler(object):
 
     def see_raw_object(self, value):
         if value._obj not in self._seen_raw_objects:
-            self._seen_raw_objects.add(value._obj)
+            self._seen_raw_objects[value._obj] = True
             if not value:    # filter out NULL pointers
                 return
             TYPE = lltype.typeOf(value).TO
@@ -309,7 +418,7 @@ class Assembler(object):
 # Allowing it anywhere causes the number of instruction variants to
 # expode, growing past 256.  So we list here only the most common
 # instructions where the 'c' variant might be useful.
-USE_C_FORM = set([
+USE_C_FORM = dict.fromkeys([
     'copystrcontent',
     'getarrayitem_gc_pure_i',
     'getarrayitem_gc_pure_r',
@@ -333,6 +442,7 @@ USE_C_FORM = set([
     'int_return',
     'int_sub',
     'jit_merge_point',
+    'pe_bailout_point',
     'new_array',
     'new_array_clear',
     'newstr',
@@ -343,4 +453,4 @@ USE_C_FORM = set([
     'strsetitem',
 
     'foobar', 'baz',    # for tests
-])
+], True)

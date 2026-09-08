@@ -1014,12 +1014,19 @@ class AbstractResumeDataReader(object):
         else:
             self.setarrayitem_int(array, index, fieldnum, arraydescr)
 
-    def _prepare_next_section(self, info):
+    def _prepare_next_section(self, info, jitcode):
         from rpython.jit.codewriter.jitcode import enumerate_vars
+        # If set, 'info' is relative to own_liveness_info, not the
+        # global liveness_info string.
+        own_liveness_info = jitcode.own_liveness_info
+        if own_liveness_info is not None:
+            all_liveness = own_liveness_info
+        else:
+            all_liveness = self.metainterp_sd.liveness_info
         # Use info.enumerate_vars(), normally dispatching to
         # rpython.jit.codewriter.jitcode.  Some tests give a different 'info'.
         enumerate_vars(info,
-                self.metainterp_sd.liveness_info,
+                all_liveness,
                 self._callback_i,
                 self._callback_r,
                 self._callback_f,
@@ -1037,6 +1044,15 @@ class AbstractResumeDataReader(object):
         value = self.next_float()
         self.write_a_float(register_index, value)
 
+def _jitcode_at_pos(jitcodes, pos):
+    """pos may be a late jitcode's global .index (not a position past
+    the frozen jitcodes list); look those up via get_late_jitcode."""
+    if pos < len(jitcodes):
+        return jitcodes[pos]
+    from rpython.jit.codewriter.jitcode import get_late_jitcode
+    return get_late_jitcode(pos)
+
+
 # ---------- when resuming for pyjitpl.py, make boxes ----------
 
 def rebuild_from_resumedata(metainterp, storage, deadframe,
@@ -1048,10 +1064,10 @@ def rebuild_from_resumedata(metainterp, storage, deadframe,
 
     while not resumereader.done_reading():
         jitcode_pos, pc = resumereader.read_jitcode_pos_pc()
-        jitcode = metainterp.staticdata.jitcodes[jitcode_pos]
+        jitcode = _jitcode_at_pos(metainterp.staticdata.jitcodes, jitcode_pos)
         f = metainterp.newframe(jitcode)
         f.setup_resume_at_op(pc)
-        resumereader.consume_boxes(f.get_current_position_info(),
+        resumereader.consume_boxes(f.get_current_position_info(), jitcode,
                                    f.registers_i, f.registers_r, f.registers_f)
         f.handle_rvmprof_enter_on_resume()
     return resumereader.liveboxes, virtualizable_boxes, virtualref_boxes
@@ -1074,11 +1090,11 @@ class ResumeDataBoxReader(AbstractResumeDataReader):
         self.liveboxes = [None] * self.count
         self._prepare(storage)
 
-    def consume_boxes(self, info, boxes_i, boxes_r, boxes_f):
+    def consume_boxes(self, info, jitcode, boxes_i, boxes_r, boxes_f):
         self.boxes_i = boxes_i
         self.boxes_r = boxes_r
         self.boxes_f = boxes_f
-        self._prepare_next_section(info)
+        self._prepare_next_section(info, jitcode)
 
     def consume_virtualizable_boxes(self, vinfo, vable_size):
         # we have to ignore the initial part of 'nums' (containing vrefs),
@@ -1336,7 +1352,7 @@ def blackhole_from_resumedata(blackholeinterpbuilder, jitcodes,
         nextbh.nextblackholeinterp = curbh
         curbh = nextbh
         jitcode_pos, pc = resumereader.read_jitcode_pos_pc()
-        jitcode = jitcodes[jitcode_pos]
+        jitcode = _jitcode_at_pos(jitcodes, jitcode_pos)
         curbh.setposition(jitcode, pc)
         resumereader.consume_one_section(curbh)
         curbh.handle_rvmprof_enter()
@@ -1381,7 +1397,7 @@ class ResumeDataDirectReader(AbstractResumeDataReader):
     def consume_one_section(self, blackholeinterp):
         self.blackholeinterp = blackholeinterp
         info = blackholeinterp.get_current_position_info()
-        self._prepare_next_section(info)
+        self._prepare_next_section(info, blackholeinterp.jitcode)
 
     def consume_virtualref_info(self, vrefinfo):
         # we have to decode a list of references containing pairs

@@ -5,6 +5,8 @@ The rest, dealing with variables in optimized ways, is in nestedscope.py.
 """
 
 from rpython.rlib import jit, rstackovf
+from rpython.rlib.nonconst import NonConstant
+from rpython.rlib.pe import PEDriver
 from rpython.rlib.debug import check_nonneg
 from rpython.rlib.objectmodel import (we_are_translated, always_inline,
         dont_inline, not_rpython)
@@ -48,6 +50,41 @@ def binaryoperation(operationname):
 opcodedesc = bytecode_spec.opcodedesc
 HAVE_ARGUMENT = bytecode_spec.HAVE_ARGUMENT
 
+class BreakUnrolled(Exception):
+    """Signals a generic BREAK_LOOP; a template's exits can't include it."""
+
+
+class PcMoved(Exception):
+    """A trace hook moved the pc, so JUMP_ABSOLUTE's target is not oparg."""
+
+
+# Sentinel splits: not late-static, so the residual program ends here.
+PE_LEAVE = r_uint(-1)
+PE_RETURN = r_uint(-2)
+
+# Synthetic opcode for "no template covers this" (real opcodes stay <~150).
+PE_LEAVE_OPCODE = 254
+
+
+def _residual_exit(frame, next_instr):
+    # The frame outlives this exit, so it must be written back now.
+    jit.hint(frame, force_virtualizable=True)
+    return pyframe.W_ResidualExit(next_instr)
+
+
+def _worth_generating(program, code):
+    """Decline a program that is nothing but the synthetic leave fallback."""
+    if program.leave_blocks == len(program.blocks):
+        return False
+    return True
+
+
+# pc/instr_start/pycode names are fixed: the machinery looks holes up by name.
+pedriver = PEDriver(static="opcode", split="pc",
+                    holes="oparg instr_start break_target pycode",
+                    worth_generating=_worth_generating)
+
+
 class __extend__(pyframe.PyFrame):
     """A PyFrame that knows about interpretation of standard Python opcodes
     minus the ones related to nested scopes."""
@@ -61,14 +98,22 @@ class __extend__(pyframe.PyFrame):
 
         try:
             while True:
-                next_instr = self.handle_bytecode(co_code, next_instr, ec)
+                next_instr = self.handle_bytecode(
+                    pycode, co_code, next_instr, ec,
+                    self.get_is_being_profiled())
         except ExitFrame:
             self.last_exception = None
             return self.popvalue()
 
-    def handle_bytecode(self, co_code, next_instr, ec):
+    def handle_bytecode(self, pycode, co_code, next_instr, ec,
+                        is_being_profiled):
         try:
-            next_instr = self.dispatch_bytecode(co_code, next_instr, ec)
+            next_instr = self.dispatch_bytecode(
+                pycode, co_code, next_instr, ec, is_being_profiled)
+        except PcMoved:
+            next_instr = r_uint(self.last_instr)
+        except BreakUnrolled:
+            next_instr = self.unrollstack_and_jump(SBreakLoop.singleton)
         except OperationError as operr:
             next_instr = self.handle_operation_error(ec, operr)
         except RaiseWithExplicitTraceback as e:
@@ -97,6 +142,7 @@ class __extend__(pyframe.PyFrame):
         return self.handle_operation_error(ec, operr)
 
     def handle_operation_error(self, ec, operr, attach_tb=True):
+        operr.pe_frame = self
         if attach_tb:
             if 1:
                 # xxx this is a hack.  It allows bytecode_trace() to
@@ -144,7 +190,8 @@ class __extend__(pyframe.PyFrame):
         return self.space.call_function(w_func, w_typ, w_val, w_tb)
 
     @jit.unroll_safe
-    def dispatch_bytecode(self, co_code, next_instr, ec):
+    def dispatch_bytecode(self, pycode, co_code, next_instr, ec,
+                          is_being_profiled):
         while True:
             self.last_instr = intmask(next_instr)
             if jit.we_are_jitted():
@@ -167,6 +214,7 @@ class __extend__(pyframe.PyFrame):
                 if actionflag.decrement_ticker(TICK_COUNTER_STEP) < 0:
                     actionflag.action_dispatcher(ec, self)
                     next_instr = r_uint(self.last_instr)
+            instr_start = next_instr
             opcode = ord(co_code[next_instr])
             next_instr += 1
 
@@ -191,278 +239,330 @@ class __extend__(pyframe.PyFrame):
                 next_instr += 3
                 oparg = (oparg * 65536) | (hi * 256) | lo
 
-            if opcode == opcodedesc.RETURN_VALUE.index:
-                if not self.blockstack_non_empty():
-                    self.frame_finished_execution = True  # for generators
-                    raise Return
-                w_returnvalue = self.popvalue()
-                block = self.unrollstack(SReturnValue.kind)
-                if block is None:
-                    self.pushvalue(w_returnvalue)
-                    raise Return
-                else:
-                    unroller = SReturnValue(w_returnvalue)
-                    next_instr = block.handle(self, unroller)
-                    return next_instr    # now inside a 'finally' block
-            elif opcode == opcodedesc.END_FINALLY.index:
-                unroller = self.end_finally()
-                if isinstance(unroller, SuspendedUnroller):
-                    # go on unrolling the stack
-                    block = self.unrollstack(unroller.kind)
-                    if block is None:
-                        w_result = unroller.nomoreblocks()
-                        self.pushvalue(w_result)
-                        raise Return
-                    else:
-                        next_instr = block.handle(self, unroller)
-                return next_instr
-            elif opcode == opcodedesc.JUMP_ABSOLUTE.index:
-                return self.jump_absolute(oparg, ec)
-            elif opcode == opcodedesc.BREAK_LOOP.index:
-                next_instr = self.BREAK_LOOP(oparg, next_instr)
-            elif opcode == opcodedesc.CONTINUE_LOOP.index:
-                return self.CONTINUE_LOOP(oparg, next_instr)
-            elif opcode == opcodedesc.FOR_ITER.index:
-                next_instr = self.FOR_ITER(oparg, next_instr)
-            elif opcode == opcodedesc.JUMP_FORWARD.index:
-                next_instr = self.JUMP_FORWARD(oparg, next_instr)
-            elif opcode == opcodedesc.JUMP_IF_FALSE_OR_POP.index:
-                next_instr = self.JUMP_IF_FALSE_OR_POP(oparg, next_instr)
-            elif opcode == opcodedesc.JUMP_IF_NOT_DEBUG.index:
-                next_instr = self.JUMP_IF_NOT_DEBUG(oparg, next_instr)
-            elif opcode == opcodedesc.JUMP_IF_TRUE_OR_POP.index:
-                next_instr = self.JUMP_IF_TRUE_OR_POP(oparg, next_instr)
-            elif opcode == opcodedesc.POP_JUMP_IF_FALSE.index:
-                next_instr = self.POP_JUMP_IF_FALSE(oparg, next_instr)
-            elif opcode == opcodedesc.POP_JUMP_IF_TRUE.index:
-                next_instr = self.POP_JUMP_IF_TRUE(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_ADD.index:
-                self.BINARY_ADD(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_AND.index:
-                self.BINARY_AND(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_DIVIDE.index:
-                self.BINARY_DIVIDE(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_FLOOR_DIVIDE.index:
-                self.BINARY_FLOOR_DIVIDE(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_LSHIFT.index:
-                self.BINARY_LSHIFT(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_MODULO.index:
-                self.BINARY_MODULO(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_MULTIPLY.index:
-                self.BINARY_MULTIPLY(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_OR.index:
-                self.BINARY_OR(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_POWER.index:
-                self.BINARY_POWER(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_RSHIFT.index:
-                self.BINARY_RSHIFT(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_SUBSCR.index:
-                self.BINARY_SUBSCR(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_SUBTRACT.index:
-                self.BINARY_SUBTRACT(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_TRUE_DIVIDE.index:
-                self.BINARY_TRUE_DIVIDE(oparg, next_instr)
-            elif opcode == opcodedesc.BINARY_XOR.index:
-                self.BINARY_XOR(oparg, next_instr)
-            elif opcode == opcodedesc.BUILD_CLASS.index:
-                self.BUILD_CLASS(oparg, next_instr)
-            elif opcode == opcodedesc.BUILD_LIST.index:
-                self.BUILD_LIST(oparg, next_instr)
-            elif opcode == opcodedesc.BUILD_LIST_FROM_ARG.index:
-                self.BUILD_LIST_FROM_ARG(oparg, next_instr)
-            elif opcode == opcodedesc.BUILD_MAP.index:
-                self.BUILD_MAP(oparg, next_instr)
-            elif opcode == opcodedesc.BUILD_SET.index:
-                self.BUILD_SET(oparg, next_instr)
-            elif opcode == opcodedesc.BUILD_SLICE.index:
-                self.BUILD_SLICE(oparg, next_instr)
-            elif opcode == opcodedesc.BUILD_TUPLE.index:
-                self.BUILD_TUPLE(oparg, next_instr)
-            elif opcode == opcodedesc.CALL_FUNCTION.index:
-                self.CALL_FUNCTION(oparg, next_instr)
-            elif opcode == opcodedesc.CALL_FUNCTION_KW.index:
-                self.CALL_FUNCTION_KW(oparg, next_instr)
-            elif opcode == opcodedesc.CALL_FUNCTION_VAR.index:
-                self.CALL_FUNCTION_VAR(oparg, next_instr)
-            elif opcode == opcodedesc.CALL_FUNCTION_VAR_KW.index:
-                self.CALL_FUNCTION_VAR_KW(oparg, next_instr)
-            elif opcode == opcodedesc.CALL_METHOD.index:
-                self.CALL_METHOD(oparg, next_instr)
-            elif opcode == opcodedesc.COMPARE_OP.index:
-                self.COMPARE_OP(oparg, next_instr)
-            elif opcode == opcodedesc.DELETE_ATTR.index:
-                self.DELETE_ATTR(oparg, next_instr)
-            elif opcode == opcodedesc.DELETE_FAST.index:
-                self.DELETE_FAST(oparg, next_instr)
-            elif opcode == opcodedesc.DELETE_GLOBAL.index:
-                self.DELETE_GLOBAL(oparg, next_instr)
-            elif opcode == opcodedesc.DELETE_NAME.index:
-                self.DELETE_NAME(oparg, next_instr)
-            elif opcode == opcodedesc.DELETE_SLICE_0.index:
-                self.DELETE_SLICE_0(oparg, next_instr)
-            elif opcode == opcodedesc.DELETE_SLICE_1.index:
-                self.DELETE_SLICE_1(oparg, next_instr)
-            elif opcode == opcodedesc.DELETE_SLICE_2.index:
-                self.DELETE_SLICE_2(oparg, next_instr)
-            elif opcode == opcodedesc.DELETE_SLICE_3.index:
-                self.DELETE_SLICE_3(oparg, next_instr)
-            elif opcode == opcodedesc.DELETE_SUBSCR.index:
-                self.DELETE_SUBSCR(oparg, next_instr)
-            elif opcode == opcodedesc.DUP_TOP.index:
-                self.DUP_TOP(oparg, next_instr)
-            elif opcode == opcodedesc.DUP_TOPX.index:
-                self.DUP_TOPX(oparg, next_instr)
-            elif opcode == opcodedesc.EXEC_STMT.index:
-                self.EXEC_STMT(oparg, next_instr)
-            elif opcode == opcodedesc.GET_ITER.index:
-                self.GET_ITER(oparg, next_instr)
-            elif opcode == opcodedesc.IMPORT_FROM.index:
-                self.IMPORT_FROM(oparg, next_instr)
-            elif opcode == opcodedesc.IMPORT_NAME.index:
-                self.IMPORT_NAME(oparg, next_instr)
-            elif opcode == opcodedesc.IMPORT_STAR.index:
-                self.IMPORT_STAR(oparg, next_instr)
-            elif opcode == opcodedesc.INPLACE_ADD.index:
-                self.INPLACE_ADD(oparg, next_instr)
-            elif opcode == opcodedesc.INPLACE_AND.index:
-                self.INPLACE_AND(oparg, next_instr)
-            elif opcode == opcodedesc.INPLACE_DIVIDE.index:
-                self.INPLACE_DIVIDE(oparg, next_instr)
-            elif opcode == opcodedesc.INPLACE_FLOOR_DIVIDE.index:
-                self.INPLACE_FLOOR_DIVIDE(oparg, next_instr)
-            elif opcode == opcodedesc.INPLACE_LSHIFT.index:
-                self.INPLACE_LSHIFT(oparg, next_instr)
-            elif opcode == opcodedesc.INPLACE_MODULO.index:
-                self.INPLACE_MODULO(oparg, next_instr)
-            elif opcode == opcodedesc.INPLACE_MULTIPLY.index:
-                self.INPLACE_MULTIPLY(oparg, next_instr)
-            elif opcode == opcodedesc.INPLACE_OR.index:
-                self.INPLACE_OR(oparg, next_instr)
-            elif opcode == opcodedesc.INPLACE_POWER.index:
-                self.INPLACE_POWER(oparg, next_instr)
-            elif opcode == opcodedesc.INPLACE_RSHIFT.index:
-                self.INPLACE_RSHIFT(oparg, next_instr)
-            elif opcode == opcodedesc.INPLACE_SUBTRACT.index:
-                self.INPLACE_SUBTRACT(oparg, next_instr)
-            elif opcode == opcodedesc.INPLACE_TRUE_DIVIDE.index:
-                self.INPLACE_TRUE_DIVIDE(oparg, next_instr)
-            elif opcode == opcodedesc.INPLACE_XOR.index:
-                self.INPLACE_XOR(oparg, next_instr)
-            elif opcode == opcodedesc.LIST_APPEND.index:
-                self.LIST_APPEND(oparg, next_instr)
-            elif opcode == opcodedesc.LOAD_ATTR.index:
-                self.LOAD_ATTR(oparg, next_instr)
-            elif opcode == opcodedesc.LOAD_CLOSURE.index:
-                self.LOAD_CLOSURE(oparg, next_instr)
-            elif opcode == opcodedesc.LOAD_CONST.index:
-                self.LOAD_CONST(oparg, next_instr)
-            elif opcode == opcodedesc.LOAD_DEREF.index:
-                self.LOAD_DEREF(oparg, next_instr)
-            elif opcode == opcodedesc.LOAD_FAST.index:
-                self.LOAD_FAST(oparg, next_instr)
-            elif opcode == opcodedesc.LOAD_GLOBAL.index:
-                self.LOAD_GLOBAL(oparg, next_instr)
-            elif opcode == opcodedesc.LOAD_LOCALS.index:
-                self.LOAD_LOCALS(oparg, next_instr)
-            elif opcode == opcodedesc.LOAD_NAME.index:
-                self.LOAD_NAME(oparg, next_instr)
-            elif opcode == opcodedesc.LOOKUP_METHOD.index:
-                self.LOOKUP_METHOD(oparg, next_instr)
-            elif opcode == opcodedesc.MAKE_CLOSURE.index:
-                self.MAKE_CLOSURE(oparg, next_instr)
-            elif opcode == opcodedesc.MAKE_FUNCTION.index:
-                self.MAKE_FUNCTION(oparg, next_instr)
-            elif opcode == opcodedesc.MAP_ADD.index:
-                self.MAP_ADD(oparg, next_instr)
-            elif opcode == opcodedesc.NOP.index:
-                self.NOP(oparg, next_instr)
-            elif opcode == opcodedesc.POP_BLOCK.index:
-                self.POP_BLOCK(oparg, next_instr)
-            elif opcode == opcodedesc.POP_TOP.index:
-                self.POP_TOP(oparg, next_instr)
-            elif opcode == opcodedesc.PRINT_EXPR.index:
-                self.PRINT_EXPR(oparg, next_instr)
-            elif opcode == opcodedesc.PRINT_ITEM.index:
-                self.PRINT_ITEM(oparg, next_instr)
-            elif opcode == opcodedesc.PRINT_ITEM_TO.index:
-                self.PRINT_ITEM_TO(oparg, next_instr)
-            elif opcode == opcodedesc.PRINT_NEWLINE.index:
-                self.PRINT_NEWLINE(oparg, next_instr)
-            elif opcode == opcodedesc.PRINT_NEWLINE_TO.index:
-                self.PRINT_NEWLINE_TO(oparg, next_instr)
-            elif opcode == opcodedesc.RAISE_VARARGS.index:
-                self.RAISE_VARARGS(oparg, next_instr)
-            elif opcode == opcodedesc.ROT_FOUR.index:
-                self.ROT_FOUR(oparg, next_instr)
-            elif opcode == opcodedesc.ROT_THREE.index:
-                self.ROT_THREE(oparg, next_instr)
-            elif opcode == opcodedesc.ROT_TWO.index:
-                self.ROT_TWO(oparg, next_instr)
-            elif opcode == opcodedesc.SETUP_EXCEPT.index:
-                self.SETUP_EXCEPT(oparg, next_instr)
-            elif opcode == opcodedesc.SETUP_FINALLY.index:
-                self.SETUP_FINALLY(oparg, next_instr)
-            elif opcode == opcodedesc.SETUP_LOOP.index:
-                self.SETUP_LOOP(oparg, next_instr)
-            elif opcode == opcodedesc.SETUP_WITH.index:
-                self.SETUP_WITH(oparg, next_instr)
-            elif opcode == opcodedesc.SET_ADD.index:
-                self.SET_ADD(oparg, next_instr)
-            elif opcode == opcodedesc.SLICE_0.index:
-                self.SLICE_0(oparg, next_instr)
-            elif opcode == opcodedesc.SLICE_1.index:
-                self.SLICE_1(oparg, next_instr)
-            elif opcode == opcodedesc.SLICE_2.index:
-                self.SLICE_2(oparg, next_instr)
-            elif opcode == opcodedesc.SLICE_3.index:
-                self.SLICE_3(oparg, next_instr)
-            elif opcode == opcodedesc.STOP_CODE.index:
-                self.STOP_CODE(oparg, next_instr)
-            elif opcode == opcodedesc.STORE_ATTR.index:
-                self.STORE_ATTR(oparg, next_instr)
-            elif opcode == opcodedesc.STORE_DEREF.index:
-                self.STORE_DEREF(oparg, next_instr)
-            elif opcode == opcodedesc.STORE_FAST.index:
-                self.STORE_FAST(oparg, next_instr)
-            elif opcode == opcodedesc.STORE_GLOBAL.index:
-                self.STORE_GLOBAL(oparg, next_instr)
-            elif opcode == opcodedesc.STORE_MAP.index:
-                self.STORE_MAP(oparg, next_instr)
-            elif opcode == opcodedesc.STORE_NAME.index:
-                self.STORE_NAME(oparg, next_instr)
-            elif opcode == opcodedesc.STORE_SLICE_0.index:
-                self.STORE_SLICE_0(oparg, next_instr)
-            elif opcode == opcodedesc.STORE_SLICE_1.index:
-                self.STORE_SLICE_1(oparg, next_instr)
-            elif opcode == opcodedesc.STORE_SLICE_2.index:
-                self.STORE_SLICE_2(oparg, next_instr)
-            elif opcode == opcodedesc.STORE_SLICE_3.index:
-                self.STORE_SLICE_3(oparg, next_instr)
-            elif opcode == opcodedesc.STORE_SUBSCR.index:
-                self.STORE_SUBSCR(oparg, next_instr)
-            elif opcode == opcodedesc.UNARY_CONVERT.index:
-                self.UNARY_CONVERT(oparg, next_instr)
-            elif opcode == opcodedesc.UNARY_INVERT.index:
-                self.UNARY_INVERT(oparg, next_instr)
-            elif opcode == opcodedesc.UNARY_NEGATIVE.index:
-                self.UNARY_NEGATIVE(oparg, next_instr)
-            elif opcode == opcodedesc.UNARY_NOT.index:
-                self.UNARY_NOT(oparg, next_instr)
-            elif opcode == opcodedesc.UNARY_POSITIVE.index:
-                self.UNARY_POSITIVE(oparg, next_instr)
-            elif opcode == opcodedesc.UNPACK_SEQUENCE.index:
-                self.UNPACK_SEQUENCE(oparg, next_instr)
-            elif opcode == opcodedesc.WITH_CLEANUP.index:
-                self.WITH_CLEANUP(oparg, next_instr)
-            elif opcode == opcodedesc.YIELD_VALUE.index:
-                self.YIELD_VALUE(oparg, next_instr)
-            elif opcode == opcodedesc.LOAD_REVDB_VAR.index:
-                self.LOAD_REVDB_VAR(oparg, next_instr)
+            # NonConstant: a literal -1 would fold and hide this branch.
+            if we_are_translated():
+                no_break_target = NonConstant(-1)
             else:
-                self.MISSING_OPCODE(oparg, next_instr)
-
-            if jit.we_are_jitted():
+                no_break_target = -1
+            split, w_res = self.interp_step(
+                opcode, oparg, next_instr, instr_start, no_break_target,
+                pycode, is_being_profiled, ec)
+            if split == PE_RETURN:
+                raise Return
+            if split == PE_LEAVE:
+                assert isinstance(w_res, pyframe.W_ResidualExit)
+                return w_res.next_instr
+            next_instr = split
+            # A backward jump must reach dispatch()'s merge point.
+            if (opcode == opcodedesc.JUMP_ABSOLUTE.index
+                    or jit.we_are_jitted()):
                 return next_instr
+
+    @always_inline
+    def interp_step(self, opcode, oparg, pc, instr_start, break_target,
+                    pycode,
+                    is_being_profiled, ec):
+        """One bytecode's semantics; returns (split, w_result)."""
+        # Direct virtualizable access; else every frame access forces it.
+        self = jit.hint(self, access_directly=True)
+        pedriver.pe_merge_point(self=self, opcode=opcode, oparg=oparg,
+                                pc=pc, instr_start=instr_start,
+                                break_target=break_target, pycode=pycode,
+                                is_being_profiled=is_being_profiled, ec=ec)
+        # A residual program has no other writer, and tracebacks read it.
+        self.last_instr = intmask(instr_start)
+        if opcode == PE_LEAVE_OPCODE:
+            # No template for instr_start: resume the generic loop there.
+            return PE_LEAVE, _residual_exit(self, r_uint(instr_start))
+        if opcode == opcodedesc.RETURN_VALUE.index:
+            if not self.blockstack_non_empty():
+                self.frame_finished_execution = True  # for generators
+                return PE_RETURN, self.peekvalue()
+            w_returnvalue = self.popvalue()
+            block = self.unrollstack(SReturnValue.kind)
+            if block is None:
+                self.pushvalue(w_returnvalue)
+                return PE_RETURN, self.peekvalue()
+            else:
+                unroller = SReturnValue(w_returnvalue)
+                target = block.handle(self, unroller)
+                return PE_LEAVE, _residual_exit(self, target)
+        elif opcode == opcodedesc.END_FINALLY.index:
+            unroller = self.end_finally()
+            # A template's exits must be all Finish or all Continue.
+            if not isinstance(unroller, SuspendedUnroller):
+                return PE_LEAVE, _residual_exit(self, pc)
+            block = self.unrollstack(unroller.kind)
+            if block is None:
+                w_result = unroller.nomoreblocks()
+                self.pushvalue(w_result)
+                return PE_RETURN, self.peekvalue()
+            target = block.handle(self, unroller)
+            return PE_LEAVE, _residual_exit(self, target)
+        elif opcode == opcodedesc.JUMP_ABSOLUTE.index:
+            if self.jump_absolute(oparg, ec):
+                raise PcMoved
+            return r_uint(oparg), None
+        elif opcode == opcodedesc.BREAK_LOOP.index:
+            if break_target < 0:
+                raise BreakUnrolled
+            # Handler-bearing code stays generic, so only loop blocks remain.
+            block = self.pop_block()
+            block.cleanupstack(self)
+            return r_uint(break_target), None
+        elif opcode == opcodedesc.CONTINUE_LOOP.index:
+            target = self.CONTINUE_LOOP(oparg, pc)
+            return PE_LEAVE, _residual_exit(self, target)
+        elif opcode == opcodedesc.FOR_ITER.index:
+            if self.FOR_ITER():
+                return pc + r_uint(oparg), None
+            return pc, None
+        elif opcode == opcodedesc.JUMP_FORWARD.index:
+            pc = self.JUMP_FORWARD(oparg, pc)
+        elif opcode == opcodedesc.JUMP_IF_FALSE_OR_POP.index:
+            if self.JUMP_IF_FALSE_OR_POP():
+                return r_uint(oparg), None
+            return pc, None
+        elif opcode == opcodedesc.JUMP_IF_NOT_DEBUG.index:
+            pc = self.JUMP_IF_NOT_DEBUG(oparg, pc)
+        elif opcode == opcodedesc.JUMP_IF_TRUE_OR_POP.index:
+            if self.JUMP_IF_TRUE_OR_POP():
+                return r_uint(oparg), None
+            return pc, None
+        elif opcode == opcodedesc.POP_JUMP_IF_FALSE.index:
+            if self.POP_JUMP_IF_FALSE():
+                return r_uint(oparg), None
+            return pc, None
+        elif opcode == opcodedesc.POP_JUMP_IF_TRUE.index:
+            if self.POP_JUMP_IF_TRUE():
+                return r_uint(oparg), None
+            return pc, None
+        elif opcode == opcodedesc.BINARY_ADD.index:
+            self.BINARY_ADD(oparg, pc)
+        elif opcode == opcodedesc.BINARY_AND.index:
+            self.BINARY_AND(oparg, pc)
+        elif opcode == opcodedesc.BINARY_DIVIDE.index:
+            self.BINARY_DIVIDE(oparg, pc)
+        elif opcode == opcodedesc.BINARY_FLOOR_DIVIDE.index:
+            self.BINARY_FLOOR_DIVIDE(oparg, pc)
+        elif opcode == opcodedesc.BINARY_LSHIFT.index:
+            self.BINARY_LSHIFT(oparg, pc)
+        elif opcode == opcodedesc.BINARY_MODULO.index:
+            self.BINARY_MODULO(oparg, pc)
+        elif opcode == opcodedesc.BINARY_MULTIPLY.index:
+            self.BINARY_MULTIPLY(oparg, pc)
+        elif opcode == opcodedesc.BINARY_OR.index:
+            self.BINARY_OR(oparg, pc)
+        elif opcode == opcodedesc.BINARY_POWER.index:
+            self.BINARY_POWER(oparg, pc)
+        elif opcode == opcodedesc.BINARY_RSHIFT.index:
+            self.BINARY_RSHIFT(oparg, pc)
+        elif opcode == opcodedesc.BINARY_SUBSCR.index:
+            self.BINARY_SUBSCR(oparg, pc)
+        elif opcode == opcodedesc.BINARY_SUBTRACT.index:
+            self.BINARY_SUBTRACT(oparg, pc)
+        elif opcode == opcodedesc.BINARY_TRUE_DIVIDE.index:
+            self.BINARY_TRUE_DIVIDE(oparg, pc)
+        elif opcode == opcodedesc.BINARY_XOR.index:
+            self.BINARY_XOR(oparg, pc)
+        elif opcode == opcodedesc.BUILD_CLASS.index:
+            self.BUILD_CLASS(oparg, pc)
+        elif opcode == opcodedesc.BUILD_LIST.index:
+            self.BUILD_LIST(oparg, pc)
+        elif opcode == opcodedesc.BUILD_LIST_FROM_ARG.index:
+            self.BUILD_LIST_FROM_ARG(oparg, pc)
+        elif opcode == opcodedesc.BUILD_MAP.index:
+            self.BUILD_MAP(oparg, pc)
+        elif opcode == opcodedesc.BUILD_SET.index:
+            self.BUILD_SET(oparg, pc)
+        elif opcode == opcodedesc.BUILD_SLICE.index:
+            self.BUILD_SLICE(oparg, pc)
+        elif opcode == opcodedesc.BUILD_TUPLE.index:
+            self.BUILD_TUPLE(oparg, pc)
+        elif opcode == opcodedesc.CALL_FUNCTION.index:
+            self.CALL_FUNCTION(oparg, pc)
+        elif opcode == opcodedesc.CALL_FUNCTION_KW.index:
+            self.CALL_FUNCTION_KW(oparg, pc)
+        elif opcode == opcodedesc.CALL_FUNCTION_VAR.index:
+            self.CALL_FUNCTION_VAR(oparg, pc)
+        elif opcode == opcodedesc.CALL_FUNCTION_VAR_KW.index:
+            self.CALL_FUNCTION_VAR_KW(oparg, pc)
+        elif opcode == opcodedesc.CALL_METHOD.index:
+            self.CALL_METHOD(oparg, pc)
+        elif opcode == opcodedesc.COMPARE_OP.index:
+            self.COMPARE_OP(oparg, pc)
+        elif opcode == opcodedesc.DELETE_ATTR.index:
+            self.DELETE_ATTR(oparg, pc)
+        elif opcode == opcodedesc.DELETE_FAST.index:
+            self.DELETE_FAST(oparg, pc)
+        elif opcode == opcodedesc.DELETE_GLOBAL.index:
+            self.DELETE_GLOBAL(oparg, pc)
+        elif opcode == opcodedesc.DELETE_NAME.index:
+            self.DELETE_NAME(oparg, pc)
+        elif opcode == opcodedesc.DELETE_SLICE_0.index:
+            self.DELETE_SLICE_0(oparg, pc)
+        elif opcode == opcodedesc.DELETE_SLICE_1.index:
+            self.DELETE_SLICE_1(oparg, pc)
+        elif opcode == opcodedesc.DELETE_SLICE_2.index:
+            self.DELETE_SLICE_2(oparg, pc)
+        elif opcode == opcodedesc.DELETE_SLICE_3.index:
+            self.DELETE_SLICE_3(oparg, pc)
+        elif opcode == opcodedesc.DELETE_SUBSCR.index:
+            self.DELETE_SUBSCR(oparg, pc)
+        elif opcode == opcodedesc.DUP_TOP.index:
+            self.DUP_TOP(oparg, pc)
+        elif opcode == opcodedesc.DUP_TOPX.index:
+            self.DUP_TOPX(oparg, pc)
+        elif opcode == opcodedesc.EXEC_STMT.index:
+            self.EXEC_STMT(oparg, pc)
+        elif opcode == opcodedesc.GET_ITER.index:
+            self.GET_ITER(oparg, pc)
+        elif opcode == opcodedesc.IMPORT_FROM.index:
+            self.IMPORT_FROM(oparg, pc)
+        elif opcode == opcodedesc.IMPORT_NAME.index:
+            self.IMPORT_NAME(oparg, pc)
+        elif opcode == opcodedesc.IMPORT_STAR.index:
+            self.IMPORT_STAR(oparg, pc)
+        elif opcode == opcodedesc.INPLACE_ADD.index:
+            self.INPLACE_ADD(oparg, pc)
+        elif opcode == opcodedesc.INPLACE_AND.index:
+            self.INPLACE_AND(oparg, pc)
+        elif opcode == opcodedesc.INPLACE_DIVIDE.index:
+            self.INPLACE_DIVIDE(oparg, pc)
+        elif opcode == opcodedesc.INPLACE_FLOOR_DIVIDE.index:
+            self.INPLACE_FLOOR_DIVIDE(oparg, pc)
+        elif opcode == opcodedesc.INPLACE_LSHIFT.index:
+            self.INPLACE_LSHIFT(oparg, pc)
+        elif opcode == opcodedesc.INPLACE_MODULO.index:
+            self.INPLACE_MODULO(oparg, pc)
+        elif opcode == opcodedesc.INPLACE_MULTIPLY.index:
+            self.INPLACE_MULTIPLY(oparg, pc)
+        elif opcode == opcodedesc.INPLACE_OR.index:
+            self.INPLACE_OR(oparg, pc)
+        elif opcode == opcodedesc.INPLACE_POWER.index:
+            self.INPLACE_POWER(oparg, pc)
+        elif opcode == opcodedesc.INPLACE_RSHIFT.index:
+            self.INPLACE_RSHIFT(oparg, pc)
+        elif opcode == opcodedesc.INPLACE_SUBTRACT.index:
+            self.INPLACE_SUBTRACT(oparg, pc)
+        elif opcode == opcodedesc.INPLACE_TRUE_DIVIDE.index:
+            self.INPLACE_TRUE_DIVIDE(oparg, pc)
+        elif opcode == opcodedesc.INPLACE_XOR.index:
+            self.INPLACE_XOR(oparg, pc)
+        elif opcode == opcodedesc.LIST_APPEND.index:
+            self.LIST_APPEND(oparg, pc)
+        elif opcode == opcodedesc.LOAD_ATTR.index:
+            self.LOAD_ATTR(oparg, pc)
+        elif opcode == opcodedesc.LOAD_CLOSURE.index:
+            self.LOAD_CLOSURE(oparg, pc)
+        elif opcode == opcodedesc.LOAD_CONST.index:
+            self.LOAD_CONST(oparg, pc)
+        elif opcode == opcodedesc.LOAD_DEREF.index:
+            self.LOAD_DEREF(oparg, pc)
+        elif opcode == opcodedesc.LOAD_FAST.index:
+            self.LOAD_FAST(oparg, pc)
+        elif opcode == opcodedesc.LOAD_GLOBAL.index:
+            self.LOAD_GLOBAL(oparg, pc)
+        elif opcode == opcodedesc.LOAD_LOCALS.index:
+            self.LOAD_LOCALS(oparg, pc)
+        elif opcode == opcodedesc.LOAD_NAME.index:
+            self.LOAD_NAME(oparg, pc)
+        elif opcode == opcodedesc.LOOKUP_METHOD.index:
+            self.LOOKUP_METHOD(oparg, pc)
+        elif opcode == opcodedesc.MAKE_CLOSURE.index:
+            self.MAKE_CLOSURE(oparg, pc)
+        elif opcode == opcodedesc.MAKE_FUNCTION.index:
+            self.MAKE_FUNCTION(oparg, pc)
+        elif opcode == opcodedesc.MAP_ADD.index:
+            self.MAP_ADD(oparg, pc)
+        elif opcode == opcodedesc.NOP.index:
+            self.NOP(oparg, pc)
+        elif opcode == opcodedesc.POP_BLOCK.index:
+            self.POP_BLOCK(oparg, pc)
+        elif opcode == opcodedesc.POP_TOP.index:
+            self.POP_TOP(oparg, pc)
+        elif opcode == opcodedesc.PRINT_EXPR.index:
+            self.PRINT_EXPR(oparg, pc)
+        elif opcode == opcodedesc.PRINT_ITEM.index:
+            self.PRINT_ITEM(oparg, pc)
+        elif opcode == opcodedesc.PRINT_ITEM_TO.index:
+            self.PRINT_ITEM_TO(oparg, pc)
+        elif opcode == opcodedesc.PRINT_NEWLINE.index:
+            self.PRINT_NEWLINE(oparg, pc)
+        elif opcode == opcodedesc.PRINT_NEWLINE_TO.index:
+            self.PRINT_NEWLINE_TO(oparg, pc)
+        elif opcode == opcodedesc.RAISE_VARARGS.index:
+            self.RAISE_VARARGS(oparg, pc)
+        elif opcode == opcodedesc.ROT_FOUR.index:
+            self.ROT_FOUR(oparg, pc)
+        elif opcode == opcodedesc.ROT_THREE.index:
+            self.ROT_THREE(oparg, pc)
+        elif opcode == opcodedesc.ROT_TWO.index:
+            self.ROT_TWO(oparg, pc)
+        elif opcode == opcodedesc.SETUP_EXCEPT.index:
+            self.SETUP_EXCEPT(oparg, pc)
+        elif opcode == opcodedesc.SETUP_FINALLY.index:
+            self.SETUP_FINALLY(oparg, pc)
+        elif opcode == opcodedesc.SETUP_LOOP.index:
+            self.SETUP_LOOP(oparg, pc)
+        elif opcode == opcodedesc.SETUP_WITH.index:
+            self.SETUP_WITH(oparg, pc)
+        elif opcode == opcodedesc.SET_ADD.index:
+            self.SET_ADD(oparg, pc)
+        elif opcode == opcodedesc.SLICE_0.index:
+            self.SLICE_0(oparg, pc)
+        elif opcode == opcodedesc.SLICE_1.index:
+            self.SLICE_1(oparg, pc)
+        elif opcode == opcodedesc.SLICE_2.index:
+            self.SLICE_2(oparg, pc)
+        elif opcode == opcodedesc.SLICE_3.index:
+            self.SLICE_3(oparg, pc)
+        elif opcode == opcodedesc.STOP_CODE.index:
+            self.STOP_CODE(oparg, pc)
+        elif opcode == opcodedesc.STORE_ATTR.index:
+            self.STORE_ATTR(oparg, pc)
+        elif opcode == opcodedesc.STORE_DEREF.index:
+            self.STORE_DEREF(oparg, pc)
+        elif opcode == opcodedesc.STORE_FAST.index:
+            self.STORE_FAST(oparg, pc)
+        elif opcode == opcodedesc.STORE_GLOBAL.index:
+            self.STORE_GLOBAL(oparg, pc)
+        elif opcode == opcodedesc.STORE_MAP.index:
+            self.STORE_MAP(oparg, pc)
+        elif opcode == opcodedesc.STORE_NAME.index:
+            self.STORE_NAME(oparg, pc)
+        elif opcode == opcodedesc.STORE_SLICE_0.index:
+            self.STORE_SLICE_0(oparg, pc)
+        elif opcode == opcodedesc.STORE_SLICE_1.index:
+            self.STORE_SLICE_1(oparg, pc)
+        elif opcode == opcodedesc.STORE_SLICE_2.index:
+            self.STORE_SLICE_2(oparg, pc)
+        elif opcode == opcodedesc.STORE_SLICE_3.index:
+            self.STORE_SLICE_3(oparg, pc)
+        elif opcode == opcodedesc.STORE_SUBSCR.index:
+            self.STORE_SUBSCR(oparg, pc)
+        elif opcode == opcodedesc.UNARY_CONVERT.index:
+            self.UNARY_CONVERT(oparg, pc)
+        elif opcode == opcodedesc.UNARY_INVERT.index:
+            self.UNARY_INVERT(oparg, pc)
+        elif opcode == opcodedesc.UNARY_NEGATIVE.index:
+            self.UNARY_NEGATIVE(oparg, pc)
+        elif opcode == opcodedesc.UNARY_NOT.index:
+            self.UNARY_NOT(oparg, pc)
+        elif opcode == opcodedesc.UNARY_POSITIVE.index:
+            self.UNARY_POSITIVE(oparg, pc)
+        elif opcode == opcodedesc.UNPACK_SEQUENCE.index:
+            self.UNPACK_SEQUENCE(oparg, pc)
+        elif opcode == opcodedesc.WITH_CLEANUP.index:
+            self.WITH_CLEANUP(oparg, pc)
+        elif opcode == opcodedesc.YIELD_VALUE.index:
+            self.YIELD_VALUE(oparg, pc)
+        elif opcode == opcodedesc.LOAD_REVDB_VAR.index:
+            self.LOAD_REVDB_VAR(oparg, pc)
+        else:
+            self.MISSING_OPCODE(oparg, pc)
+
+        return pc, None
 
     @jit.unroll_safe
     def unrollstack(self, unroller_kind):
@@ -1096,41 +1196,38 @@ class __extend__(pyframe.PyFrame):
         jump_backward(self, jumpto)
 
     def jump_absolute(self, jumpto, ec):
+        """True when a trace hook moved the pc; it is then in last_instr."""
         # this function is overridden by pypy.module.pypyjit.interp_jit
         check_nonneg(jumpto)
         if self.space.reverse_debugging:
             self._revdb_jump_backward(jumpto)
-        return jumpto
+        return False
 
     def JUMP_FORWARD(self, jumpby, next_instr):
         next_instr += jumpby
         return next_instr
 
-    def POP_JUMP_IF_FALSE(self, target, next_instr):
+    def POP_JUMP_IF_FALSE(self):
         w_value = self.popvalue()
-        if not self.space.is_true(w_value):
-            return target
-        return next_instr
+        return not self.space.is_true(w_value)
 
-    def POP_JUMP_IF_TRUE(self, target, next_instr):
+    def POP_JUMP_IF_TRUE(self):
         w_value = self.popvalue()
-        if self.space.is_true(w_value):
-            return target
-        return next_instr
+        return self.space.is_true(w_value)
 
-    def JUMP_IF_FALSE_OR_POP(self, target, next_instr):
+    def JUMP_IF_FALSE_OR_POP(self):
         w_value = self.peekvalue()
         if not self.space.is_true(w_value):
-            return target
+            return True
         self.popvalue()
-        return next_instr
+        return False
 
-    def JUMP_IF_TRUE_OR_POP(self, target, next_instr):
+    def JUMP_IF_TRUE_OR_POP(self):
         w_value = self.peekvalue()
         if self.space.is_true(w_value):
-            return target
+            return True
         self.popvalue()
-        return next_instr
+        return False
 
     def JUMP_IF_NOT_DEBUG(self, jumpby, next_instr):
         if not self.space.sys.debug:
@@ -1142,7 +1239,8 @@ class __extend__(pyframe.PyFrame):
         w_iterator = self.space.iter(w_iterable)
         self.pushvalue(w_iterator)
 
-    def FOR_ITER(self, jumpby, next_instr):
+    def FOR_ITER(self):
+        """Advance the iterator; True when it was exhausted and we jump."""
         w_iterator = self.peekvalue()
         try:
             w_nextitem = self.space.next(w_iterator)
@@ -1151,10 +1249,9 @@ class __extend__(pyframe.PyFrame):
                 raise
             # iterator exhausted
             self.popvalue()
-            next_instr += jumpby
-        else:
-            self.pushvalue(w_nextitem)
-        return next_instr
+            return True
+        self.pushvalue(w_nextitem)
+        return False
 
     def SETUP_LOOP(self, offsettoend, next_instr):
         block = LoopBlock(self, next_instr + offsettoend, self.lastblock)
@@ -1491,7 +1588,9 @@ class LoopBlock(FrameBlock):
             frame.append_block(self)
             jumpto = unroller.jump_to
             ec = frame.space.getexecutioncontext()
-            return r_uint(frame.jump_absolute(jumpto, ec))
+            if frame.jump_absolute(jumpto, ec):
+                return r_uint(frame.last_instr)
+            return r_uint(jumpto)
         else:
             # jump to the end of the loop
             self.cleanupstack(frame)

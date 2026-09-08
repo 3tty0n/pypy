@@ -1,8 +1,9 @@
 import weakref
-from rpython.rtyper.lltypesystem import lltype, llmemory
+from rpython.rtyper.lltypesystem import lltype, llmemory, rffi
 from rpython.rtyper.annlowlevel import (
     cast_instance_to_gcref, cast_gcref_to_instance)
 from rpython.rlib.objectmodel import we_are_translated
+from rpython.jit.metainterp.jitprof import Profiler
 from rpython.rlib.debug import (
     debug_start, debug_stop, debug_print, have_debug_prints)
 from rpython.rlib.rarithmetic import r_uint, intmask
@@ -51,12 +52,15 @@ class CompileData(object):
 
         self.box_names_memo = memo
         optimizations = build_opt_chain(self.enable_opts)
+        profiler = metainterp_sd.profiler
+        profiler.start_optimizing()
         debug_start("jit-optimize")
         try:
             return self.optimize(metainterp_sd, jitdriver_sd, optimizations)
         finally:
             self.forget_optimization_info()
             debug_stop("jit-optimize")
+            profiler.end_optimizing()
 
 
 class PreambleCompileData(CompileData):
@@ -163,9 +167,11 @@ def create_empty_loop(metainterp, name_prefix=''):
     return loop
 
 
-def make_jitcell_token(jitdriver_sd):
+def make_jitcell_token(jitdriver_sd, pe_origin=False, greenkey=None):
     jitcell_token = JitCellToken()
     jitcell_token.outermost_jitdriver_sd = jitdriver_sd
+    jitcell_token.pe_origin = pe_origin
+    jitcell_token.greenkey = greenkey
     return jitcell_token
 
 def record_loop_or_bridge(metainterp_sd, loop):
@@ -180,6 +186,7 @@ def record_loop_or_bridge(metainterp_sd, loop):
     wref = weakref.ref(original_jitcell_token)
     clt = original_jitcell_token.compiled_loop_token
     clt.loop_token_wref = wref
+    clt.pe_origin = original_jitcell_token.pe_origin
     for op in loop.operations:
         descr = op.getdescr()
         if isinstance(descr, ResumeDescr):
@@ -217,7 +224,8 @@ def compile_simple_loop(metainterp, greenkey, trace, runtime_args, enable_opts,
                         cut_at, patch_jumpop_at_end=True):
     jitdriver_sd = metainterp.jitdriver_sd
     metainterp_sd = metainterp.staticdata
-    jitcell_token = make_jitcell_token(jitdriver_sd)
+    jitcell_token = make_jitcell_token(jitdriver_sd,
+                                       metainterp.pe_root_linked, greenkey)
     call_pure_results = metainterp.call_pure_results
     data = SimpleCompileData(trace, call_pure_results=call_pure_results,
                              enable_opts=enable_opts)
@@ -263,7 +271,8 @@ def compile_loop(metainterp, greenkey, start, inputargs, jumpargs,
             faildescr=None, entry_bridge=False)
     #
     enable_opts = jitdriver_sd.warmstate.enable_opts
-    jitcell_token = make_jitcell_token(jitdriver_sd)
+    jitcell_token = make_jitcell_token(jitdriver_sd,
+                                       metainterp.pe_root_linked, greenkey)
     cut_at = history.get_trace_position()
     history.record(rop.JUMP, jumpargs, None, descr=jitcell_token)
     if start != (0, 0, 0, 0, 0):
@@ -501,9 +510,21 @@ def forget_optimization_info(lst, reset_values=False):
         if reset_values:
             item.reset_value()
 
+def stamp_guard_tails(operations):
+    # tail_ops feeds Profiler.bridge_break_even's cost model.
+    n = len(operations)
+    for i in range(n):
+        op = operations[i]
+        if op.is_guard():
+            descr = op.getdescr()
+            if isinstance(descr, AbstractResumeGuardDescr):
+                descr.tail_ops = n - i
+
+
 def send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, loop, type,
                          orig_inpargs, memo):
     forget_optimization_info(loop.operations)
+    stamp_guard_tails(loop.operations)
     forget_optimization_info(loop.inputargs)
     vinfo = jitdriver_sd.virtualizable_info
     if vinfo is not None:
@@ -569,6 +590,7 @@ def send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, loop, type,
 def send_bridge_to_backend(jitdriver_sd, metainterp_sd, faildescr, inputargs,
                            operations, original_loop_token, memo):
     forget_optimization_info(operations)
+    stamp_guard_tails(operations)
     forget_optimization_info(inputargs)
     if not we_are_translated():
         show_procedures(metainterp_sd)
@@ -679,10 +701,47 @@ class ResumeDescr(AbstractFailDescr):
     def clone(self):
         return self
 
+class BridgeEntries(object):
+    """Entries into the bridges of one guard (or of one guard_value
+    value): each is a failure the bridge replaced, so the survivor
+    histograms keep counting it instead of seeing the guard die."""
+
+    def __init__(self, credited):
+        self.counter = lltype.malloc(rffi.CArray(lltype.Signed), 1,
+                                     flavor='raw', track_allocation=False)
+        self.counter[0] = 0
+        self.credited = credited
+
+    def increment_op(self):
+        adr = rffi.cast(lltype.Signed, self.counter)
+        return ResOperation(rop.INCREMENT_DEBUG_COUNTER, [ConstInt(adr)])
+
+    def credit(self, direct, hist):
+        """Record the 2**k milestones crossed since the last sweep, with
+        'direct' the failures the guard counted itself."""
+        total = direct + self.counter[0]
+        Profiler.note_milestones(self.credited, total, hist)
+        self.credited = total
+        return total
+
+
 class AbstractResumeGuardDescr(ResumeDescr):
-    _attrs_ = ('status',)
+    _attrs_ = ('status', 'abort_count', 'tail_ops', 'fail_count',
+               'fails_since_tick', 'value_counts', 'value_hist',
+               'entries', 'value_entries', 'bridge_value')
 
     status = r_uint(0)
+    tail_ops = 0
+    # Aborted bridges from this guard; each one halves tick eagerness.
+    abort_count = 0
+    ABORT_COUNT_MAX = 16
+    fail_count = 0
+    fails_since_tick = 0
+    value_counts = None
+    value_hist = None
+    entries = None
+    value_entries = None
+    bridge_value = 0
 
     ST_BUSY_FLAG    = 0x01     # if set, busy tracing from the guard
     ST_TYPE_MASK    = 0x06     # mask for the type (TY_xxx)
@@ -709,11 +768,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
                 self.done_compiling()
         else:
             from rpython.jit.metainterp.blackhole import resume_in_blackhole
-            if isinstance(self, ResumeGuardCopiedDescr):
-                resume_in_blackhole(metainterp_sd, jitdriver_sd, self.prev, deadframe)
-            else:
-                assert isinstance(self, ResumeGuardDescr)
-                resume_in_blackhole(metainterp_sd, jitdriver_sd, self, deadframe)
+            resume_in_blackhole(metainterp_sd, jitdriver_sd,
+                                self.get_resumestorage(), deadframe)
         assert 0, "unreachable"
 
     def _trace_and_compile_from_bridge(self, deadframe, metainterp_sd,
@@ -736,14 +792,21 @@ class AbstractResumeGuardDescr(ResumeDescr):
         return self.status & self.ST_SHIFT_MASK
 
     def must_compile(self, deadframe, metainterp_sd, jitdriver_sd):
-        jitcounter = metainterp_sd.warmrunnerdesc.jitcounter
+        self.fail_count += 1
+        if self.entries is None:
+            metainterp_sd.profiler.note_guard_failure(self.fail_count)
         #
         if self.status & (self.ST_BUSY_FLAG | self.ST_TYPE_MASK) == 0:
-            # common case: this is not a guard_value, and we are not
-            # already busy tracing.  The rest of self.status stores a
-            # valid per-guard index in the jitcounter.
-            hash = self.status
-            assert hash == (self.status & self.ST_SHIFT_MASK)
+            # common case: not a guard_value and not busy tracing.  Decide
+            # on the exact per-guard count: the shared jitcounter decays
+            # and evicts, so its "N failures" took thousands in practice.
+            increment = self._tick_increment(metainterp_sd, jitdriver_sd,
+                                             self.fail_count, None)
+            self.fails_since_tick += 1
+            if self.fails_since_tick * increment < 1.0:
+                return False
+            self.fails_since_tick = 0
+            return True
         #
         # do we have the BUSY flag?  If so, we're tracing right now, e.g. in an
         # outer invocation of the same function, so don't trace again for now.
@@ -751,8 +814,6 @@ class AbstractResumeGuardDescr(ResumeDescr):
             return False
         #
         else:    # we have a GUARD_VALUE that fails.
-            from rpython.rlib.objectmodel import current_object_addr_as_int
-
             index = intmask(self.status >> self.ST_SHIFT)
             typetag = intmask(self.status & self.ST_TYPE_MASK)
 
@@ -777,11 +838,59 @@ class AbstractResumeGuardDescr(ResumeDescr):
                     intval = llmemory.cast_adr_to_int(
                         llmemory.cast_int_to_adr(intval), "forced")
 
-            hash = r_uint(current_object_addr_as_int(self) * 777767777 +
-                          intval * 1442968193)
-        #
-        increment = jitdriver_sd.warmstate.increment_trace_eagerness
-        return jitcounter.tick(hash, increment)
+            # Exact per-value count: the shared jitcounter evicts entries,
+            # so a polymorphic guard_value never reached its eagerness.
+            if self.value_counts is None:
+                self.value_counts = {}
+                self.value_hist = [0] * Profiler.HIST_BUCKETS
+            count = self.value_counts.get(intval, 0) + 1
+            self.value_counts[intval] = count
+            self.bridge_value = intval
+            if count & (count - 1) == 0 and (self.value_entries is None
+                    or intval not in self.value_entries):
+                self.value_hist[Profiler._bucket(count)] += 1
+            increment = self._tick_increment(metainterp_sd, jitdriver_sd,
+                                             count, self.value_hist)
+            return count * increment >= 1.0
+
+    def _tick_increment(self, metainterp_sd, jitdriver_sd, count, hist):
+        """How much one failure heats this guard's counter: 1.0 bridges
+        right away, 1/N after N failures.  It starts at the jitdriver's
+        eagerness parameter, rises to the measured break-even rate once
+        the cost model has one, jumps to 1.0 when the survivor rule says
+        waiting loses more than bridging risks, and is halved once per
+        bridge already aborted from this guard."""
+        profiler = metainterp_sd.profiler
+        warmstate = jitdriver_sd.warmstate
+        if self.rd_loop_token.pe_origin:
+            increment = warmstate.increment_pe_trace_eagerness
+        else:
+            increment = warmstate.increment_trace_eagerness
+        if increment <= 0.0:
+            return 0.0        # trace_eagerness <= 0: never bridge
+        failures = profiler.bridge_break_even(self.tail_ops)
+        if failures > 0.0:
+            # Measured model available: never lazier than the parameter.
+            if failures < 1.0:
+                failures = 1.0
+            model_increment = 1.0 / failures
+            if model_increment > increment:
+                increment = model_increment
+        horizon = int(1.0 / increment)
+        if hist is None:
+            pays = profiler.bridge_pays_off(count, self.tail_ops, horizon)
+        else:
+            pays = profiler.bridge_pays_off_hist(count, self.tail_ops,
+                                                 horizon, hist)
+        if pays:
+            increment = 1.0
+        if self.abort_count:
+            increment = increment / float(1 << self.abort_count)
+        return increment
+
+    def note_aborted_bridge(self):
+        if self.abort_count < self.ABORT_COUNT_MAX:
+            self.abort_count += 1
 
     def start_compiling(self):
         # start tracing and compiling from this guard.
@@ -789,9 +898,9 @@ class AbstractResumeGuardDescr(ResumeDescr):
 
     def done_compiling(self):
         # done tracing and compiling from this guard.  Note that if the
-        # bridge has not been successfully compiled, the jitcounter for
-        # it was reset to 0 already by jitcounter.tick() and not
-        # incremented at all as long as ST_BUSY_FLAG was set.
+        # bridge has not been successfully compiled, fails_since_tick was
+        # reset to 0 already by must_compile() and not incremented at all
+        # as long as ST_BUSY_FLAG was set.
         self.status &= ~self.ST_BUSY_FLAG
 
     def compile_and_attach(self, metainterp, new_loop, orig_inputargs):
@@ -804,11 +913,41 @@ class AbstractResumeGuardDescr(ResumeDescr):
             self._debug_subinputargs = new_loop.inputargs
             self._debug_suboperations = new_loop.operations
         propagate_original_jitcell_token(new_loop)
+        operations = [self.bridge_entries().increment_op()]
+        operations.extend(new_loop.operations)
         send_bridge_to_backend(metainterp.jitdriver_sd, metainterp.staticdata,
-                               self, inputargs, new_loop.operations,
+                               self, inputargs, operations,
                                new_loop.original_jitcell_token,
                                metainterp.box_names_memo)
+        metainterp.staticdata.profiler.note_bridge(self)
         record_loop_or_bridge(metainterp.staticdata, new_loop)
+
+    def bridge_entries(self):
+        if self.entries is None:
+            self.entries = BridgeEntries(self.fail_count)
+        if not self.status & self.ST_TYPE_MASK:
+            return self.entries
+        if self.value_entries is None:
+            self.value_entries = {}
+        entries = self.value_entries.get(self.bridge_value, None)
+        if entries is None:
+            entries = BridgeEntries(self.value_counts[self.bridge_value])
+            self.value_entries[self.bridge_value] = entries
+        return entries
+
+    def credit_bridge_entries(self, profiler):
+        """Sweep: count this guard's bridge entries as failures."""
+        total = 0
+        if self.value_entries is not None:
+            for intval, entries in self.value_entries.iteritems():
+                entries.credit(self.value_counts[intval], self.value_hist)
+                total += entries.counter[0]
+        else:
+            total = self.entries.counter[0]
+        credited = self.entries.credited
+        self.entries.credited = self.fail_count + total
+        Profiler.note_milestones(credited, self.fail_count + total,
+                                 profiler.fail_hist)
 
     def make_a_counter_per_value(self, guard_value_op, index):
         assert guard_value_op.getopnum() == rop.GUARD_VALUE
@@ -830,7 +969,8 @@ class AbstractResumeGuardDescr(ResumeDescr):
             self.status = hash & self.ST_SHIFT_MASK
 
 class ResumeGuardCopiedDescr(AbstractResumeGuardDescr):
-    _attrs_ = ('status', 'prev')
+    _attrs_ = ('status', 'abort_count', 'tail_ops', 'prev', 'entries',
+               'value_entries', 'bridge_value')
 
     def __init__(self, prev):
         AbstractResumeGuardDescr.__init__(self)
@@ -1010,7 +1150,8 @@ class ResumeFromInterpDescr(ResumeDescr):
         # with completely unoptimized arguments, as in the interpreter.
         metainterp_sd = metainterp.staticdata
         jitdriver_sd = metainterp.jitdriver_sd
-        new_loop.original_jitcell_token = jitcell_token = make_jitcell_token(jitdriver_sd)
+        new_loop.original_jitcell_token = jitcell_token = make_jitcell_token(
+            jitdriver_sd, metainterp.pe_root_linked, self.original_greenkey)
         propagate_original_jitcell_token(new_loop)
         send_loop_to_backend(self.original_greenkey, metainterp.jitdriver_sd,
                              metainterp_sd, new_loop, "entry bridge",

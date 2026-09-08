@@ -1265,10 +1265,17 @@ def get_ctypes_callable(funcptr, calling_conv, natural_arity):
                 # on ie slackware there was need for RTLD_GLOBAL here.
                 # this breaks a lot of things, since passing RTLD_GLOBAL
                 # creates symbol conflicts on C level.
-                clib = dllclass._dlltype(libpath, **load_library_kwargs)
-                cfunc = get_on_lib(clib, funcname)
-                if cfunc is not None:
-                    break
+                try:
+                    clib = dllclass._dlltype(libpath, **load_library_kwargs)
+                except OSError:
+                    # On macOS find_library() hands back a .tbd text stub from
+                    # the SDK, which dlopen() rejects.  Treat an unloadable
+                    # library as missing and fall back to the standard C lib.
+                    not_found.append(libname)
+                else:
+                    cfunc = get_on_lib(clib, funcname)
+                    if cfunc is not None:
+                        break
             else:
                 not_found.append(libname)
 
