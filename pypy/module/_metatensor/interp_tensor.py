@@ -454,3 +454,11 @@ def zeros(space, w_shape, requires_grad=False, w_dtype=None):
     for i in range(t.size):
         h[i] = 0.0
     return W_Tensor(nn.Tensor(t, requires_grad))
+
+
+def kernel_count(space):
+    return space.newint(kernels.counter.n)
+
+
+def launch_count(space):
+    return space.newint(device.launch_count())

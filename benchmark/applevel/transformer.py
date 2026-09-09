@@ -21,26 +21,29 @@ def tb_vector(v):
     return _metatensor.tensor([v] * TB_D)
 
 
-def tb_qkv():
-    dh = TB_D // TB_H
-    data = [0.0] * (TB_D * TB_D)
-    for r in range(TB_D):
-        for h in range(TB_H):
+def tb_qkv(d=TB_D, heads=TB_H):
+    dh = d // heads
+    data = [0.0] * (d * d)
+    for r in range(d):
+        for h in range(heads):
             for c in range(dh):
-                data[r * TB_D + h * dh + c] = float(
-                    ((r * dh + c) * 7) % 13 - 6) / TB_D
-    return _metatensor.tensor(data, [TB_D, TB_D])
+                data[r * d + h * dh + c] = float(((r * dh + c) * 7) % 13 - 6) / d
+    return _metatensor.tensor(data, [d, d])
 
 
-def tb_proj():
-    dh = TB_D // TB_H
-    data = [0.0] * (TB_D * TB_D)
-    for h in range(TB_H):
+def tb_proj(d=TB_D, heads=TB_H):
+    dh = d // heads
+    data = [0.0] * (d * d)
+    for h in range(heads):
         for r in range(dh):
-            for c in range(TB_D):
-                data[(h * dh + r) * TB_D + c] = float(
-                    ((r * TB_D + c) * 7) % 13 - 6) / TB_D
-    return _metatensor.tensor(data, [TB_D, TB_D])
+            for c in range(d):
+                data[(h * dh + r) * d + c] = float(((r * d + c) * 7) % 13 - 6) / d
+    return _metatensor.tensor(data, [d, d])
+
+
+def make_attn(d, heads):
+    return nn.MultiheadAttention(tb_qkv(d, heads), tb_qkv(d, heads),
+                                 tb_qkv(d, heads), tb_proj(d, heads), heads)
 
 
 def make_block():

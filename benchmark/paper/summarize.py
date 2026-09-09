@@ -24,8 +24,8 @@ def main(out_dir):
     micro = read_tsv(os.path.join(out_dir, "micro.tsv"))
     if micro:
         lines.append("## Microbenchmarks (median steady_us over rounds)\n")
-        lines.append("| variant | k | n | fused (ours) | eager (ours) | nojit (ours) | torch.compile | torch eager | speedup vs compile |")
-        lines.append("|---|---|---|---|---|---|---|---|---|")
+        lines.append("| variant | k | n | fused (ours) | app-level (ours) | eager (ours) | nojit (ours) | torch.compile | torch eager | speedup vs compile | interp tax |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
         groups = collections.defaultdict(lambda: collections.defaultdict(list))
         for r in micro:
             dtype = r.get("breaks") or r.get("graphs") or "float64"
@@ -33,13 +33,20 @@ def main(out_dir):
             groups[key][r["mode"]].append(float(r["steady_us"]))
         def row(key, g):
             fused = med(g.get("fused", []))
+            app = med(g.get("app", []))
             compiled = med(g.get("torch-compile", []))
             speedup = compiled / fused if fused and compiled else None
-            return "| %d | %d | %d | %s | %s | %s | %s | %s | %s |" % (
-                key[1], key[2], key[3], fmt(fused), fmt(med(g.get("eager", []))),
+            # What the PyPy interpreter costs on top of the mechanism: the same
+            # model run app-level over the same model run as a translated
+            # RPython program.
+            tax = app / fused if app and fused else None
+            return "| %d | %d | %d | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+                key[1], key[2], key[3], fmt(fused), fmt(app),
+                fmt(med(g.get("eager", []))),
                 fmt(med(g.get("nojit", []))), fmt(compiled),
                 fmt(med(g.get("torch-eager", []))),
-                fmt(speedup, "%.2fx") if speedup else "n/a")
+                fmt(speedup, "%.2fx") if speedup else "n/a",
+                fmt(tax, "%.2fx") if tax else "n/a")
         for key in sorted(groups):
             if key[0] == "float64":
                 lines.append(row(key, groups[key]))
@@ -47,8 +54,8 @@ def main(out_dir):
         others = [k for k in sorted(groups) if k[0] != "float64"]
         if others:
             lines.append("## Precision sweep (median steady_us)\n")
-            lines.append("| dtype | variant | k | n | fused (ours) | eager (ours) | nojit (ours) | torch.compile | torch eager | speedup vs compile |")
-            lines.append("|---|---|---|---|---|---|---|---|---|---|")
+            lines.append("| dtype | variant | k | n | fused (ours) | app-level (ours) | eager (ours) | nojit (ours) | torch.compile | torch eager | speedup vs compile | interp tax |")
+            lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
             for key in others:
                 lines.append("| %s %s" % (key[0], row(key, groups[key])))
             lines.append("")

@@ -169,7 +169,13 @@ else
 fi
 
 echo "== translating pypy-c (this can take 15-60 minutes) =="
-if [ ! -e "$BUILD/pypy-c" ]; then
+# Rebuild when the tensor sources move, the same staleness check
+# metatensor-bench gets; without it a changed _metatensor module silently keeps
+# the old binary.
+PYPY_SRC=$(find "$REPO/pypy/module/_metatensor" "$REPO/rpython/metatensor" \
+             "$REPO/lib_pypy/tensorpypy" -name '*.py' -newer "$BUILD/pypy-c" \
+             -print -quit 2>/dev/null || true)
+if [ ! -e "$BUILD/pypy-c" ] || [ -n "$PYPY_SRC" ]; then
   ( cd "$BUILD" && PYTHONPATH="$REPO" "$PYTHON2" "$REPO/rpython/bin/rpython" \
       --batch --make-jobs="$MAKE_JOBS" -Ojit --no-shared \
       --output="$BUILD/pypy-c" \

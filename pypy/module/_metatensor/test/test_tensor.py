@@ -379,3 +379,11 @@ class AppTestTensor(object):
         assert r.sum().item() == 25.0
         pick = _metatensor.tensor([[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
         assert r.mul(pick).sum().item() == 5.0
+
+    def test_counters(self):
+        import _metatensor
+        before = _metatensor.kernel_count()
+        t = _metatensor.tensor([1.0, -2.0, 3.0])
+        assert ((t * t) + t).relu().sum().item() > 0.0
+        assert _metatensor.kernel_count() >= before
+        assert _metatensor.launch_count() >= 0

@@ -52,6 +52,21 @@ set. `bench.sh all` clears `$OUT/*.tsv` first for a clean run.
     benchmark/paper/bench.sh summarize
     benchmark/paper/bench.sh plot                    # figures into $OUT/figures
 
+## Two binaries, two micro columns
+
+The microbenchmarks default to `build/metatensor-bench`, a translated RPython
+program with no bytecode dispatch, while `torch_bench.py` pays for CPython.
+That gap flatters us, so `--applevel` runs the same models as Python through
+the translated `build/pypy-c`, which is the apples-to-apples comparison and the
+same execution path the end-to-end models use:
+
+    benchmark/paper/bench.sh micro --applevel        # adds "app" rows
+
+It covers variants 0, 8, 9 and 13 in float64, and only adds `app` rows, so run
+it alongside a normal micro run rather than instead of one. `summarize` then
+fills the `app-level (ours)` column and `interp tax` = app / fused, which is
+what the PyPy interpreter costs on top of the mechanism itself.
+
 ## Figures
 
 `bench.sh plot` - also the last step of `bench.sh all` - renders the paper

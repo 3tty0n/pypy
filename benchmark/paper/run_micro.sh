@@ -3,6 +3,18 @@ set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 source "$HERE/config.sh"
 
+# --applevel runs the same models through the translated pypy-c instead of the
+# standalone metatensor-bench, so the comparison against torch_bench.py (which
+# pays for CPython) is like for like. It only adds "app" rows; run it alongside
+# a normal micro run, not instead of one.
+APPLEVEL=${APPLEVEL:-0}
+if [ "$1" = "--applevel" ]; then APPLEVEL=1; shift; fi
+APP_VARIANTS="0 8 9 13"
+if [ "$APPLEVEL" = 1 ]; then
+  paper_setup_pypy
+  trap paper_cleanup_pypy EXIT
+fi
+
 HEADER="mode\tvariant\tk\tn\titers\twarm_s\tsteady_us\tkernels\tacc\tcompiled_in_timed\tlaunches_per_iter\tgraphs\tbreaks"
 TSV="$OUT/micro.tsv"
 tsv_init "$TSV" "$HEADER"
@@ -19,8 +31,24 @@ torchrun() {
   record_micro_line "$line"
 }
 
+app_point() {
+  local variant=$1 k=$2 n=$3 line
+  case " $APP_VARIANTS " in
+    *" $variant "*) ;;
+    *) return 0 ;;
+  esac
+  line=$("$RUN_PYPY" $JIT_FLAGS "$HERE/../applevel/micro.py" app "$variant" "$k" "$n" "$ITERS" | tail -1) || return 0
+  [ -n "$line" ] || return 0
+  echo "$line" | tr ' ' '\t' >> "$TSV"
+  record_micro_line "$line"
+}
+
 run_point() {
   local variant=$1 k=$2 n=$3 line eff=""
+  if [ "$APPLEVEL" = 1 ]; then
+    app_point "$variant" "$k" "$n"
+    return 0
+  fi
   for mode in fused eager nojit; do
     line=$(ours $mode $variant $k $n $ITERS)
     echo "$line" | tr ' ' '\t' >> "$TSV"

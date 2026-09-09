@@ -12,7 +12,9 @@ commands:
   setup                  run setup.sh
   export                 export weight checkpoints
   micro [V K N]          microbenchmarks; no args = full grid, or one point
-                         (also: --dtype float32 to set RTENSOR_DTYPE/TORCH_DTYPE)
+                         (--dtype float32 sets RTENSOR_DTYPE/TORCH_DTYPE;
+                          --applevel runs variants 0/8/9/13 through pypy-c
+                          instead of metatensor-bench, adding "app" rows)
   models [NAME...]       end-to-end models; no args = all
                          names: $ALL_MODELS
   ablation [EXP...]      ablations; no args = all
@@ -57,11 +59,18 @@ case "$cmd" in
     ;;
   micro)
     dtype=""
-    if [ "$1" = "--dtype" ]; then dtype=$2; shift 2; fi
+    applevel=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --dtype)    dtype=$2; shift 2 ;;
+        --applevel) applevel=(--applevel); shift ;;
+        *)          break ;;
+      esac
+    done
     if [ -n "$dtype" ]; then
-      RTENSOR_DTYPE=$dtype TORCH_DTYPE=$dtype bash "$HERE/run_micro.sh" "$@"
+      RTENSOR_DTYPE=$dtype TORCH_DTYPE=$dtype bash "$HERE/run_micro.sh" "${applevel[@]}" "$@"
     else
-      bash "$HERE/run_micro.sh" "$@"
+      bash "$HERE/run_micro.sh" "${applevel[@]}" "$@"
     fi
     ;;
   models)
