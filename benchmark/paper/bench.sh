@@ -27,9 +27,10 @@ commands:
   compare DIR...         cross-machine figures: \$OUT against one or two other
                          result directories, comparing ratios rather than
                          microseconds
-  all                    fresh run: export, micro, models, ablation, dynamic,
-                         summarize, plot
-                         (clears \$OUT/*.tsv first)
+  all                    one shot: setup, export, micro, models, ablation,
+                         dynamic, summarize, plot
+                         (clears \$OUT/*.tsv first; SKIP_SETUP=1 to reuse an
+                          existing build)
   list                   print model/experiment names and the micro grid
   help                   this message
 
@@ -113,6 +114,10 @@ case "$cmd" in
     "${RTENSOR_PYTHON:-python3}" "$HERE/plot.py" "$OUT" "${args[@]}" "$@"
     ;;
   all)
+    if [ "${SKIP_SETUP:-0}" != "1" ]; then
+      echo "== setup =="
+      bash "$HERE/setup.sh" || { echo "setup FAILED" >&2; exit 1; }
+    fi
     source "$HERE/config.sh"
     rm -f "$OUT"/*.tsv
     LOG="$OUT/log.txt"

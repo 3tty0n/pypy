@@ -118,6 +118,11 @@ if [ -z "$UV" ] && [ "${NO_UV:-0}" != "1" ]; then
 fi
 
 LOCK="$HERE/requirements.lock"
+# The lock pulls torch/triton from the CUDA index and everything else from
+# PyPI; uv only looks at the first index that has a package, so a pin like
+# certifi== that the CUDA index carries at another version is unresolvable
+# without letting it consider every index.
+export UV_INDEX_STRATEGY="${UV_INDEX_STRATEGY:-unsafe-best-match}"
 if [ -n "$UV" ] && [ -f "$LOCK" ]; then
   echo "installing from $(basename "$LOCK") with $("$UV" --version)"
   VIRTUAL_ENV="$VENV" "$UV" pip sync -q "$LOCK"
