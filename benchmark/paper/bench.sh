@@ -22,6 +22,9 @@ commands:
   plot [ARGS]            render the paper figures into \$OUT/figures
                          (--only NAME, --format pdf,png, --column single|double,
                           --texture for grayscale print, --titles for slides)
+  compare DIR...         cross-machine figures: \$OUT against one or two other
+                         result directories, comparing ratios rather than
+                         microseconds
   all                    fresh run: export, micro, models, ablation, dynamic,
                          summarize, plot
                          (clears \$OUT/*.tsv first)
@@ -86,6 +89,23 @@ case "$cmd" in
   plot)
     source "$HERE/config.sh"
     "${RTENSOR_PYTHON:-python3}" "$HERE/plot.py" "$OUT" "$@"
+    ;;
+  compare)
+    if [ $# -lt 1 ]; then
+      echo "bench.sh: compare needs at least one other result directory" >&2
+      exit 1
+    fi
+    source "$HERE/config.sh"
+    # Leading positionals are the other result directories; everything from
+    # the first flag onward belongs to plot.py, values included.
+    args=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -*) break ;;
+        *)  args+=(--compare "$1"); shift ;;
+      esac
+    done
+    "${RTENSOR_PYTHON:-python3}" "$HERE/plot.py" "$OUT" "${args[@]}" "$@"
     ;;
   all)
     source "$HERE/config.sh"

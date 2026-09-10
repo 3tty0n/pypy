@@ -63,6 +63,26 @@ single|double` to override the per-figure default, `--texture` to hatch the
 fills for grayscale print, `--titles` for slide versions (a paper puts the
 title in the caption).
 
+### Two machines side by side
+
+    benchmark/paper/bench.sh compare ../results/luchkylilac-rtx3090/paper-2026-09-07
+
+compares `$OUT` against one or two other result directories (three machines is
+the limit: the categorical palette is used in fixed order and never cycled, so
+a fourth would need a hue that does not exist). Each series is named from the
+other run's `machine.txt`, falling back to its `<host>-<gpu>` directory name
+for runs recorded before that file existed.
+
+    compare_speedup   speedup per benchmark, one series per machine
+    compare_models    end-to-end ratio per model, one series per machine
+    compare_dynamic   ratio against torch.compile over sequence length
+
+These compare *ratios*, not microseconds: an absolute time is a property of the
+accelerator, while the ratio is a property of the system under test, and the
+claim to support is that the ordering survives a change of GPU. Points the two
+runs did not measure at the same size - the memory fit shrinks variant 10
+differently per GPU - are left out and named on stderr.
+
 `bench.sh list` prints the available model and ablation names and the micro grid.
 
 Runtime knobs (see also `benchmark/README.md`): `RTENSOR_FLAT_BLOCK`

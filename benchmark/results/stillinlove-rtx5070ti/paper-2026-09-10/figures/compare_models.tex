@@ -1,0 +1,16 @@
+\begin{tabular}{lrr}
+\toprule
+model & RTX 5070 Ti (stillinlove) & RTX 3090 (luchkylilac) \\
+\midrule
+resnet18-b8 & 0.51 & 0.68 \\
+mixer\_b16 & 1.03 & 0.82 \\
+distilgpt2 & 1.08 & 0.93 \\
+bert-tiny & 1.36 & 1.22 \\
+resnet18-b1 & 1.39 & 1.23 \\
+tiny-gpt2 & 1.46 & 1.96 \\
+bert-mini & 1.49 & 1.17 \\
+smollm2-135m & 1.81 & 1.29 \\
+vit-tiny & 1.87 & 1.28 \\
+\bottomrule
+\end{tabular}
+% end-to-end speedup over torch.compile
