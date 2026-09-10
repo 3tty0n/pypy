@@ -10,7 +10,15 @@ SUMMARY="$OUT/dynamic_summary.tsv"
 tsv_init "$SERIES" "system\tround\tlength\tus"
 tsv_init "$SUMMARY" "system\tround\tlength\tmedian_us\tloops\tbridges\trecompiles"
 
-median() { python3 -c "import sys,statistics;print(statistics.median([float(x) for x in sys.stdin if x.strip()]))"; }
+# A length with no samples yields an empty cell rather than aborting the stage,
+# and the venv interpreter is used because a PyPy3 may own python3 on PATH.
+median() {
+  "${RTENSOR_PYTHON:-python3}" -c "
+import sys, statistics
+xs = [float(x) for x in sys.stdin if x.strip()]
+print(statistics.median(xs) if xs else '')
+"
+}
 
 run_ours() {
   local round=$1

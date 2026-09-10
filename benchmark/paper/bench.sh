@@ -19,6 +19,8 @@ commands:
                          names: $ALL_EXPERIMENTS
   dynamic                dynamic sequence-length experiment
   summarize              render \$OUT/summary.md from the tsv files
+  check [GROUP...]       smallest run that exercises every mode; groups are
+                         prereq micro dtypes torch models ablation dynamic report
   plot [ARGS]            render the paper figures into \$OUT/figures
                          (--only NAME, --format pdf,png, --column single|double,
                           --texture for grayscale print, --titles for slides)
@@ -85,6 +87,9 @@ case "$cmd" in
   summarize)
     source "$HERE/config.sh"
     python3 "$HERE/summarize.py" "$OUT"
+    ;;
+  check)
+    bash "$HERE/check.sh" "$@"
     ;;
   plot)
     source "$HERE/config.sh"

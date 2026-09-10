@@ -103,6 +103,23 @@ differently per GPU - are left out and named on stderr.
 
 `bench.sh list` prints the available model and ablation names and the micro grid.
 
+## Checking a setup
+
+    benchmark/paper/bench.sh check          # every mode, ~100 s
+    benchmark/paper/bench.sh check micro dtypes
+
+runs the smallest thing that still exercises each mode - our three execution
+modes, the three dtypes, both torch baselines, one model, one ablation, one
+dynamic sweep, then summarize and plot - into a scratch directory, and exits
+non-zero on the first thing that is wrong. Run it before a grid, and after any
+change to the toolchain.
+
+The check that earns its keep is `launches_per_iter`: a kernel that fails to
+load falls back to the CPU silently, and the run still produces plausible
+numbers, just two orders of magnitude slower. It also compares the accumulator
+across fused/eager/nojit and against torch, so a kernel that runs but computes
+the wrong thing fails too.
+
 ## Adding a microbenchmark
 
 The grid and the names the figures use live in `benchmark/benchmarks.toml`, so
