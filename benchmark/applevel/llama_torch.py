@@ -20,7 +20,7 @@ def main():
         'iters=%d steady_us=%.1f checksum=%.6f' %
         (a.mode, cfg['n_layer'], cfg['n_embd'], cfg['n_head'], cfg['seq'],
          cfg['vocab'], a.dtname, a.iters, steady_us, acc),
-        argmax, torch_common.compare(a.outdir, logits, argmax))
+        argmax, torch_common.compare(a.outdir, logits, argmax), a)
 
 
 if __name__ == '__main__':

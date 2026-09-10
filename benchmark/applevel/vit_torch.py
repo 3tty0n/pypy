@@ -20,7 +20,7 @@ def main():
         (a.mode, cfg['n_layer'], cfg['n_embd'], cfg['n_head'], cfg['tokens'],
          cfg['classes'], a.dtname, a.iters, steady_us, acc),
         logits.topk(5).indices.tolist(), torch_common.compare(a.outdir,
-                                                              logits))
+                                                              logits), a)
 
 
 if __name__ == '__main__':

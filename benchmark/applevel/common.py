@@ -62,8 +62,17 @@ def batch_argv():
     return int(sys.argv[4]) if len(sys.argv) > 4 else 1
 
 
+FIRST_RUN_MS = [None]
+
+
 def timed(model, args, iters, warmup):
-    for i in range(warmup):
+    # The first forward carries the tracing and kernel compilation; it is
+    # timed on its own so the compile cost can sit next to the steady state.
+    t0 = time.time()
+    logits = model(*args)
+    logits.sum().item()
+    FIRST_RUN_MS[0] = (time.time() - t0) * 1e3
+    for i in range(warmup - 1):
         logits = model(*args)
     logits.sum().item()
     t0 = time.time()
@@ -106,6 +115,8 @@ def dump(outdir, flat):
 
 
 def report(line, order):
+    if FIRST_RUN_MS[0] is not None:
+        line += ' compile_ms=-1 first_run_ms=%.1f' % FIRST_RUN_MS[0]
     print(line)
     print('argmax %s' % ' '.join([str(a) for a in order]))
 

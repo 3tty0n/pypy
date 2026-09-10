@@ -256,9 +256,23 @@ def run_attn(iters):
     return loop(compiled(forward), x, iters)
 
 
+FIRST_MS = [None]
+
+
 def report(warm, steady, acc, graphs=-1, breaks=-1):
-    print("torch-%s %d %d %d %d %f %f 0 %f 0 %d %d %s" % (
-        mode, variant, k, n, iters, warm, steady, acc, graphs, breaks, DTNAME))
+    # compile_ms is -1: torch.compile compiles inside the first call, so
+    # first_run_ms is compile plus one iteration and the split is not known.
+    print("torch-%s %d %d %d %d %f %f 0 %f 0 %d %d %s -1 %.3f" % (
+        mode, variant, k, n, iters, warm, steady, acc, graphs, breaks, DTNAME,
+        FIRST_MS[0] if FIRST_MS[0] is not None else -1.0))
+
+
+def timed(run):
+    t0 = time.time(); run(1); torch.cuda.synchronize()
+    FIRST_MS[0] = (time.time() - t0) * 1e3
+    t0 = time.time(); run(19); warm = time.time() - t0 + FIRST_MS[0] / 1e3
+    t0 = time.time(); acc = run(iters); steady = (time.time() - t0) / iters * 1e6
+    return warm, steady, acc
 
 
 MODELS = {6: run_mlp, 7: run_mlp_train, 8: run_block, 9: run_cnn,
@@ -266,9 +280,7 @@ MODELS = {6: run_mlp, 7: run_mlp_train, 8: run_block, 9: run_cnn,
           13: run_attn}
 
 if variant in MODELS:
-    run = MODELS[variant]
-    t0 = time.time(); run(20); warm = time.time() - t0
-    t0 = time.time(); acc = run(iters); steady = (time.time() - t0) / iters * 1e6
+    warm, steady, acc = timed(MODELS[variant])
     report(warm, steady, acc)
     sys.exit(0)
 
@@ -317,6 +329,5 @@ def run(iters):
     return h.sum().item()
 
 
-t0 = time.time(); run(20); warm = time.time() - t0
-t0 = time.time(); acc = run(iters); steady = (time.time() - t0) / iters * 1e6
+warm, steady, acc = timed(run)
 report(warm, steady, acc, graphs, breaks)

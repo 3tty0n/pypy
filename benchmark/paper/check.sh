@@ -5,7 +5,7 @@
 #
 #     bench.sh check              # everything
 #     bench.sh check micro        # one group: micro, dtypes, torch, models,
-#                                 # ablation, dynamic, report
+#                                 # baselines, ablation, dynamic, report
 #
 # The check that matters most is launches_per_iter: a kernel that fails to load
 # falls back to the CPU silently, and the run still produces plausible numbers.
@@ -110,6 +110,31 @@ group_torch() {
   done
 }
 
+group_baselines() {
+  echo "== jax / iree / triton baselines =="
+  local line steady acc
+  line=$("$TORCH_PYTHON" "$HERE/../triton_bench.py" triton 12 1 25600 "$ITERS" 2>/dev/null | tail -1)
+  if [ -z "$line" ]; then bad "triton runs"; else
+    steady=$(field "$line" 7); acc=$(field "$line" 9)
+    if positive "$steady"; then ok "triton" "steady=${steady}us"; else bad "triton steady_us" "got $steady"; fi
+    ref=$("$TORCH_PYTHON" "$HERE/../torch_bench.py" eager 12 1 25600 "$ITERS" 2>/dev/null | tail -1)
+    if close_enough "$acc" "$(field "$ref" 9)"; then ok "triton agrees with torch" "acc=$acc"
+    else bad "triton agrees with torch" "acc=$acc vs $(field "$ref" 9)"; fi
+  fi
+  if [ -z "${JAX_PYTHON:-}" ]; then skip "jax" "JAX_PYTHON unset (setup.sh with WITH_JAX=1)"; return; fi
+  local mode
+  for mode in jax iree; do
+    line=$("$JAX_PYTHON" "$HERE/../jax_bench.py" "$mode" 12 1 25600 "$ITERS" 2>/dev/null | tail -1)
+    if [ -z "$line" ]; then bad "$mode runs"; continue; fi
+    steady=$(field "$line" 7); acc=$(field "$line" 9)
+    if positive "$steady"; then ok "$mode" "steady=${steady}us"; else bad "$mode steady_us" "got $steady"; fi
+    if [ -n "${ref:-}" ]; then
+      if close_enough "$acc" "$(field "$ref" 9)"; then ok "$mode agrees with torch" "acc=$acc"
+      else bad "$mode agrees with torch" "acc=$acc vs $(field "$ref" 9)"; fi
+    fi
+  done
+}
+
 group_models() {
   echo "== model path (tiny-gpt2) =="
   if [ ! -d "$WEIGHTS/tiny-gpt2" ]; then
@@ -179,11 +204,11 @@ for line in open('$OUT/results.jsonl'):
   fi
 }
 
-CHECK_GROUPS=${*:-prereq micro dtypes torch models ablation dynamic report}
+CHECK_GROUPS=${*:-prereq micro dtypes torch baselines models ablation dynamic report}
 started=$SECONDS
 for g in $CHECK_GROUPS; do
   case "$g" in
-    prereq|micro|dtypes|torch|models|ablation|dynamic|report) "group_$g" ;;
+    prereq|micro|dtypes|torch|baselines|models|ablation|dynamic|report) "group_$g" ;;
     *) echo "check.sh: unknown group '$g'" >&2; exit 2 ;;
   esac
 done

@@ -36,6 +36,7 @@ zero misencodes magnitude, so no bar chart here uses a log length.
 import argparse
 import collections
 import csv
+import json
 import os
 import re
 import statistics
@@ -63,16 +64,16 @@ from matplotlib.ticker import FuncFormatter
 # Aqua (2.82:1) and yellow (2.17:1) sit below 3:1 against white, which the
 # contrast check flags as "relief required": the .tex table beside each figure
 # is that relief.
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]
+SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#8a5cd6"]
 POS, NEG = "#2a78d6", "#e34948"      # diverging poles, neutral midpoint is the rule line
 INK, INK_2, GRID = "#0b0b0b", "#52514e", "#d9d8d4"
 # Opt-in only: texture is for print and full CVD, never decoration.
-HATCH = ["", "///", "...", "xxx"]
+HATCH = ["", "///", "...", "xxx", "\\\\"]
 
 SINGLE_COL, DOUBLE_COL = 3.25, 6.75   # MLSys column and text widths, inches
 # Figures whose row labels are long enough that a single column would leave no
 # room for the plot itself.  --column overrides this.
-WIDE = {"micro_speedup", "fusion", "models", "ablation",
+WIDE = {"micro_speedup", "fusion", "models", "ablation", "micro_baselines",
         "compare_speedup", "compare_models"}
 
 SYSTEM_LABEL = {
@@ -81,6 +82,9 @@ SYSTEM_LABEL = {
     "torch-eager": "PyTorch eager",
     "torch-compile-dynamic": "torch.compile (dynamic)",
     "torch-compile-static": "torch.compile (static)",
+    "jax": "JAX/XLA",
+    "iree": "IREE",
+    "triton": "Triton (handwritten)",
 }
 # Names come from benchmarks.toml, the same file the grid is read from, so a
 # new benchmark is named once. A run whose variants predate an entry still
@@ -128,6 +132,22 @@ def read_tsv(path):
         return []
     with open(path) as f:
         return list(csv.DictReader(f, delimiter="\t"))
+
+
+def read_jsonl(path):
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+    return out
 
 
 def med(xs):
@@ -221,7 +241,7 @@ def fig_micro_speedup(out, args):
         if dtype != "float64" or not m.get("fused") or not m.get("torch-compile"):
             continue
         r, lo, hi = ratio_band(m["torch-compile"], m["fused"])
-        pts.append((r, micro_label(v, k, n), lo, hi))
+        pts.append((r, micro_label(v, k, n), lo, hi, m))
     if not pts:
         return None
     pts.sort()
@@ -230,6 +250,15 @@ def fig_micro_speedup(out, args):
     lows = [p[2] for p in pts]
     highs = [p[3] for p in pts]
     y = range(len(pts))
+    # app rows only exist when the point was also run with --applevel; a
+    # point without them just gets no marker.
+    app_y, app_x = [], []
+    for i, (_, _, _, _, m) in enumerate(pts):
+        if m.get("app"):
+            am, _, _ = ratio_band(m["torch-compile"], m["app"])
+            if am is not None:
+                app_y.append(i)
+                app_x.append(am)
 
     fig, ax = plt.subplots(figsize=(args.width, 0.16 * len(pts) + 0.75))
     colors = [POS if v >= 1 else NEG for v in vals]
@@ -239,13 +268,20 @@ def fig_micro_speedup(out, args):
             hatch=(HATCH[0] if not args.texture else None))
     ax.errorbar(vals, list(y), xerr=err(vals, lows, highs), fmt="none",
                 zorder=4, **ERRBAR)
+    if app_x:
+        # No error bars here - the row is busy enough; the range is in the
+        # table.
+        # A white face is what makes the marker read on top of a saturated bar;
+        # an unfilled one disappears into it.
+        ax.scatter(app_x, app_y, s=30, facecolors="white", edgecolors=INK,
+                   linewidth=1.1, zorder=6)
     ax.axvline(1, color=INK_2, linewidth=0.8, zorder=3)
     ax.set_xscale("log", base=2)
     ax.set_xticks([0.5, 1, 2, 4, 8, 16])
     ax.xaxis.set_major_formatter(FuncFormatter(
         lambda v, _: ("%g" % v).rstrip("0").rstrip(".") + "\u00d7"))
     ax.set_yticks(list(y), labels)
-    ax.set_xlim(min(lows) / 1.4, max(highs) * 1.3)
+    ax.set_xlim(min(lows) / 1.5, max(highs) * 1.45)
     ax.set_xlabel("speedup over torch.compile")
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
@@ -254,28 +290,51 @@ def fig_micro_speedup(out, args):
     # Direct-label the extremes only; the rest are in the table.
     for i in (0, len(pts) - 1):
         v = vals[i]
-        ax.annotate("%.2f\u00d7" % v, (v, i), xytext=(4 if v >= 1 else -4, 0),
+        # Anchored past the whisker, not at the bar end, so the label never
+        # sits on top of the error bar.
+        at = highs[i] if v >= 1 else lows[i]
+        ax.annotate("%.2f\u00d7" % v, (at, i), xytext=(5 if v >= 1 else -5, 0),
                     textcoords="offset points", va="center",
                     ha="left" if v >= 1 else "right", fontsize=7, color=INK_2)
-    ax.legend(handles=[
+    legend_handles = [
         Line2D([], [], color=POS, lw=4, label="MetaTensor faster"),
-        Line2D([], [], color=NEG, lw=4, label="torch.compile faster")],
-        loc="lower right", bbox_to_anchor=(1.0, 0.0))
+        Line2D([], [], color=NEG, lw=4, label="torch.compile faster")]
+    if app_x:
+        legend_handles.append(Line2D(
+            [], [], marker="o", linestyle="none", markerfacecolor="none",
+            markeredgecolor=INK_2, markersize=5,
+            label="same run, app-level through PyPy"))
+    ax.legend(handles=legend_handles, loc="lower right",
+              bbox_to_anchor=(1.0, 0.0))
     if args.titles:
         ax.set_title("Microbenchmark speedup, float64")
     rows = []
-    for i, (r, lab, lo, hi) in enumerate(pts):
-        key = [k for k in g if k[0] == "float64"
-               and micro_label(k[1], k[2], k[3]) == lab][0]
-        om, olo, ohi = band(g[key]["fused"])
-        cm, clo, chi = band(g[key]["torch-compile"])
-        rows.append([lab, "%.1f" % om, spread_str(olo, ohi),
-                     "%.1f" % cm, spread_str(clo, chi),
-                     "%.2f" % r, spread_str(lo, hi, "%.2f")])
+    header = ["benchmark", "MetaTensor", "range"]
+    if app_x:
+        header += ["app-level", "range"]
+    header += ["torch.compile", "range", "speedup", "range"]
+    if app_x:
+        header += ["app speedup", "range"]
+    for r, lab, lo, hi, m in pts:
+        om, olo, ohi = band(m["fused"])
+        cm, clo, chi = band(m["torch-compile"])
+        row = [lab, "%.1f" % om, spread_str(olo, ohi)]
+        if app_x:
+            if m.get("app"):
+                apm, aplo, aphi = band(m["app"])
+                ar, arlo, arhi = ratio_band(m["torch-compile"], m["app"])
+                row += ["%.1f" % apm, spread_str(aplo, aphi)]
+            else:
+                row += ["n/a", "n/a"]
+        row += ["%.1f" % cm, spread_str(clo, chi), "%.2f" % r,
+                spread_str(lo, hi, "%.2f")]
+        if app_x:
+            row += (["%.2f" % ar, spread_str(arlo, arhi, "%.2f")]
+                    if m.get("app") else ["n/a", "n/a"])
+        rows.append(row)
     write_table(os.path.join(args.outdir, "micro_speedup.tex"),
                 "median us per iteration over the rounds, with the observed range",
-                ["benchmark", "MetaTensor", "range", "torch.compile", "range",
-                 "speedup", "range"], rows)
+                header, rows)
     return fig, "micro_speedup"
 
 
@@ -342,19 +401,21 @@ def fig_models(out, args):
     g = collections.defaultdict(lambda: collections.defaultdict(list))
     for r in rows:
         g[r["model"]][r["system"]].append(float(r["steady_us"]))
-    systems = ["ours", "torch-compile", "torch-eager"]
+    systems = [s for s in ["ours", "torch-compile", "torch-eager", "jax", "iree"]
+               if any(s in d for d in g.values())]
     models = sorted(g, key=lambda m: med(g[m].get("ours", [])) or 0)
     stats = {s: [band(g[m].get(s, [])) for m in models] for s in systems}
     vals = {s: [b[0] or 0 for b in stats[s]] for s in systems}
 
-    h = 0.26
+    # 3 systems keeps the original 0.26 half-height; more systems shrink to fit.
+    h = 0.8 / len(systems)
     fig, ax = plt.subplots(figsize=(args.width, 0.42 * len(models) + 0.8))
     y = [i for i in range(len(models))]
     for si_, s in enumerate(systems):
-        off = (si_ - 1) * h
+        off = (si_ - (len(systems) - 1) / 2) * h
         ax.barh([v + off for v in y], vals[s], height=h * 0.88,
-                color=SERIES[si_], linewidth=0,
-                hatch=HATCH[si_] if args.texture else None,
+                color=SERIES[si_ % len(SERIES)], linewidth=0,
+                hatch=HATCH[si_ % len(HATCH)] if args.texture else None,
                 label=SYSTEM_LABEL[s])
         ax.errorbar(vals[s], [v + off for v in y],
                     xerr=err(vals[s], [b[1] or 0 for b in stats[s]],
@@ -369,19 +430,36 @@ def fig_models(out, args):
     ax.legend(loc="lower right", ncol=1)
     if args.titles:
         ax.set_title("End-to-end inference")
+
+    ov, ov_st = vals.get("ours", [0] * len(models)), stats.get("ours", [(None, None, None)] * len(models))
+    tc, tc_st = vals.get("torch-compile", [0] * len(models)), stats.get("torch-compile", [(None, None, None)] * len(models))
+    te = vals.get("torch-eager", [0] * len(models))
+    jx = vals.get("jax", [0] * len(models))
+    ir = vals.get("iree", [0] * len(models))
+    header = ["model", "MetaTensor", "range", "torch.compile", "range", "eager"]
+    if "jax" in systems:
+        header.append("JAX/XLA")
+    if "iree" in systems:
+        header.append("IREE")
+    header.append("ratio")
+    if "jax" in systems:
+        header.append("jax/compile")
+    table_rows = []
+    for i, m in enumerate(models):
+        row = [m, "%.0f" % ov[i], spread_str(ov_st[i][1], ov_st[i][2], "%.0f"),
+               "%.0f" % tc[i], spread_str(tc_st[i][1], tc_st[i][2], "%.0f"),
+               "%.0f" % te[i]]
+        if "jax" in systems:
+            row.append("%.0f" % jx[i] if jx[i] else "n/a")
+        if "iree" in systems:
+            row.append("%.0f" % ir[i] if ir[i] else "n/a")
+        row.append("%.2f" % (ov[i] / tc[i]) if tc[i] else "n/a")
+        if "jax" in systems:
+            row.append("%.2f" % (jx[i] / tc[i]) if tc[i] and jx[i] else "n/a")
+        table_rows.append(row)
     write_table(os.path.join(args.outdir, "models.tex"),
                 "median us per iteration over the rounds, with the observed range",
-                ["model", "MetaTensor", "range", "torch.compile", "range",
-                 "eager", "ratio"],
-                [[m, "%.0f" % vals["ours"][i],
-                  spread_str(stats["ours"][i][1], stats["ours"][i][2], "%.0f"),
-                  "%.0f" % vals["torch-compile"][i],
-                  spread_str(stats["torch-compile"][i][1],
-                             stats["torch-compile"][i][2], "%.0f"),
-                  "%.0f" % vals["torch-eager"][i],
-                  "%.2f" % (vals["ours"][i] / vals["torch-compile"][i])
-                  if vals["torch-compile"][i] else "n/a"]
-                 for i, m in enumerate(models)])
+                header, table_rows)
     return fig, "models"
 
 
@@ -400,9 +478,11 @@ def fig_dynamic(out, args):
 
     fig, ax = plt.subplots(figsize=(args.width, args.width * 0.62))
     markers = ["o", "s", "^", "D"]
+    top = 0.0
     for i, s in enumerate(systems):
         bands = [band(g[(s, L)]) for L in lengths]
         ys = [b[0] for b in bands]
+        top = max(top, max(b[2] for b in bands))
         ax.errorbar(lengths, ys,
                     yerr=err(ys, [b[1] for b in bands], [b[2] for b in bands]),
                     fmt="none", zorder=2, **ERRBAR)
@@ -413,11 +493,15 @@ def fig_dynamic(out, args):
     ax.set_xlim(lengths[0] - 3, lengths[-1] + 3)
     ax.set_xlabel("sequence length (tokens)")
     ax.set_ylabel("median time per step (\u00b5s)")
-    ax.set_ylim(0, None)
+    # Headroom so the legend has somewhere to go: the systems separate by an
+    # order of magnitude, and every corner is occupied at the natural ceiling.
+    ax.set_ylim(0, top * 1.2)
     ax.yaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax)
-    ax.legend(loc="upper left")
+    # Which corner is free depends on where the recompile climb lands, which
+    # depends on the data - let matplotlib measure it rather than guessing.
+    ax.legend(loc="best", labelspacing=0.3, borderaxespad=0.3)
     if args.titles:
         ax.set_title("Changing sequence length")
     write_table(os.path.join(args.outdir, "dynamic.tex"),
@@ -552,6 +636,201 @@ def fig_ablation(out, args):
                   spread_str(*band(g[(e, m, v)])[1:], fmt="%.0f")]
                  for (e, m, v) in sorted(g, key=lambda k: (k[0], k[1], setting_key(k[2])))])
     return fig, "ablation"
+
+
+def fig_micro_baselines(out, args):
+    """Every backend against the same fused baseline: grouped diverging bars,
+    one row per point, same log-ratio convention as fig_micro_speedup."""
+    g = micro_values(read_tsv(os.path.join(out, "micro.tsv")))
+    systems = ["torch-eager", "torch-compile", "jax", "iree", "triton"]
+    pts = []
+    for (dtype, v, k, n), m in g.items():
+        if dtype != "float64" or not m.get("fused"):
+            continue
+        r = None
+        if m.get("torch-compile"):
+            r, _, _ = ratio_band(m["torch-compile"], m["fused"])
+        pts.append((r, micro_label(v, k, n), m))
+    if not pts:
+        return None
+    pts.sort(key=lambda p: (p[0] is None, p[0]))
+    labels = [p[1] for p in pts]
+    used = [s for s in systems if any(m.get(s) for _, _, m in pts)]
+    if not used:
+        return None
+
+    h = 0.8 / len(used)
+    fig, ax = plt.subplots(figsize=(args.width, 0.18 * len(pts) * len(used) + 0.9))
+    y = list(range(len(pts)))
+    for si_, s in enumerate(used):
+        off = (si_ - (len(used) - 1) / 2) * h
+        ys, xs = [], []
+        for i, (_, _, m) in enumerate(pts):
+            fm = med(m.get("fused", []))
+            sm = med(m.get(s, []))
+            if fm and sm:
+                ys.append(i + off)
+                xs.append(sm / fm)
+        if not xs:
+            continue
+        ax.barh(ys, [x - 1 for x in xs], left=1, height=h * 0.86,
+                color=SERIES[si_ % len(SERIES)], linewidth=0,
+                hatch=HATCH[si_ % len(HATCH)] if args.texture else None,
+                label=SYSTEM_LABEL.get(s, s))
+    ax.axvline(1, color=INK_2, linewidth=0.8, zorder=3)
+    ax.set_xscale("log", base=2)
+    ax.xaxis.set_major_formatter(FuncFormatter(
+        lambda v, _: ("%g" % v).rstrip("0").rstrip(".") + "×"))
+    ax.set_yticks(y, labels)
+    ax.set_xlabel("time relative to MetaTensor (fused), log scale")
+    ax.xaxis.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    despine(ax, keep=("left",))
+    ax.tick_params(axis="y", length=0)
+    ax.legend(loc="lower right")
+    if args.titles:
+        ax.set_title("Baselines relative to MetaTensor")
+
+    header = ["benchmark", "MetaTensor (us)", "eager", "torch.compile"]
+    if "jax" in used:
+        header.append("JAX/XLA")
+    if "iree" in used:
+        header.append("IREE")
+    if "triton" in used:
+        header.append("Triton")
+    header.append("MT/Triton")
+    table_rows = []
+    for _, lab, m in pts:
+        fm = med(m.get("fused", []))
+        te = med(m.get("torch-eager", []))
+        tc = med(m.get("torch-compile", []))
+        row = [lab, "%.0f" % fm if fm else "n/a",
+               "%.0f" % te if te else "n/a", "%.0f" % tc if tc else "n/a"]
+        if "jax" in used:
+            jv = med(m.get("jax", []))
+            row.append("%.0f" % jv if jv else "n/a")
+        if "iree" in used:
+            iv = med(m.get("iree", []))
+            row.append("%.0f" % iv if iv else "n/a")
+        tv = med(m.get("triton", []))
+        if "triton" in used:
+            row.append("%.0f" % tv if tv else "n/a")
+        row.append("%.2f" % (fm / tv) if (fm and tv) else "n/a")
+        table_rows.append(row)
+    write_table(os.path.join(args.outdir, "micro_baselines.tex"),
+                "median us per iteration, MetaTensor and baselines, float64",
+                header, table_rows)
+    return fig, "micro_baselines"
+
+
+def fig_compile_overhead(out, args):
+    """Compile and first-run cost per backend, and the break-even iteration
+    count against eager, read from results.jsonl."""
+    records = read_jsonl(os.path.join(out, "results.jsonl"))
+    if not records:
+        return None
+    systems = ["torch-compile", "jax", "iree", "triton", "ours"]
+
+    def workload_key(r):
+        if r.get("kind") == "micro" and r.get("dtype") == "float64":
+            return ("micro", r.get("variant"), r.get("k"), r.get("n"))
+        if r.get("kind") == "models":
+            return ("models", r.get("model"))
+        return None
+
+    def workload_label(key):
+        if key[0] == "micro":
+            return micro_label(key[1], key[2], key[3])
+        return key[1]
+
+    g = collections.defaultdict(lambda: collections.defaultdict(list))
+    for r in records:
+        key = workload_key(r)
+        if key is None:
+            continue
+        sysname = r.get("mode") if key[0] == "micro" else r.get("system")
+        if not sysname:
+            continue
+        g[key][sysname].append(r)
+
+    def medf(rs, field):
+        vals = [r[field] for r in rs
+                if isinstance(r.get(field), (int, float)) and r[field] >= 0]
+        return statistics.median(vals) if vals else None
+
+    rows = []
+    for key in g:
+        eager_rs = g[key].get("torch-eager", [])
+        eager_first = medf(eager_rs, "first_run_ms")
+        eager_steady = medf(eager_rs, "steady_us")
+        for s in systems:
+            rs = g[key].get(s)
+            if not rs:
+                continue
+            compile_ms = medf(rs, "compile_ms")
+            first_ms = medf(rs, "first_run_ms")
+            steady = medf(rs, "steady_us")
+            be = "n/a"
+            if (first_ms is not None and eager_first is not None
+                    and eager_steady is not None and steady is not None
+                    and eager_steady - steady > 0):
+                # compile_ms is paid before the first run where it is
+                # reported; torch.compile folds it into first_run_ms.
+                be = "%.0f" % ((first_ms + (compile_ms or 0) - eager_first)
+                                * 1000 / (eager_steady - steady))
+            rows.append((key, s, compile_ms, first_ms, steady, be))
+    if not rows:
+        return None
+
+    write_table(os.path.join(args.outdir, "compile_overhead.tex"),
+                "median compile / first-run cost and break-even iteration "
+                "count against torch eager",
+                ["workload", "system", "compile (ms)", "first run (ms)",
+                 "steady (us)", "break-even (iters)"],
+                [[workload_label(key), SYSTEM_LABEL.get(s, s),
+                  "%.0f" % c if (c is not None and c >= 0) else "n/a",
+                  "%.0f" % f if (f is not None and f >= 0) else "n/a",
+                  "%.0f" % st if st is not None else "n/a", be]
+                 for key, s, c, f, st, be in rows])
+
+    keys_order = []
+    for key, s, c, f, st, be in rows:
+        if key not in keys_order:
+            keys_order.append(key)
+    plot_rows = [(key, s, f) for key, s, c, f, st, be in rows
+                 if f is not None and f > 0]
+    systems_used = [s for s in systems if any(pr[1] == s for pr in plot_rows)]
+    if not plot_rows or not systems_used:
+        return None
+
+    h = 0.8 / len(systems_used)
+    fig, ax = plt.subplots(figsize=(
+        args.width, 0.18 * len(keys_order) * len(systems_used) + 0.9))
+    y = list(range(len(keys_order)))
+    for si_, s in enumerate(systems_used):
+        off = (si_ - (len(systems_used) - 1) / 2) * h
+        ys, xs = [], []
+        for i, key in enumerate(keys_order):
+            match = [f for k, ss, f in plot_rows if k == key and ss == s]
+            if match:
+                ys.append(i + off)
+                xs.append(match[0])
+        if not xs:
+            continue
+        ax.barh(ys, xs, height=h * 0.86, color=SERIES[si_ % len(SERIES)],
+                linewidth=0, hatch=HATCH[si_ % len(HATCH)] if args.texture else None,
+                label=SYSTEM_LABEL.get(s, s))
+    ax.set_xscale("log")
+    ax.set_yticks(y, [workload_label(k) for k in keys_order])
+    ax.set_xlabel("first-run latency (ms), log scale")
+    ax.xaxis.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    despine(ax, keep=("left",))
+    ax.tick_params(axis="y", length=0)
+    ax.legend(loc="lower right")
+    if args.titles:
+        ax.set_title("Compile / first-run overhead")
+    return fig, "compile_overhead"
 
 
 # --- machines --------------------------------------------------------------
@@ -779,6 +1058,8 @@ FIGURES = collections.OrderedDict([
     ("dynamic", fig_dynamic),
     ("precision", fig_precision),
     ("ablation", fig_ablation),
+    ("micro_baselines", fig_micro_baselines),
+    ("compile_overhead", fig_compile_overhead),
 ])
 
 COMPARE_FIGURES = collections.OrderedDict([

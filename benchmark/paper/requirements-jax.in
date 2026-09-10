@@ -1,0 +1,8 @@
+# Optional backends: JAX/XLA and IREE, installed into a second venv
+# ($VENV-jax) so their CUDA wheels never move the torch/triton pins.
+#     uv pip compile benchmark/paper/requirements-jax.in \
+#         -o benchmark/paper/requirements-jax.lock
+jax[cuda13]
+iree-base-compiler
+iree-base-runtime
+numpy

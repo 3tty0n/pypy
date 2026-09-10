@@ -62,8 +62,10 @@ same execution path the end-to-end models use:
 
     benchmark/paper/bench.sh micro --applevel        # adds "app" rows
 
-It covers variants 0, 8, 9 and 13 in float64, and only adds `app` rows, so run
-it alongside a normal micro run rather than instead of one. `summarize` then
+It covers every micro variant, float64 only (micro.py rejects other dtypes,
+so the precision sweep is skipped under `--applevel`), and only adds `app`
+rows, so run it alongside a normal micro run rather than instead of one.
+`summarize` then
 fills the `app-level (ours)` column and `interp tax` = app / fused, which is
 what the PyPy interpreter costs on top of the mechanism itself.
 
@@ -118,14 +120,118 @@ differently per GPU - are left out and named on stderr.
 
 `bench.sh list` prints the available model and ablation names and the micro grid.
 
+## Other backends: JAX/XLA, IREE, handwritten Triton
+
+Besides PyTorch eager and `torch.compile`, the harness measures the same
+workloads on three more systems. Each is one more script that prints the
+same line the torch twin prints, so the run scripts, `summarize.py` and
+`plot.py` treat it as another `mode` (micro) or `system` (models) and no
+benchmark had to change.
+
+| backend | script | mode / system | what it covers |
+|---|---|---|---|
+| JAX/XLA (`jax.jit`) | `benchmark/jax_bench.py`, `benchmark/applevel/jax_models.py` | `jax` | every micro variant 0-13; gpt2 (distilgpt2, tiny-gpt2), bert (tiny, mini), vit-tiny, mixer_b16 |
+| IREE (StableHLO from the same JAX code, CUDA HAL) | same two scripts, mode `iree` | `iree` | micro variants 0, 6, 11, 12, 13; bert-mini, vit-tiny |
+| handwritten Triton | `benchmark/triton_bench.py` | `triton` | micro variants 0-5 (fused elementwise chain), 6 (MLP), 11 (reduction), 12 (matmul + bias + relu), 13 (attention: Triton GEMMs + a flash-style online-softmax kernel) |
+| Torch-TensorRT | - | - | not built: no wheel for the Python 3.14 / CUDA 13 pairing the lock pins (`uv pip install torch-tensorrt` fails to build from source) |
+
+### Installing
+
+JAX and IREE go into a second venv, `${JAX_VENV:-$VENV-jax}`, because their
+CUDA wheels would otherwise move the torch/triton pins that `requirements.lock`
+exists to hold still. `bench.sh setup` creates it from `requirements-jax.lock`
+(`WITH_JAX=0` skips it) and writes `JAX_PYTHON` into `env.sh`; without it
+the jax/iree rows are simply absent and everything else runs. By hand:
+
+    uv venv --python 3.14 ~/.venvs/metatensor-jax
+    VIRTUAL_ENV=~/.venvs/metatensor-jax uv pip sync benchmark/paper/requirements-jax.lock
+    export JAX_PYTHON=~/.venvs/metatensor-jax/bin/python
+
+The Triton baseline needs nothing beyond the torch venv (`triton` is already
+pinned there). `machine.txt` records jax, jaxlib and IREE versions next to
+torch and triton.
+
+### Running
+
+Nothing changes: `bench.sh micro` adds `jax`, `iree` (where supported) and
+`triton` rows to every point, `bench.sh models` adds `jax` (and `iree` for
+bert-mini and vit-tiny) rows, and `bench.sh check baselines` runs one point
+on each and checks its accumulator against torch eager. `summarize.md` gains
+the JAX/IREE/Triton columns, an `ours/Triton` ratio (MetaTensor latency over
+handwritten-Triton latency) and a compilation-overhead table; `plot` writes
+`micro_baselines.*`, `compile_overhead.*` and the extra model bars.
+
+### Methodology per backend
+
+All backends share the shapes, dtypes, seeds, iteration counts, rounds and
+GPU of the existing runs, and all synchronize before and after the timed
+loop (`torch.cuda.synchronize`, `block_until_ready`, IREE `to_host`).
+Compilation is excluded from `steady_us` everywhere and reported separately
+in `results.jsonl` (`compile_ms`, `first_run_ms`; both also appear as the
+last two fields of the micro line and as `compile_ms=`/`first_run_ms=` on
+the model line):
+
+- JAX: `compile_ms` is `jit(f).lower(...).compile()` alone;
+  `first_run_ms` the first executed call. The Python control-flow variants
+  1-5 keep their branches in Python and jit only the tensor expressions, the
+  same split `torch.compile` ends up with after its graph breaks.
+  `jax_default_matmul_precision` is `highest`, so fp32 GEMMs are real fp32
+  like torch eager and cuBLAS, not TF32. Weights are jit arguments, not
+  baked constants.
+- IREE: the identical Python function is exported to StableHLO with
+  `jax.export` and compiled with `--iree-cuda-target=sm_<cc>` and f64 kept
+  (`--iree-input-demote-f64-to-f32=false`). `compile_ms` is the IREE
+  compile only (the trace is `export_ms`). It runs through the Python
+  runtime API with inputs moved to the device once; each call still pays
+  that API's dispatch, and IREE's CUDA backend has no cuBLAS, so its
+  steady-state numbers are well behind XLA. It is reported as-is, as an
+  optional column, not tuned.
+- Triton: `compile_ms` is the first launch of each kernel (Triton compiles
+  then), `first_run_ms` the first iteration after every kernel exists.
+  Kernels use fixed tiles (64x64x32 GEMM, 1024-element elementwise blocks,
+  32x32 attention tiles at fp64 to fit sm_86 shared memory) and no
+  autotuning; they are the kernel a person writes in an afternoon, not the
+  best one for this GPU.
+- torch.compile: `first_run_ms` is compile plus one iteration; the split is
+  not observable from outside, so `compile_ms` is -1 and the break-even
+  column uses the first run.
+- MetaTensor: `first_run_ms` on the model line is the first forward, which
+  carries tracing and kernel compilation.
+
+Break-even (`summarize.md`, `compile_overhead.tex`) is
+`(first_run(system) - first_run(eager)) / (steady(eager) - steady(system))`
+in iterations, against PyTorch eager.
+
+Correctness: every new row is checked like the torch rows. Micro lines carry
+the same accumulator as torch (they agree to the printed digits on every
+supported variant; fp16 attention differs in the last digits of a sum that
+cancels to ~1e-4). Model lines carry `maxabsdiff` against the stored
+MetaTensor logits, the same reference and the same tolerance (`check.sh`:
+1e-3) the torch rows use. No tolerance was changed for any backend.
+
+Known comparability limits:
+
+- Triton's GEMM is a Triton kernel; MetaTensor's GEMM is cuBLAS with the
+  epilogue fused around it. The `ours/Triton` ratio on the matmul variants
+  compares against a plain Triton GEMM, not cuBLAS.
+- Triton and torch.compile cache compiled kernels on disk across processes
+  (`~/.triton`, inductor cache), so their `compile_ms` reflects that cache;
+  JAX's persistent compilation cache is off, so its `compile_ms` is always
+  a cold compile.
+- IREE covers a subset and its numbers include Python runtime dispatch.
+- `kernel_count` is left empty for JAX, IREE and torch; only MetaTensor and
+  the Triton baseline (where it is the number of distinct kernels) report it.
+- The precision sweep (float32/float16) runs jax and triton at those dtypes
+  too; IREE is float64 only there.
+
 ## Checking a setup
 
     benchmark/paper/bench.sh check          # every mode, ~100 s
     benchmark/paper/bench.sh check micro dtypes
 
 runs the smallest thing that still exercises each mode - our three execution
-modes, the three dtypes, both torch baselines, one model, one ablation, one
-dynamic sweep, then summarize and plot - into a scratch directory, and exits
+modes, the three dtypes, both torch baselines, the jax/iree/triton baselines,
+one model, one ablation, one dynamic sweep, then summarize and plot - into a scratch directory, and exits
 non-zero on the first thing that is wrong. Run it before a grid, and after any
 change to the toolchain.
 
