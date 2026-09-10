@@ -18,6 +18,7 @@ def _empty_kernel():
     k.nodes = lltype.malloc(NODEARRAY, 0)
     k.fn = k.sumroot = k.threads = k.shared = k.nextra = 0
     k.rowmode = 0
+    k.nouts = 0
     k.n = 0
     k.cols = 0
     k.dtype = F64
@@ -72,12 +73,17 @@ def cached_kernel(key):
 def cache_kernel(key, kernel):
     kernel_cache.kernels[key] = kernel
 
+def drop_kernel(key):
+    if key in kernel_cache.kernels:
+        del kernel_cache.kernels[key]
+
 def new_kernel(ninputs, nnodes, dtype=F64):
     kernel = lltype.malloc(KERNEL)
     kernel.ninputs = ninputs
     kernel.nodes = lltype.malloc(NODEARRAY, nnodes)
     kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
     kernel.rowmode = 0
+    kernel.nouts = 0
     kernel.n = 0
     kernel.cols = 0
     kernel.dtype = dtype
@@ -88,11 +94,22 @@ def new_kernel(ninputs, nnodes, dtype=F64):
 
 def add_output(kernel, node):
     old = kernel.outputs
+    # The cache holds this very object, so growing it invalidates the entry it
+    # was filed under; drop that before the key changes.
+    if kernel.fn:
+        drop_kernel(kernel_key(kernel))
     new = lltype.malloc(SHAPEARRAY, len(old) + 1)
     for i in range(len(old)):
         new[i] = old[i]
     new[len(old)] = node
     kernel.outputs = new
+    if kernel.fn:
+        # The compiled code has the previous signature.  Launching it now would
+        # pass one output pointer too many, pushing n and cols off the end of
+        # the parameter list and giving the kernel a device pointer as its row
+        # stride.  Recompile for the signature the launcher will actually use.
+        kernel.fn = 0
+        compile_or_reuse(kernel)
     return len(old)
 
 def kernel_key(kernel):
@@ -120,6 +137,7 @@ def compile_or_reuse(kernel):
         kernel.rowmode = cached.rowmode
         kernel.modes = cached.modes
         kernel.outmodes = cached.outmodes
+        kernel.nouts = cached.nouts
         return kernel
     finish_kernel(kernel)
     cache_kernel(key, kernel)
@@ -151,6 +169,7 @@ def finish_kernel(kernel):
     kernel.rowmode = int(kernel_row_mode(kernel))
     kernel.modes = packed_modes(kernel)
     kernel.outmodes = packed_out_modes(kernel)
+    kernel.nouts = 1 + len(kernel.outputs)
     kernel.fn = compile_gpu(kernel)
     return kernel
 

@@ -396,6 +396,17 @@ RPY_EXPORTED void rt_cuda_warn_cpu(long fn)
     }
 }
 
+RPY_EXPORTED void rt_cuda_warn_arity(long compiled, long launched)
+{
+    static int warned;
+    if (!warned) {
+        warned = 1;
+        fprintf(stderr, "metatensor: kernel compiled for %ld outputs but "
+                        "launched with %ld, running on the CPU instead\n",
+                compiled, launched);
+    }
+}
+
 RPY_EXPORTED long rt_cuda_launch_count(void)
 {
     return launches;

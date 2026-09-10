@@ -6,7 +6,7 @@ from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import math
 from rpython.metatensor.core import (ADD, ARITY, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, cols, config, nbytes, new_tensor)
-from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, host, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_launch, rt_cuda_reset, rt_cuda_warn_cpu)
+from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, host, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_free, rt_cuda_launch, rt_cuda_reset, rt_cuda_warn_arity, rt_cuda_warn_cpu)
 from rpython.metatensor.kernels import (needs_zero, row_tile, single_kernel)
 from rpython.metatensor.devops import (_make_ones, ones, col2chw, head_merge, head_split, im2col, im2col_nhwc, maxpool2, maxpool2_nhwc, rot_half, rowgather, scalar, scalars, tensor_assign, tensor_bmm, tensor_matmul)
 
@@ -141,6 +141,18 @@ def extra_size(kernel, k, n, c):
         m = 1
     return m
 
+def arity_mismatch(kernel):
+    """True when kernel.fn was compiled for a different number of outputs.
+
+    The launcher packs the output pointers ahead of n and cols, so one output
+    too many silently shifts cols into a device pointer and the kernel walks
+    off the buffer.  Refuse the launch and let the caller run on the CPU.
+    """
+    if kernel.nouts == 1 + len(kernel.outputs):
+        return False
+    rt_cuda_warn_arity(kernel.nouts, 1 + len(kernel.outputs))
+    return True
+
 @jit.unroll_safe
 def modes_fit(kernel, inputs, n, c):
     packed = kernel.modes
@@ -161,6 +173,8 @@ def modes_fit(kernel, inputs, n, c):
 def launch_gpu(kernel, inputs):
     nin = len(inputs)
     dt = kernel.dtype
+    if arity_mismatch(kernel):
+        return NULLTENSOR
     for k in range(nin):
         if inputs[k].dtype != dt:
             return NULLTENSOR
@@ -201,11 +215,12 @@ def launch_gpu(kernel, inputs):
         dptrs[k] = dev(inputs[k])
         if dptrs[k] == 0:
             ok = False
+    esizes = lltype.malloc(SIGNEDARRAY, nout, flavor='raw')
+    esizes[0] = outlen
     outs[0] = rt_cuda_alloc(nbytes(outlen, dt),
                             needs_zero(kernel)) if ok else 0
     if outs[0] == 0:
         ok = False
-    esizes = lltype.malloc(SIGNEDARRAY, nout, flavor='raw')
     for k in range(1, nout):
         esizes[k] = extra_size(kernel, k - 1, n, c)
         outs[k] = rt_cuda_alloc(nbytes(esizes[k], dt), 0) if ok else 0
@@ -219,6 +234,13 @@ def launch_gpu(kernel, inputs):
             rffi.cast(rffi.INT, kernel.shared),
             rffi.cast(rffi.INT, kernel.nextra), c)) != 0
     result = NULLTENSOR
+    if not ok:
+        # An allocation or the launch failed part way through.  Nothing owns
+        # the buffers we did get, so hand them back instead of leaking them
+        # and pushing the next allocation closer to the same failure.
+        for k in range(nout):
+            if outs[k] != 0:
+                rt_cuda_free(outs[k], nbytes(esizes[k], dt))
     if ok:
         result = device_tensor(outlen, outs[0], shape, dt)
         if nout > 1:

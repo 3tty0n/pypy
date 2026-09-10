@@ -57,6 +57,7 @@ RPY_EXTERN int rt_cuda_available(void);
 RPY_EXTERN long rt_cuda_load(const char *ptx, const char *name);
 RPY_EXTERN long rt_cuda_alloc(long nbytes, long zero);
 RPY_EXTERN void rt_cuda_warn_cpu(long fn);
+RPY_EXTERN void rt_cuda_warn_arity(long compiled, long launched);
 RPY_EXTERN long rt_cuda_upload(double *host, long n, long dtype);
 RPY_EXTERN int rt_cuda_download(long dptr, double *host, long n, long dtype);
 RPY_EXTERN void rt_cuda_reset(void);
@@ -96,6 +97,10 @@ rt_cuda_launch = rffi.llexternal(
 rt_cuda_available = rffi.llexternal('rt_cuda_available', [], rffi.INT,
                                     compilation_info=eci,
                                 releasegil=False)
+rt_cuda_warn_arity = rffi.llexternal('rt_cuda_warn_arity',
+                                     [lltype.Signed, lltype.Signed],
+                                     lltype.Void, compilation_info=eci,
+                                     releasegil=False)
 rt_cuda_warn_cpu = rffi.llexternal('rt_cuda_warn_cpu', [lltype.Signed],
                                    lltype.Void, compilation_info=eci,
                                    releasegil=False)

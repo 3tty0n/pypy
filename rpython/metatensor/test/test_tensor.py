@@ -1710,3 +1710,15 @@ def test_dtype_mismatch_raises():
     py.test.raises(ValueError, ops.add, a, b)
     py.test.raises(ValueError, ops.mul, a, b)
     core.note_dtype(core.F64)
+
+
+def test_add_output_after_compile_keeps_the_arity_the_launcher_uses():
+    kernel = kernels.new_kernel(2, 2, core.policy.dtype)
+    kernels.set_node(kernel, 0, core.MUL, 1, 1, core.BC_NONE)
+    kernels.set_node(kernel, 1, core.DIV, 0, 2, core.BC_R_COL)
+    kernels.compile_or_reuse(kernel)
+    if kernel.fn == 0:
+        return
+    kernels.add_output(kernel, 2)
+    assert kernel.nouts == 1 + len(kernel.outputs)
+    assert not runtime.arity_mismatch(kernel)

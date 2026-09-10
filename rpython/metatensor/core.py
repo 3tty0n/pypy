@@ -67,6 +67,7 @@ KERNEL = lltype.GcStruct('TENSOR_KERNEL', ('ninputs', lltype.Signed),
                          ('dtype', lltype.Signed),
                          ('modes', lltype.Signed),
                          ('outmodes', lltype.Signed),
+                         ('nouts', lltype.Signed),
                          ('outputs', lltype.Ptr(SHAPEARRAY)))
 KERNELPTR = lltype.Ptr(KERNEL)
 
