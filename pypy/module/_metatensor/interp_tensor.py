@@ -306,6 +306,10 @@ class W_Tensor(W_Root):
     def descr_detach(self, space):
         return W_Tensor(nn.Tensor(self.tensor.t, self.tensor.requires_grad))
 
+    def descr_force(self, space):
+        return W_Tensor(nn.Tensor(ops.tensor_force(self.tensor.t),
+                                  self.tensor.requires_grad))
+
     def descr_backward(self, space):
         self.tensor.backward()
 
@@ -380,6 +384,7 @@ W_Tensor.typedef = TypeDef(
     maxpool2_nhwc=interp2app(W_Tensor.descr_maxpool2_nhwc),
     conv2d=interp2app(W_Tensor.descr_conv2d),
     detach=interp2app(W_Tensor.descr_detach),
+    force=interp2app(W_Tensor.descr_force),
     backward=interp2app(W_Tensor.descr_backward),
     zero_grad=interp2app(W_Tensor.descr_zero_grad),
     __add__=interp2app(W_Tensor.descr_add),
@@ -462,3 +467,7 @@ def kernel_count(space):
 
 def launch_count(space):
     return space.newint(device.launch_count())
+
+
+def mem_total(space):
+    return space.newint(device.mem_total())

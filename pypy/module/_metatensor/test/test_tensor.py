@@ -387,3 +387,14 @@ class AppTestTensor(object):
         assert ((t * t) + t).relu().sum().item() > 0.0
         assert _metatensor.kernel_count() >= before
         assert _metatensor.launch_count() >= 0
+
+    def test_force(self):
+        import _metatensor
+        t = _metatensor.tensor([1.0, -2.0, 3.0])
+        f = t.force()
+        assert f.tolist() == t.tolist()
+
+    def test_mem_total(self):
+        import _metatensor
+        assert isinstance(_metatensor.mem_total(), int)
+        assert _metatensor.mem_total() >= 0

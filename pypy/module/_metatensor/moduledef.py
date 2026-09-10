@@ -9,6 +9,7 @@ class Module(MixedModule):
         'zeros': 'interp_tensor.zeros',
         'kernel_count': 'interp_tensor.kernel_count',
         'launch_count': 'interp_tensor.launch_count',
+        'mem_total': 'interp_tensor.mem_total',
     }
 
     appleveldefs = {
