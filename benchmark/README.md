@@ -24,7 +24,7 @@ otherwise `libcublas.so` is looked up through the dynamic loader).
 
     benchmark/metatensor-bench MODE VARIANT K N ITERS
     $RTENSOR_PYTHON benchmark/torch_bench.py {eager|compile} VARIANT K N ITERS
-    benchmark/paper/bench.sh all        # full grid -> benchmark/results/paper-<date>-<host>/summary.md
+    benchmark/paper/bench.sh all        # full grid -> benchmark/results/<host>-<gpu>/paper-<date>/summary.md
 
 `MODE`: `fused` (ours), `eager` (tensor opt off, one kernel per op), `nojit`.
 `K` is the chain length, `N` the tensor size or row count.

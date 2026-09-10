@@ -9,6 +9,15 @@ VENV="${VENV:-$HOME/.venvs/metatensor}"
 TORCH_INDEX="${TORCH_INDEX:-https://download.pytorch.org/whl/cu130}"
 MAKE_JOBS="${MAKE_JOBS:-$(nproc)}"
 
+# setup.sh is documented as idempotent, so a re-run has to pick up what the
+# first run detected.  env.sh holds CUDA_HOME (and the derived paths); without
+# this a second run falls back to the /usr/local/cuda default and stops at the
+# prerequisite check on any machine whose CUDA lives elsewhere.
+if [ -f "$HERE/env.sh" ]; then
+  # shellcheck disable=SC1090
+  source "$HERE/env.sh"
+fi
+
 echo "== checking prerequisites =="
 if command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-smi -L || echo "setup.sh: nvidia-smi present but failed (driver/NVML mismatch is usually harmless for CUDA itself)" >&2
@@ -50,13 +59,47 @@ if [ -z "$PYTHON2" ]; then
 fi
 echo "using $PYTHON2 ($("$PYTHON2" --version 2>&1))"
 
+echo "== python3 for the venv =="
+# Triton and the torch wheels are CPython-only, so a PyPy3 "python3" on PATH
+# (a pyenv shim, say) has to be skipped in favour of a real CPython.
+is_cpython() {
+  "$1" -c 'import platform, sys; sys.exit(0 if platform.python_implementation() == "CPython" else 1)' \
+    >/dev/null 2>&1
+}
+PYTHON3="${PYTHON3:-}"
+if [ -n "$PYTHON3" ]; then
+  is_cpython "$PYTHON3" || { echo "setup.sh: PYTHON3=$PYTHON3 is not CPython" >&2; exit 1; }
+  "$PYTHON3" -c 'import ensurepip, venv' >/dev/null 2>&1 || \
+    { echo "setup.sh: $PYTHON3 lacks the venv/ensurepip modules" >&2; exit 1; }
+else
+  for cand in python3 python3.13 python3.12 python3.11 python3.10 \
+              /usr/bin/python3 /usr/bin/python3.13 /usr/bin/python3.12 \
+              /usr/bin/python3.11 /usr/bin/python3.10; do
+    path=$(command -v "$cand" 2>/dev/null) || continue
+    is_cpython "$path" || continue
+    "$path" -c 'import ensurepip, venv' >/dev/null 2>&1 || continue
+    PYTHON3="$path"
+    break
+  done
+fi
+if [ -z "$PYTHON3" ]; then
+  echo "setup.sh: no CPython 3 with the venv module found; install one (e.g." >&2
+  echo "  apt install python3 python3-venv) or set PYTHON3=/path/to/python3" >&2
+  exit 1
+fi
+echo "using $PYTHON3 ($("$PYTHON3" --version 2>&1))"
+
 echo "== python3 venv at $VENV =="
+if [ -x "$VENV/bin/python" ] && ! is_cpython "$VENV/bin/python"; then
+  echo "$VENV is not a CPython venv, recreating it"
+  rm -rf "$VENV"
+fi
 if [ ! -x "$VENV/bin/python" ]; then
-  python3 -m venv "$VENV"
+  "$PYTHON3" -m venv "$VENV"
 fi
 "$VENV/bin/pip" install -q --upgrade pip
 "$VENV/bin/pip" install -q triton torch --index-url "$TORCH_INDEX"
-"$VENV/bin/pip" install -q transformers safetensors timm pillow numpy
+"$VENV/bin/pip" install -q transformers safetensors timm pillow numpy matplotlib
 RTENSOR_PYTHON="$VENV/bin/python"
 
 echo "== detecting compute capability =="

@@ -23,10 +23,58 @@ ITERS=${ITERS:-200}
 WARMUP=${WARMUP:-30}
 ROUNDS=${ROUNDS:-3}
 JIT_FLAGS=${JIT_FLAGS:---jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000}
-OUT=${OUT:-$HERE/../results/paper-$(date +%F)-$(hostname)}
+# Results are filed under the machine and the accelerator that produced them,
+# because a number here means nothing without both: results/<host>-<gpu>/paper-<date>.
+gpu_slug() {
+  local name
+  name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+  if [ -z "$name" ]; then
+    echo "nogpu"
+    return
+  fi
+  echo "$name" | tr 'A-Z' 'a-z' | sed -e 's/nvidia //' -e 's/geforce //' \
+                                     -e 's/[^a-z0-9]//g'
+}
+RUN_HOST=${RUN_HOST:-$(hostname)}
+RUN_GPU=${RUN_GPU:-$(gpu_slug)}
+OUT=${OUT:-$HERE/../results/$RUN_HOST-$RUN_GPU/paper-$(date +%F)}
 export RTENSOR_BUDGET_MB=${RTENSOR_BUDGET_MB:-8}
 
 mkdir -p "$OUT" "$WEIGHTS"
+
+# The directory name carries the host and the GPU; this carries everything else
+# a reader needs to place the numbers - driver, toolkit, wheels, CPU.
+write_machine_txt() {
+  local f="$OUT/machine.txt"
+  {
+    echo "host          $RUN_HOST"
+    echo "date          $(date -Iseconds)"
+    echo "gpu           $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
+    echo "gpu_memory    $(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null | head -1)"
+    echo "compute_cap   ${RTENSOR_CC:-unknown}"
+    echo "driver        $(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)"
+    echo "cuda_home     ${CUDA_HOME:-unset}"
+    echo "cpu           $(sed -n 's/^model name[ \t]*: //p' /proc/cpuinfo | head -1)"
+    echo "cpu_threads   $(nproc)"
+    echo "kernel        $(uname -sr)"
+    if [ -n "$RTENSOR_PYTHON" ] && [ -x "$RTENSOR_PYTHON" ]; then
+      "$RTENSOR_PYTHON" - <<'PY' 2>/dev/null
+import importlib
+for mod in ("torch", "triton", "transformers"):
+    try:
+        print("%-13s %s" % (mod, importlib.import_module(mod).__version__))
+    except Exception:
+        print("%-13s -" % mod)
+PY
+    fi
+    echo "iters         ${ITERS}"
+    echo "rounds        ${ROUNDS}"
+    echo "budget_mb     ${RTENSOR_BUDGET_MB}"
+    echo "jit_flags     ${JIT_FLAGS}"
+    echo "commit        $(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  } > "$f"
+}
+write_machine_txt
 
 if [ -z "$PYPY" ]; then
   echo "config.sh: PYPY not set (translated pypy-c with _metatensor)" >&2
