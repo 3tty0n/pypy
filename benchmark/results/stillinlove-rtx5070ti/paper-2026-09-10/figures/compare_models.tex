@@ -1,16 +1,16 @@
-\begin{tabular}{lrr}
+\begin{tabular}{lrrrr}
 \toprule
-model & RTX 5070 Ti & RTX 3090 \\
+model & RTX 5070 Ti & range & RTX 3090 & range \\
 \midrule
-resnet18-b8 & 0.51 & 0.68 \\
-mixer\_b16 & 1.03 & 0.82 \\
-distilgpt2 & 1.08 & 0.93 \\
-bert-tiny & 1.36 & 1.22 \\
-resnet18-b1 & 1.39 & 1.23 \\
-tiny-gpt2 & 1.46 & 1.96 \\
-bert-mini & 1.49 & 1.17 \\
-smollm2-135m & 1.81 & 1.29 \\
-vit-tiny & 1.87 & 1.28 \\
+resnet18-b8 & 0.51 & 0.51-0.51 & 0.68 & 0.68-0.69 \\
+mixer\_b16 & 1.03 & 1.03-1.05 & 0.82 & 0.81-0.83 \\
+distilgpt2 & 1.08 & 1.08-1.08 & 0.93 & 0.92-0.95 \\
+bert-tiny & 1.36 & 1.35-1.37 & 1.22 & 1.18-1.23 \\
+resnet18-b1 & 1.39 & 1.39-1.39 & 1.23 & 1.21-1.24 \\
+tiny-gpt2 & 1.46 & 1.46-1.50 & 1.96 & 1.95-2.05 \\
+bert-mini & 1.49 & 1.46-1.50 & 1.17 & 1.16-1.18 \\
+smollm2-135m & 1.81 & 1.79-1.82 & 1.29 & 1.28-1.29 \\
+vit-tiny & 1.87 & 1.85-1.88 & 1.28 & 1.27-1.31 \\
 \bottomrule
 \end{tabular}
-% end-to-end speedup over torch.compile
+% end-to-end speedup over torch.compile, with the range over the rounds

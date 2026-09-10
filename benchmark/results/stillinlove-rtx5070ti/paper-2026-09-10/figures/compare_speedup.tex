@@ -1,33 +1,33 @@
-\begin{tabular}{lrr}
+\begin{tabular}{lrrrr}
 \toprule
-benchmark & RTX 5070 Ti & RTX 3090 \\
+benchmark & RTX 5070 Ti & range & RTX 3090 & range \\
 \midrule
-TF train n=25.6k & 0.80 & 0.78 \\
-attention n=256k & 1.12 & 1.05 \\
-TF block n=25.6k & 1.13 & 1.06 \\
-MLP train n=256k & 1.19 & 1.08 \\
-CNN n=25.6k & 1.27 & 1.11 \\
-TF block n=256k & 1.33 & 1.33 \\
-MLP n=256k & 1.41 & 1.17 \\
-MLP train n=25.6k & 1.49 & 1.24 \\
-elementwise k=4 n=10M & 1.69 & 1.95 \\
-attention n=25.6k & 1.71 & 1.35 \\
-elementwise k=4 n=1M & 1.74 & 1.72 \\
-elementwise k=8 n=1M & 1.74 & 1.88 \\
-MLP n=25.6k & 1.75 & 1.35 \\
-matmul n=256k & 1.83 & 1.36 \\
-value guard k=4 n=1M & 1.93 & 1.79 \\
-matmul n=25.6k & 1.99 & 1.47 \\
-side effect k=4 n=1M & 2.80 & 5.94 \\
-force k=4 n=1M & 2.85 & 6.97 \\
-exception k=4 n=1M & 2.86 & 6.24 \\
-guard k=4 n=1M & 2.94 & 7.11 \\
-elementwise k=1 n=1M & 2.97 & 1.47 \\
-CNN n=256k & 3.30 & 1.14 \\
-elementwise k=4 n=100k & 3.83 & 3.29 \\
-elementwise k=4 n=10k & 3.86 & 3.31 \\
-reduction n=256k & 15.64 & 10.15 \\
-reduction n=25.6k & 18.24 & 17.39 \\
+TF train n=25.6k & 0.80 & 0.80-0.81 & 0.78 & 0.77-0.78 \\
+attention n=256k & 1.12 & 1.11-1.13 & 1.05 & 1.05-1.07 \\
+TF block n=25.6k & 1.13 & 1.13-1.13 & 1.06 & 1.04-1.06 \\
+MLP train n=256k & 1.19 & 1.18-1.20 & 1.08 & 1.07-1.08 \\
+CNN n=25.6k & 1.27 & 1.27-1.28 & 1.11 & 1.07-1.14 \\
+TF block n=256k & 1.33 & 1.32-1.33 & 1.33 & 1.32-1.34 \\
+MLP n=256k & 1.41 & 1.41-1.41 & 1.17 & 1.16-1.20 \\
+MLP train n=25.6k & 1.49 & 1.49-1.51 & 1.24 & 1.21-1.26 \\
+elementwise k=4 n=10M & 1.69 & 1.69-1.70 & 1.95 & 1.95-1.95 \\
+attention n=25.6k & 1.71 & 1.71-1.72 & 1.35 & 1.34-1.36 \\
+elementwise k=4 n=1M & 1.74 & 1.73-1.74 & 1.72 & 1.72-1.73 \\
+elementwise k=8 n=1M & 1.74 & 1.74-1.74 & 1.88 & 1.88-1.88 \\
+MLP n=25.6k & 1.75 & 1.75-1.76 & 1.35 & 1.35-1.36 \\
+matmul n=256k & 1.83 & 1.83-1.83 & 1.36 & 1.35-1.38 \\
+value guard k=4 n=1M & 1.93 & 1.91-1.94 & 1.79 & 1.77-1.79 \\
+matmul n=25.6k & 1.99 & 1.91-2.01 & 1.47 & 1.46-1.51 \\
+side effect k=4 n=1M & 2.80 & 2.79-2.80 & 5.94 & 5.92-5.94 \\
+force k=4 n=1M & 2.85 & 2.85-2.85 & 6.97 & 6.97-6.98 \\
+exception k=4 n=1M & 2.86 & 2.85-2.86 & 6.24 & 6.24-6.25 \\
+guard k=4 n=1M & 2.94 & 2.93-2.94 & 7.11 & 7.11-7.12 \\
+elementwise k=1 n=1M & 2.97 & 2.93-3.05 & 1.47 & 1.43-1.48 \\
+CNN n=256k & 3.30 & 3.29-3.30 & 1.14 & 1.13-1.17 \\
+elementwise k=4 n=100k & 3.83 & 3.82-3.95 & 3.29 & 3.26-3.31 \\
+elementwise k=4 n=10k & 3.86 & 3.74-3.91 & 3.31 & 3.25-3.39 \\
+reduction n=256k & 15.64 & 15.54-15.74 & 10.15 & 9.79-12.04 \\
+reduction n=25.6k & 18.24 & 7.61-18.59 & 17.39 & 16.72-18.38 \\
 \bottomrule
 \end{tabular}
-% fused speedup over torch.compile, float64
+% fused speedup over torch.compile, float64, with the range over the rounds

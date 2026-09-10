@@ -41,6 +41,8 @@ import re
 import statistics
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -80,11 +82,14 @@ SYSTEM_LABEL = {
     "torch-compile-dynamic": "torch.compile (dynamic)",
     "torch-compile-static": "torch.compile (static)",
 }
-VARIANT_LABEL = {
-    0: "elementwise", 1: "guard", 2: "force", 3: "value guard", 4: "exception",
-    5: "side effect", 6: "MLP", 7: "MLP train", 8: "TF block", 9: "CNN",
-    10: "TF train", 11: "reduction", 12: "matmul", 13: "attention",
-}
+# Names come from benchmarks.toml, the same file the grid is read from, so a
+# new benchmark is named once. A run whose variants predate an entry still
+# plots - the fallback is the bare variant number.
+try:
+    import grid as _grid
+    VARIANT_LABEL = _grid.labels(_grid.load())
+except Exception:  # no benchmarks.toml next to this checkout
+    VARIANT_LABEL = {}
 
 
 def style(font):
@@ -130,18 +135,52 @@ def med(xs):
     return statistics.median(xs) if xs else None
 
 
-def micro_groups(rows):
-    """(dtype, variant, k, n) -> {mode: median steady_us}.
-
-    The dtype lands in a different column for our rows and torch's, exactly as
-    summarize.py reads it; keep the two in step.
-    """
+def micro_values(rows):
+    """The dtype lands in a different tsv column for our rows and torch's;
+    read it the way summarize.py does and keep the two in step."""
     g = collections.defaultdict(lambda: collections.defaultdict(list))
     for r in rows:
         dtype = r.get("breaks") or r.get("graphs") or "float64"
         key = (dtype, int(r["variant"]), int(r["k"]), int(r["n"]))
         g[key][r["mode"]].append(float(r["steady_us"]))
-    return {k: {m: med(v) for m, v in d.items()} for k, d in g.items()}
+    return g
+
+
+def micro_groups(rows):
+    return {k: {m: med(v) for m, v in d.items()}
+            for k, d in micro_values(rows).items()}
+
+
+def band(xs):
+    """(median, min, max) over the rounds. With three rounds a standard
+    deviation is noise; the observed range is what there is to report."""
+    xs = [float(x) for x in xs if x not in (None, "")]
+    if not xs:
+        return None, None, None
+    return statistics.median(xs), min(xs), max(xs)
+
+
+def ratio_band(num, den):
+    """Envelope of num/den when the rounds are not paired across the two
+    systems, so the extremes are taken from opposite ends."""
+    nm, nlo, nhi = band(num)
+    dm, dlo, dhi = band(den)
+    if not nm or not dm:
+        return None, None, None
+    return nm / dm, nlo / dhi, nhi / dlo
+
+
+def err(values, lows, highs):
+    """Matplotlib wants distances from the point, not absolute bounds."""
+    return [[v - lo for v, lo in zip(values, lows)],
+            [hi - v for v, hi in zip(values, highs)]]
+
+
+ERRBAR = dict(ecolor=INK_2, elinewidth=0.7, capsize=1.4, capthick=0.7)
+
+
+def spread_str(lo, hi, fmt="%.1f"):
+    return (fmt + "-" + fmt) % (lo, hi) if lo is not None else "n/a"
 
 
 def micro_label(variant, k, n):
@@ -176,17 +215,20 @@ def write_table(path, caption, header, rows, align=None):
 
 def fig_micro_speedup(out, args):
     """Ratios sit either side of a 1.0 baseline, so the form is a diverging bar."""
-    g = micro_groups(read_tsv(os.path.join(out, "micro.tsv")))
+    g = micro_values(read_tsv(os.path.join(out, "micro.tsv")))
     pts = []
     for (dtype, v, k, n), m in g.items():
         if dtype != "float64" or not m.get("fused") or not m.get("torch-compile"):
             continue
-        pts.append((m["torch-compile"] / m["fused"], micro_label(v, k, n)))
+        r, lo, hi = ratio_band(m["torch-compile"], m["fused"])
+        pts.append((r, micro_label(v, k, n), lo, hi))
     if not pts:
         return None
     pts.sort()
     vals = [p[0] for p in pts]
     labels = [p[1] for p in pts]
+    lows = [p[2] for p in pts]
+    highs = [p[3] for p in pts]
     y = range(len(pts))
 
     fig, ax = plt.subplots(figsize=(args.width, 0.16 * len(pts) + 0.75))
@@ -195,13 +237,15 @@ def fig_micro_speedup(out, args):
     ax.barh(list(y), [v - 1 for v in vals], left=1, height=0.55,
             color=colors, linewidth=0,
             hatch=(HATCH[0] if not args.texture else None))
+    ax.errorbar(vals, list(y), xerr=err(vals, lows, highs), fmt="none",
+                zorder=4, **ERRBAR)
     ax.axvline(1, color=INK_2, linewidth=0.8, zorder=3)
     ax.set_xscale("log", base=2)
     ax.set_xticks([0.5, 1, 2, 4, 8, 16])
     ax.xaxis.set_major_formatter(FuncFormatter(
         lambda v, _: ("%g" % v).rstrip("0").rstrip(".") + "\u00d7"))
     ax.set_yticks(list(y), labels)
-    ax.set_xlim(min(vals) / 1.6, max(vals) * 1.35)
+    ax.set_xlim(min(lows) / 1.4, max(highs) * 1.3)
     ax.set_xlabel("speedup over torch.compile")
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
@@ -219,41 +263,54 @@ def fig_micro_speedup(out, args):
         loc="lower right", bbox_to_anchor=(1.0, 0.0))
     if args.titles:
         ax.set_title("Microbenchmark speedup, float64")
+    rows = []
+    for i, (r, lab, lo, hi) in enumerate(pts):
+        key = [k for k in g if k[0] == "float64"
+               and micro_label(k[1], k[2], k[3]) == lab][0]
+        om, olo, ohi = band(g[key]["fused"])
+        cm, clo, chi = band(g[key]["torch-compile"])
+        rows.append([lab, "%.1f" % om, spread_str(olo, ohi),
+                     "%.1f" % cm, spread_str(clo, chi),
+                     "%.2f" % r, spread_str(lo, hi, "%.2f")])
     write_table(os.path.join(args.outdir, "micro_speedup.tex"),
-                "steady-state us per iteration, median of rounds",
-                ["benchmark", "MetaTensor", "torch.compile", "speedup"],
-                [[lab, "%.1f" % g[k]["fused"], "%.1f" % g[k]["torch-compile"],
-                  "%.2f" % (g[k]["torch-compile"] / g[k]["fused"])]
-                 for (k, lab) in sorted(
-                     ((k, micro_label(k[1], k[2], k[3])) for k in g
-                      if k[0] == "float64" and g[k].get("fused")
-                      and g[k].get("torch-compile")),
-                     key=lambda kl: g[kl[0]]["torch-compile"] / g[kl[0]]["fused"])])
+                "median us per iteration over the rounds, with the observed range",
+                ["benchmark", "MetaTensor", "range", "torch.compile", "range",
+                 "speedup", "range"], rows)
     return fig, "micro_speedup"
 
 
 def fig_fusion(out, args):
     """The same benchmark before and after fusion: a dumbbell, one row each."""
-    g = micro_groups(read_tsv(os.path.join(out, "micro.tsv")))
+    g = micro_values(read_tsv(os.path.join(out, "micro.tsv")))
     pts = []
     for (dtype, v, k, n), m in g.items():
         if dtype != "float64" or not m.get("fused") or not m.get("nojit"):
             continue
-        pts.append((m["nojit"] / m["fused"], m["nojit"], m["fused"],
-                    micro_label(v, k, n)))
+        fm, flo, fhi = band(m["fused"])
+        sm, slo, shi = band(m["nojit"])
+        pts.append((sm / fm, sm, fm, micro_label(v, k, n),
+                    (flo, fhi), (slo, shi)))
     if not pts:
         return None
     pts.sort()
     y = range(len(pts))
 
     fig, ax = plt.subplots(figsize=(args.width, 0.16 * len(pts) + 0.75))
-    for i, (_, slow, fast, _lab) in enumerate(pts):
+    for i, (_, slow, fast, _lab, _f, _s) in enumerate(pts):
         ax.plot([fast, slow], [i, i], color=GRID, linewidth=1.2, zorder=1,
                 solid_capstyle="round")
-    ax.scatter([p[1] for p in pts], list(y), s=14, color=SERIES[1],
-               zorder=2, linewidth=0, label="interpreted (nojit)")
-    ax.scatter([p[2] for p in pts], list(y), s=14, color=SERIES[0],
-               zorder=2, linewidth=0, label="fused (ours)")
+    slow = [p[1] for p in pts]
+    fast = [p[2] for p in pts]
+    ax.errorbar(slow, list(y), xerr=err(slow, [p[5][0] for p in pts],
+                                       [p[5][1] for p in pts]),
+                fmt="none", zorder=2, **ERRBAR)
+    ax.errorbar(fast, list(y), xerr=err(fast, [p[4][0] for p in pts],
+                                        [p[4][1] for p in pts]),
+                fmt="none", zorder=2, **ERRBAR)
+    ax.scatter(slow, list(y), s=14, color=SERIES[1],
+               zorder=3, linewidth=0, label="interpreted (nojit)")
+    ax.scatter(fast, list(y), s=14, color=SERIES[0],
+               zorder=3, linewidth=0, label="fused (ours)")
     ax.set_xscale("log")
     ax.set_yticks(list(y), [p[3] for p in pts])
     ax.set_xlabel("steady-state time per iteration (\u00b5s, log)")
@@ -269,9 +326,10 @@ def fig_fusion(out, args):
     if args.titles:
         ax.set_title("Effect of kernel fusion")
     write_table(os.path.join(args.outdir, "fusion.tex"),
-                "steady-state us per iteration",
-                ["benchmark", "fused", "nojit", "gain"],
-                [[p[3], "%.1f" % p[2], "%.1f" % p[1], "%.2f" % p[0]]
+                "median us per iteration over the rounds, with the observed range",
+                ["benchmark", "fused", "range", "nojit", "range", "gain"],
+                [[p[3], "%.1f" % p[2], spread_str(*p[4]),
+                  "%.1f" % p[1], spread_str(*p[5]), "%.2f" % p[0]]
                  for p in reversed(pts)])
     return fig, "fusion"
 
@@ -286,7 +344,8 @@ def fig_models(out, args):
         g[r["model"]][r["system"]].append(float(r["steady_us"]))
     systems = ["ours", "torch-compile", "torch-eager"]
     models = sorted(g, key=lambda m: med(g[m].get("ours", [])) or 0)
-    vals = {s: [med(g[m].get(s, [])) or 0 for m in models] for s in systems}
+    stats = {s: [band(g[m].get(s, [])) for m in models] for s in systems}
+    vals = {s: [b[0] or 0 for b in stats[s]] for s in systems}
 
     h = 0.26
     fig, ax = plt.subplots(figsize=(args.width, 0.42 * len(models) + 0.8))
@@ -297,6 +356,10 @@ def fig_models(out, args):
                 color=SERIES[si_], linewidth=0,
                 hatch=HATCH[si_] if args.texture else None,
                 label=SYSTEM_LABEL[s])
+        ax.errorbar(vals[s], [v + off for v in y],
+                    xerr=err(vals[s], [b[1] or 0 for b in stats[s]],
+                             [b[2] or 0 for b in stats[s]]),
+                    fmt="none", zorder=4, **ERRBAR)
     ax.set_yticks(y, models)
     ax.set_xlabel("steady-state time per iteration (\u00b5s)")
     ax.xaxis.grid(True, zorder=0)
@@ -307,9 +370,14 @@ def fig_models(out, args):
     if args.titles:
         ax.set_title("End-to-end inference")
     write_table(os.path.join(args.outdir, "models.tex"),
-                "steady-state us per iteration, median of rounds",
-                ["model", "MetaTensor", "torch.compile", "eager", "ratio"],
-                [[m, "%.0f" % vals["ours"][i], "%.0f" % vals["torch-compile"][i],
+                "median us per iteration over the rounds, with the observed range",
+                ["model", "MetaTensor", "range", "torch.compile", "range",
+                 "eager", "ratio"],
+                [[m, "%.0f" % vals["ours"][i],
+                  spread_str(stats["ours"][i][1], stats["ours"][i][2], "%.0f"),
+                  "%.0f" % vals["torch-compile"][i],
+                  spread_str(stats["torch-compile"][i][1],
+                             stats["torch-compile"][i][2], "%.0f"),
                   "%.0f" % vals["torch-eager"][i],
                   "%.2f" % (vals["ours"][i] / vals["torch-compile"][i])
                   if vals["torch-compile"][i] else "n/a"]
@@ -333,10 +401,14 @@ def fig_dynamic(out, args):
     fig, ax = plt.subplots(figsize=(args.width, args.width * 0.62))
     markers = ["o", "s", "^", "D"]
     for i, s in enumerate(systems):
-        ys = [med(g[(s, L)]) for L in lengths]
+        bands = [band(g[(s, L)]) for L in lengths]
+        ys = [b[0] for b in bands]
+        ax.errorbar(lengths, ys,
+                    yerr=err(ys, [b[1] for b in bands], [b[2] for b in bands]),
+                    fmt="none", zorder=2, **ERRBAR)
         ax.plot(lengths, ys, color=SERIES[i], linewidth=1.4, marker=markers[i],
                 markersize=3.4, markeredgewidth=0, label=SYSTEM_LABEL[s],
-                clip_on=False)
+                clip_on=False, zorder=3)
     ax.set_xticks(lengths)
     ax.set_xlim(lengths[0] - 3, lengths[-1] + 3)
     ax.set_xlabel("sequence length (tokens)")
@@ -349,9 +421,13 @@ def fig_dynamic(out, args):
     if args.titles:
         ax.set_title("Changing sequence length")
     write_table(os.path.join(args.outdir, "dynamic.tex"),
-                "median us per step; recompiles over the whole sweep",
+                "median us per step over the rounds (range in brackets); "
+                "recompiles over the whole sweep",
                 ["system"] + [str(L) for L in lengths] + ["recompiles"],
-                [[SYSTEM_LABEL[s]] + ["%.0f" % med(g[(s, L)]) for L in lengths]
+                [[SYSTEM_LABEL[s]]
+                 + ["%.0f [%s]" % (band(g[(s, L)])[0],
+                                   spread_str(*band(g[(s, L)])[1:], fmt="%.0f"))
+                    for L in lengths]
                  + [next((r["recompiles"] for r in rows if r["system"] == s), "")]
                  for s in systems])
     return fig, "dynamic"
@@ -361,7 +437,7 @@ def fig_precision(out, args):
     """Two panels with unrelated y-scales would invite a misread, so the panels
     are collapsed into one axis of speedup: a ratio is unitless and shares a
     scale no matter how far apart the absolute times are."""
-    g = micro_groups(read_tsv(os.path.join(out, "micro.tsv")))
+    g = micro_values(read_tsv(os.path.join(out, "micro.tsv")))
     dtypes = ["float64", "float32", "float16"]
     variants = sorted({k[1] for k in g if k[0] != "float64"})
     if not variants:
@@ -372,21 +448,27 @@ def fig_precision(out, args):
     table = []
     for vi, v in enumerate(variants):
         n = max(k[3] for k in g if k[1] == v)
-        ratios, absolute = [], []
+        ratios, lows, highs, absolute = [], [], [], []
         for d in dtypes:
             m = g.get((d, v, 1, n)) or {}
-            ours, comp = m.get("fused"), m.get("torch-compile")
-            ratios.append(comp / ours if ours and comp else 0)
-            absolute.append((ours, comp))
+            r, lo, hi = ratio_band(m.get("torch-compile", []), m.get("fused", []))
+            ratios.append(r or 0)
+            lows.append(lo or 0)
+            highs.append(hi or 0)
+            absolute.append((band(m.get("fused", [])), band(m.get("torch-compile", []))))
         off = (vi - (len(variants) - 1) / 2) * w
         ax.bar([i + off for i in x], ratios, w * 0.86, color=SERIES[vi],
                linewidth=0, hatch=HATCH[vi] if args.texture else None,
                label="%s (n=%s)" % (VARIANT_LABEL.get(v, "v%d" % v), si(n)))
-        for d, r, (ours, comp) in zip(dtypes, ratios, absolute):
+        ax.errorbar([i + off for i in x], ratios,
+                    yerr=err(ratios, lows, highs), fmt="none", zorder=4,
+                    **ERRBAR)
+        for d, r, lo, hi, (ob, cb) in zip(dtypes, ratios, lows, highs, absolute):
             table.append([VARIANT_LABEL.get(v, "v%d" % v), d,
-                          "%.1f" % ours if ours else "n/a",
-                          "%.1f" % comp if comp else "n/a",
-                          "%.2f" % r if r else "n/a"])
+                          "%.1f" % ob[0] if ob[0] else "n/a",
+                          "%.1f" % cb[0] if cb[0] else "n/a",
+                          "%.2f" % r if r else "n/a",
+                          spread_str(lo, hi, "%.2f") if r else "n/a"])
     ax.axhline(1, color=INK_2, linewidth=0.8, zorder=3)
     ax.set_xticks(list(x), ["float64", "float32", "float16"])
     ax.set_ylabel("speedup over torch.compile")
@@ -399,9 +481,9 @@ def fig_precision(out, args):
     if args.titles:
         ax.set_title("Precision sweep")
     write_table(os.path.join(args.outdir, "precision.tex"),
-                "steady-state us per iteration",
-                ["variant", "dtype", "MetaTensor", "torch.compile", "speedup"],
-                table)
+                "median us per iteration over the rounds, with the speedup range",
+                ["variant", "dtype", "MetaTensor", "torch.compile", "speedup",
+                 "range"], table)
     return fig, "precision"
 
 
@@ -431,27 +513,32 @@ def fig_ablation(out, args):
 
     groups = collections.OrderedDict()
     for exp, model, var in sorted(g, key=lambda k: (k[0], k[1], setting_key(k[2]))):
-        groups.setdefault((exp, model), []).append((var, med(g[(exp, model, var)])))
+        groups.setdefault((exp, model), []).append(
+            (var,) + band(g[(exp, model, var)]))
 
     keys = list(groups)
     fig, ax = plt.subplots(figsize=(args.width, 0.52 * len(keys) + 0.8))
     height = 0.30
-    ys, xs, texts, ticks = [], [], [], []
+    ys, xs, lows, highs, texts, ticks = [], [], [], [], [], []
     for i, key in enumerate(keys):
         items = groups[key]
-        for slot, (var, value) in enumerate(items):
+        for slot, (var, value, lo, hi) in enumerate(items):
             ys.append(i + ((len(items) - 1) / 2 - slot) * height)
             xs.append(value)
+            lows.append(lo)
+            highs.append(hi)
             texts.append(var)
         ticks.append("%s / %s" % (key[0].replace("_", " "), key[1]))
     ax.barh(ys, xs, height=height * 0.88, color=SERIES[0], linewidth=0,
             hatch=HATCH[0] if args.texture else None)
+    ax.errorbar(xs, ys, xerr=err(xs, lows, highs), fmt="none", zorder=4,
+                **ERRBAR)
     for xv, yv, t in zip(xs, ys, texts):
         ax.annotate(t, (xv, yv), xytext=(3, 0), textcoords="offset points",
                     va="center", fontsize=6.5, color=INK_2)
     ax.set_yticks(range(len(keys)), ticks)
     ax.set_xlabel("steady-state time per iteration (\u00b5s)")
-    ax.set_xlim(0, max(xs) * 1.18)
+    ax.set_xlim(0, max(highs) * 1.18)
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
@@ -459,9 +546,10 @@ def fig_ablation(out, args):
     if args.titles:
         ax.set_title("Ablations")
     write_table(os.path.join(args.outdir, "ablation.tex"),
-                "steady-state us per iteration, median of rounds",
-                ["experiment", "model", "setting", "us"],
-                [[e.replace("_", " "), m, v, "%.0f" % med(g[(e, m, v)])]
+                "median us per iteration over the rounds, with the observed range",
+                ["experiment", "model", "setting", "us", "range"],
+                [[e.replace("_", " "), m, v, "%.0f" % band(g[(e, m, v)])[0],
+                  spread_str(*band(g[(e, m, v)])[1:], fmt="%.0f")]
                  for (e, m, v) in sorted(g, key=lambda k: (k[0], k[1], setting_key(k[2])))])
     return fig, "ablation"
 
@@ -469,12 +557,8 @@ def fig_ablation(out, args):
 # --- machines --------------------------------------------------------------
 
 def machine_label(path):
-    """Name a result directory by the accelerator that produced it.
-
-    The accelerator only - a published figure has no business naming somebody's
-    server. machine.txt is authoritative for the GPU; runs recorded before it
-    existed fall back to the <host>-<gpu> directory name.
-    """
+    """The accelerator, never the host: a published figure should not name
+    somebody's server. Runs predating machine.txt fall back to the directory."""
     gpu = None
     txt = os.path.join(path, "machine.txt")
     if os.path.exists(txt):
@@ -490,12 +574,8 @@ def machine_label(path):
 
 
 def machine_labels(paths):
-    """Labels for a set of runs, kept distinct without falling back to a host.
-
-    Two runs on the same model of accelerator would otherwise share a label;
-    the run date separates them, which is public information about the run
-    rather than about the machine it happened on.
-    """
+    """Distinct labels without falling back to a host; same-model runs are
+    separated by their date."""
     labels = [machine_label(p) for p in paths]
     if len(set(labels)) == len(labels):
         return labels
@@ -530,19 +610,17 @@ def pretty_gpu(name):
 
 
 def _speedup_rows(out):
-    """benchmark label -> fused speedup over torch.compile, float64 only."""
-    g = micro_groups(read_tsv(os.path.join(out, "micro.tsv")))
+    g = micro_values(read_tsv(os.path.join(out, "micro.tsv")))
     rows = {}
     for (dtype, v, k, n), m in g.items():
         if dtype != "float64" or not m.get("fused") or not m.get("torch-compile"):
             continue
-        rows[(v, k, n)] = (micro_label(v, k, n),
-                           m["torch-compile"] / m["fused"])
+        rows[(v, k, n)] = (micro_label(v, k, n),) + \
+            ratio_band(m["torch-compile"], m["fused"])
     return rows
 
 
-def _grouped_ratio_bars(ax, keys, per_machine, labels, args, xlabel):
-    """One row per benchmark, one bar per machine, all growing from the 1.0 rule."""
+def _grouped_ratio_bars(ax, keys, per_machine, labels, args, xlabel, bands=None):
     y = list(range(len(keys)))
     h = 0.8 / len(labels)
     for mi, label in enumerate(labels):
@@ -551,6 +629,11 @@ def _grouped_ratio_bars(ax, keys, per_machine, labels, args, xlabel):
         ax.barh([i + off for i in y], [v - 1 for v in vals], left=1,
                 height=h * 0.86, color=SERIES[mi], linewidth=0,
                 hatch=HATCH[mi] if args.texture else None, label=label)
+        if bands:
+            ax.errorbar(vals, [i + off for i in y],
+                        xerr=err(vals, [bands[mi][k][0] for k in keys],
+                                 [bands[mi][k][1] for k in keys]),
+                        fmt="none", zorder=4, **ERRBAR)
     ax.axvline(1, color=INK_2, linewidth=0.8, zorder=3)
     ax.set_xscale("log", base=2)
     ax.xaxis.set_major_formatter(FuncFormatter(
@@ -576,10 +659,11 @@ def fig_compare_speedup(out, args):
         return None
     keys = sorted(common, key=lambda k: rows[0][k][1])
     per = [{k: r[k][1] for k in keys} for r in rows]
+    bands = [{k: (r[k][2], r[k][3]) for k in keys} for r in rows]
 
     fig, ax = plt.subplots(figsize=(args.width, 0.22 * len(keys) + 0.9))
     _grouped_ratio_bars(ax, keys, per, labels, args,
-                        "speedup over torch.compile")
+                        "speedup over torch.compile", bands)
     ax.set_yticks(list(range(len(keys))), [rows[0][k][0] for k in keys])
     ax.legend(loc="lower right")
     if args.titles:
@@ -590,9 +674,13 @@ def fig_compare_speedup(out, args):
               % (len(dropped), ", ".join(micro_label(*k) for k in dropped)),
               file=sys.stderr)
     write_table(os.path.join(args.outdir, "compare_speedup.tex"),
-                "fused speedup over torch.compile, float64",
-                ["benchmark"] + labels,
-                [[rows[0][k][0]] + ["%.2f" % p[k] for p in per] for k in keys])
+                "fused speedup over torch.compile, float64, with the range "
+                "over the rounds",
+                ["benchmark"] + [c for lab in labels for c in (lab, "range")],
+                [[rows[0][k][0]]
+                 + [c for p, b in zip(per, bands)
+                    for c in ("%.2f" % p[k], spread_str(*b[k], fmt="%.2f"))]
+                 for k in keys])
     return fig, "compare_speedup"
 
 
@@ -600,14 +688,15 @@ def fig_compare_models(out, args):
     """End-to-end ratio to torch.compile, per model, per machine."""
     outs = [out] + args.compare
     labels = machine_labels(outs)
-    per = []
+    per, bands = [], []
     for o in outs:
         g = collections.defaultdict(lambda: collections.defaultdict(list))
         for r in read_tsv(os.path.join(o, "models.tsv")):
             g[r["model"]][r["system"]].append(float(r["steady_us"]))
-        per.append({m: med(d.get("torch-compile", [])) / med(d["ours"])
-                    for m, d in g.items()
-                    if d.get("ours") and d.get("torch-compile")})
+        usable = {m: ratio_band(d["torch-compile"], d["ours"]) for m, d in g.items()
+                  if d.get("ours") and d.get("torch-compile")}
+        per.append({m: b[0] for m, b in usable.items()})
+        bands.append({m: (b[1], b[2]) for m, b in usable.items()})
     common = set(per[0])
     for p in per[1:]:
         common &= set(p)
@@ -617,15 +706,18 @@ def fig_compare_models(out, args):
 
     fig, ax = plt.subplots(figsize=(args.width, 0.30 * len(keys) + 0.9))
     _grouped_ratio_bars(ax, keys, per, labels, args,
-                        "speedup over torch.compile")
+                        "speedup over torch.compile", bands)
     ax.set_yticks(list(range(len(keys))), keys)
     ax.legend(loc="lower right")
     if args.titles:
         ax.set_title("End-to-end speedup across machines")
     write_table(os.path.join(args.outdir, "compare_models.tex"),
-                "end-to-end speedup over torch.compile",
-                ["model"] + labels,
-                [[m] + ["%.2f" % p[m] for p in per] for m in keys])
+                "end-to-end speedup over torch.compile, with the range over "
+                "the rounds",
+                ["model"] + [c for lab in labels for c in (lab, "range")],
+                [[m] + [c for p, b in zip(per, bands)
+                        for c in ("%.2f" % p[m], spread_str(*b[m], fmt="%.2f"))]
+                 for m in keys])
     return fig, "compare_models"
 
 
@@ -727,9 +819,8 @@ def main(argv=None):
     for d in args.compare:
         if not os.path.isdir(d):
             p.error("%s is not a directory" % d)
-    # The categorical palette is used in fixed order and never cycled, so a
-    # fourth machine would need a hue that does not exist rather than a
-    # generated one.
+    # The categorical palette is never cycled, so a fourth machine would need a
+    # hue that does not exist.
     if len(args.compare) > 2:
         p.error("at most three result directories can share a figure")
     args.outdir = args.outdir or os.path.join(args.out, "figures")

@@ -2,10 +2,10 @@
 \toprule
 system & 32 & 48 & 64 & 96 & 128 & recompiles \\
 \midrule
-MetaTensor & 952 & 1164 & 1240 & 1684 & 1747 & 0 \\
-torch.compile (static) & 1262 & 1473 & 1547 & 1762 & 1849 & 4 \\
-torch.compile (dynamic) & 1344 & 1570 & 1644 & 1861 & 1961 & 0 \\
-PyTorch eager & 2349 & 2400 & 2405 & 2518 & 2566 & 0 \\
+MetaTensor & 952 [950-952] & 1164 [1163-1166] & 1240 [1238-1240] & 1684 [1682-1686] & 1747 [1744-1749] & 0 \\
+torch.compile (static) & 1262 [1258-1265] & 1473 [1468-1474] & 1547 [1543-1548] & 1762 [1760-1762] & 1849 [1847-1851] & 4 \\
+torch.compile (dynamic) & 1344 [1337-1347] & 1570 [1569-1573] & 1644 [1642-1651] & 1861 [1858-1863] & 1961 [1955-1962] & 0 \\
+PyTorch eager & 2349 [2343-2372] & 2400 [2390-2414] & 2405 [2402-2430] & 2518 [2511-2534] & 2566 [2558-2583] & 0 \\
 \bottomrule
 \end{tabular}
-% median us per step; recompiles over the whole sweep
+% median us per step over the rounds (range in brackets); recompiles over the whole sweep

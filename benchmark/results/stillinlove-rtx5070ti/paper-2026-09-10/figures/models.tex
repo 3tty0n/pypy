@@ -1,16 +1,16 @@
-\begin{tabular}{lrrrr}
+\begin{tabular}{lrrrrrr}
 \toprule
-model & MetaTensor & torch.compile & eager & ratio \\
+model & MetaTensor & range & torch.compile & range & eager & ratio \\
 \midrule
-tiny-gpt2 & 286 & 418 & 1850 & 0.68 \\
-bert-tiny & 419 & 569 & 1550 & 0.74 \\
-bert-mini & 584 & 868 & 1582 & 0.67 \\
-resnet18-b1 & 685 & 955 & 1333 & 0.72 \\
-distilgpt2 & 1161 & 1254 & 3033 & 0.93 \\
-vit-tiny & 1212 & 2269 & 3108 & 0.53 \\
-resnet18-b8 & 2977 & 1523 & 1787 & 1.95 \\
-mixer\_b16 & 3015 & 3119 & 3642 & 0.97 \\
-smollm2-135m & 3052 & 5539 & 13536 & 0.55 \\
+tiny-gpt2 & 286 & 282-287 & 418 & 418-423 & 1850 & 0.68 \\
+bert-tiny & 419 & 418-422 & 569 & 568-571 & 1550 & 0.74 \\
+bert-mini & 584 & 580-594 & 868 & 866-870 & 1582 & 0.67 \\
+resnet18-b1 & 685 & 685-685 & 955 & 955-956 & 1333 & 0.72 \\
+distilgpt2 & 1161 & 1160-1162 & 1254 & 1254-1255 & 3033 & 0.93 \\
+vit-tiny & 1212 & 1210-1224 & 2269 & 2259-2279 & 3108 & 0.53 \\
+resnet18-b8 & 2977 & 2970-2990 & 1523 & 1511-1527 & 1787 & 1.95 \\
+mixer\_b16 & 3015 & 2990-3018 & 3119 & 3095-3142 & 3642 & 0.97 \\
+smollm2-135m & 3052 & 3052-3091 & 5539 & 5538-5555 & 13536 & 0.55 \\
 \bottomrule
 \end{tabular}
-% steady-state us per iteration, median of rounds
+% median us per iteration over the rounds, with the observed range

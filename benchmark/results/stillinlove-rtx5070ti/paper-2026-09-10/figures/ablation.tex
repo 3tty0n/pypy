@@ -1,19 +1,19 @@
-\begin{tabular}{lrrr}
+\begin{tabular}{lrrrr}
 \toprule
-experiment & model & setting & us \\
+experiment & model & setting & us & range \\
 \midrule
-budget mb & distilgpt2 & 8 & 1160 \\
-budget mb & distilgpt2 & 64 & 1161 \\
-flat block & distilgpt2 & 256 & 1123 \\
-flat block & distilgpt2 & 4096 & 1161 \\
-flat block & resnet18 & 256 & 627 \\
-flat block & resnet18 & 4096 & 685 \\
-fusion & distilgpt2 & off & 1601 \\
-fusion & distilgpt2 & on & 1161 \\
-precision & distilgpt2 & float16 & 1217 \\
-precision & distilgpt2 & float32 & 1161 \\
-precision & smollm2-135m & float16 & 2257 \\
-precision & smollm2-135m & float32 & 3092 \\
+budget mb & distilgpt2 & 8 & 1160 & 1160-1161 \\
+budget mb & distilgpt2 & 64 & 1161 & 1161-1162 \\
+flat block & distilgpt2 & 256 & 1123 & 1123-1124 \\
+flat block & distilgpt2 & 4096 & 1161 & 1148-1162 \\
+flat block & resnet18 & 256 & 627 & 626-664 \\
+flat block & resnet18 & 4096 & 685 & 685-686 \\
+fusion & distilgpt2 & off & 1601 & 1598-1602 \\
+fusion & distilgpt2 & on & 1161 & 1160-1162 \\
+precision & distilgpt2 & float16 & 1217 & 1213-1224 \\
+precision & distilgpt2 & float32 & 1161 & 1160-1161 \\
+precision & smollm2-135m & float16 & 2257 & 2245-2276 \\
+precision & smollm2-135m & float32 & 3092 & 3089-3096 \\
 \bottomrule
 \end{tabular}
-% steady-state us per iteration, median of rounds
+% median us per iteration over the rounds, with the observed range
