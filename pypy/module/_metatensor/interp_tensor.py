@@ -1,4 +1,5 @@
 from rpython.metatensor import core, device, kernels, nn, ops, runtime
+from rpython.rlib import jit
 from pypy.interpreter.baseobjspace import W_Root
 from pypy.interpreter.typedef import TypeDef, GetSetProperty
 from pypy.interpreter.gateway import interp2app, unwrap_spec
@@ -119,6 +120,9 @@ class W_Tensor(W_Root):
 
     def descr_gelu(self, space):
         return W_Tensor(nn.gelu(self.tensor))
+
+    def descr_gelu_erf(self, space):
+        return W_Tensor(nn.gelu_erf(self.tensor))
 
     def descr_silu(self, space):
         return W_Tensor(nn.silu(self.tensor))
@@ -365,6 +369,7 @@ W_Tensor.typedef = TypeDef(
     layer_norm=interp2app(W_Tensor.descr_layer_norm),
     rms_norm=interp2app(W_Tensor.descr_rms_norm),
     gelu=interp2app(W_Tensor.descr_gelu),
+    gelu_erf=interp2app(W_Tensor.descr_gelu_erf),
     silu=interp2app(W_Tensor.descr_silu),
     sum=interp2app(W_Tensor.descr_sum),
     item=interp2app(W_Tensor.descr_item),
@@ -423,6 +428,18 @@ def ensure_device():
 def ensure_dtype(dtype):
     ensure_device()
     kernels.init_dtype(dtype)
+
+def scalar(space, w_value, w_dtype=None):
+    """A cached 0-d tensor.  The value is promoted so the trace sees a
+    constant pointer, which is what lets the fusion pass put the number into
+    the kernel body instead of spending an input slot on it."""
+    ensure_device()
+    dtype = core.F64
+    if w_dtype is not None and not space.is_none(w_dtype):
+        dtype = _dtype_w(space, w_dtype)
+    return W_Tensor(nn.Tensor(runtime.scalar_of(
+        jit.promote(space.float_w(w_value)), jit.promote(dtype))))
+
 
 @unwrap_spec(requires_grad=bool)
 def tensor_flat(space, w_data, w_shape, requires_grad=False,

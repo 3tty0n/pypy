@@ -640,9 +640,12 @@ class ScalarCache(object):
 scalars = ScalarCache()
 
 
-@jit.elidable
 def scalar(value):
-    dtype = policy.dtype
+    return scalar_of(value, policy.dtype)
+
+
+@jit.elidable
+def scalar_of(value, dtype):
     t = scalars.tensors[dtype].get(value, NULLTENSOR)
     if not t:
         t = new_tensor(1, lltype.nullptr(SHAPEARRAY), dtype)

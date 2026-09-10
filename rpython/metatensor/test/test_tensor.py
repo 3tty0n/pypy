@@ -65,6 +65,56 @@ class TestTensor(LLJitMixin):
         assert res == f(12)
         self.check_simple_loop(call_r=1)
 
+class TestScalarImmediates(LLJitMixin):
+
+    def test_many_scalar_leaves_fuse_into_one_kernel(self):
+        driver = JitDriver(greens=[], reds=['n', 'w', 'b', 'acc'])
+        def f(n):
+            w = from_list([1.0, -2.0, 3.0, -4.0])
+            b = from_list([0.5, 0.25, -0.5, 2.0])
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, acc=acc, w=w, b=b)
+                h = ops.mul(w, b)
+                h = ops.mul(h, runtime.scalar(0.1))
+                h = ops.add(h, runtime.scalar(0.2))
+                h = ops.mul(h, runtime.scalar(0.3))
+                h = ops.add(h, runtime.scalar(0.4))
+                h = ops.mul(h, runtime.scalar(0.5))
+                h = ops.add(h, runtime.scalar(0.6))
+                h = ops.mul(h, runtime.scalar(0.7))
+                acc += ops.item(ops.sum(h))
+                n -= 1
+            return acc
+        before = set(kernels.kernel_cache.kernels)
+        res = self.meta_interp(f, [10])
+        assert abs(res - f(10)) < 1e-9
+        # Seven scalars and two tensors: without immediates that is nine
+        # leaves against MAX_INPUTS=6, so the chain would be cut into several
+        # launches.
+        self.check_simple_loop(call_r=1, call_f=1)
+        added = set(kernels.kernel_cache.kernels) - before
+        assert len(added) == 1
+        key = added.pop()
+        assert key.split(',')[0] == '2'
+        assert len([p for p in key.split(',') if p.startswith('k')]) == 7
+
+    def test_gelu_erf_fuses_into_one_kernel(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'acc'])
+        def f(n):
+            x = from_list([-3.0, -1.0, 0.5, 2.5])
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, acc=acc, x=x)
+                acc += ops.item(ops.sum(nn.gelu_erf(nn.Tensor(x)).t))
+                n -= 1
+            return acc
+        res = self.meta_interp(f, [10])
+        assert abs(res - f(10)) < 1e-9
+        # Ten scalar coefficients over a single tensor leaf.
+        self.check_simple_loop(call_r=1, call_f=1)
+
+
 class TestTensorMeta(LLJitMixin):
 
     def test_size_of_virtual_does_not_force(self):
@@ -180,7 +230,7 @@ def test_gpu_launch_matches_cpu():
     assert gpu and device.host(gpu)[0] == 3.0
     k.fn = 0
     assert device.host(runtime.launch(k, a, b, core.NULLTENSOR))[0] == 3.0
-    assert '"tt.reduce"(%v4)' in kernels.to_ttir(k, 'k')
+    assert '"tt.reduce"(%rm5)' in kernels.to_ttir(k, 'k')
     k2 = kernels.build_kernel(2, [core.ADD, core.RELU], [0, 2], [1, -1],
                                    [0, 0])
     assert k2.fn != 0
@@ -868,7 +918,7 @@ class TestTransformer(LLJitMixin):
         added = set(kernels.kernel_cache.kernels) - before
         assert len(added) == 1
         key = added.pop()
-        assert key.split(',')[2] == 'r32' and key.split(',')[0] == '6'
+        assert key.split(',')[2] == 'r32' and key.split(',')[0] == '4'
 
     def test_gelu_fuses_one_kernel(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
@@ -956,7 +1006,7 @@ class TestTransformer(LLJitMixin):
         added = set(kernels.kernel_cache.kernels) - before
         assert len(added) == 1
         key = added.pop()
-        assert key.split(',')[0] == '5'
+        assert key.split(',')[0] == '3'
 
     def test_attn_scores_context_match_head_split(self):
         heads, rows, dh = 3, 4, 2
@@ -1452,7 +1502,7 @@ class TestConv(LLJitMixin):
 
 
 TLR = 0.001
-TRAIN_CALL_R = 152
+TRAIN_CALL_R = 142
 TBLOCKS = 2
 
 

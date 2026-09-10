@@ -759,6 +759,33 @@ def gelu(x):
     return x.div(z.exp().add(one, core.BC_R_SCALAR), core.BC_NONE)
 
 
+_ERF_A = [0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429]
+
+
+@jit.unroll_safe
+def gelu_erf(x):
+    # The exact-erf gelu, here rather than app-level so its ten coefficients
+    # come from runtime.scalar: the trace then knows their pointers and the
+    # fusion pass folds them into the kernel body instead of spending input
+    # slots on them, which is the difference between one launch and eight.
+    one = Tensor(runtime.scalar(1.0))
+    neg = Tensor(runtime.scalar(-1.0))
+    u = x.relu().add(x.mul(neg, core.BC_R_SCALAR).relu(), core.BC_NONE)
+    z = u.mul(Tensor(runtime.scalar(1.0 / math.sqrt(2.0))), core.BC_R_SCALAR)
+    t = one.div(z.mul(Tensor(runtime.scalar(0.3275911)), core.BC_R_SCALAR)
+                 .add(one, core.BC_R_SCALAR), core.BC_L_SCALAR)
+    poly = Tensor(runtime.scalar(_ERF_A[4])).mul(t, core.BC_L_SCALAR).add(
+        Tensor(runtime.scalar(_ERF_A[3])), core.BC_R_SCALAR)
+    for i in [2, 1, 0]:
+        poly = poly.mul(t, core.BC_NONE).add(
+            Tensor(runtime.scalar(_ERF_A[i])), core.BC_R_SCALAR)
+    e = one.sub(poly.mul(t, core.BC_NONE).mul(
+        z.mul(z, core.BC_NONE).mul(neg, core.BC_R_SCALAR).exp(),
+        core.BC_NONE), core.BC_L_SCALAR)
+    return x.add(u.mul(e, core.BC_NONE), core.BC_NONE).mul(
+        Tensor(runtime.scalar(0.5)), core.BC_R_SCALAR)
+
+
 def silu(x):
     neg = Tensor(runtime.scalar(-1.0))
     one = Tensor(runtime.scalar(1.0))

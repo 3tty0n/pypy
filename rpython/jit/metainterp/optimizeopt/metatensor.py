@@ -38,8 +38,17 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         self._is_virtual = False
         if self.launched_kernel:
             return self.force_as_extra_output(op, optforce)
-        leaves, opcodes, lefts, rights, params, infos = [], [], [], [], [], []
-        _collect_indexed(self, leaves, opcodes, lefts, rights, params, infos)
+        leaves, consts = [], []
+        opcodes, lefts, rights, params, infos = [], [], [], [], []
+        _collect_indexed(self, leaves, consts, opcodes, lefts, rights, params,
+                         infos)
+        if not leaves:
+            # Nothing left to give the launcher its size from: keep the
+            # scalars as real inputs for this (degenerate) all-scalar chain.
+            leaves, consts = [], []
+            opcodes, lefts, rights, params, infos = [], [], [], [], []
+            _collect_indexed(self, leaves, consts, opcodes, lefts, rights,
+                             params, infos, False)
         n = 0
         cols = 0
         if self.opt is not None:
@@ -47,6 +56,9 @@ class VTensorInfo(AbstractVirtualPtrInfo):
             cols = self.opt.static_cols(self.big_leaf())
         kernel = lltype.malloc(core.KERNEL)
         kernel.ninputs = len(leaves)
+        kernel.consts = lltype.malloc(core.HOSTARRAY, len(consts))
+        for i in range(len(consts)):
+            kernel.consts[i] = _const_value(consts[i])
         kernel.nodes = lltype.malloc(core.NODEARRAY, len(opcodes))
         kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
         kernel.rowmode = 0
@@ -83,7 +95,7 @@ class VTensorInfo(AbstractVirtualPtrInfo):
             if info is not self and not core.is_reduction(info.opcode):
                 info.launched_kernel = kernel
                 info.launched_box = newop
-                info.node_index = len(leaves) + i
+                info.node_index = len(leaves) + len(consts) + i
         return newop
 
     def force_as_extra_output(self, op, optforce):
@@ -143,15 +155,38 @@ class VTensorInfo(AbstractVirtualPtrInfo):
     def visitor_dispatch_virtual_type(self, visitor):
         return visitor.visit_vtensor(self.opcode, self.param)
 
-def _collect_indexed(info, leaves, opcodes, lefts, rights, params, infos):
-    _collect_leaves(info, leaves)
-    _emit_nodes(info, leaves, opcodes, lefts, rights, params, infos)
+def _collect_indexed(info, leaves, consts, opcodes, lefts, rights, params,
+                     infos, split=True):
+    _collect_leaves(info, leaves, consts, split)
+    _emit_nodes(info, leaves, consts, opcodes, lefts, rights, params, infos)
 
-def _collect_leaves(info, leaves):
+def _is_const_scalar(box):
+    """A 0-d tensor whose pointer the trace already knows - the cached
+    scalars behind _scalar()/runtime.scalar().  Its value becomes a literal in
+    the kernel body, so it costs no input slot and no load."""
+    if not box.is_constant():
+        return False
+    ref = box.getref_base()
+    if not ref:
+        return False
+    t = lltype.cast_opaque_ptr(core.TENSORPTR, ref)
+    if not t or t.size != 1 or not t.host or len(t.host) < 1:
+        return False
+    v = t.host[0]
+    return v == v and v - v == 0.0
+
+def _const_value(box):
+    t = lltype.cast_opaque_ptr(core.TENSORPTR, box.getref_base())
+    return t.host[0]
+
+def _collect_leaves(info, leaves, consts, split=True):
     for box in info.args:
         sub = vtensor_info(box)
         if sub is not None:
-            _collect_leaves(sub, leaves)
+            _collect_leaves(sub, leaves, consts, split)
+        elif split and _is_const_scalar(box):
+            if _leaf_index(consts, box) < 0:
+                consts.append(box)
         elif _leaf_index(leaves, box) < 0:
             leaves.append(box)
 
@@ -161,22 +196,25 @@ def _leaf_index(leaves, box):
             return j
     return -1
 
-def _emit_nodes(info, leaves, opcodes, lefts, rights, params, infos):
+def _emit_nodes(info, leaves, consts, opcodes, lefts, rights, params, infos):
     idx = [-1, -1]
     for i in range(len(info.args)):
         box = info.args[i]
         sub = vtensor_info(box)
         if sub is not None:
-            idx[i] = _emit_nodes(sub, leaves, opcodes, lefts, rights, params,
-                                 infos)
+            idx[i] = _emit_nodes(sub, leaves, consts, opcodes, lefts, rights,
+                                 params, infos)
         else:
-            idx[i] = _leaf_index(leaves, box)
+            j = _leaf_index(leaves, box)
+            if j < 0:
+                j = len(leaves) + _leaf_index(consts, box)
+            idx[i] = j
     opcodes.append(info.opcode)
     lefts.append(idx[0])
     rights.append(idx[1])
     params.append(info.param)
     infos.append(info)
-    return len(leaves) + len(opcodes) - 1
+    return len(leaves) + len(consts) + len(opcodes) - 1
 
 class OptTensor(Optimization):
 
@@ -290,8 +328,8 @@ class OptTensor(Optimization):
     optimize_CALL_PURE_I = optimize_CALL_I
 
     def _nleaves(self, args):
-        leaves = []
-        _collect_leaves(VTensorInfo(0, args, 0), leaves)
+        leaves, consts = [], []
+        _collect_leaves(VTensorInfo(0, args, 0), leaves, consts)
         return len(leaves)
 
     def optimize_GUARD_NO_EXCEPTION(self, op):

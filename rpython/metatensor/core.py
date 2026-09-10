@@ -68,8 +68,15 @@ KERNEL = lltype.GcStruct('TENSOR_KERNEL', ('ninputs', lltype.Signed),
                          ('modes', lltype.Signed),
                          ('outmodes', lltype.Signed),
                          ('nouts', lltype.Signed),
+                         ('consts', lltype.Ptr(HOSTARRAY)),
                          ('outputs', lltype.Ptr(SHAPEARRAY)))
 KERNELPTR = lltype.Ptr(KERNEL)
+NO_CONSTS = lltype.malloc(HOSTARRAY, 0, immortal=True)
+
+def nvals(kernel):
+    """Scalar leaves live in the same value-index space as the inputs, right
+    after them, but are literals in the generated code instead of pointers."""
+    return kernel.ninputs + len(kernel.consts)
 
 def _shape1(n):
     shape = lltype.malloc(SHAPEARRAY, 1)

@@ -1,8 +1,9 @@
+from rpython.rlib.rfloat import formatd
 from rpython.rlib.rmd5 import md5
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import os
-from rpython.metatensor.core import (ARITY, AXIS_ALL, F64, KERNEL, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, SHAPEARRAY, SUM, config, is_reduction, param_slot, slot_param, slot_used)
+from rpython.metatensor.core import (ARITY, AXIS_ALL, F64, KERNEL, NO_CONSTS, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, SHAPEARRAY, SUM, config, is_reduction, param_slot, slot_param, slot_used)
 from rpython.metatensor.device import (_env, _here, gpu_enabled, profile, rt_cuda_load, rt_cuda_set_budget)
 from rpython.metatensor.ttir import (input_modes, kernel_row_mode, out_modes, row_tile, row_warps, to_tile_ir, to_ttir, to_ttir_gather)
 
@@ -24,6 +25,7 @@ def _empty_kernel():
     k.dtype = F64
     k.modes = 0
     k.outmodes = 0
+    k.consts = NO_CONSTS
     k.outputs = lltype.malloc(SHAPEARRAY, 0)
     return k
 single_kernels = SingleKernels()
@@ -89,6 +91,7 @@ def new_kernel(ninputs, nnodes, dtype=F64):
     kernel.dtype = dtype
     kernel.modes = 0
     kernel.outmodes = 0
+    kernel.consts = NO_CONSTS
     kernel.outputs = lltype.malloc(SHAPEARRAY, 0)
     return kernel
 
@@ -120,6 +123,13 @@ def kernel_key(kernel):
     for i in range(len(kernel.nodes)):
         node = kernel.nodes[i]
         parts.append('%d:%d:%d:%d' % (node.opcode, node.a, node.b, node.p))
+    for i in range(len(kernel.consts)):
+        # The value is in the key, so two chains that differ only in a scalar
+        # get two kernels.  That is the point - the scalar is a literal in the
+        # code - and the cost is one Triton compile per distinct value.  The
+        # values here come from a small fixed set (the gelu/layer-norm
+        # coefficients), so the cache still hits after warm-up.
+        parts.append('k%s' % formatd(kernel.consts[i], 'r', 0))
     for i in range(len(kernel.outputs)):
         parts.append('o%d' % kernel.outputs[i])
     parts.append('d%d' % kernel.dtype)

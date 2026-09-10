@@ -1,4 +1,5 @@
-from rpython.metatensor.core import (ADD, ARITY, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_MAXPOOL_NHWC, GA_ROTHALF, MAXR, MUL, RELU, RELUGRAD, SQRT, STORE_TYPE, SUB, SUM, config, is_reduction)
+from rpython.rlib.rfloat import formatd
+from rpython.metatensor.core import (ADD, ARITY, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_MAXPOOL_NHWC, GA_ROTHALF, MAXR, MUL, RELU, RELUGRAD, SQRT, STORE_TYPE, SUB, SUM, config, is_reduction, nvals)
 
 
 def next_pow2(c):
@@ -29,7 +30,7 @@ def set_mode(modes, v, m):
     return modes[v] == m
 
 def all_modes(kernel):
-    nin = kernel.ninputs
+    nin = nvals(kernel)
     nodes = kernel.nodes
     modes = [-1] * (nin + len(nodes))
     for k in range(len(nodes) - 1, -1, -1):
@@ -65,16 +66,16 @@ def all_modes(kernel):
 
 def input_modes(kernel):
     modes = all_modes(kernel)
-    nin = kernel.ninputs
+    nin = nvals(kernel)
     if len(modes) != nin + len(kernel.nodes):
         return []
     result = []
-    for i in range(nin):
+    for i in range(kernel.ninputs):
         result.append(modes[i])
     return result
 
 def row_mode(kernel, modes):
-    nin = kernel.ninputs
+    nin = nvals(kernel)
     nodes = kernel.nodes
     if len(modes) != nin + len(nodes):
         return False
@@ -95,12 +96,21 @@ def kernel_row_mode(kernel):
 
 def out_modes(kernel):
     modes = all_modes(kernel)
-    if len(modes) != kernel.ninputs + len(kernel.nodes):
+    if len(modes) != nvals(kernel) + len(kernel.nodes):
         return []
     result = []
     for k in range(len(kernel.outputs)):
         result.append(modes[kernel.outputs[k]])
     return result
+
+def _fliteral(v):
+    # MLIR wants a decimal point before any exponent, so 1e-05 is rejected;
+    # %e always has one, and 16 digits round-trips an f64.
+    t = formatd(v, 'e', 16)
+    if 'inf' in t or 'nan' in t:
+        return ''
+    return t
+
 
 def _tile_types(block, S, C):
     return ('tensor<%dx%s>' % (block, C), 'tensor<%dx%s>' % (block, S),
@@ -161,7 +171,7 @@ def to_tile_ir(kernel, name, n):
 
 def to_ttir(kernel, name):
     modes = all_modes(kernel)
-    if len(modes) != kernel.ninputs + len(kernel.nodes):
+    if len(modes) != nvals(kernel) + len(kernel.nodes):
         return ''
     if row_mode(kernel, modes):
         return to_ttir_row(kernel, name, modes)
@@ -209,9 +219,20 @@ def _trunc(lines, tag, v, half, T, TS):
     lines.append('    %%%s = arith.truncf %%v%d : %s to %s' % (tag, v, T, TS))
     return '%%%s' % tag
 
+def _emit_consts(lines, kernel, nreal, T):
+    for j in range(len(kernel.consts)):
+        text = _fliteral(kernel.consts[j])
+        if not text:
+            return False
+        lines.append('    %%v%d = arith.constant dense<%s> : %s'
+                     % (nreal + j, text, T))
+    return True
+
+
 def to_ttir_row(kernel, name, modes):
     nodes = kernel.nodes
-    nin = kernel.ninputs
+    nreal = kernel.ninputs
+    nin = nvals(kernel)
     last = len(nodes) - 1
     if last < 0:
         return ''
@@ -241,7 +262,7 @@ def to_ttir_row(kernel, name, modes):
     omodes = out_modes(kernel)
     if len(omodes) != len(kernel.outputs):
         return ''
-    params = ['%%in%d: !tt.ptr<%s>' % (i, S) for i in range(nin)]
+    params = ['%%in%d: !tt.ptr<%s>' % (i, S) for i in range(nreal)]
     params.append('%%out: !tt.ptr<%s>' % S)
     for k in range(len(kernel.outputs)):
         params.append('%%out%d: !tt.ptr<%s>' % (k, S))
@@ -262,7 +283,9 @@ def to_ttir_row(kernel, name, modes):
              '    %%offs = arith.addi %%bases, %%ar : %s' % I64]
     if half:
         lines.append('    %%zeros = arith.constant dense<0.0> : %s' % TS)
-    for i in range(nin):
+    if not _emit_consts(lines, kernel, nreal, T):
+        return ''
+    for i in range(nreal):
         if modes[i] == 2 or modes[i] == 3:
             src = '%%in%d' % i
             if modes[i] == 3:
@@ -368,7 +391,8 @@ def to_ttir_row(kernel, name, modes):
 
 def to_ttir_flat(kernel, name):
     nodes = kernel.nodes
-    nin = kernel.ninputs
+    nreal = kernel.ninputs
+    nin = nvals(kernel)
     BLOCK = config.flat
     masked = kernel.n == 0 or kernel.n % BLOCK != 0
     dt = kernel.dtype
@@ -377,7 +401,7 @@ def to_ttir_flat(kernel, name):
     half = S != C
     T, TS, P, I32, I64, I1 = _tile_types(BLOCK, S, C)
     modes = input_modes(kernel)
-    if len(modes) != nin:
+    if len(modes) != nreal:
         return ''
     omodes = out_modes(kernel)
     if len(omodes) != len(kernel.outputs):
@@ -388,7 +412,7 @@ def to_ttir_flat(kernel, name):
     need_mod = axis == 0
     need_div = axis == 1
     need_zero_off = False
-    for i in range(nin):
+    for i in range(nreal):
         if modes[i] == 1:
             need_mod = True
         elif modes[i] == 2:
@@ -404,7 +428,7 @@ def to_ttir_flat(kernel, name):
             need_div = True
     if half and kernel.sumroot and nodes[len(nodes) - 1].opcode == SUM:
         return ''
-    params = ['%%in%d: !tt.ptr<%s>' % (i, S) for i in range(nin)]
+    params = ['%%in%d: !tt.ptr<%s>' % (i, S) for i in range(nreal)]
     params.append('%%out: !tt.ptr<%s>' % S)
     for k in range(len(kernel.outputs)):
         params.append('%%out%d: !tt.ptr<%s>' % (k, S))
@@ -413,6 +437,8 @@ def to_ttir_flat(kernel, name):
              'attributes {noinline = false} {' % (name, ', '.join(params)),
              '    %%zero = arith.constant dense<0.0> : %s' % T,
              '    %%one = arith.constant dense<1.0> : %s' % T]
+    if not _emit_consts(lines, kernel, nreal, T):
+        return ''
     _flat_prologue(lines, BLOCK, I32, I64)
     if need_mod or need_div:
         lines.append('    %%cs = tt.splat %%c : i64 -> %s' % I64)
@@ -429,7 +455,7 @@ def to_ttir_flat(kernel, name):
         lines.append('    %%tmask = arith.constant dense<true> : %s' % I1)
     if half:
         lines.append('    %%zeros = arith.constant dense<0.0> : %s' % TS)
-    for i in range(nin):
+    for i in range(nreal):
         lines.append('    %%p%d = tt.splat %%in%d : !tt.ptr<%s> -> %s'
                      % (i, i, S, P))
         if modes[i] == 1:
@@ -498,8 +524,17 @@ def to_ttir_flat(kernel, name):
                              '%%qo, %%v%d, %s : (%s, %s, %s) -> %s'
                              % (v, node.a, tmask, P, T, I1, T))
             else:
-                lines.append('    %%v%d = "tt.reduce"(%%v%d) <{axis = 0 : i32}> ({'
-                             % (v, node.a))
+                # The tail lanes hold whatever the chain makes of a masked
+                # load, which is only zero when every op in it maps 0 to 0 -
+                # not true once a constant is folded into the body.  Zero them
+                # before the reduction, the way the MAXR branch does.
+                src = '%%v%d' % node.a
+                if masked:
+                    lines.append('    %%rm%d = arith.select %%mask, %%v%d, '
+                                 '%%zero : %s, %s' % (v, node.a, I1, T))
+                    src = '%%rm%d' % v
+                lines.append('    %%v%d = "tt.reduce"(%s) <{axis = 0 : i32}> ({'
+                             % (v, src))
                 lines.append('    ^bb0(%%x: %s, %%y: %s):' % (C, C))
                 lines.append('      %%r = arith.addf %%x, %%y : %s' % C)
                 lines.append('      tt.reduce.return %%r : %s' % C)
