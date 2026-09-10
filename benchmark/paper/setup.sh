@@ -136,6 +136,25 @@ else
 fi
 RTENSOR_PYTHON="$VENV/bin/python"
 
+# Optional baselines (JAX/XLA, IREE) live in their own venv: their CUDA wheels
+# would otherwise move the torch/triton pins.  WITH_JAX=0 skips it; a missing
+# venv only makes the jax/iree columns absent.
+JAX_VENV="${JAX_VENV:-$VENV-jax}"
+JAX_PYTHON=""
+if [ "${WITH_JAX:-1}" = "1" ]; then
+  echo "== optional backends venv at $JAX_VENV =="
+  if [ -n "$UV" ]; then
+    [ -x "$JAX_VENV/bin/python" ] || "$UV" venv -q --python "$PYTHON3" "$JAX_VENV"
+    if VIRTUAL_ENV="$JAX_VENV" "$UV" pip sync -q "$HERE/requirements-jax.lock"; then
+      JAX_PYTHON="$JAX_VENV/bin/python"
+    else
+      echo "setup.sh: jax/iree install failed; those columns will be absent" >&2
+    fi
+  else
+    echo "setup.sh: no uv, skipping the jax/iree venv (WITH_JAX=0 silences this)" >&2
+  fi
+fi
+
 echo "== detecting compute capability =="
 CC=$("$RTENSOR_PYTHON" -c '
 import torch
@@ -154,35 +173,16 @@ export RTENSOR_PYTHON="$RTENSOR_PYTHON"
 export RTENSOR_CC="$CC"
 export RTENSOR_CUBLAS="$RTENSOR_CUBLAS"
 export CUDA_HOME="$CUDA_HOME"
+export JAX_PYTHON="$JAX_PYTHON"
 EOF
 echo "wrote $HERE/env.sh"
 
-echo "== translating metatensor-bench =="
 mkdir -p "$BUILD"
-BENCH_SRC=$(ls -t "$HERE/../metatensor_bench.py" "$HERE/../bench/"*.py | head -1)
-if [ ! -e "$BUILD/metatensor-bench" ] || [ "$BENCH_SRC" -nt "$BUILD/metatensor-bench" ]; then
-  ( cd "$BUILD" && RTENSOR_PYTHON="$RTENSOR_PYTHON" RTENSOR_CUBLAS="$RTENSOR_CUBLAS" \
-    PYTHON2="$PYTHON2" MAKE_JOBS="$MAKE_JOBS" \
-    "$REPO/benchmark/build.sh" "$BUILD/metatensor-bench" )
-else
-  echo "skip metatensor-bench (up to date)"
-fi
-
-echo "== translating pypy-c (this can take 15-60 minutes) =="
-# Rebuild when the tensor sources move, the same staleness check
-# metatensor-bench gets; without it a changed _metatensor module silently keeps
-# the old binary.
-PYPY_SRC=$(find "$REPO/pypy/module/_metatensor" "$REPO/rpython/metatensor" \
-             "$REPO/lib_pypy/tensorpypy" -name '*.py' -newer "$BUILD/pypy-c" \
-             -print -quit 2>/dev/null || true)
-if [ ! -e "$BUILD/pypy-c" ] || [ -n "$PYPY_SRC" ]; then
-  ( cd "$BUILD" && PYTHONPATH="$REPO" "$PYTHON2" "$REPO/rpython/bin/rpython" \
-      --batch --make-jobs="$MAKE_JOBS" -Ojit --no-shared \
-      --output="$BUILD/pypy-c" \
-      "$REPO/pypy/goal/targetpypystandalone.py" --withmod-_metatensor )
-else
-  echo "skip pypy-c (already built)"
-fi
+echo "== translating metatensor-bench and pypy-c (this can take 15-60 minutes) =="
+# Makefile owns the staleness checks (only rebuilds what actually moved).
+BUILD="$BUILD" REPO="$REPO" PYTHON2="$PYTHON2" RTENSOR_PYTHON="$RTENSOR_PYTHON" \
+  RTENSOR_CUBLAS="$RTENSOR_CUBLAS" MAKE_JOBS="$MAKE_JOBS" \
+  make -C "$HERE" all
 
 if [ "${SKIP_WEIGHTS:-0}" != "1" ]; then
   echo "== exporting checkpoints into $WEIGHTS =="
