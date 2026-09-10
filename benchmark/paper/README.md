@@ -41,6 +41,27 @@ set. `bench.sh all` clears `$OUT/*.tsv` first for a clean run.
     benchmark/paper/bench.sh models distilgpt2 resnet18-b1
     benchmark/paper/bench.sh ablation fusion
     benchmark/paper/bench.sh summarize
+    benchmark/paper/bench.sh plot                    # figures into $OUT/figures
+
+## Figures
+
+`bench.sh plot` - also the last step of `bench.sh all` - renders the paper
+figures from the tsv files into `$OUT/figures`: vector PDFs with TrueType
+fonts embedded, sized to one MLSys column or the full text width. Beside each
+figure it writes a `.tex` tabular of the same numbers, for the values a plot
+cannot carry.
+
+    micro_speedup   per-benchmark speedup over torch.compile
+    fusion          fused against interpreted, same benchmark
+    models          end-to-end inference, three systems
+    dynamic         cost against sequence length
+    precision       speedup at float64/32/16
+    ablation        one runtime knob at a time
+
+Flags: `--only NAME` (repeatable), `--format pdf,png`, `--column
+single|double` to override the per-figure default, `--texture` to hatch the
+fills for grayscale print, `--titles` for slide versions (a paper puts the
+title in the caption).
 
 `bench.sh list` prints the available model and ablation names and the micro grid.
 
@@ -63,10 +84,16 @@ it.
 
 ## Compare against the reference run
 
-The evaluation in the paper is `benchmark/results/paper-2026-09-07-luchkylilac/summary.md`
-(RTX 3090, sm_86). Diff your `$OUT/summary.md` against it; per-op numbers
-will differ by GPU, but ordering between `fused`/`torch.compile`/`eager`
-should hold.
+Results are filed as `benchmark/results/<host>-<gpu>/paper-<date>/`, because a
+number means nothing without knowing which machine and which accelerator
+produced it; `$OUT/machine.txt` carries the rest of the provenance (driver,
+toolkit, wheel versions, CPU, and the knobs the run used). `RUN_HOST` and
+`RUN_GPU` override the two path components; `OUT` overrides the whole path.
+
+The evaluation in the paper is
+`benchmark/results/luchkylilac-rtx3090/paper-2026-09-07/summary.md` (RTX 3090,
+sm_86). Diff your `$OUT/summary.md` against it; per-op numbers will differ by
+GPU, but ordering between `fused`/`torch.compile`/`eager` should hold.
 
 ## Troubleshooting
 

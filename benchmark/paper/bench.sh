@@ -19,7 +19,11 @@ commands:
                          names: $ALL_EXPERIMENTS
   dynamic                dynamic sequence-length experiment
   summarize              render \$OUT/summary.md from the tsv files
-  all                    fresh run: export, micro, models, ablation, dynamic, summarize
+  plot [ARGS]            render the paper figures into \$OUT/figures
+                         (--only NAME, --format pdf,png, --column single|double,
+                          --texture for grayscale print, --titles for slides)
+  all                    fresh run: export, micro, models, ablation, dynamic,
+                         summarize, plot
                          (clears \$OUT/*.tsv first)
   list                   print model/experiment names and the micro grid
   help                   this message
@@ -79,6 +83,10 @@ case "$cmd" in
     source "$HERE/config.sh"
     python3 "$HERE/summarize.py" "$OUT"
     ;;
+  plot)
+    source "$HERE/config.sh"
+    "${RTENSOR_PYTHON:-python3}" "$HERE/plot.py" "$OUT" "$@"
+    ;;
   all)
     source "$HERE/config.sh"
     rm -f "$OUT"/*.tsv
@@ -100,6 +108,7 @@ case "$cmd" in
     step ablation SKIP_ABLATION bash "$HERE/run_ablation.sh"
     step dynamic SKIP_DYNAMIC bash "$HERE/run_dynamic.sh"
     step summarize SKIP_SUMMARIZE python3 "$HERE/summarize.py" "$OUT"
+    step plot SKIP_PLOT "${RTENSOR_PYTHON:-python3}" "$HERE/plot.py" "$OUT"
     ;;
   list)
     cmd_list
