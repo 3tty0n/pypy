@@ -1,0 +1,13 @@
+\begin{tabular}{lrrrrr}
+\toprule
+variant & dtype & MetaTensor & torch.compile & speedup & range \\
+\midrule
+TF block & float64 & 22334.6 & 29742.8 & 1.33 & 1.32-1.35 \\
+TF block & float32 & 1870.5 & 2030.8 & 1.09 & 1.07-1.10 \\
+TF block & float16 & 712.6 & 866.5 & 1.22 & 1.21-1.22 \\
+attention & float64 & 4750.7 & 4995.0 & 1.05 & 1.04-1.07 \\
+attention & float32 & 316.4 & 549.4 & 1.74 & 1.73-1.91 \\
+attention & float16 & 220.8 & 439.8 & 1.99 & 1.65-2.10 \\
+\bottomrule
+\end{tabular}
+% median us per iteration over the rounds, with the speedup range

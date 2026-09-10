@@ -1,0 +1,52 @@
+\begin{tabular}{lrrrrr}
+\toprule
+workload & system & compile (ms) & first run (ms) & steady (us) & break-even (iters) \\
+\midrule
+elementwise k=1 n=1M & torch.compile & n/a & n/a & 55 & n/a \\
+elementwise k=4 n=1M & torch.compile & n/a & n/a & 69 & n/a \\
+elementwise k=8 n=1M & torch.compile & n/a & n/a & 133 & n/a \\
+elementwise k=4 n=10k & torch.compile & n/a & n/a & 51 & n/a \\
+elementwise k=4 n=100k & torch.compile & n/a & n/a & 50 & n/a \\
+elementwise k=4 n=10M & torch.compile & n/a & n/a & 646 & n/a \\
+guard k=4 n=1M & torch.compile & n/a & n/a & 308 & n/a \\
+force k=4 n=1M & torch.compile & n/a & n/a & 307 & n/a \\
+value guard k=4 n=1M & torch.compile & n/a & n/a & 167 & n/a \\
+exception k=4 n=1M & torch.compile & n/a & n/a & 332 & n/a \\
+side effect k=4 n=1M & torch.compile & n/a & n/a & 332 & n/a \\
+reduction n=25.6k & torch.compile & n/a & n/a & 73 & n/a \\
+reduction n=256k & torch.compile & n/a & n/a & 155 & n/a \\
+matmul n=25.6k & torch.compile & n/a & n/a & 144 & n/a \\
+matmul n=256k & torch.compile & n/a & n/a & 497 & n/a \\
+attention n=25.6k & torch.compile & n/a & n/a & 596 & n/a \\
+attention n=256k & torch.compile & n/a & n/a & 4995 & n/a \\
+MLP n=25.6k & torch.compile & n/a & n/a & 392 & n/a \\
+MLP n=256k & torch.compile & n/a & n/a & 1284 & n/a \\
+MLP train n=25.6k & torch.compile & n/a & n/a & 849 & n/a \\
+MLP train n=256k & torch.compile & n/a & n/a & 3078 & n/a \\
+TF block n=25.6k & torch.compile & n/a & n/a & 519 & n/a \\
+TF block n=256k & torch.compile & n/a & n/a & 29743 & n/a \\
+CNN n=25.6k & torch.compile & n/a & n/a & 866 & n/a \\
+CNN n=256k & torch.compile & n/a & n/a & 685 & n/a \\
+TF train n=25.6k & torch.compile & n/a & n/a & 3191 & n/a \\
+TF train n=191.5k & torch.compile & n/a & n/a & 78479 & n/a \\
+distilgpt2 & torch.compile & n/a & n/a & 1324 & n/a \\
+distilgpt2 & MetaTensor & n/a & n/a & 1374 & n/a \\
+tiny-gpt2 & torch.compile & n/a & n/a & 418 & n/a \\
+tiny-gpt2 & MetaTensor & n/a & n/a & 196 & n/a \\
+smollm2-135m & torch.compile & n/a & n/a & 5199 & n/a \\
+smollm2-135m & MetaTensor & n/a & n/a & 4062 & n/a \\
+bert-tiny & torch.compile & n/a & n/a & 532 & n/a \\
+bert-tiny & MetaTensor & n/a & n/a & 392 & n/a \\
+bert-mini & torch.compile & n/a & n/a & 778 & n/a \\
+bert-mini & MetaTensor & n/a & n/a & 672 & n/a \\
+resnet18-b1 & torch.compile & n/a & n/a & 1058 & n/a \\
+resnet18-b1 & MetaTensor & n/a & n/a & 766 & n/a \\
+resnet18-b8 & torch.compile & n/a & n/a & 2187 & n/a \\
+resnet18-b8 & MetaTensor & n/a & n/a & 3194 & n/a \\
+mixer\_b16 & torch.compile & n/a & n/a & 3128 & n/a \\
+mixer\_b16 & MetaTensor & n/a & n/a & 3802 & n/a \\
+vit-tiny & torch.compile & n/a & n/a & 2148 & n/a \\
+vit-tiny & MetaTensor & n/a & n/a & 1671 & n/a \\
+\bottomrule
+\end{tabular}
+% median compile / first-run cost and break-even iteration count against torch eager

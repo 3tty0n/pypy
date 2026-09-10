@@ -1,0 +1,11 @@
+\begin{tabular}{lrrrrrr}
+\toprule
+system & 32 & 48 & 64 & 96 & 128 & recompiles \\
+\midrule
+MetaTensor & 1040 [1036-1042] & 1438 [1428-1451] & 1502 [1490-1507] & 1790 [1760-1801] & 2120 [2076-2140] & 0 \\
+torch.compile (static) & 1181 [1178-1182] & 1562 [1555-1565] & 1595 [1593-1597] & 1832 [1830-1836] & 2067 [2055-2071] & 4 \\
+torch.compile (dynamic) & 1256 [1255-1267] & 1687 [1680-1696] & 1742 [1734-1760] & 1891 [1889-1945] & 2135 [2134-2204] & 0 \\
+PyTorch eager & 2480 [2451-2656] & 2647 [2620-2812] & 2646 [2611-2818] & 2703 [2687-2880] & 2800 [2775-2971] & 0 \\
+\bottomrule
+\end{tabular}
+% median us per step over the rounds (range in brackets); recompiles over the whole sweep

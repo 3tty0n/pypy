@@ -1,0 +1,19 @@
+\begin{tabular}{lrrrr}
+\toprule
+experiment & model & setting & us & range \\
+\midrule
+budget mb & distilgpt2 & 8 & 1368 & 1364-1381 \\
+budget mb & distilgpt2 & 64 & 1378 & 1369-1384 \\
+flat block & distilgpt2 & 256 & 1332 & 1329-1337 \\
+flat block & distilgpt2 & 4096 & 1383 & 1374-1386 \\
+flat block & resnet18 & 256 & 680 & 679-705 \\
+flat block & resnet18 & 4096 & 743 & 741-744 \\
+fusion & distilgpt2 & off & 2028 & 2007-2041 \\
+fusion & distilgpt2 & on & 1389 & 1361-1394 \\
+precision & distilgpt2 & float16 & 961 & 945-976 \\
+precision & distilgpt2 & float32 & 1374 & 1368-1385 \\
+precision & smollm2-135m & float16 & 2216 & 2199-2244 \\
+precision & smollm2-135m & float32 & 4103 & 4093-4117 \\
+\bottomrule
+\end{tabular}
+% median us per iteration over the rounds, with the observed range

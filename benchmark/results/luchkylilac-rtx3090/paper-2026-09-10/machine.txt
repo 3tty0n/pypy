@@ -1,0 +1,22 @@
+host          luchkylilac
+date          2026-09-10T09:51:11+09:00
+gpu           NVIDIA GeForce RTX 3090
+gpu_memory    24576 MiB
+compute_cap   86
+driver        595.71.05
+cuda_home     /usr/local/cuda
+cpu           AMD Ryzen 9 5950X 16-Core Processor
+cpu_threads   32
+kernel        Linux 7.0.0-31-generic
+torch         2.14.0+cu130
+triton        3.8.0
+transformers  5.16.1
+jax           0.11.1
+jaxlib        0.11.1
+iree.compiler 3.11.0
+iree.runtime  3.11.0
+iters         200
+rounds        3
+budget_mb     8
+jit_flags     --jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000
+commit        582e3b3545
