@@ -328,8 +328,17 @@ def to_ttir_row(kernel, name, modes):
             lines.append('    tt.store %%po, %s : !tt.ptr<%s>' % (sv, S))
         else:
             lines.append('    %true = arith.constant true')
+            # The accumulator has the kernel's storage type, not always f64,
+            # and for f16 the reduction runs in f32 and has to be narrowed
+            # first, exactly as the tt.store branch above does.
+            sv = '%%rs%d' % v
+            if half:
+                lines.append('    %%rt%d = arith.truncf %s : %s to %s'
+                             % (v, sv, C, S))
+                sv = '%%rt%d' % v
             lines.append('    %%o = tt.atomic_rmw fadd, acq_rel, gpu, %%out, '
-                         '%%rs%d, %%true : (!tt.ptr<f64>, f64, i1) -> f64' % v)
+                         '%s, %%true : (!tt.ptr<%s>, %s, i1) -> %s'
+                         % (sv, S, S, S))
     if not isred[nin + last]:
         lines.append('    %%po = tt.splat %%out : !tt.ptr<%s> -> %s' % (S, P))
         lines.append('    %%qo = tt.addptr %%po, %%offs : %s, %s' % (P, I64))
