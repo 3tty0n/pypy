@@ -261,6 +261,14 @@ RPY_EXPORTED void rt_cuda_set_budget(long bytes)
     budget_bytes = bytes;
 }
 
+RPY_EXPORTED long rt_cuda_mem_total(void)
+{
+    size_t freeb, totalb;
+    if (rt_init() && cuMemGetInfo(&freeb, &totalb) == CUDA_SUCCESS)
+        return (long)totalb;
+    return 0;
+}
+
 RPY_EXPORTED int rt_cuda_has_free(long nbytes)
 {
     long i;
@@ -338,13 +346,32 @@ static const char *rt_name_of(long fn)
     return "?";
 }
 
+static void rt_warn_load(const char *what, const char *name, CUresult r)
+{
+    static int warned;
+    const char *err = 0;
+    if (warned) return;
+    warned = 1;
+    cuGetErrorString(r, &err);
+    fprintf(stderr, "metatensor: %s failed for kernel %s: %s\n"
+                    "metatensor: every kernel will run on the CPU instead\n",
+            what, name, err ? err : "?");
+}
+
 RPY_EXPORTED long rt_cuda_load(const char *ptx, const char *name)
 {
     CUmodule mod;
     CUfunction fn;
+    CUresult r;
     if (!rt_init()) return 0;
-    if (cuModuleLoadData(&mod, ptx) != CUDA_SUCCESS) return 0;
-    if (cuModuleGetFunction(&fn, mod, name) != CUDA_SUCCESS) return 0;
+    if ((r = cuModuleLoadData(&mod, ptx)) != CUDA_SUCCESS) {
+        rt_warn_load("cuModuleLoadData", name, r);
+        return 0;
+    }
+    if ((r = cuModuleGetFunction(&fn, mod, name)) != CUDA_SUCCESS) {
+        rt_warn_load("cuModuleGetFunction", name, r);
+        return 0;
+    }
     if (rt_nnames < 4096) {
         rt_names[rt_nnames].fn = (long)fn;
         snprintf(rt_names[rt_nnames].name, 64, "%s", name);

@@ -63,6 +63,7 @@ RPY_EXTERN void rt_cuda_reset(void);
 RPY_EXTERN void rt_cuda_free(long dptr, long nbytes);
 RPY_EXTERN int rt_cuda_copy(long dst, long src, long nbytes);
 RPY_EXTERN void rt_cuda_set_budget(long bytes);
+RPY_EXTERN long rt_cuda_mem_total(void);
 RPY_EXTERN long rt_cuda_live_bytes(void);
 RPY_EXTERN long rt_cuda_launch_count(void);
 RPY_EXTERN int rt_cuda_needs_gc(long nbytes);
@@ -189,6 +190,8 @@ rt_cuda_set_budget = rffi.llexternal('rt_cuda_set_budget', [lltype.Signed],
                                      releasegil=False)
 rt_cuda_live_bytes = rffi.llexternal('rt_cuda_live_bytes', [], lltype.Signed,
                                      compilation_info=eci, releasegil=False)
+rt_cuda_mem_total = rffi.llexternal('rt_cuda_mem_total', [], lltype.Signed,
+                                    compilation_info=eci, releasegil=False)
 rt_cuda_needs_gc = rffi.llexternal('rt_cuda_needs_gc', [lltype.Signed], rffi.INT,
                                    compilation_info=eci, releasegil=False)
 rt_cuda_has_free = rffi.llexternal('rt_cuda_has_free', [lltype.Signed], rffi.INT,
@@ -200,6 +203,10 @@ rt_cuda_launch_count = rffi.llexternal('rt_cuda_launch_count', [],
 
 def launch_count():
     return rt_cuda_launch_count()
+
+def mem_total():
+    """Bytes of device memory on GPU 0, or 0 when there is no usable GPU."""
+    return rt_cuda_mem_total()
 
 class Profile(object):
     def __init__(self):

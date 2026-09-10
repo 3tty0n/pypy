@@ -1,3 +1,4 @@
+from rpython.rlib.rmd5 import md5
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import os
@@ -181,17 +182,48 @@ def _read(path):
         chunks.append(chunk)
     os.close(fd)
     return ''.join(chunks)
+def _read_or_empty(path):
+    try:
+        return _read(path)
+    except OSError:
+        return ''
+
+def _cache_base(src, warps):
+    key = md5('%s|%d|%s' % (get_cc(), warps, src)).hexdigest()
+    return _env('TMPDIR', '/tmp') + '/rtensor-k-' + key
+
 def compile_ttir(src, name, warps):
-    base = _env('TMPDIR', '/tmp') + '/' + name
-    _write(base + '.ttir', src)
-    cmd = '%s -P %s %s.ttir %s.ptx %s.meta %s %d' % (
-        _env('RTENSOR_PYTHON', 'python3'), _here + '/triton_compile.py',
-        base, base, base, get_cc(), warps)
-    if os.system(cmd) != 0:
-        return 0, 0, 0, 0
-    words = _read(base + '.meta').strip().split(' ')
-    ptx = _read(base + '.ptx')
-    p_ptx = rffi.str2charp(ptx)
+    # Compiling one kernel starts a Python process and imports Triton, which
+    # costs about 0.6 s even when Triton's own cache hits.  Every process
+    # builds the same ~50 kernels at startup, so that is half a minute before
+    # any measurement begins, on every run.  What comes out depends only on the
+    # TTIR, the compute capability and the warp count, so keying the files on
+    # those three lets later runs skip the subprocess entirely.  Set
+    # RTENSOR_KERNEL_CACHE=0 to always recompile.
+    cached = _env('RTENSOR_KERNEL_CACHE', '1') != '0'
+    meta = ''
+    image = ''
+    if cached:
+        base = _cache_base(src, warps)
+        meta = _read_or_empty(base + '.meta')
+        image = _read_or_empty(base + '.cubin')
+        if not image:
+            image = _read_or_empty(base + '.ptx')
+    else:
+        base = _env('TMPDIR', '/tmp') + '/' + name
+    if not meta or not image:
+        _write(base + '.ttir', src)
+        cmd = '%s -P %s %s.ttir %s.ptx %s.meta %s %d' % (
+            _env('RTENSOR_PYTHON', 'python3'), _here + '/triton_compile.py',
+            base, base, base, get_cc(), warps)
+        if os.system(cmd) != 0:
+            return 0, 0, 0, 0
+        meta = _read(base + '.meta')
+        image = _read_or_empty(base + '.cubin')
+        if not image:
+            image = _read(base + '.ptx')
+    words = meta.strip().split(' ')
+    p_ptx = rffi.str2charp(image)
     p_name = rffi.str2charp(name)
     fn = rt_cuda_load(p_ptx, p_name)
     rffi.free_charp(p_ptx)
