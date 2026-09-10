@@ -80,7 +80,10 @@ run_point() {
     return 0
   fi
   for mode in fused eager nojit; do
-    line=$(ours $mode $variant $k $n $ITERS)
+    if ! line=$(ours $mode $variant $k $n $ITERS); then
+      echo "run_micro.sh: standalone variant $variant k $k n $n mode $mode failed" >&2
+      return 0
+    fi
     echo "$line" | tr ' ' '\t' >> "$TSV"
     record_micro_line "$line"
     if [ "$mode" = fused ]; then eff=$(echo "$line" | awk '{print $4}'); fi

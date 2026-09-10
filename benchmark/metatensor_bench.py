@@ -109,6 +109,11 @@ def entry_point(argv):
     device.sync_device()
     steady = (time.time() - t0) / iters * 1e6
     launches = float(device.launch_count() - launches_before) / iters
+    if device.alloc_failed():
+        os.write(2, 'metatensor-bench: variant %d fell back to CPU mid-run '
+                    '(device allocation failed), discarding this '
+                    'measurement\n' % variant)
+        return 1
     runtime.reset_device()
     # Only report a different n when the working set actually had to shrink;
     # the plain floor of n // d is left alone so rows stay comparable with

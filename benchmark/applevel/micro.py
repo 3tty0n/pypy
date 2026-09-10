@@ -346,6 +346,12 @@ def main(argv):
     kernels_n = _metatensor.kernel_count()
     launches = float(_metatensor.launch_count() - launches_before) / iters
 
+    if _metatensor.alloc_failed():
+        sys.stderr.write("micro.py: variant %d fell back to CPU mid-run "
+                          "(device allocation failed), discarding this "
+                          "measurement\n" % variant)
+        return 1
+
     # Only report a different n when the working set actually had to shrink;
     # the plain floor of n // d is left alone so rows stay comparable with
     # earlier results.
