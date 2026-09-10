@@ -1,0 +1,18 @@
+host          stillinlove
+date          2026-09-10T20:23:57+09:00
+gpu           NVIDIA GeForce RTX 5070 Ti
+gpu_memory    16303 MiB
+compute_cap   120
+driver        595.84
+cuda_home     /usr
+cpu           Intel(R) Xeon(R) w9-3595X
+cpu_threads   120
+kernel        Linux 7.0.0-31-generic
+torch         2.14.0+cu130
+triton        3.8.0
+transformers  5.16.1
+iters         200
+rounds        3
+budget_mb     8
+jit_flags     --jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000
+commit        3344da91ae

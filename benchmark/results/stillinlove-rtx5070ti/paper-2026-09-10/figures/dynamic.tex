@@ -1,0 +1,11 @@
+\begin{tabular}{lrrrrrr}
+\toprule
+system & 32 & 48 & 64 & 96 & 128 & recompiles \\
+\midrule
+MetaTensor & 952 & 1164 & 1240 & 1684 & 1747 & 0 \\
+torch.compile (static) & 1262 & 1473 & 1547 & 1762 & 1849 & 4 \\
+torch.compile (dynamic) & 1344 & 1570 & 1644 & 1861 & 1961 & 0 \\
+PyTorch eager & 2349 & 2400 & 2405 & 2518 & 2566 & 0 \\
+\bottomrule
+\end{tabular}
+% median us per step; recompiles over the whole sweep

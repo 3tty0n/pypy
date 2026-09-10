@@ -1,0 +1,16 @@
+\begin{tabular}{lrrrr}
+\toprule
+model & MetaTensor & torch.compile & eager & ratio \\
+\midrule
+tiny-gpt2 & 286 & 418 & 1850 & 0.68 \\
+bert-tiny & 419 & 569 & 1550 & 0.74 \\
+bert-mini & 584 & 868 & 1582 & 0.67 \\
+resnet18-b1 & 685 & 955 & 1333 & 0.72 \\
+distilgpt2 & 1161 & 1254 & 3033 & 0.93 \\
+vit-tiny & 1212 & 2269 & 3108 & 0.53 \\
+resnet18-b8 & 2977 & 1523 & 1787 & 1.95 \\
+mixer\_b16 & 3015 & 3119 & 3642 & 0.97 \\
+smollm2-135m & 3052 & 5539 & 13536 & 0.55 \\
+\bottomrule
+\end{tabular}
+% steady-state us per iteration, median of rounds

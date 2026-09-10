@@ -1,0 +1,7 @@
+# Runs that recorded a silent CPU fallback rather than GPU execution: kept on
+# disk for reference, never committed - the numbers do not measure what the
+# harness claims to measure.
+*/invalid-*/
+# Figure previews; the committed figure is the vector PDF beside them.
+*/*/figures/*.png
+*/*/figures/*.svg

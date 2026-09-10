@@ -1,0 +1,140 @@
+== export ==
+skip distilgpt2 (already exported)
+skip tiny-gpt2 (already exported)
+skip smollm2-135m (already exported)
+skip bert-tiny (already exported)
+skip bert-mini (already exported)
+skip resnet18 (already exported)
+skip mixer_b16 (already exported)
+skip vit-tiny (already exported)
+== micro ==
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+run_micro: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+run_micro: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+run_micro: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+wrote /home/yusuke/src/tensorpypy/benchmark/results/paper-2026-09-10-stillinlove-cached/micro.tsv
+== models ==
+wrote /home/yusuke/src/tensorpypy/benchmark/results/paper-2026-09-10-stillinlove-cached/models.tsv
+== ablation ==
+wrote /home/yusuke/src/tensorpypy/benchmark/results/paper-2026-09-10-stillinlove-cached/ablation.tsv
+== dynamic ==
+wrote /home/yusuke/src/tensorpypy/benchmark/results/paper-2026-09-10-stillinlove-cached/dynamic_series.tsv and /home/yusuke/src/tensorpypy/benchmark/results/paper-2026-09-10-stillinlove-cached/dynamic_summary.tsv
+== summarize ==
+# Paper benchmark summary
+
+## Microbenchmarks (median steady_us over rounds)
+
+| variant | k | n | fused (ours) | eager (ours) | nojit (ours) | torch.compile | torch eager | speedup vs compile |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 1 | 1000000 | 12.0 | 27.5 | 30.3 | 35.6 | 24.9 | 2.97x |
+| 0 | 4 | 10000 | 9.2 | 28.3 | 27.1 | 35.4 | 70.9 | 3.86x |
+| 0 | 4 | 100000 | 9.2 | 31.5 | 28.4 | 35.2 | 73.2 | 3.83x |
+| 0 | 4 | 1000000 | 32.8 | 109.2 | 120.7 | 56.9 | 97.6 | 1.74x |
+| 0 | 4 | 10000000 | 324.0 | 3292.2 | 3286.6 | 549.0 | 3278.9 | 1.69x |
+| 0 | 8 | 1000000 | 64.2 | 242.2 | 241.2 | 111.5 | 194.7 | 1.74x |
+| 1 | 4 | 1000000 | 33.4 | 122.4 | 121.2 | 97.9 | 98.8 | 2.94x |
+| 2 | 4 | 1000000 | 34.3 | 122.4 | 121.2 | 97.8 | 98.9 | 2.85x |
+| 3 | 4 | 1000000 | 65.5 | 143.0 | 147.7 | 126.8 | 131.6 | 1.93x |
+| 4 | 4 | 1000000 | 36.7 | 133.6 | 130.1 | 104.9 | 106.0 | 2.86x |
+| 5 | 4 | 1000000 | 37.6 | 125.1 | 130.0 | 105.1 | 106.0 | 2.80x |
+| 6 | 1 | 25600 | 206.5 | 208.4 | 206.2 | 361.9 | 359.4 | 1.75x |
+| 6 | 1 | 256000 | 760.1 | 763.5 | 760.1 | 1072.7 | 1062.7 | 1.41x |
+| 7 | 1 | 25600 | 488.3 | 500.6 | 498.6 | 729.4 | 655.7 | 1.49x |
+| 7 | 1 | 256000 | 2047.2 | 2043.5 | 2034.9 | 2428.9 | 2435.2 | 1.19x |
+| 8 | 1 | 25600 | 366.1 | 628.8 | 628.8 | 412.1 | 422.7 | 1.13x |
+| 8 | 1 | 256000 | 16217.9 | 19109.6 | 19108.6 | 21491.0 | 20847.4 | 1.33x |
+| 9 | 1 | 25600 | 570.0 | 573.7 | 574.4 | 726.7 | 659.8 | 1.27x |
+| 9 | 1 | 256000 | 412.7 | 435.2 | 429.6 | 1361.2 | 1293.2 | 3.30x |
+| 10 | 1 | 25600 | 3127.3 | 3785.8 | 3513.6 | 2507.4 | 3051.7 | 0.80x |
+| 10 | 1 | 155008 | 49350.1 | 51692.3 | 51704.8 | 38475.1 | 40392.3 | 0.78x |
+| 11 | 1 | 25600 | 3.2 | 15.6 | 15.9 | 57.7 | 35.4 | 18.24x |
+| 11 | 1 | 256000 | 13.3 | 95.6 | 95.8 | 207.6 | 186.7 | 15.64x |
+| 12 | 1 | 25600 | 69.7 | 69.8 | 68.9 | 139.1 | 133.0 | 1.99x |
+| 12 | 1 | 256000 | 258.7 | 259.4 | 255.4 | 474.1 | 465.6 | 1.83x |
+| 13 | 1 | 25600 | 314.9 | 406.0 | 406.0 | 538.8 | 527.5 | 1.71x |
+| 13 | 1 | 256000 | 3633.3 | 4130.8 | 4130.3 | 4071.2 | 3966.7 | 1.12x |
+
+## Precision sweep (median steady_us)
+
+| dtype | variant | k | n | fused (ours) | eager (ours) | nojit (ours) | torch.compile | torch eager | speedup vs compile |
+|---|---|---|---|---|---|---|---|---|---|
+| float16 | 8 | 1 | 256000 | 801.6 | 2168.2 | 2166.9 | 935.5 | 1489.3 | 1.17x |
+| float16 | 13 | 1 | 256000 | 106.1 | 337.9 | 331.0 | 484.6 | 470.1 | 4.57x |
+| float32 | 8 | 1 | 256000 | 1713.9 | 4348.8 | 4345.1 | 1892.4 | 2604.0 | 1.10x |
+| float32 | 13 | 1 | 256000 | 230.4 | 406.5 | 400.5 | 576.0 | 622.4 | 2.50x |
+
+## Guards / graph breaks (launches per iter, torch graph breaks)
+
+| variant | n | launches/iter (fused) | torch graphs | torch breaks |
+|---|---|---|---|---|
+| 1 | 1000000 | 1.0 | 1 | 0 |
+| 2 | 1000000 | 1.1 | 1 | 0 |
+| 3 | 1000000 | 2.0 | 2 | 1 |
+| 4 | 1000000 | 1.0 | 1 | 0 |
+| 5 | 1000000 | 1.1 | 2 | 1 |
+
+## End-to-end models (median steady_us, ratio to torch.compile)
+
+| model | ours | torch.compile | torch eager | ratio ours/compile | correctness |
+|---|---|---|---|---|---|
+| bert-mini | 52641.1 | 870.6 | 1585.2 | 60.47x | 1.90735e-05 |
+| bert-tiny | 22784.6 | 569.9 | 1532.0 | 39.98x | 2.67029e-05 |
+| distilgpt2 | 129085.2 | 1251.8 | 2962.2 | 103.12x | 0.000183105 |
+| mixer_b16 | 1116731.0 | 3100.9 | 3636.6 | 360.13x | 0.00254631 |
+| resnet18-b1 | 337343.8 | 955.5 | 1337.6 | 353.05x | 0.0131173 |
+| resnet18-b8 | 2746529.7 | 1527.8 | 1772.0 | 1797.70x | 0.0131097 |
+| smollm2-135m | 276145.9 | 5512.2 | 13579.3 | 50.10x | 0.00015831 |
+| tiny-gpt2 | 1836.4 | 420.1 | 1849.3 | 4.37x | 9.22009e-08 |
+| vit-tiny | 308262.7 | 2267.3 | 3070.5 | 135.96x | 0.00240284 |
+
+## Ablations (median steady_us)
+
+| experiment | variant | model | steady_us | note |
+|---|---|---|---|---|
+| budget_mb | 64 | distilgpt2 | 128958.9 |  |
+| budget_mb | 8 | distilgpt2 | 129057.5 |  |
+| flat_block | 256 | distilgpt2 | 129386.4 |  |
+| flat_block | 256 | resnet18 | 336701.3 |  |
+| flat_block | 4096 | distilgpt2 | 129334.7 |  |
+| flat_block | 4096 | resnet18 | 337099.4 |  |
+| fusion | off | distilgpt2 | 83336.1 | enable_opts minus tensor |
+| fusion | on | distilgpt2 | 129213.4 |  |
+| precision | float16 | distilgpt2 | 159217.0 |  |
+| precision | float16 | smollm2-135m | 384029.1 |  |
+| precision | float32 | distilgpt2 | 129383.4 |  |
+| precision | float32 | smollm2-135m | 275769.4 |  |
+
+## Dynamic sequence length (median steady_us per length)
+
+| system | length | median_us | loops | bridges | recompiles |
+|---|---|---|---|---|---|
+| ours | 32 | 67635.6 | 168 | 166 | 0 |
+| ours | 48 | 104804.4 | 168 | 166 | 0 |
+| ours | 64 | 145762.5 | 168 | 166 | 0 |
+| ours | 96 | 253219.5 | 168 | 166 | 0 |
+| ours | 128 | 360245.1 | 168 | 166 | 0 |
+| torch-compile-dynamic | 32 | 1334.3 | 0 | 0 | 0 |
+| torch-compile-dynamic | 48 | 1569.8 | 0 | 0 | 0 |
+| torch-compile-dynamic | 64 | 1644.8 | 0 | 0 | 0 |
+| torch-compile-dynamic | 96 | 1859.9 | 0 | 0 | 0 |
+| torch-compile-dynamic | 128 | 1957.3 | 0 | 0 | 0 |
+| torch-compile-static | 32 | 1263.3 | 0 | 0 | 4 |
+| torch-compile-static | 48 | 1472.3 | 0 | 0 | 4 |
+| torch-compile-static | 64 | 1547.0 | 0 | 0 | 4 |
+| torch-compile-static | 96 | 1762.4 | 0 | 0 | 4 |
+| torch-compile-static | 128 | 1848.7 | 0 | 0 | 4 |
+| torch-eager | 32 | 2364.2 | 0 | 0 | 0 |
+| torch-eager | 48 | 2411.0 | 0 | 0 | 0 |
+| torch-eager | 64 | 2417.7 | 0 | 0 | 0 |
+| torch-eager | 96 | 2525.0 | 0 | 0 | 0 |
+| torch-eager | 128 | 2578.2 | 0 | 0 | 0 |
+
+

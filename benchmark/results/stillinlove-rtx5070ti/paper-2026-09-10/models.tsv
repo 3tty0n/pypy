@@ -1,0 +1,82 @@
+model	system	round	steady_us	maxabsdiff	argmax_match
+distilgpt2	ours	1	1162.1		
+distilgpt2	torch-eager	1	3027.5	0.000228882	1
+distilgpt2	torch-compile	1	1254.1	0.000167847	1
+distilgpt2	ours	2	1161.0		
+distilgpt2	torch-eager	2	3032.6	0.000228882	1
+distilgpt2	torch-compile	2	1254.3	0.000167847	1
+distilgpt2	ours	3	1159.9		
+distilgpt2	torch-eager	3	3067.6	0.000228882	1
+distilgpt2	torch-compile	3	1254.9	0.000167847	1
+tiny-gpt2	ours	1	282.3		
+tiny-gpt2	torch-eager	1	1850.3	2.23517e-08	1
+tiny-gpt2	torch-compile	1	418.3	2.23517e-08	1
+tiny-gpt2	ours	2	286.8		
+tiny-gpt2	torch-eager	2	1881.9	2.23517e-08	1
+tiny-gpt2	torch-compile	2	422.8	2.23517e-08	1
+tiny-gpt2	ours	3	285.8		
+tiny-gpt2	torch-eager	3	1828.3	2.23517e-08	1
+tiny-gpt2	torch-compile	3	418.5	2.23517e-08	1
+smollm2-135m	ours	1	3090.7		
+smollm2-135m	torch-eager	1	13536.1	0.000150681	1
+smollm2-135m	torch-compile	1	5538.4	9.15527e-05	1
+smollm2-135m	ours	2	3052.1		
+smollm2-135m	torch-eager	2	13448.4	0.000150681	1
+smollm2-135m	torch-compile	2	5538.8	9.15527e-05	1
+smollm2-135m	ours	3	3051.6		
+smollm2-135m	torch-eager	3	13602.3	0.000150681	1
+smollm2-135m	torch-compile	3	5555.2	9.15527e-05	1
+bert-tiny	ours	1	418.2		
+bert-tiny	torch-eager	1	1566.9	3.05176e-05	1
+bert-tiny	torch-compile	1	568.1	2.67029e-05	1
+bert-tiny	ours	2	419.1		
+bert-tiny	torch-eager	2	1526.1	3.05176e-05	1
+bert-tiny	torch-compile	2	568.8	2.67029e-05	1
+bert-tiny	ours	3	422.0		
+bert-tiny	torch-eager	3	1550.3	3.05176e-05	1
+bert-tiny	torch-compile	3	570.9	2.67029e-05	1
+bert-mini	ours	1	594.5		
+bert-mini	torch-eager	1	1582.3	2.09808e-05	1
+bert-mini	torch-compile	1	868.1	2.09808e-05	1
+bert-mini	ours	2	584.4		
+bert-mini	torch-eager	2	1579.7	2.09808e-05	1
+bert-mini	torch-compile	2	870.3	2.09808e-05	1
+bert-mini	ours	3	580.0		
+bert-mini	torch-eager	3	1587.9	2.09808e-05	1
+bert-mini	torch-compile	3	865.9	2.09808e-05	1
+resnet18-b1	ours	1	685.4		
+resnet18-b1	torch-eager	1	1352.6	0.0131187	1
+resnet18-b1	torch-compile	1	955.6	0.0120893	1
+resnet18-b1	ours	2	685.3		
+resnet18-b1	torch-eager	2	1328.9	0.0131187	1
+resnet18-b1	torch-compile	2	955.4	0.0120893	1
+resnet18-b1	ours	3	685.3		
+resnet18-b1	torch-eager	3	1332.6	0.0131187	1
+resnet18-b1	torch-compile	3	955.4	0.0120893	1
+resnet18-b8	ours	1	2989.6		
+resnet18-b8	torch-eager	1	1758.0	0.0131087	1
+resnet18-b8	torch-compile	1	1527.4	0.0122066	1
+resnet18-b8	ours	2	2976.6		
+resnet18-b8	torch-eager	2	1787.4	0.0131087	1
+resnet18-b8	torch-compile	2	1523.3	0.0122066	1
+resnet18-b8	ours	3	2970.3		
+resnet18-b8	torch-eager	3	1787.9	0.0131087	1
+resnet18-b8	torch-compile	3	1511.0	0.0122066	1
+mixer_b16	ours	1	3014.8		
+mixer_b16	torch-eager	1	3669.9	0.00259018	1
+mixer_b16	torch-compile	1	3142.1	0.00262356	1
+mixer_b16	ours	2	2989.5		
+mixer_b16	torch-eager	2	3630.3	0.00259018	1
+mixer_b16	torch-compile	2	3094.8	0.00262356	1
+mixer_b16	ours	3	3017.9		
+mixer_b16	torch-eager	3	3642.4	0.00259018	1
+mixer_b16	torch-compile	3	3119.1	0.00262356	1
+vit-tiny	ours	1	1223.5		
+vit-tiny	torch-eager	1	3107.8	0.00240499	1
+vit-tiny	torch-compile	1	2279.2	0.00240216	1
+vit-tiny	ours	2	1212.3		
+vit-tiny	torch-eager	2	3083.3	0.00240499	1
+vit-tiny	torch-compile	2	2268.6	0.00240216	1
+vit-tiny	ours	3	1209.6		
+vit-tiny	torch-eager	3	3179.0	0.00240499	1
+vit-tiny	torch-compile	3	2258.8	0.00240216	1
