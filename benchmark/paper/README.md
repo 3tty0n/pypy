@@ -130,10 +130,10 @@ benchmark had to change.
 
 | backend | script | mode / system | what it covers |
 |---|---|---|---|
-| JAX/XLA (`jax.jit`) | `benchmark/jax_bench.py`, `benchmark/applevel/jax_models.py` | `jax` | every micro variant 0-13; gpt2 (distilgpt2, tiny-gpt2), bert (tiny, mini), vit-tiny, mixer_b16 |
+| JAX/XLA (`jax.jit`) | `benchmark/jax_bench.py`, `benchmark/applevel/jax_models.py` | `jax` | every micro variant 0-13; gpt2 (distilgpt2, tiny-gpt2), bert (tiny, mini), vit-tiny, mixer_b16, smollm2-135m (llama), resnet18 (b1, b8) |
 | IREE (StableHLO from the same JAX code, CUDA HAL) | same two scripts, mode `iree` | `iree` | micro variants 0, 6, 11, 12, 13; bert-mini, vit-tiny |
 | handwritten Triton | `benchmark/triton_bench.py` | `triton` | micro variants 0-5 (fused elementwise chain), 6 (MLP), 11 (reduction), 12 (matmul + bias + relu), 13 (attention: Triton GEMMs + a flash-style online-softmax kernel) |
-| Torch-TensorRT | - | - | not built: no wheel for the Python 3.14 / CUDA 13 pairing the lock pins (`uv pip install torch-tensorrt` fails to build from source) |
+| Torch-TensorRT 2.9 (`torch.compile(backend="tensorrt")`) | the existing `*_torch.py` and `torch_bench.py`, mode `tensorrt` | `torch-tensorrt` | every model and every micro variant, from the unchanged PyTorch definitions |
 
 ### Installing
 
@@ -146,6 +146,12 @@ the jax/iree rows are simply absent and everything else runs. By hand:
     uv venv --python 3.14 ~/.venvs/metatensor-jax
     VIRTUAL_ENV=~/.venvs/metatensor-jax uv pip sync benchmark/paper/requirements-jax.lock
     export JAX_PYTHON=~/.venvs/metatensor-jax/bin/python
+
+Torch-TensorRT has cu130 wheels only up to CPython 3.13 and pins torch 2.9,
+so it gets a third venv, `${TRT_VENV:-$VENV-trt}`, from `requirements-trt.lock`
+(`WITH_TRT=0` skips it; `TRT_PYTHON` in `env.sh`). Its torch is therefore
+2.9, not the 2.14 the eager/compile columns run on; the model code is the
+same file.
 
 The Triton baseline needs nothing beyond the torch venv (`triton` is already
 pinned there). `machine.txt` records jax, jaxlib and IREE versions next to
@@ -192,6 +198,15 @@ the model line):
   32x32 attention tiles at fp64 to fit sm_86 shared memory) and no
   autotuning; they are the kernel a person writes in an afternoon, not the
   best one for this GPU.
+- Torch-TensorRT: `torch.compile(backend="tensorrt")` with
+  `enabled_precisions={dtype}` and `disable_tf32=True` (TensorRT allows TF32
+  by default, which put vit/mixer at 8e-3 off). Torch-TensorRT 2.9 lowers
+  `scaled_dot_product_attention` with a mask wrongly (BERT logits off by 25),
+  so HF models are loaded with `attn_implementation="eager"` in this mode
+  only; everything then matches to the same 1e-5 as torch eager. Like
+  torch.compile, `compile_ms` is -1 and `first_run_ms` includes the build
+  (tens of seconds for the deeper models). A specialized inference engine,
+  reported as such, not an architectural peer.
 - torch.compile: `first_run_ms` is compile plus one iteration; the split is
   not observable from outside, so `compile_ms` is -1 and the break-even
   column uses the first run.

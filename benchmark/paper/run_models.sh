@@ -36,15 +36,15 @@ record() {
 # paper's IREE column uses (see README).
 IREE_MODELS=" bert-mini vit-tiny "
 jax_rows() {
-  local model=$1 jaxmodel=$2 weights=$3 round=$4
+  local model=$1 jaxmodel=$2 weights=$3 round=$4; shift 4
   [ -n "${JAX_PYTHON:-}" ] && [ -x "$JAX_PYTHON" ] || return 0
   [ -n "$jaxmodel" ] || return 0
   local out
-  out=$("$JAX_PYTHON" "$APP/jax_models.py" "$jaxmodel" jax "$weights" "$ITERS" "$WARMUP" 2>/dev/null) &&
+  out=$("$JAX_PYTHON" "$APP/jax_models.py" "$jaxmodel" jax "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null) &&
     record "$model" jax "$round" "$out"
   case "$IREE_MODELS" in
     *" $model "*)
-      out=$("$JAX_PYTHON" "$APP/jax_models.py" "$jaxmodel" iree "$weights" "$ITERS" "$WARMUP" 2>/dev/null) &&
+      out=$("$JAX_PYTHON" "$APP/jax_models.py" "$jaxmodel" iree "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null) &&
         record "$model" iree "$round" "$out" ;;
   esac
 }
@@ -59,18 +59,22 @@ model() {
     record "$model" torch-eager "$round" "$out"
     out=$("$TORCH_PYTHON" "$APP/$torchscript" compile "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null)
     record "$model" torch-compile "$round" "$out"
-    jax_rows "$model" "$jaxmodel" "$weights" "$round"
+    jax_rows "$model" "$jaxmodel" "$weights" "$round" "$@"
+    if [ -n "${TRT_PYTHON:-}" ]; then
+      out=$("$TRT_PYTHON" "$APP/$torchscript" tensorrt "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null) &&
+        record "$model" torch-tensorrt "$round" "$out"
+    fi
   done
 }
 
 # fourth column: the jax_models.py model, "" where there is no JAX twin
 model_distilgpt2() { model distilgpt2 gpt2.py gpt2_torch.py gpt2 "$WEIGHTS/distilgpt2"; }
 model_tiny-gpt2() { model tiny-gpt2 gpt2.py gpt2_torch.py gpt2 "$WEIGHTS/tiny-gpt2"; }
-model_smollm2-135m() { model smollm2-135m llama.py llama_torch.py "" "$WEIGHTS/smollm2-135m"; }
+model_smollm2-135m() { model smollm2-135m llama.py llama_torch.py llama "$WEIGHTS/smollm2-135m"; }
 model_bert-tiny() { model bert-tiny bert.py bert_torch.py bert "$WEIGHTS/bert-tiny"; }
 model_bert-mini() { model bert-mini bert.py bert_torch.py bert "$WEIGHTS/bert-mini"; }
-model_resnet18-b1() { model resnet18-b1 resnet.py resnet_torch.py "" "$WEIGHTS/resnet18" 1; }
-model_resnet18-b8() { model resnet18-b8 resnet.py resnet_torch.py "" "$WEIGHTS/resnet18" 8; }
+model_resnet18-b1() { model resnet18-b1 resnet.py resnet_torch.py resnet "$WEIGHTS/resnet18" 1; }
+model_resnet18-b8() { model resnet18-b8 resnet.py resnet_torch.py resnet "$WEIGHTS/resnet18" 8; }
 model_mixer_b16() { model mixer_b16 mixer.py mixer_torch.py mixer "$WEIGHTS/mixer_b16"; }
 model_vit-tiny() { model vit-tiny vit.py vit_torch.py vit "$WEIGHTS/vit-tiny"; }
 

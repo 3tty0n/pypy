@@ -78,11 +78,10 @@ def main():
         fwd = model.forward
     else:
         from transformers import GPT2LMHeadModel
-        hf = GPT2LMHeadModel.from_pretrained(cfg['source'])
+        hf = GPT2LMHeadModel.from_pretrained(cfg['source'], **torch_common.hf_kwargs(a))
         hf = hf.to(a.dev, a.dtype).eval()
         fwd = lambda i: hf(i.unsqueeze(0)).logits[0]
-    if a.mode == 'compile':
-        fwd = torch.compile(fwd)
+    fwd = torch_common.compiled(fwd, a)
     logits, acc, steady_us = torch_common.timed(fwd, (idx,), a)
     torch_common.report(
         'gpt2 torch-%s layers=%d embd=%d heads=%d seq=%d vocab=%d dtype=%s '

@@ -7,12 +7,11 @@ def main():
     a = torch_common.argv()
     cfg = a.cfg
     from transformers import BertForMaskedLM
-    hf = BertForMaskedLM.from_pretrained(cfg['source']).to(a.dev,
+    hf = BertForMaskedLM.from_pretrained(cfg['source'], **torch_common.hf_kwargs(a)).to(a.dev,
                                                            a.dtype).eval()
     idx = torch.tensor([cfg['tokens']], device=a.dev, dtype=torch.long)
     fwd = lambda i: hf(i).logits[0]
-    if a.mode == 'compile':
-        fwd = torch.compile(fwd)
+    fwd = torch_common.compiled(fwd, a)
     logits, acc, steady_us = torch_common.timed(fwd, (idx,), a)
     torch_common.report(
         'bert torch-%s layers=%d embd=%d heads=%d seq=%d vocab=%d dtype=%s '

@@ -121,6 +121,15 @@ group_baselines() {
     if close_enough "$acc" "$(field "$ref" 9)"; then ok "triton agrees with torch" "acc=$acc"
     else bad "triton agrees with torch" "acc=$acc vs $(field "$ref" 9)"; fi
   fi
+  if [ -n "${TRT_PYTHON:-}" ]; then
+    line=$("$TRT_PYTHON" "$HERE/../torch_bench.py" tensorrt 12 1 25600 "$ITERS" 2>/dev/null | tail -1)
+    if [ -z "$line" ]; then bad "tensorrt runs"; else
+      steady=$(field "$line" 7); acc=$(field "$line" 9)
+      if positive "$steady"; then ok "tensorrt" "steady=${steady}us"; else bad "tensorrt steady_us" "got $steady"; fi
+      if [ -n "${ref:-}" ] && close_enough "$acc" "$(field "$ref" 9)"; then ok "tensorrt agrees with torch" "acc=$acc"
+      else bad "tensorrt agrees with torch" "acc=$acc vs $(field "$ref" 9)"; fi
+    fi
+  else skip "tensorrt" "TRT_PYTHON unset (setup.sh with WITH_TRT=1)"; fi
   if [ -z "${JAX_PYTHON:-}" ]; then skip "jax" "JAX_PYTHON unset (setup.sh with WITH_JAX=1)"; return; fi
   local mode
   for mode in jax iree; do

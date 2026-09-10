@@ -13,8 +13,7 @@ def main():
     import timm
     m = timm.create_model(cfg['source'], pretrained=True).to(a.dev, a.dtype)
     fwd = m.eval()
-    if a.mode == 'compile':
-        fwd = torch.compile(fwd)
+    fwd = torch_common.compiled(fwd, a)
     logits, acc, steady_us = torch_common.timed(fwd, (px,), a)
     torch_common.report(
         'resnet torch-%s model=%s batch=%d classes=%d dtype=%s iters=%d '

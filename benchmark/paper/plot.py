@@ -64,11 +64,11 @@ from matplotlib.ticker import FuncFormatter
 # Aqua (2.82:1) and yellow (2.17:1) sit below 3:1 against white, which the
 # contrast check flags as "relief required": the .tex table beside each figure
 # is that relief.
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#8a5cd6"]
+SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#8a5cd6", "#6b6b6b"]
 POS, NEG = "#2a78d6", "#e34948"      # diverging poles, neutral midpoint is the rule line
 INK, INK_2, GRID = "#0b0b0b", "#52514e", "#d9d8d4"
 # Opt-in only: texture is for print and full CVD, never decoration.
-HATCH = ["", "///", "...", "xxx", "\\\\"]
+HATCH = ["", "///", "...", "xxx", "\\\\", "++"]
 
 SINGLE_COL, DOUBLE_COL = 3.25, 6.75   # MLSys column and text widths, inches
 # Figures whose row labels are long enough that a single column would leave no
@@ -84,6 +84,7 @@ SYSTEM_LABEL = {
     "torch-compile-static": "torch.compile (static)",
     "jax": "JAX/XLA",
     "iree": "IREE",
+    "torch-tensorrt": "Torch-TensorRT",
     "triton": "Triton (handwritten)",
 }
 # Names come from benchmarks.toml, the same file the grid is read from, so a
@@ -401,7 +402,7 @@ def fig_models(out, args):
     g = collections.defaultdict(lambda: collections.defaultdict(list))
     for r in rows:
         g[r["model"]][r["system"]].append(float(r["steady_us"]))
-    systems = [s for s in ["ours", "torch-compile", "torch-eager", "jax", "iree"]
+    systems = [s for s in ["ours", "torch-compile", "torch-eager", "jax", "iree", "torch-tensorrt"]
                if any(s in d for d in g.values())]
     models = sorted(g, key=lambda m: med(g[m].get("ours", [])) or 0)
     stats = {s: [band(g[m].get(s, [])) for m in models] for s in systems}
@@ -642,7 +643,7 @@ def fig_micro_baselines(out, args):
     """Every backend against the same fused baseline: grouped diverging bars,
     one row per point, same log-ratio convention as fig_micro_speedup."""
     g = micro_values(read_tsv(os.path.join(out, "micro.tsv")))
-    systems = ["torch-eager", "torch-compile", "jax", "iree", "triton"]
+    systems = ["torch-eager", "torch-compile", "jax", "iree", "triton", "torch-tensorrt"]
     pts = []
     for (dtype, v, k, n), m in g.items():
         if dtype != "float64" or not m.get("fused"):
@@ -729,7 +730,7 @@ def fig_compile_overhead(out, args):
     records = read_jsonl(os.path.join(out, "results.jsonl"))
     if not records:
         return None
-    systems = ["torch-compile", "jax", "iree", "triton", "ours"]
+    systems = ["torch-compile", "torch-tensorrt", "jax", "iree", "triton", "ours"]
 
     def workload_key(r):
         if r.get("kind") == "micro" and r.get("dtype") == "float64":

@@ -4,7 +4,7 @@
                                                     MODE: jax | iree
 
 Each forward is a transcription of the tensorpypy.models class the pypy side
-runs (Bert, GPT2, ViT, Mixer), on the same weights.bin/index.json, so the
+runs (Bert, GPT2, ViT, Mixer, Llama, ResNet), on the same weights.bin/index.json, so the
 three systems compute the same function on the same numbers.  The report
 line is the one torch_common.report prints, plus compile_ms (jit lower +
 XLA compile, no execution) and first_run_ms (first executed forward), so
@@ -212,8 +212,121 @@ def build_mixer(cfg, flat, dtype):
     return params, (img,), forward
 
 
+def rms_norm(x, g, eps):
+    return x * jax.lax.rsqrt((x * x).mean(-1, keepdims=True) + eps) * g
+
+
+def rope(x, cos, sin, dh):
+    """RoPE on [t, heads*dh]; rot_half swaps the two halves of each head."""
+    t, d = x.shape
+    xr = x.reshape(t, d // dh, dh)
+    rot = jnp.concatenate([-xr[:, :, dh // 2:], xr[:, :, :dh // 2]],
+                          -1).reshape(t, d)
+    return x * cos + rot * sin
+
+
+def build_llama(cfg, flat, dtype):
+    w = Weights(cfg, flat, dtype)
+    t, d, h, eps = cfg['seq'], cfg['n_embd'], cfg['n_head'], cfg['eps']
+    dh = cfg['head_dim']
+    blocks = []
+    for i in range(cfg['n_layer']):
+        p = 'h.%d.' % i
+        blocks.append({
+            'wqkv': w.cat([p + 'attn.q.w', p + 'attn.k.w', p + 'attn.v.w']),
+            'wo': w.get(p + 'attn.proj.w'),
+            'wgate': w.get(p + 'mlp.gate.w'), 'wup': w.get(p + 'mlp.up.w'),
+            'wdown': w.get(p + 'mlp.down.w'),
+            'g1': w.get(p + 'norm1.g'), 'g2': w.get(p + 'norm2.g')})
+    params = {'wte': w.get('wte'), 'gf': w.get('norm_f.g'), 'blocks': blocks,
+              'cos': w.get('rope.cos')[:t], 'sin': w.get('rope.sin')[:t],
+              'mask': jnp.where(jnp.triu(jnp.ones((t, t), bool), 1),
+                                -1e9, 0.0).astype(dtype)}
+    if not cfg['tied']:
+        params['head'] = w.get('lm_head.w')
+    idx = jnp.asarray(cfg['tokens'], dtype=jnp.int32)
+
+    def forward(p, idx):
+        x = p['wte'][idx]
+        for bp in p['blocks']:
+            y = rms_norm(x, bp['g1'], eps)
+            qkv = y @ bp['wqkv']
+            q = rope(qkv[:, :d], p['cos'], p['sin'], dh)
+            k = rope(qkv[:, d:2 * d], p['cos'], p['sin'], dh)
+            q, k, v = [z.reshape(t, h, d // h).transpose(1, 0, 2)
+                       for z in (q, k, qkv[:, 2 * d:])]
+            s = jnp.einsum('hqd,hkd->hqk', q, k) / math.sqrt(d // h)
+            c = jnp.einsum('hqk,hkd->hqd', jax.nn.softmax(s + p['mask'], -1),
+                           v)
+            x = x + c.transpose(1, 0, 2).reshape(t, d) @ bp['wo']
+            y = rms_norm(x, bp['g2'], eps)
+            x = x + (jax.nn.silu(y @ bp['wgate']) * (y @ bp['wup'])) @ \
+                bp['wdown']
+        x = rms_norm(x, p['gf'], eps)
+        return x @ p.get('head', p['wte']).T
+    return params, (idx,), forward
+
+
+def conv(x, w, stride, pad):
+    return jax.lax.conv_general_dilated(
+        x, w, (stride, stride), [(pad, pad)] * 2,
+        dimension_numbers=('NHWC', 'HWIO', 'NHWC'))
+
+
+def build_resnet(cfg, flat, dtype):
+    """timm resnet18 in NHWC, on the exported (kh, kw, cin, cout) filters."""
+    w = Weights(cfg, flat, dtype)
+    eps, s = cfg['eps'], cfg['image_size']
+    batch = int(sys.argv[6]) if len(sys.argv) > 6 else 1
+
+    def flt(name, k, c):
+        return w.get(name).reshape(k, k, c, -1)
+
+    def bn(name):
+        g, b = w.raw(name + '.g'), w.raw(name + '.b')
+        m, v = w.raw(name + '.m'), w.raw(name + '.v')
+        a = g / np.sqrt(v + eps)
+        return (jnp.asarray(a, dtype), jnp.asarray(b - m * a, dtype))
+
+    layers, geom = [], []
+    for li, n, shape, k, stride, down in cfg['layers']:
+        p = 'l%d.%d.' % (li, n)
+        o, c = shape[0], shape[1]
+        d = {'w1': flt(p + 'conv1.w', k, c), 'bn1': bn(p + 'bn1'),
+             'w2': flt(p + 'conv2.w', k, o), 'bn2': bn(p + 'bn2'),
+             }
+        if down:
+            d['wd'] = flt(p + 'down.w', 1, c)
+            d['bnd'] = bn(p + 'bnd')
+        layers.append(d)
+        geom.append((stride, k // 2))
+    ok = cfg['stem'][1]
+    params = {'conv1': flt('conv1.w', ok, 3), 'bn1': bn('bn1'),
+              'layers': layers, 'fcw': w.get('fc.w'), 'fcb': w.get('fc.b')}
+    img = jnp.asarray(np.broadcast_to(w.raw('image'), (batch, s, s, 3)),
+                      dtype=dtype)
+
+    def forward(p, x):
+        y = jax.nn.relu(conv(x, p['conv1'], 2, ok // 2) * p['bn1'][0] +
+                        p['bn1'][1])
+        y = jax.lax.reduce_window(y, -jnp.inf, jax.lax.max, (1, 3, 3, 1),
+                                  (1, 2, 2, 1),
+                                  ((0, 0), (1, 1), (1, 1), (0, 0)))
+        for bp, (stride, pad) in zip(p['layers'], geom):
+            z = conv(y, bp['w1'], stride, pad)
+            z = jax.nn.relu(z * bp['bn1'][0] + bp['bn1'][1])
+            z = conv(z, bp['w2'], 1, pad)
+            z = z * bp['bn2'][0] + bp['bn2'][1]
+            if 'wd' in bp:
+                y = conv(y, bp['wd'], stride, 0)
+                y = y * bp['bnd'][0] + bp['bnd'][1]
+            y = jax.nn.relu(z + y)
+        return y.mean((1, 2)) @ p['fcw'] + p['fcb']
+    return params, (img,), forward
+
+
 BUILD = {'gpt2': build_gpt2, 'bert': build_bert, 'vit': build_vit,
-         'mixer': build_mixer}
+         'mixer': build_mixer, 'llama': build_llama, 'resnet': build_resnet}
 
 
 # -- driver -------------------------------------------------------------------
@@ -261,11 +374,16 @@ def main():
     steady_us = (time.time() - t0) / iters * 1e6
     acc = float(np.asarray(logits, np.float64).sum())
 
-    if model in ('gpt2', 'bert'):
+    if model in ('gpt2', 'bert', 'llama'):
         desc = 'layers=%d embd=%d heads=%d seq=%d vocab=%d' % (
             cfg['n_layer'], cfg['n_embd'], cfg['n_head'], cfg['seq'],
             cfg['vocab'])
         order = np.asarray(logits).argmax(-1).tolist()
+    elif model == 'resnet':
+        desc = 'model=%s batch=%d classes=%d' % (
+            cfg['source'], logits.shape[0], cfg['classes'])
+        order = np.argsort(-np.asarray(logits)[0])[:5].tolist()
+        logits = logits[:1]
     elif model == 'vit':
         desc = 'layers=%d embd=%d heads=%d tokens=%d classes=%d' % (
             cfg['n_layer'], cfg['n_embd'], cfg['n_head'], cfg['tokens'],

@@ -42,7 +42,15 @@ def make_input(rows, cols):
 
 
 def compiled(fn):
-    return torch.compile(fn, dynamic=False) if mode == "compile" else fn
+    if mode == "compile":
+        return torch.compile(fn, dynamic=False)
+    if mode == "tensorrt":
+        import torch_tensorrt  # noqa: F401
+        return torch.compile(fn, dynamic=False, backend="tensorrt",
+                             options={"enabled_precisions": {DT},
+                                      "disable_tf32": True,
+                                      "min_block_size": 1})
+    return fn
 
 
 def loop(step, x, iters):

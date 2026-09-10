@@ -42,6 +42,27 @@ def image(a):
     return torch.tensor(buf[off:off + n]).view(1, *shape)
 
 
+def hf_kwargs(a):
+    """Torch-TensorRT 2.9 lowers scaled_dot_product_attention with a mask
+    wrongly (BERT logits off by ~25); the eager attention path converts
+    exactly, so HF models use it under tensorrt."""
+    return {'attn_implementation': 'eager'} if a.mode == 'tensorrt' else {}
+
+
+def compiled(fwd, a):
+    """eager: as is; compile: Inductor; tensorrt: Torch-TensorRT through the
+    torch.compile front end, so the same model definition serves all three."""
+    if a.mode == 'compile':
+        return torch.compile(fwd)
+    if a.mode == 'tensorrt':
+        import torch_tensorrt  # noqa: F401  registers the backend
+        return torch.compile(fwd, backend='tensorrt',
+                             options={'enabled_precisions': {a.dtype},
+                                      'disable_tf32': True,
+                                      'min_block_size': 1})
+    return fwd
+
+
 def timed(fwd, args, a):
     """Warm-up, sync, timed loop, sync.  The first forward is timed on its
     own into a.first_run_ms: for compile mode that is compile plus one run."""

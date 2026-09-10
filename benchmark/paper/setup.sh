@@ -155,6 +155,20 @@ if [ "${WITH_JAX:-1}" = "1" ]; then
   fi
 fi
 
+# Torch-TensorRT: its cu130 wheels stop at CPython 3.13, so it gets a third
+# venv on 3.13 with the torch it pins (2.9). WITH_TRT=0 skips it.
+TRT_VENV="${TRT_VENV:-$VENV-trt}"
+TRT_PYTHON=""
+if [ "${WITH_TRT:-1}" = "1" ] && [ -n "$UV" ]; then
+  echo "== optional Torch-TensorRT venv at $TRT_VENV =="
+  if { [ -x "$TRT_VENV/bin/python" ] || "$UV" venv -q --python 3.13 "$TRT_VENV"; } &&
+     VIRTUAL_ENV="$TRT_VENV" "$UV" pip sync -q "$HERE/requirements-trt.lock"; then
+    TRT_PYTHON="$TRT_VENV/bin/python"
+  else
+    echo "setup.sh: torch-tensorrt install failed; that column will be absent" >&2
+  fi
+fi
+
 echo "== detecting compute capability =="
 CC=$("$RTENSOR_PYTHON" -c '
 import torch
@@ -174,6 +188,7 @@ export RTENSOR_CC="$CC"
 export RTENSOR_CUBLAS="$RTENSOR_CUBLAS"
 export CUDA_HOME="$CUDA_HOME"
 export JAX_PYTHON="$JAX_PYTHON"
+export TRT_PYTHON="$TRT_PYTHON"
 EOF
 echo "wrote $HERE/env.sh"
 

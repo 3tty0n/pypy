@@ -8,11 +8,10 @@ def main():
     cfg = a.cfg
     px = torch_common.image(a).to(a.dev, a.dtype)
     from transformers import ViTForImageClassification
-    hf = ViTForImageClassification.from_pretrained(cfg['source'])
+    hf = ViTForImageClassification.from_pretrained(cfg['source'], **torch_common.hf_kwargs(a))
     hf = hf.to(a.dev, a.dtype).eval()
     fwd = lambda x: hf(x).logits[0]
-    if a.mode == 'compile':
-        fwd = torch.compile(fwd)
+    fwd = torch_common.compiled(fwd, a)
     logits, acc, steady_us = torch_common.timed(fwd, (px,), a)
     torch_common.report(
         'vit torch-%s layers=%d embd=%d heads=%d tokens=%d classes=%d '

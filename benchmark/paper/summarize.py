@@ -52,7 +52,7 @@ def compile_table(records, lines):
         eager = g[key].get("torch-eager", {})
         e_first = known(med(eager.get("first_run_ms", [])))
         e_steady = med(eager.get("steady_us", []))
-        for system in ("torch-compile", "jax", "iree", "triton", "fused", "ours"):
+        for system in ("torch-compile", "torch-tensorrt", "jax", "iree", "triton", "fused", "ours"):
             if system not in g[key]:
                 continue
             d = g[key][system]
@@ -151,8 +151,8 @@ def main(out_dir):
     models = read_tsv(os.path.join(out_dir, "models.tsv"))
     if models:
         lines.append("## End-to-end models (median steady_us, ratio to torch.compile)\n")
-        lines.append("| model | ours | torch.compile | torch eager | JAX/XLA | IREE | ratio ours/compile | ratio jax/compile | correctness |")
-        lines.append("|---|---|---|---|---|---|---|---|---|")
+        lines.append("| model | ours | torch.compile | torch eager | JAX/XLA | IREE | TensorRT | ratio ours/compile | ratio jax/compile | correctness |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
         g = collections.defaultdict(lambda: collections.defaultdict(list))
         corr = collections.defaultdict(list)
         for r in models:
@@ -169,9 +169,10 @@ def main(out_dir):
             jratio = jax_ / compiled if jax_ and compiled else None
             c = corr.get(model, [])
             cstr = c[0] if c else ""
-            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
                 model, fmt(ours), fmt(compiled), fmt(eager), fmt(jax_),
-                fmt(iree), fmt(ratio, "%.2fx") if ratio else "n/a",
+                fmt(iree), fmt(med(g[model].get("torch-tensorrt", []))),
+                fmt(ratio, "%.2fx") if ratio else "n/a",
                 fmt(jratio, "%.2fx") if jratio else "n/a", cstr))
         lines.append("")
 

@@ -52,6 +52,7 @@ IREE_VARIANTS=" 0 6 11 12 13 "
 baselines() {
   local variant=$1 k=$2 n=$3
   baseline_run "$TORCH_PYTHON" triton_bench.py triton "$variant" "$k" "$n" "$ITERS"
+  baseline_run "$TRT_PYTHON" torch_bench.py tensorrt "$variant" "$k" "$n" "$ITERS"
   baseline_run "$JAX_PYTHON" jax_bench.py jax "$variant" "$k" "$n" "$ITERS"
   case "$IREE_VARIANTS" in
     *" $variant "*)

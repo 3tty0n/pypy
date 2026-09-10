@@ -19,6 +19,13 @@ if [ -n "$JAX_PYTHON" ] && ! [ -x "$JAX_PYTHON" ]; then
   JAX_PYTHON=""
 fi
 export JAX_PYTHON
+# Optional Torch-TensorRT venv (CPython 3.13: torch-tensorrt has no 3.14 wheel).
+TRT_PYTHON=${TRT_PYTHON:-}
+if [ -n "$TRT_PYTHON" ] && ! [ -x "$TRT_PYTHON" ]; then
+  echo "config.sh: TRT_PYTHON=$TRT_PYTHON is not executable; tensorrt rows skipped" >&2
+  TRT_PYTHON=""
+fi
+export TRT_PYTHON
 
 if [ -z "$RTENSOR_CUBLAS" ] && [ -n "$RTENSOR_PYTHON" ]; then
   for f in "$(dirname "$RTENSOR_PYTHON")"/../lib/python3*/site-packages/nvidia/cu*/lib/libcublas.so.*; do
@@ -93,6 +100,17 @@ for mod, attr in (("jax", "__version__"), ("jaxlib", "__version__"),
 PY
     else
       echo "jax           - (JAX_PYTHON unset)"
+    fi
+    if [ -n "$TRT_PYTHON" ]; then
+      "$TRT_PYTHON" - <<'PY' 2>/dev/null
+import importlib
+for mod in ("torch_tensorrt", "tensorrt"):
+    try:
+        print("%-13s %s" % (mod, importlib.import_module(mod).__version__))
+    except Exception:
+        print("%-13s -" % mod)
+print("trt_torch     %s" % importlib.import_module("torch").__version__)
+PY
     fi
     echo "iters         ${ITERS}"
     echo "rounds        ${ROUNDS}"
