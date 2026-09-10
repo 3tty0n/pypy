@@ -2,6 +2,7 @@
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 source "$HERE/config.sh"
+APP="$HERE/../applevel"
 paper_setup_pypy
 trap paper_cleanup_pypy EXIT
 
@@ -23,7 +24,7 @@ print(statistics.median(xs) if xs else '')
 run_ours() {
   local round=$1
   local jitlog="$OUT/.dyn_jit_$round.log"
-  out=$(PYPYLOG=jit-summary:"$jitlog" "$RUN_PYPY" $JIT_FLAGS "$HERE/dynamic_gpt2.py" "$WEIGHTS/distilgpt2" "$ITERS")
+  out=$(PYPYLOG=jit-summary:"$jitlog" "$RUN_PYPY" $JIT_FLAGS "$APP/dynamic_gpt2.py" "$WEIGHTS/distilgpt2" "$ITERS")
   loops=$(grep 'Total # of loops:' "$jitlog" | grep -o '[0-9]*$' | tail -1)
   bridges=$(grep 'Total # of bridges:' "$jitlog" | grep -o '[0-9]*$' | tail -1)
   echo "$out" | tail -n +2 | while IFS=$'\t' read -r length us; do
@@ -41,7 +42,7 @@ run_ours() {
 
 run_torch() {
   local mode=$1 system=$2 round=$3
-  out=$("$TORCH_PYTHON" "$HERE/dynamic_gpt2_torch.py" "$mode" "$WEIGHTS/distilgpt2" "$ITERS" 2>/dev/null)
+  out=$("$TORCH_PYTHON" "$APP/dynamic_gpt2_torch.py" "$mode" "$WEIGHTS/distilgpt2" "$ITERS" 2>/dev/null)
   recompiles=$(echo "$out" | grep '^recompiles' | cut -f2)
   echo "$out" | grep -v '^length\|^recompiles' | while IFS=$'\t' read -r length us; do
     echo -e "$system\t$round\t$length\t$us" >> "$SERIES"
@@ -55,11 +56,15 @@ run_torch() {
   done
 }
 
+progress_init dynamic "$ROUNDS"
+
 for round in $(seq "$ROUNDS"); do
+  progress_step "round $round/$ROUNDS"
   run_ours "$round"
   run_torch eager torch-eager "$round"
   run_torch compile torch-compile-static "$round"
   run_torch compile-dynamic torch-compile-dynamic "$round"
 done
 
+progress_done
 echo "wrote $SERIES and $SUMMARY"
