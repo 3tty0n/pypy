@@ -1,8 +1,8 @@
 from rpython.rlib import jit
 from rpython.metatensor import nn
 from rpython.metatensor.ops import tensor_sum, tensor_item
-from bench.common import (MLP_D, make_lr, make_mlp_input, make_mlp_layer,
-    rows_of)
+from bench.common import (MEM_MLP, MEM_MLP_TRAIN, MLP_D, fit_rows, make_lr,
+    make_mlp_input, make_mlp_layer)
 
 mlp_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 train_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
@@ -12,7 +12,7 @@ def make_mlp(d):
                            make_mlp_layer(d)])
 
 def run_mlp(n, iters):
-    rows = rows_of(n, MLP_D)
+    rows = fit_rows(n, MLP_D, 0, MEM_MLP)
     mlp = make_mlp(MLP_D)
     x = make_mlp_input(rows, MLP_D)
     i = 0
@@ -25,7 +25,7 @@ def run_mlp(n, iters):
     return tensor_item(tensor_sum(x.t, -1))
 
 def run_mlp_train(n, iters):
-    rows = rows_of(n, MLP_D)
+    rows = fit_rows(n, MLP_D, 0, MEM_MLP_TRAIN)
     mlp = make_mlp(MLP_D)
     x = make_mlp_input(rows, MLP_D)
     params = mlp.parameters()

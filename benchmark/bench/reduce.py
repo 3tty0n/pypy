@@ -1,14 +1,14 @@
 from rpython.rlib import jit
 from rpython.metatensor import core, device, ops
 from rpython.metatensor.ops import tensor_add, tensor_mul, tensor_sum, tensor_item
-from bench.common import (MLP_D, RED_COLS, make_mlp_input, make_mlp_layer,
-    rows_of, zeros)
+from bench.common import (MEM_MATMUL, MEM_REDUCE, MLP_D, RED_COLS, fit_rows,
+    make_mlp_input, make_mlp_layer, zeros)
 
 reduction_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 matmul_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 
 def run_reduction(n, iters):
-    rows = rows_of(n, RED_COLS)
+    rows = fit_rows(n, RED_COLS, 0, MEM_REDUCE)
     x = zeros([rows, RED_COLS])
     for i in range(rows * RED_COLS):
         x.host[i] = (i % 7) - 3.0
@@ -22,7 +22,7 @@ def run_reduction(n, iters):
     return tensor_item(tensor_sum(x, -1))
 
 def run_matmul(n, iters):
-    rows = rows_of(n, MLP_D)
+    rows = fit_rows(n, MLP_D, 0, MEM_MATMUL)
     layer = make_mlp_layer(MLP_D)
     x = make_mlp_input(rows, MLP_D)
     i = 0

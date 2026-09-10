@@ -1,7 +1,7 @@
 from rpython.rlib import jit
 from rpython.metatensor import device, nn
-from bench.common import (CNN_C, CNN_CLS, CNN_HW, CNN_O, TB_EPS,
-    make_mlp_input, rows_of, zeros)
+from bench.common import (CNN_C, CNN_CLS, CNN_HW, CNN_O, MEM_CNN, TB_EPS,
+    fit_rows, make_mlp_input, zeros)
 
 cnn_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 
@@ -30,7 +30,7 @@ def make_cnn():
 
 def run_cnn(n, iters):
     pixels = CNN_C * CNN_HW * CNN_HW
-    rows = rows_of(n, pixels)
+    rows = fit_rows(n, pixels, 0, MEM_CNN)
     cnn = make_cnn()
     x = make_mlp_input(rows, pixels)
     acc = 0.0

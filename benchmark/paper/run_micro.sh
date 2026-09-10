@@ -7,14 +7,25 @@ HEADER="mode\tvariant\tk\tn\titers\twarm_s\tsteady_us\tkernels\tacc\tcompiled_in
 TSV="$OUT/micro.tsv"
 tsv_init "$TSV" "$HEADER"
 
-ours() { "$BENCH" "$@" | tr ' ' '\t' >> "$TSV"; }
+# metatensor-bench fits its working set to the GPU and reports the element
+# count it actually ran with as field 4, so torch has to be given that same
+# count rather than the requested one.
+ours() { "$BENCH" "$@"; }
 torchrun() { "$TORCH_PYTHON" "$HERE/../torch_bench.py" "$@" 2>/dev/null | tail -1 | tr ' ' '\t' >> "$TSV"; }
 
 run_point() {
-  local variant=$1 k=$2 n=$3
-  for mode in fused eager nojit; do ours $mode $variant $k $n $ITERS; done
-  torchrun compile $variant $k $n $ITERS
-  torchrun eager $variant $k $n $ITERS
+  local variant=$1 k=$2 n=$3 line eff=""
+  for mode in fused eager nojit; do
+    line=$(ours $mode $variant $k $n $ITERS)
+    echo "$line" | tr ' ' '\t' >> "$TSV"
+    if [ "$mode" = fused ]; then eff=$(echo "$line" | awk '{print $4}'); fi
+  done
+  [ -n "$eff" ] || eff=$n
+  if [ "$eff" != "$n" ]; then
+    echo "run_micro: variant $variant n $n -> $eff (fitted to GPU memory)" >&2
+  fi
+  torchrun compile $variant $k $eff $ITERS
+  torchrun eager $variant $k $eff $ITERS
 }
 
 if [ -n "$1" ]; then

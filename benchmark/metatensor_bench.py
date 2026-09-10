@@ -21,6 +21,37 @@ def run_model(variant, n, iters):
         return transformer.run_block(n, iters)
     return mlp.run_mlp(n, iters)
 
+# Warmup schedule.  The JIT thresholds are 3, and steady_us on variant 13 at
+# n=256000 was flat within 0.4% between 21 and 101 total warmup iterations, so
+# the old 20/30 schedule was about five times longer than it needed to be.
+WARMUP_ITERS, PRESTEADY_ITERS = 10, 10
+MIN_WARMUP = 5
+
+def warmup_budget_s():
+    try:
+        return int(bench_env('RTENSOR_WARMUP_BUDGET_S', '30'))
+    except ValueError:
+        return 30
+
+def warmup_plan(per_iter):
+    """Warmup iteration counts for one measurement point.
+
+    Cheap points keep the fixed 20/30 schedule.  For a point where a single
+    iteration already costs a noticeable fraction of the budget - the quadratic
+    attention variants at large n - the 100 warmup iterations alone would run
+    for tens of minutes, so the schedule is trimmed to what fits.  It never
+    drops below MIN_WARMUP, which has to stay above the JIT thresholds.
+    """
+    if per_iter <= 0.0:
+        return WARMUP_ITERS, PRESTEADY_ITERS
+    budget = float(warmup_budget_s())
+    afford = int(budget / per_iter)
+    if afford < MIN_WARMUP:
+        afford = MIN_WARMUP
+    w1 = WARMUP_ITERS if afford > WARMUP_ITERS else afford
+    w2 = PRESTEADY_ITERS if afford > PRESTEADY_ITERS else afford
+    return w1, w2
+
 def entry_point(argv):
     if len(argv) != 6:
         print 'usage: metatensor-bench MODE VARIANT K N ITERS  (MODE: fused|eager|nojit, VARIANT: 0..13)'
@@ -49,13 +80,17 @@ def entry_point(argv):
     kernels.init_dtype(cfg.dtype)
     dtname = core.DTYPE_NAMES[cfg.dtype]
     sink.fd = os.open('/dev/null', os.O_WRONLY, 0)
+    cfg.eff_n = n
     if variant >= 6:
-        run_model(variant, n, 20)
         t0 = time.time()
-        run_model(variant, n, 20)
+        run_model(variant, n, 1)
+        w1, w2 = warmup_plan(time.time() - t0)
+        run_model(variant, n, w1)
+        t0 = time.time()
+        run_model(variant, n, w1)
         warm = time.time() - t0
-        run_model(variant, n, 30)
-        run_model(variant, n, 30)
+        run_model(variant, n, w2)
+        run_model(variant, n, w2)
         before = kernels.counter.n
         launches_before = device.launch_count()
         t0 = time.time()
@@ -63,10 +98,10 @@ def entry_point(argv):
     else:
         w, b = chain.make_inputs(n)
         t0 = time.time()
-        chain.run(variant, k, w, b, 20)
+        chain.run(variant, k, w, b, WARMUP_ITERS)
         warm = time.time() - t0
-        chain.run(variant, k, w, b, 30)
-        chain.run(variant, k, w, b, 30)
+        chain.run(variant, k, w, b, PRESTEADY_ITERS)
+        chain.run(variant, k, w, b, PRESTEADY_ITERS)
         before = kernels.counter.n
         launches_before = device.launch_count()
         t0 = time.time()
@@ -75,8 +110,16 @@ def entry_point(argv):
     steady = (time.time() - t0) / iters * 1e6
     launches = float(device.launch_count() - launches_before) / iters
     runtime.reset_device()
-    emit(mode, variant, k, n, iters, warm, steady, kernels.counter.n, acc,
-         kernels.counter.n - before, launches, dtname)
+    # Only report a different n when the working set actually had to shrink;
+    # the plain floor of n // d is left alone so rows stay comparable with
+    # earlier results.
+    report_n = n
+    if cfg.capped:
+        report_n = cfg.eff_n
+        os.write(2, 'metatensor-bench: variant %d n %d -> %d '
+                    '(fitted to GPU memory)\n' % (variant, n, report_n))
+    emit(mode, variant, k, report_n, iters, warm, steady, kernels.counter.n,
+         acc, kernels.counter.n - before, launches, dtname)
     return 0
 
 def target(*args):

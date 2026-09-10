@@ -3,11 +3,12 @@ from rpython.rlib import jit
 from rpython.metatensor import device
 from rpython.metatensor.ops import (tensor_add, tensor_mul, tensor_relu,
     tensor_sum, tensor_item, tensor_force)
-from bench.common import sink, zeros
+from bench.common import MEM_CHAIN, fit_n, sink, zeros
 
 driver = jit.JitDriver(greens=['k', 'variant'], reds='auto', is_recursive=True)
 
 def make_inputs(n):
+    n = fit_n(n, MEM_CHAIN)
     w = zeros([n])
     b = zeros([n])
     for i in range(n):

@@ -1,8 +1,9 @@
 from rpython.rlib import jit
 from rpython.metatensor import device, nn
 from rpython.metatensor.ops import tensor_sum, tensor_item
-from bench.common import (ATT_D, ATT_H, TB_D, TB_EPS, TB_H, TF_BLOCKS,
-    make_lr, make_mlp_input, rows_of, zeros)
+from bench.common import (ATT_D, ATT_H, MEM_ATTN_LIN, MEM_ATTN_SQ,
+    MEM_BLOCK_LIN, MEM_BLOCK_SQ, MEM_TF_TRAIN_LIN, MEM_TF_TRAIN_SQ, TB_D,
+    TB_EPS, TB_H, TF_BLOCKS, fit_rows, make_lr, make_mlp_input, zeros)
 
 block_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
 tf_driver = jit.JitDriver(greens=[], reds='auto', is_recursive=True)
@@ -58,7 +59,7 @@ def make_block():
                                        nn.MLP(make_mlp_layers()), TB_EPS)
 
 def run_block(n, iters):
-    rows = rows_of(n, TB_D)
+    rows = fit_rows(n, TB_D, MEM_BLOCK_SQ, MEM_BLOCK_LIN)
     block = make_block()
     x = make_mlp_input(rows, TB_D)
     i = 0
@@ -84,7 +85,7 @@ def make_transformer():
     return nn.Transformer(blocks, head)
 
 def run_transformer_train(n, iters):
-    rows = rows_of(n, TB_D)
+    rows = fit_rows(n, TB_D, MEM_TF_TRAIN_SQ, MEM_TF_TRAIN_LIN)
     model = make_transformer()
     x = make_mlp_input(rows, TB_D)
     params = model.parameters()
@@ -106,7 +107,7 @@ def make_attn():
                                 ATT_H)
 
 def run_attn(n, iters):
-    rows = rows_of(n, ATT_D)
+    rows = fit_rows(n, ATT_D, MEM_ATTN_SQ, MEM_ATTN_LIN)
     attn = make_attn()
     x = make_mlp_input(rows, ATT_D)
     i = 0
