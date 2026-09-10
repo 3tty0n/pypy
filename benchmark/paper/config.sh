@@ -11,6 +11,14 @@ BENCH=${BENCH:-$HERE/build/metatensor-bench}
 TORCH_PYTHON=${TORCH_PYTHON:-${RTENSOR_PYTHON:-}}
 RTENSOR_PYTHON=${RTENSOR_PYTHON:-$TORCH_PYTHON}
 export RTENSOR_PYTHON TORCH_PYTHON
+# Optional JAX/XLA + IREE venv (setup.sh writes it into env.sh). Unset or
+# missing means those rows are skipped, nothing else changes.
+JAX_PYTHON=${JAX_PYTHON:-}
+if [ -n "$JAX_PYTHON" ] && ! [ -x "$JAX_PYTHON" ]; then
+  echo "config.sh: JAX_PYTHON=$JAX_PYTHON is not executable; jax/iree rows skipped" >&2
+  JAX_PYTHON=""
+fi
+export JAX_PYTHON
 
 if [ -z "$RTENSOR_CUBLAS" ] && [ -n "$RTENSOR_PYTHON" ]; then
   for f in "$(dirname "$RTENSOR_PYTHON")"/../lib/python3*/site-packages/nvidia/cu*/lib/libcublas.so.*; do
@@ -67,6 +75,25 @@ for mod in ("torch", "triton", "transformers"):
         print("%-13s -" % mod)
 PY
     fi
+    if [ -n "$JAX_PYTHON" ]; then
+      "$JAX_PYTHON" - <<'PY' 2>/dev/null
+import importlib
+for mod, attr in (("jax", "__version__"), ("jaxlib", "__version__"),
+                  ("iree.compiler", "version"), ("iree.runtime", "version")):
+    try:
+        m = importlib.import_module(mod)
+        v = getattr(m, attr, None)
+        v = getattr(v, "VERSION", v) if v is not None else None
+        if v is None:
+            from importlib.metadata import version
+            v = version(mod.replace("iree.", "iree-base-"))
+        print("%-13s %s" % (mod, v))
+    except Exception:
+        print("%-13s -" % mod)
+PY
+    else
+      echo "jax           - (JAX_PYTHON unset)"
+    fi
     echo "iters         ${ITERS}"
     echo "rounds        ${ROUNDS}"
     echo "budget_mb     ${RTENSOR_BUDGET_MB}"
@@ -91,6 +118,7 @@ bench_record() {
 
 # Ours emits 12 fields and torch 13 - torch has no launch counter and adds
 # graph/break counts - so the tail is read by field count, not by position.
+# torch, jax, iree and triton now append compile_ms and first_run_ms (15).
 record_micro_line() {
   local line=$1
   # shellcheck disable=SC2086
@@ -101,7 +129,13 @@ record_micro_line() {
   local compiled=$1
   shift
   local extra=("$@")
-  if [ ${#extra[@]} -ge 3 ]; then
+  if [ ${#extra[@]} -ge 5 ]; then
+    bench_record micro mode="$mode" variant="$variant" k="$k" n="$n" \
+      iters="$iters" warm_s="$warm" steady_us="$steady" kernels="$kernels" \
+      acc="$acc" compiled_in_timed="$compiled" graphs="${extra[0]}" \
+      breaks="${extra[1]}" dtype="${extra[2]}" compile_ms="${extra[3]}" \
+      first_run_ms="${extra[4]}"
+  elif [ ${#extra[@]} -ge 3 ]; then
     bench_record micro mode="$mode" variant="$variant" k="$k" n="$n" \
       iters="$iters" warm_s="$warm" steady_us="$steady" kernels="$kernels" \
       acc="$acc" compiled_in_timed="$compiled" graphs="${extra[0]}" \
@@ -120,6 +154,7 @@ tsv_init() {
 }
 
 steady_of() { echo "$1" | grep -o 'steady_us=[0-9.]*' | head -1 | cut -d= -f2; }
+field_of() { echo "$1" | grep -o "$2=[0-9.eE+-]*" | head -1 | cut -d= -f2; }
 diff_of() { echo "$1" | grep -o 'maxabsdiff=[0-9.eE+-]*' | head -1 | cut -d= -f2; }
 
 PAPER_PYPY_LINK="$REPO/pypy-c-paper"
@@ -133,4 +168,60 @@ paper_setup_pypy() {
 }
 paper_cleanup_pypy() {
   rm -f "$PAPER_PYPY_LINK"
+}
+
+# Progress reporting. bench.sh all redirects stdout+stderr into tee for the
+# log, and saves the original stderr on fd 3, so the bar keeps its terminal
+# while the log gets one line per step.
+PROG_WIDTH=24
+
+_prog_fd() {
+  if [ -t 3 ]; then echo 3; else echo 2; fi
+}
+
+_prog_hms() {
+  printf '%d:%02d:%02d' $(($1 / 3600)) $(($1 % 3600 / 60)) $(($1 % 60))
+}
+
+progress_init() {
+  PROG_LABEL=$1
+  PROG_TOTAL=$2
+  PROG_N=0
+  PROG_T0=$(date +%s)
+}
+
+progress_step() {
+  local what=$1 finished=$PROG_N fd el eta bar='' i filled
+  [ "${PROG_TOTAL:-0}" -gt 0 ] || return 0
+  PROG_N=$((PROG_N + 1))
+  fd=$(_prog_fd)
+  el=$(( $(date +%s) - PROG_T0 ))
+  if [ "$finished" -gt 0 ]; then
+    eta=$(_prog_hms $(( el * (PROG_TOTAL - finished) / finished )))
+  else
+    eta='--:--:--'
+  fi
+  filled=$(( PROG_WIDTH * finished / PROG_TOTAL ))
+  i=0
+  while [ $i -lt $PROG_WIDTH ]; do
+    if [ $i -lt $filled ]; then bar="$bar#"; else bar="$bar-"; fi
+    i=$((i + 1))
+  done
+  if [ -t "$fd" ]; then
+    printf '\r\033[K[%s] %s %d/%d  %s  eta %s' \
+      "$bar" "$PROG_LABEL" "$PROG_N" "$PROG_TOTAL" "$what" "$eta" >&"$fd"
+  else
+    printf '[%s %d/%d] %s  elapsed %s  eta %s\n' \
+      "$PROG_LABEL" "$PROG_N" "$PROG_TOTAL" "$what" "$(_prog_hms $el)" "$eta" >&"$fd"
+  fi
+}
+
+progress_done() {
+  local fd el
+  [ "${PROG_TOTAL:-0}" -gt 0 ] || return 0
+  fd=$(_prog_fd)
+  el=$(( $(date +%s) - PROG_T0 ))
+  [ -t "$fd" ] && printf '\r\033[K' >&"$fd"
+  printf '%s: %d/%d done in %s\n' \
+    "$PROG_LABEL" "$PROG_N" "$PROG_TOTAL" "$(_prog_hms $el)" >&"$fd"
 }

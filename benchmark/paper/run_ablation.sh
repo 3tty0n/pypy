@@ -80,13 +80,17 @@ EXPERIMENTS=${EXPERIMENTS:-}
 if [ "$#" -gt 0 ]; then EXPERIMENTS="$*"; fi
 EXPERIMENTS=${EXPERIMENTS:-$ALL_EXPERIMENTS}
 
+progress_init ablation $(echo $EXPERIMENTS | wc -w)
+
 for e in $EXPERIMENTS; do
   fn="exp_$e"
   if ! declare -f "$fn" >/dev/null; then
     echo "run_ablation.sh: unknown experiment '$e', valid: $ALL_EXPERIMENTS" >&2
     exit 1
   fi
+  progress_step "$e"
   "$fn"
 done
 
+progress_done
 echo "wrote $TSV"
