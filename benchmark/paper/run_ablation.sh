@@ -20,12 +20,19 @@ run_resnet() {
   "$RUN_PYPY" $jitflags "$APP/resnet.py" "$weights" "$ITERS" "$WARMUP" 1
 }
 
+# One ablation row, to both writers: exp variant model round steady diff note
+ab_row() {
+  echo -e "$1\t$2\t$3\t$4\t$5\t$6\t$7" >> "$TSV"
+  bench_record ablation experiment="$1" variant="$2" model="$3" round="$4" \
+    steady_us="$5" maxabsdiff="$6" note="$7"
+}
+
 exp_fusion() {
   for round in $(seq "$ROUNDS"); do
     out=$(run_gpt2 "$JIT_FLAGS" "$WEIGHTS/distilgpt2")
-    echo -e "fusion\ton\tdistilgpt2\t$round\t$(steady_of "$out")\t\t" >> "$TSV"
+    ab_row fusion on distilgpt2 "$round" "$(steady_of "$out")" "" ""
     out=$(run_gpt2 "-S --jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000,$NOFUSE_OPTS" "$WEIGHTS/distilgpt2")
-    echo -e "fusion\toff\tdistilgpt2\t$round\t$(steady_of "$out")\t\tenable_opts minus tensor" >> "$TSV"
+    ab_row fusion off distilgpt2 "$round" "$(steady_of "$out")" "" "enable_opts minus tensor"
   done
 }
 
@@ -33,9 +40,9 @@ exp_flat_block() {
   for block in 256 4096; do
     for round in $(seq "$ROUNDS"); do
       out=$(RTENSOR_FLAT_BLOCK=$block run_gpt2 "$JIT_FLAGS" "$WEIGHTS/distilgpt2")
-      echo -e "flat_block\t$block\tdistilgpt2\t$round\t$(steady_of "$out")\t\t" >> "$TSV"
+      ab_row flat_block "$block" distilgpt2 "$round" "$(steady_of "$out")" "" ""
       out=$(RTENSOR_FLAT_BLOCK=$block run_resnet "$JIT_FLAGS" "$WEIGHTS/resnet18")
-      echo -e "flat_block\t$block\tresnet18\t$round\t$(steady_of "$out")\t\t" >> "$TSV"
+      ab_row flat_block "$block" resnet18 "$round" "$(steady_of "$out")" "" ""
     done
   done
 }
@@ -44,7 +51,7 @@ exp_budget_mb() {
   for budget in 8 64; do
     for round in $(seq "$ROUNDS"); do
       out=$(RTENSOR_BUDGET_MB=$budget run_gpt2 "$JIT_FLAGS" "$WEIGHTS/distilgpt2")
-      echo -e "budget_mb\t$budget\tdistilgpt2\t$round\t$(steady_of "$out")\t\t" >> "$TSV"
+      ab_row budget_mb "$budget" distilgpt2 "$round" "$(steady_of "$out")" "" ""
     done
   done
 }
@@ -54,15 +61,15 @@ exp_precision() {
     for round in $(seq "$ROUNDS"); do
       if out=$(RTENSOR_DTYPE=$dtype run_gpt2 "$JIT_FLAGS" "$WEIGHTS/distilgpt2" 2>&1); then
         tdiff=$(RTENSOR_DTYPE=$dtype "$TORCH_PYTHON" "$APP/gpt2_torch.py" eager "$WEIGHTS/distilgpt2" "$ITERS" "$WARMUP" 2>/dev/null)
-        echo -e "precision\t$dtype\tdistilgpt2\t$round\t$(steady_of "$out")\t$(diff_of "$tdiff")\t" >> "$TSV"
+        ab_row precision "$dtype" distilgpt2 "$round" "$(steady_of "$out")" "$(diff_of "$tdiff")" ""
       else
-        echo -e "precision\t$dtype\tdistilgpt2\t$round\t\t\tunsupported: run failed" >> "$TSV"
+        ab_row "precision" "$dtype" "distilgpt2" "$round" "" "" "unsupported: run failed"
       fi
       if out=$(RTENSOR_DTYPE=$dtype "$RUN_PYPY" $JIT_FLAGS "$APP/llama.py" "$WEIGHTS/smollm2-135m" "$ITERS" "$WARMUP" 2>&1); then
         tdiff=$(RTENSOR_DTYPE=$dtype "$TORCH_PYTHON" "$APP/llama_torch.py" eager "$WEIGHTS/smollm2-135m" "$ITERS" "$WARMUP" 2>/dev/null)
-        echo -e "precision\t$dtype\tsmollm2-135m\t$round\t$(steady_of "$out")\t$(diff_of "$tdiff")\t" >> "$TSV"
+        ab_row precision "$dtype" smollm2-135m "$round" "$(steady_of "$out")" "$(diff_of "$tdiff")" ""
       else
-        echo -e "precision\t$dtype\tsmollm2-135m\t$round\t\t\tunsupported: run failed" >> "$TSV"
+        ab_row "precision" "$dtype" "smollm2-135m" "$round" "" "" "unsupported: run failed"
       fi
     done
   done

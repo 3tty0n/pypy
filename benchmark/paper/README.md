@@ -15,6 +15,15 @@
     benchmark/paper/bench.sh setup
     benchmark/paper/bench.sh all
 
+The Python 3 dependencies are declared in `benchmark/paper/pyproject.toml` and
+pinned in `requirements.lock`; `setup.sh` installs from the lock with `uv`,
+fetching uv into `.toolchain/` if it is not on PATH and falling back to plain
+pip (`NO_UV=1` forces the fallback). The pin matters: which torch and Triton
+you get decides whether the kernels run on the GPU at all, and a mismatch
+against the driver is silent. Move a pin with
+
+    uv pip compile benchmark/paper/pyproject.toml -o benchmark/paper/requirements.lock
+
 `bench.sh setup` is idempotent: it creates the venv at `${VENV:-$HOME/.venvs/metatensor}`,
 detects the GPU compute capability with torch and writes it (plus every
 derived path) to `benchmark/paper/env.sh`, translates `metatensor-bench` and
@@ -51,6 +60,13 @@ fonts embedded, sized to one MLSys column or the full text width. Beside each
 figure it writes a `.tex` tabular of the same numbers, for the values a plot
 cannot carry.
 
+Every figure carries the spread over `$ROUNDS` rounds: marks sit at the median
+with whiskers to the observed minimum and maximum, and the tables give the same
+range. With three rounds a standard deviation would be noise, so the range is
+what is reported. Speedup figures show the envelope of the ratio, taken from
+opposite ends of the two ranges, because the rounds are not paired across the
+two systems.
+
     micro_speedup   per-benchmark speedup over torch.compile
     fusion          fused against interpreted, same benchmark
     models          end-to-end inference, three systems
@@ -86,6 +102,24 @@ runs did not measure at the same size - the memory fit shrinks variant 10
 differently per GPU - are left out and named on stderr.
 
 `bench.sh list` prints the available model and ablation names and the micro grid.
+
+## Adding a microbenchmark
+
+The grid and the names the figures use live in `benchmark/benchmarks.toml`, so
+a new point is one entry there rather than a loop in `run_micro.sh` plus a
+label table in `plot.py`. The two implementations still have to be written
+separately - `benchmark/bench/` for the RPython side, `benchmark/torch_bench.py`
+for the baseline - which is the comparison the harness exists to make.
+
+## Result files
+
+Each stage appends to its tsv as before, and every measurement also lands in
+`$OUT/results.jsonl` as a record that names its own fields. The tsv files are
+positional and a row's meaning depends on which system wrote it - micro.tsv
+carries the dtype in the `breaks` column for our rows and in `graphs` for
+torch's, because the two emitters have different field counts - so the jsonl is
+the format to read from new code. `summarize.py` and `plot.py` still read the
+tsv files.
 
 Runtime knobs (see also `benchmark/README.md`): `RTENSOR_FLAT_BLOCK`
 (elements per block for elementwise/gather kernels, default 4096; smaller

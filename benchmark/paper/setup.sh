@@ -97,9 +97,38 @@ fi
 if [ ! -x "$VENV/bin/python" ]; then
   "$PYTHON3" -m venv "$VENV"
 fi
-"$VENV/bin/pip" install -q --upgrade pip
-"$VENV/bin/pip" install -q triton torch --index-url "$TORCH_INDEX"
-"$VENV/bin/pip" install -q transformers safetensors timm pillow numpy matplotlib
+
+# requirements.lock pins the torch/triton the numbers were measured with; that
+# pairing is what decides whether the kernels run on the GPU at all. uv is
+# fetched into $TOOLCHAIN like PyPy2, with pip as the fallback.
+UV=$(command -v uv 2>/dev/null || true)
+if [ -z "$UV" ] && [ -x "$TOOLCHAIN/uv/uv" ]; then
+  UV="$TOOLCHAIN/uv/uv"
+fi
+if [ -z "$UV" ] && [ "${NO_UV:-0}" != "1" ]; then
+  echo "no uv on PATH, downloading it into $TOOLCHAIN"
+  mkdir -p "$TOOLCHAIN/uv"
+  if curl -fsSL https://astral.sh/uv/install.sh \
+       | env UV_INSTALL_DIR="$TOOLCHAIN/uv" UV_NO_MODIFY_PATH=1 sh >/dev/null 2>&1 \
+     && [ -x "$TOOLCHAIN/uv/uv" ]; then
+    UV="$TOOLCHAIN/uv/uv"
+  else
+    echo "setup.sh: could not install uv, falling back to pip" >&2
+  fi
+fi
+
+LOCK="$HERE/requirements.lock"
+if [ -n "$UV" ] && [ -f "$LOCK" ]; then
+  echo "installing from $(basename "$LOCK") with $("$UV" --version)"
+  VIRTUAL_ENV="$VENV" "$UV" pip sync -q "$LOCK"
+elif [ -n "$UV" ]; then
+  echo "no requirements.lock yet, resolving from pyproject.toml"
+  VIRTUAL_ENV="$VENV" "$UV" pip install -q -r "$HERE/pyproject.toml"
+else
+  "$VENV/bin/pip" install -q --upgrade pip
+  "$VENV/bin/pip" install -q triton torch --index-url "$TORCH_INDEX"
+  "$VENV/bin/pip" install -q transformers safetensors timm pillow numpy matplotlib
+fi
 RTENSOR_PYTHON="$VENV/bin/python"
 
 echo "== detecting compute capability =="

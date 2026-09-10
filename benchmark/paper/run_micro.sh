@@ -11,13 +11,20 @@ tsv_init "$TSV" "$HEADER"
 # count it actually ran with as field 4, so torch has to be given that same
 # count rather than the requested one.
 ours() { "$BENCH" "$@"; }
-torchrun() { "$TORCH_PYTHON" "$HERE/../torch_bench.py" "$@" 2>/dev/null | tail -1 | tr ' ' '\t' >> "$TSV"; }
+torchrun() {
+  local line
+  line=$("$TORCH_PYTHON" "$HERE/../torch_bench.py" "$@" 2>/dev/null | tail -1)
+  [ -n "$line" ] || return 0
+  echo "$line" | tr ' ' '\t' >> "$TSV"
+  record_micro_line "$line"
+}
 
 run_point() {
   local variant=$1 k=$2 n=$3 line eff=""
   for mode in fused eager nojit; do
     line=$(ours $mode $variant $k $n $ITERS)
     echo "$line" | tr ' ' '\t' >> "$TSV"
+    record_micro_line "$line"
     if [ "$mode" = fused ]; then eff=$(echo "$line" | awk '{print $4}'); fi
   done
   [ -n "$eff" ] || eff=$n
@@ -35,20 +42,23 @@ if [ -n "$1" ]; then
   exit 0
 fi
 
+# The grid lives in benchmark/benchmarks.toml; grid.py is the only thing that
+# parses it, so a new point is one entry there rather than a loop here and a
+# label in plot.py.
+GRID=$("${RTENSOR_PYTHON:-python3}" "$HERE/grid.py" points) || exit 1
+SWEEP=$("${RTENSOR_PYTHON:-python3}" "$HERE/grid.py" precision) || exit 1
+
 for rep in $(seq "$ROUNDS"); do
-  for k in 1 4 8; do run_point 0 $k 1000000; done
-  for n in 10000 100000 1000000 10000000; do run_point 0 4 $n; done
-  for v in 1 2 3 4 5; do run_point $v 4 1000000; done
-  for v in 11 12 13; do for n in 25600 256000; do run_point $v 1 $n; done; done
-  for v in 6 7 8 9 10; do for n in 25600 256000; do run_point $v 1 $n; done; done
+  while read -r v k n; do
+    [ -n "$v" ] && run_point "$v" "$k" "$n"
+  done <<< "$GRID"
 done
 
 for rep in $(seq "$ROUNDS"); do
-  for v in 8 13; do
-    for dt in float64 float32 float16; do
-      RTENSOR_DTYPE=$dt TORCH_DTYPE=$dt run_point $v 1 256000
-    done
-  done
+  while read -r v k n dt; do
+    [ -n "$v" ] || continue
+    RTENSOR_DTYPE=$dt TORCH_DTYPE=$dt run_point "$v" "$k" "$n"
+  done <<< "$SWEEP"
 done
 
 echo "wrote $TSV"

@@ -20,10 +20,13 @@ run_ours() {
   bridges=$(grep 'Total # of bridges:' "$jitlog" | grep -o '[0-9]*$' | tail -1)
   echo "$out" | tail -n +2 | while IFS=$'\t' read -r length us; do
     echo -e "ours\t$round\t$length\t$us" >> "$SERIES"
+      bench_record dynamic_series system=ours round="$round" length="$length" us="$us"
   done
   for length in 32 48 64 96 128; do
     m=$(echo "$out" | tail -n +2 | awk -F'\t' -v l="$length" '$1==l{print $2}' | median)
     echo -e "ours\t$round\t$length\t$m\t${loops:-0}\t${bridges:-0}\t0" >> "$SUMMARY"
+    bench_record dynamic system=ours round="$round" length="$length" \
+      median_us="$m" loops="${loops:-0}" bridges="${bridges:-0}" recompiles=0
   done
   rm -f "$jitlog"
 }
@@ -34,10 +37,13 @@ run_torch() {
   recompiles=$(echo "$out" | grep '^recompiles' | cut -f2)
   echo "$out" | grep -v '^length\|^recompiles' | while IFS=$'\t' read -r length us; do
     echo -e "$system\t$round\t$length\t$us" >> "$SERIES"
+      bench_record dynamic_series system="$system" round="$round" length="$length" us="$us"
   done
   for length in 32 48 64 96 128; do
     m=$(echo "$out" | grep -v '^length\|^recompiles' | awk -F'\t' -v l="$length" '$1==l{print $2}' | median)
     echo -e "$system\t$round\t$length\t$m\t0\t0\t${recompiles:-0}" >> "$SUMMARY"
+    bench_record dynamic system="$system" round="$round" length="$length" \
+      median_us="$m" loops=0 bridges=0 recompiles="${recompiles:-0}"
   done
 }
 

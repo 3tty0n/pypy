@@ -1,0 +1,31 @@
+# Python 3 side of the paper harness. The RPython toolchain is a separate
+# Python 2 interpreter and is not described here.
+#
+# setup.sh installs from requirements.lock instead of resolving this, because
+# the driver/toolkit/Triton pairing decides whether the kernels run on the GPU
+# at all. To move a pin:
+#     uv pip compile benchmark/paper/pyproject.toml \
+#         -o benchmark/paper/requirements.lock
+[project]
+name = "metatensor-paper-harness"
+version = "0"
+requires-python = ">=3.11"
+dependencies = [
+    "torch",
+    "triton",
+    "transformers",
+    "safetensors",
+    "timm",
+    "pillow",
+    "numpy",
+    "matplotlib",
+]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+triton = { index = "pytorch" }

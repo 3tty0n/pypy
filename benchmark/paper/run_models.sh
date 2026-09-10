@@ -25,6 +25,8 @@ record() {
     if [ "$(cat "$OUT/.last_argmax_ours")" = "$(cat "$OUT/.last_argmax_$system")" ]; then match=1; else match=0; fi
   fi
   echo -e "$model\t$system\t$round\t${steady:-}\t${diff:-}\t${match}" >> "$TSV"
+  bench_record models model="$model" system="$system" round="$round" \
+    steady_us="${steady:-}" maxabsdiff="${diff:-}" argmax_match="${match}"
 }
 
 model() {

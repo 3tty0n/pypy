@@ -1,0 +1,95 @@
+# The microbenchmark grid and the names the figures use, read by paper/grid.py.
+# Adding a point here covers run_micro.sh and plot.py; the two implementations
+# in benchmark/bench/ and benchmark/torch_bench.py still have to be written
+# separately, which is the point of the comparison.
+#
+#   k  chain depth, used by variants 0-5 only, default 1
+
+[[benchmark]]
+variant = 0
+label = "elementwise"
+k = [1, 4, 8]
+sizes = [1000000]
+
+[[benchmark]]
+variant = 0
+label = "elementwise"
+k = [4]
+sizes = [10000, 100000, 1000000, 10000000]
+
+[[benchmark]]
+variant = 1
+label = "guard"
+k = [4]
+sizes = [1000000]
+
+[[benchmark]]
+variant = 2
+label = "force"
+k = [4]
+sizes = [1000000]
+
+[[benchmark]]
+variant = 3
+label = "value guard"
+k = [4]
+sizes = [1000000]
+
+[[benchmark]]
+variant = 4
+label = "exception"
+k = [4]
+sizes = [1000000]
+
+[[benchmark]]
+variant = 5
+label = "side effect"
+k = [4]
+sizes = [1000000]
+
+[[benchmark]]
+variant = 11
+label = "reduction"
+sizes = [25600, 256000]
+
+[[benchmark]]
+variant = 12
+label = "matmul"
+sizes = [25600, 256000]
+
+[[benchmark]]
+variant = 13
+label = "attention"
+sizes = [25600, 256000]
+
+[[benchmark]]
+variant = 6
+label = "MLP"
+sizes = [25600, 256000]
+
+[[benchmark]]
+variant = 7
+label = "MLP train"
+sizes = [25600, 256000]
+
+[[benchmark]]
+variant = 8
+label = "TF block"
+sizes = [25600, 256000]
+
+[[benchmark]]
+variant = 9
+label = "CNN"
+sizes = [25600, 256000]
+
+[[benchmark]]
+variant = 10
+label = "TF train"
+sizes = [25600, 256000]
+
+# Precision sweep: the same points again at every dtype. Kept separate because
+# it is a second pass over a subset, not part of the float64 grid.
+[precision]
+variants = [8, 13]
+sizes = [256000]
+dtypes = ["float64", "float32", "float16"]

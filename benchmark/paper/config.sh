@@ -83,6 +83,37 @@ if [ -z "$BENCH" ]; then
   echo "config.sh: BENCH not set (translated metatensor-bench)" >&2
 fi
 
+# Every measurement also lands in $OUT/results.jsonl as a named-field record;
+# the tsv files stay for the existing readers.
+bench_record() {
+  OUT="$OUT" "${RTENSOR_PYTHON:-python3}" "$HERE/record.py" "$@" || true
+}
+
+# Ours emits 12 fields and torch 13 - torch has no launch counter and adds
+# graph/break counts - so the tail is read by field count, not by position.
+record_micro_line() {
+  local line=$1
+  # shellcheck disable=SC2086
+  set -- $line
+  local mode=$1 variant=$2 k=$3 n=$4 iters=$5 warm=$6 steady=$7 kernels=$8
+  local acc=$9
+  shift 9
+  local compiled=$1
+  shift
+  local extra=("$@")
+  if [ ${#extra[@]} -ge 3 ]; then
+    bench_record micro mode="$mode" variant="$variant" k="$k" n="$n" \
+      iters="$iters" warm_s="$warm" steady_us="$steady" kernels="$kernels" \
+      acc="$acc" compiled_in_timed="$compiled" graphs="${extra[0]}" \
+      breaks="${extra[1]}" dtype="${extra[2]}"
+  else
+    bench_record micro mode="$mode" variant="$variant" k="$k" n="$n" \
+      iters="$iters" warm_s="$warm" steady_us="$steady" kernels="$kernels" \
+      acc="$acc" compiled_in_timed="$compiled" launches_per_iter="${extra[0]}" \
+      dtype="${extra[1]}"
+  fi
+}
+
 tsv_init() {
   local path=$1 header=$2
   [ -f "$path" ] || echo -e "$header" > "$path"
