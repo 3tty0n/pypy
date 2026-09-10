@@ -43,8 +43,15 @@ def image(a):
 
 
 def timed(fwd, args, a):
+    """Warm-up, sync, timed loop, sync.  The first forward is timed on its
+    own into a.first_run_ms: for compile mode that is compile plus one run."""
     with torch.no_grad():
-        for i in range(a.warmup):
+        t0 = time.time()
+        logits = fwd(*args)
+        if a.dev == 'cuda':
+            torch.cuda.synchronize()
+        a.first_run_ms = (time.time() - t0) * 1e3
+        for i in range(a.warmup - 1):
             logits = fwd(*args)
         if a.dev == 'cuda':
             torch.cuda.synchronize()
@@ -73,6 +80,8 @@ def compare(outdir, logits, argmax=None):
     return diff
 
 
-def report(line, order, diff):
+def report(line, order, diff, a=None):
+    if a is not None and getattr(a, 'first_run_ms', None) is not None:
+        line += ' compile_ms=-1 first_run_ms=%.1f' % a.first_run_ms
     print(line)
     print('argmax %s%s' % (' '.join(str(a) for a in order), diff))
