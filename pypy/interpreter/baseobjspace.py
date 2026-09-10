@@ -235,6 +235,7 @@ class W_Root(object):
 
     # -------------------------------------------------------------------
 
+    @jit.warmup_critical_function
     def is_w(self, space, w_other):
         return self is w_other
 
@@ -1213,6 +1214,7 @@ class ObjSpace(object):
         args = Arguments(self, list(args_w))
         return self.call_args(w_func, args)
 
+    @jit.warmup_critical_function
     def call_valuestack(self, w_func, nargs, frame, dropvalues, methodcall=False):
         # methodcall is only used for better error messages in argument.py
         from pypy.interpreter.function import Function, Method, is_builtin_code

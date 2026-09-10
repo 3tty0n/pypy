@@ -82,6 +82,7 @@ class Function(W_Root):
             return jit.promote(self.code)
         return self.code
 
+    @jit.warmup_critical_function
     def funccall(self, *args_w): # speed hack
         from pypy.interpreter import gateway
         from pypy.interpreter.pycode import PyCode
@@ -123,6 +124,7 @@ class Function(W_Root):
                                               list(args_w[1:])))
         return self.call_args(Arguments(self.space, list(args_w)))
 
+    @jit.warmup_critical_function
     def funccall_valuestack(self, nargs, frame, dropvalues, methodcall=False): # speed hack
         # methodcall is only for better error messages
         from pypy.interpreter import gateway
@@ -189,6 +191,7 @@ class Function(W_Root):
         frame.dropvalues(dropvalues)
         return self.call_args(args)
 
+    @jit.warmup_critical_function
     @jit.unroll_safe
     def _flat_pycall(self, code, nargs, frame, dropvalues):
         # code is a PyCode
@@ -459,6 +462,7 @@ class Function(W_Root):
         return w_res
 
 
+@jit.warmup_critical_function
 def descr_function_get(space, w_function, w_obj, w_cls=None):
     """functionobject.__get__(obj[, type]) -> method"""
     # this is not defined as a method on Function because it's generally

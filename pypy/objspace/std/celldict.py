@@ -5,6 +5,7 @@ indirection is introduced to make the version tag change less often.
 import weakref
 
 from rpython.rlib import jit, pe, rerased, objectmodel
+from rpython.rlib.jit import warmup_critical_function
 
 from pypy.interpreter.baseobjspace import W_Root
 from pypy.objspace.std.dictmultiobject import (
@@ -128,6 +129,7 @@ class ModuleDictStrategy(DictStrategy):
             self.switch_to_object_strategy(w_dict)
             return w_dict.getitem(w_key)
 
+    @warmup_critical_function
     def getitem_str(self, w_dict, key):
         cell = self.getdictvalue_no_unwrapping(w_dict, key)
         return unwrap_cell(self.space, cell)
@@ -250,6 +252,7 @@ class GlobalCache(object):
     def getvalue(self, space):
         return unwrap_cell(space, self.cell)
 
+@warmup_critical_function
 def LOAD_GLOBAL_cached(self, nameindex, next_instr):
     w_value = _LOAD_GLOBAL_cached(self, nameindex, next_instr)
     self.pushvalue(w_value)

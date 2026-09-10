@@ -27,6 +27,10 @@ def pe_cogen_enabled():
     return os.environ.get('PYPY_PE_COGEN', '1') != '0'
 
 
+def genextension_enabled():
+    return os.environ.get('PYPY_GEN_EXTENSION', '1') != '0'
+
+
 def debug(msg):
     try:
         os.write(2, "debug: " + msg + '\n')
@@ -248,12 +252,15 @@ class PyPyTarget(object):
         return pypy_optiondescription
 
     def target(self, driver, args):
-        if pe_cogen_enabled():
+        if genextension_enabled():
+            driver.exe_name = 'pypy-twoproj-%(backend)s'
+        elif pe_cogen_enabled():
             driver.exe_name = 'pypy-cogen-%(backend)s'
         else:
             driver.exe_name = 'pypy-%(backend)s'
 
         config = driver.config
+        config.translation.genextension = genextension_enabled()
         parser = self.opt_parser(config)
 
         parser.parse_args(args)

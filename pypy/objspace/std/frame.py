@@ -2,6 +2,7 @@
 
 import operator
 
+from rpython.rlib.jit import warmup_critical_function
 from rpython.rlib.rarithmetic import ovfcheck
 from rpython.tool.sourcetools import func_renamer
 
@@ -54,10 +55,10 @@ def _intshortcut(spaceopname):
     return opimpl
 
 
-int_BINARY_ADD = _intshortcut('add')
-int_INPLACE_ADD = _intshortcut('inplace_add')
-int_BINARY_SUBTRACT = _intshortcut('sub')
-int_INPLACE_SUBTRACT = _intshortcut('inplace_sub')
+int_BINARY_ADD = warmup_critical_function(_intshortcut('add'))
+int_INPLACE_ADD = warmup_critical_function(_intshortcut('inplace_add'))
+int_BINARY_SUBTRACT = warmup_critical_function(_intshortcut('sub'))
+int_INPLACE_SUBTRACT = warmup_critical_function(_intshortcut('inplace_sub'))
 
 
 def list_BINARY_SUBSCR(self, oparg, next_instr):
@@ -84,7 +85,7 @@ def build_frame(space):
         StdObjSpaceFrame.BINARY_SUBTRACT = int_BINARY_SUBTRACT
         StdObjSpaceFrame.INPLACE_SUBTRACT = int_INPLACE_SUBTRACT
     if space.config.objspace.std.optimized_list_getitem:
-        StdObjSpaceFrame.BINARY_SUBSCR = list_BINARY_SUBSCR
+        StdObjSpaceFrame.BINARY_SUBSCR = warmup_critical_function(list_BINARY_SUBSCR)
     from pypy.objspace.std.callmethod import LOOKUP_METHOD, CALL_METHOD
     StdObjSpaceFrame.LOOKUP_METHOD = LOOKUP_METHOD
     StdObjSpaceFrame.CALL_METHOD = CALL_METHOD

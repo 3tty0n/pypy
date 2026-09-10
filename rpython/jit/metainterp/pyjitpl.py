@@ -1095,6 +1095,20 @@ class MIFrame(object):
     def opimpl_hint_force_virtualizable(self, box):
         self.metainterp.gen_store_back_in_vable(box)
 
+    def _record_quasiimmut_field_no_heapcache(self, box, fielddescr,
+                                              mutatefielddescr, orgpc):
+        from rpython.jit.metainterp.quasiimmut import QuasiImmutDescr
+        cpu = self.metainterp.cpu
+        descr = QuasiImmutDescr(cpu, box.getref_base(), fielddescr,
+                                mutatefielddescr)
+        self.metainterp.heapcache.quasi_immut_now_known(fielddescr, box)
+        self.metainterp.history.record1(rop.QUASIIMMUT_FIELD, box,
+                                        None, descr=descr)
+        if self.metainterp.heapcache.need_guard_not_invalidated:
+            self.metainterp.generate_guard(rop.GUARD_NOT_INVALIDATED,
+                                           resumepc=orgpc)
+        self.metainterp.heapcache.need_guard_not_invalidated = False
+
     @arguments("box", "descr", "descr", "orgpc")
     def opimpl_record_quasiimmut_field(self, box, fielddescr,
                                        mutatefielddescr, orgpc):
@@ -1192,6 +1206,94 @@ class MIFrame(object):
         calldescr = vinfo.clear_vable_descr
         self.execute_varargs(rop.COND_CALL, [condbox, funcbox, box],
                              calldescr, False, False)
+
+    VIRTUALIZABLE_STATUS_UNKNOWN = '?'
+    NONSTANDARD_VIRTUALIZABLE = 'n'
+    STANDARD_VIRTUALIZABLE = 'v'
+
+    def _nonstandard_virtualizable_quick_check(self, box, fielddescr):
+        if self.metainterp.forced_virtualizable is not None:
+            return self.VIRTUALIZABLE_STATUS_UNKNOWN
+        if self.metainterp.heapcache.is_known_nonstandard_virtualizable(box):
+            self.metainterp.staticdata.profiler.count_ops(rop.PTR_EQ, Counters.HEAPCACHED_OPS)
+            return self.NONSTANDARD_VIRTUALIZABLE
+        if (self.metainterp.jitdriver_sd.virtualizable_info is not None or
+            self.metainterp.jitdriver_sd.greenfield_info is not None):
+            standard_box = self.metainterp.virtualizable_boxes[-1]
+            if standard_box is box:
+                return self.STANDARD_VIRTUALIZABLE
+        return self.VIRTUALIZABLE_STATUS_UNKNOWN
+
+    def _get_arrayitem_vable_index_unboxed(self, arrayfielddescr, index):
+        vinfo = self.metainterp.jitdriver_sd.virtualizable_info
+        virtualizable_box = self.metainterp.virtualizable_boxes[-1]
+        virtualizable = vinfo.unwrap_virtualizable_box(virtualizable_box)
+        arrayindex = vinfo.array_field_by_descrs[arrayfielddescr]
+        assert 0 <= index < vinfo.get_array_length(virtualizable, arrayindex)
+        return vinfo.get_index_in_array(virtualizable, arrayindex, index)
+
+    @arguments("box", "box", "descr", "descr", "orgpc")
+    def _shortcut_getfield_vable(self, box, fielddescr):
+        nonstandardness_status = self._nonstandard_virtualizable_quick_check(box, fielddescr)
+        if nonstandardness_status == self.VIRTUALIZABLE_STATUS_UNKNOWN:
+            return None
+        if nonstandardness_status == self.NONSTANDARD_VIRTUALIZABLE:
+            if fielddescr.is_pointer_field():
+                return self.opimpl_getfield_gc_r(box, fielddescr)
+            assert not fielddescr.is_float_field()
+            return self.opimpl_getfield_gc_i(box, fielddescr)
+        assert nonstandardness_status == self.STANDARD_VIRTUALIZABLE
+        self.metainterp.check_synchronized_virtualizable()
+        index = self._get_virtualizable_field_index(fielddescr)
+        return self.metainterp.virtualizable_boxes[index]
+
+    def _shortcut_setfield_vable(self, box, valuebox, fielddescr):
+        nonstandardness_status = self._nonstandard_virtualizable_quick_check(box, fielddescr)
+        if nonstandardness_status == self.VIRTUALIZABLE_STATUS_UNKNOWN:
+            return False
+        if nonstandardness_status == self.NONSTANDARD_VIRTUALIZABLE:
+            self._opimpl_setfield_gc_any(box, valuebox, fielddescr)
+        else:
+            assert nonstandardness_status == self.STANDARD_VIRTUALIZABLE
+            index = self._get_virtualizable_field_index(fielddescr)
+            self.metainterp.virtualizable_boxes[index] = valuebox
+            self.metainterp.synchronize_virtualizable()
+        return True
+
+    def _shortcut_getarrayitem_vable(self, box, index, fdescr, adescr):
+        nonstandardness_status = self._nonstandard_virtualizable_quick_check(box, fdescr)
+        if nonstandardness_status == self.VIRTUALIZABLE_STATUS_UNKNOWN:
+            return None
+        if nonstandardness_status == self.NONSTANDARD_VIRTUALIZABLE:
+            indexbox = ConstInt(index)
+            arraybox = self.opimpl_getfield_gc_r(box, fdescr)
+            if adescr.is_array_of_pointers():
+                return self.opimpl_getarrayitem_gc_r(arraybox, indexbox, adescr)
+            elif adescr.is_array_of_floats():
+                return self.opimpl_getarrayitem_gc_f(arraybox, indexbox, adescr)
+            else:
+                return self.opimpl_getarrayitem_gc_i(arraybox, indexbox, adescr)
+        assert nonstandardness_status == self.STANDARD_VIRTUALIZABLE
+        self.metainterp.check_synchronized_virtualizable()
+        index = self._get_arrayitem_vable_index_unboxed(fdescr, index)
+        return self.metainterp.virtualizable_boxes[index]
+
+    def _shortcut_setarrayitem_vable(self, box, index, valuebox,
+                                   fdescr, adescr):
+        nonstandardness_status = self._nonstandard_virtualizable_quick_check(box, fdescr)
+        if nonstandardness_status == self.VIRTUALIZABLE_STATUS_UNKNOWN:
+            return False
+        elif nonstandardness_status == self.NONSTANDARD_VIRTUALIZABLE:
+            arraybox = self.opimpl_getfield_gc_r(box, fdescr)
+            indexbox = ConstInt(index)
+            self._opimpl_setarrayitem_gc_any(arraybox, indexbox, valuebox,
+                                             adescr)
+        else:
+            assert nonstandardness_status == self.STANDARD_VIRTUALIZABLE
+            index = self._get_arrayitem_vable_index_unboxed(fdescr, index)
+            self.metainterp.virtualizable_boxes[index] = valuebox
+            self.metainterp.synchronize_virtualizable()
+        return True
 
     def _get_virtualizable_field_index(self, fielddescr):
         # Get the index of a fielddescr.  Must only be called for
@@ -2011,6 +2113,9 @@ class MIFrame(object):
         # methods) raises ChangeFrame.  This is the case when the current frame
         # changes, due to a call or a return.
         try:
+            genext = self.jitcode.genext_function
+            if genext is not None:
+                return genext(self)
             staticdata = self.metainterp.staticdata
             pc = self.pc
             while True:
@@ -2039,6 +2144,11 @@ class MIFrame(object):
                 pc = self.pc
         except ChangeFrame:
             pass
+
+    def _shortcut_record_cmp(self, opnum, b1, b2, sameboxresult, intvalue):
+        if b1 is b2:
+            return sameboxresult
+        return self.metainterp.history.record2_int(opnum, b1, b2, intvalue)
 
     def implement_guard_value(self, box, orgpc):
         """Promote the given Box into a Const.  Note: be careful, it's a

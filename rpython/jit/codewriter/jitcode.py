@@ -362,6 +362,8 @@ class JitCode(AbstractDescr):
         self.calldescr = calldescr
         self.jitdriver_sd = None # None for non-portals
         self.pe_metadata = None
+        # L2: generated jit_shortcut, installed by GenExtension
+        self.genext_function = None
         self.pe_is_linked = False # set True by attach_linked_jitcode
         self.pe_program = None    # its PELinkedProgram, when linked
         self._called_from = called_from   # debugging

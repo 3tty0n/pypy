@@ -130,6 +130,10 @@ translation_optiondescription = OptionDescription(
                "Forbid NUL chars in strings in some external function calls",
                default=False, cmdline=None),
 
+    BoolOption("genextension",
+               "generate JIT extension by specializing the tracer",
+               default=False, cmdline="--gen-extension"),
+
     # misc
     BoolOption("verbose", "Print extra information", default=False,
                cmdline="--verbose"),

@@ -80,6 +80,8 @@ class Assembler(object):
         """Take the 'ssarepr' representation of the code and assemble
         it inside the 'jitcode'.  If jitcode is None, make a new one.
         """
+        from rpython.jit.codewriter.genextension import GenExtension
+        from rpython.config.translationoption import get_translation_config
         self.setup(ssarepr.name)
         if num_regs is not None:
             self.count_regs.update(num_regs)
@@ -96,6 +98,11 @@ class Assembler(object):
         if self._count_jitcodes < 20:    # stop if we have a lot of them
             jitcode._dump = format_assembler(ssarepr)
         self._count_jitcodes += 1
+        config = get_translation_config()
+        translation_config = getattr(config, "translation", None)
+        if (getattr(translation_config, "genextension", False) and
+                getattr(ssarepr, "genextension", False)):
+            GenExtension(self, ssarepr, jitcode).generate()
         return jitcode
 
     def setup(self, name):
