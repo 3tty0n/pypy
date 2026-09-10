@@ -16,8 +16,10 @@ commands:
                           --applevel runs variants 0/8/9/13 through pypy-c
                           instead of metatensor-bench, adding "app" rows;
                           triton rows always, jax/iree rows when JAX_PYTHON
-                          is set - see README "Other backends")
-  models [NAME...]       end-to-end models; no args = all
+                          is set - see README "Other backends";
+                          --baselines-only adds only those rows)
+  models [--baselines-only] [NAME...]
+                         end-to-end models; no args = all
                          names: $ALL_MODELS
   ablation [EXP...]      ablations; no args = all
                          names: $ALL_EXPERIMENTS
@@ -75,6 +77,7 @@ run_cmd() {
         case "$1" in
           --dtype)    dtype=$2; shift 2 ;;
           --applevel) applevel=(--applevel); shift ;;
+          --baselines-only) applevel=(--baselines-only); shift ;;
           *)          break ;;
         esac
       done
@@ -85,13 +88,15 @@ run_cmd() {
       fi
       ;;
     models)
+      bonly=()
+      if [ "$1" = "--baselines-only" ]; then bonly=(--baselines-only); shift; fi
       for m in "$@"; do
         case " $ALL_MODELS " in
           *" $m "*) ;;
           *) echo "bench.sh: unknown model '$m', valid: $ALL_MODELS" >&2; exit 1 ;;
         esac
       done
-      bash "$HERE/run_models.sh" "$@"
+      bash "$HERE/run_models.sh" "${bonly[@]}" "$@"
       ;;
     ablation)
       for e in "$@"; do

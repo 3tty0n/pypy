@@ -3,6 +3,8 @@ set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 source "$HERE/config.sh"
 APP="$HERE/../applevel"
+BASELINES_ONLY=${BASELINES_ONLY:-0}
+if [ "$1" = "--baselines-only" ]; then BASELINES_ONLY=1; shift; fi
 paper_setup_pypy
 trap paper_cleanup_pypy EXIT
 
@@ -53,12 +55,14 @@ model() {
   local model=$1 pyscript=$2 torchscript=$3 jaxmodel=$4 weights=$5; shift 5
   for round in $(seq "$ROUNDS"); do
     progress_step "$model round $round/$ROUNDS"
-    out=$(run_ours "$pyscript" "$weights" "$ITERS" "$WARMUP" "$@")
-    record "$model" ours "$round" "$out"
-    out=$("$TORCH_PYTHON" "$APP/$torchscript" eager "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null)
-    record "$model" torch-eager "$round" "$out"
-    out=$("$TORCH_PYTHON" "$APP/$torchscript" compile "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null)
-    record "$model" torch-compile "$round" "$out"
+    if [ "$BASELINES_ONLY" != 1 ]; then
+      out=$(run_ours "$pyscript" "$weights" "$ITERS" "$WARMUP" "$@")
+      record "$model" ours "$round" "$out"
+      out=$("$TORCH_PYTHON" "$APP/$torchscript" eager "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null)
+      record "$model" torch-eager "$round" "$out"
+      out=$("$TORCH_PYTHON" "$APP/$torchscript" compile "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null)
+      record "$model" torch-compile "$round" "$out"
+    fi
     jax_rows "$model" "$jaxmodel" "$weights" "$round" "$@"
     if [ -n "${TRT_PYTHON:-}" ]; then
       out=$("$TRT_PYTHON" "$APP/$torchscript" tensorrt "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null) &&

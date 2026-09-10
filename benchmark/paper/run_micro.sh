@@ -9,6 +9,10 @@ source "$HERE/config.sh"
 # a normal micro run, not instead of one.
 APPLEVEL=${APPLEVEL:-0}
 if [ "$1" = "--applevel" ]; then APPLEVEL=1; shift; fi
+# --baselines-only adds just the triton/tensorrt/jax/iree rows to an existing
+# result set, for a grid whose ours/torch rows were measured earlier.
+BASELINES_ONLY=${BASELINES_ONLY:-0}
+if [ "$1" = "--baselines-only" ]; then BASELINES_ONLY=1; shift; fi
 if [ "$APPLEVEL" = 1 ]; then
   paper_setup_pypy
   trap paper_cleanup_pypy EXIT
@@ -76,6 +80,10 @@ app_point() {
 
 run_point() {
   local variant=$1 k=$2 n=$3 line eff=""
+  if [ "$BASELINES_ONLY" = 1 ]; then
+    baselines "$variant" "$k" "$n"
+    return 0
+  fi
   if [ "$APPLEVEL" = 1 ]; then
     app_point "$variant" "$k" "$n"
     return 0
