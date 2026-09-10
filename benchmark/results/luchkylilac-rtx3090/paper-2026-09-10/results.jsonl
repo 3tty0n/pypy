@@ -682,87 +682,6 @@
 {"acc": 32261731.495851, "compiled_in_timed": 1, "dtype": "float64", "iters": 200, "k": 1, "kernels": 59, "kind": "micro", "launches_per_iter": 11.005, "mode": "app", "n": 256000, "steady_us": 22228.435278, "variant": 8, "warm_s": 0.319033}
 {"acc": 214.208506, "compiled_in_timed": 0, "dtype": "float64", "iters": 200, "k": 1, "kernels": 58, "kind": "micro", "launches_per_iter": 7.01, "mode": "app", "n": 24576, "steady_us": 746.394396, "variant": 9, "warm_s": 0.086582}
 {"acc": 2158.224764, "compiled_in_timed": 0, "dtype": "float64", "iters": 200, "k": 1, "kernels": 58, "kind": "micro", "launches_per_iter": 7.015, "mode": "app", "n": 254976, "steady_us": 565.645695, "variant": 9, "warm_s": 0.096221}
-{"kind": "models", "model": "distilgpt2", "round": 1, "steady_us": 1374.5, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.000144958, "model": "distilgpt2", "round": 1, "steady_us": 2710.4, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.000137329, "model": "distilgpt2", "round": 1, "steady_us": 1288.1, "system": "torch-compile"}
-{"kind": "models", "model": "distilgpt2", "round": 2, "steady_us": 1360.0, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.000144958, "model": "distilgpt2", "round": 2, "steady_us": 2739.8, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.000137329, "model": "distilgpt2", "round": 2, "steady_us": 1347.8, "system": "torch-compile"}
-{"kind": "models", "model": "distilgpt2", "round": 3, "steady_us": 1384.4, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.000144958, "model": "distilgpt2", "round": 3, "steady_us": 2768.1, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.000137329, "model": "distilgpt2", "round": 3, "steady_us": 1323.8, "system": "torch-compile"}
-{"kind": "models", "model": "tiny-gpt2", "round": 1, "steady_us": 195.6, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 1, "steady_us": 1690.4, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 1, "steady_us": 363.0, "system": "torch-compile"}
-{"kind": "models", "model": "tiny-gpt2", "round": 2, "steady_us": 195.6, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 2, "steady_us": 1643.7, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 2, "steady_us": 421.8, "system": "torch-compile"}
-{"kind": "models", "model": "tiny-gpt2", "round": 3, "steady_us": 200.5, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 3, "steady_us": 1605.8, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 3, "steady_us": 418.4, "system": "torch-compile"}
-{"kind": "models", "model": "smollm2-135m", "round": 1, "steady_us": 4086.8, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.000151277, "model": "smollm2-135m", "round": 1, "steady_us": 15774.0, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.000166893, "model": "smollm2-135m", "round": 1, "steady_us": 5284.1, "system": "torch-compile"}
-{"kind": "models", "model": "smollm2-135m", "round": 2, "steady_us": 4062.3, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.000151277, "model": "smollm2-135m", "round": 2, "steady_us": 14604.3, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.000166893, "model": "smollm2-135m", "round": 2, "steady_us": 5199.4, "system": "torch-compile"}
-{"kind": "models", "model": "smollm2-135m", "round": 3, "steady_us": 4047.4, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.000151277, "model": "smollm2-135m", "round": 3, "steady_us": 15699.0, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.000166893, "model": "smollm2-135m", "round": 3, "steady_us": 5168.4, "system": "torch-compile"}
-{"kind": "models", "model": "bert-tiny", "round": 1, "steady_us": 392.4, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 1, "steady_us": 1109.2, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 2.76566e-05, "model": "bert-tiny", "round": 1, "steady_us": 492.3, "system": "torch-compile"}
-{"kind": "models", "model": "bert-tiny", "round": 2, "steady_us": 391.0, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 2, "steady_us": 1086.6, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 2.76566e-05, "model": "bert-tiny", "round": 2, "steady_us": 532.5, "system": "torch-compile"}
-{"kind": "models", "model": "bert-tiny", "round": 3, "steady_us": 418.4, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 3, "steady_us": 1090.0, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 2.76566e-05, "model": "bert-tiny", "round": 3, "steady_us": 588.0, "system": "torch-compile"}
-{"kind": "models", "model": "bert-mini", "round": 1, "steady_us": 677.5, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 1, "steady_us": 1805.4, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 1.81198e-05, "model": "bert-mini", "round": 1, "steady_us": 767.3, "system": "torch-compile"}
-{"kind": "models", "model": "bert-mini", "round": 2, "steady_us": 672.5, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 2, "steady_us": 1802.2, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 1.81198e-05, "model": "bert-mini", "round": 2, "steady_us": 778.1, "system": "torch-compile"}
-{"kind": "models", "model": "bert-mini", "round": 3, "steady_us": 671.1, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 3, "steady_us": 1763.8, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 1.81198e-05, "model": "bert-mini", "round": 3, "steady_us": 879.6, "system": "torch-compile"}
-{"kind": "models", "model": "resnet18-b1", "round": 1, "steady_us": 781.2, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.00524807, "model": "resnet18-b1", "round": 1, "steady_us": 1570.7, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.0150442, "model": "resnet18-b1", "round": 1, "steady_us": 1003.3, "system": "torch-compile"}
-{"kind": "models", "model": "resnet18-b1", "round": 2, "steady_us": 763.3, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.00524807, "model": "resnet18-b1", "round": 2, "steady_us": 1486.8, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.0150442, "model": "resnet18-b1", "round": 2, "steady_us": 1058.4, "system": "torch-compile"}
-{"kind": "models", "model": "resnet18-b1", "round": 3, "steady_us": 765.6, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.00524807, "model": "resnet18-b1", "round": 3, "steady_us": 1568.0, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.0150442, "model": "resnet18-b1", "round": 3, "steady_us": 1166.0, "system": "torch-compile"}
-{"kind": "models", "model": "resnet18-b8", "round": 1, "steady_us": 3197.6, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.00887299, "model": "resnet18-b8", "round": 1, "steady_us": 2249.1, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.0144663, "model": "resnet18-b8", "round": 1, "steady_us": 2171.9, "system": "torch-compile"}
-{"kind": "models", "model": "resnet18-b8", "round": 2, "steady_us": 3193.9, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.00887299, "model": "resnet18-b8", "round": 2, "steady_us": 2260.9, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.0144663, "model": "resnet18-b8", "round": 2, "steady_us": 2193.0, "system": "torch-compile"}
-{"kind": "models", "model": "resnet18-b8", "round": 3, "steady_us": 3187.0, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.00887299, "model": "resnet18-b8", "round": 3, "steady_us": 2255.2, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 0.0144663, "model": "resnet18-b8", "round": 3, "steady_us": 2186.6, "system": "torch-compile"}
-{"kind": "models", "model": "mixer_b16", "round": 1, "steady_us": 3797.7, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 3.71933e-05, "model": "mixer_b16", "round": 1, "steady_us": 3037.3, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 6.77109e-05, "model": "mixer_b16", "round": 1, "steady_us": 3078.6, "system": "torch-compile"}
-{"kind": "models", "model": "mixer_b16", "round": 2, "steady_us": 3802.5, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 3.71933e-05, "model": "mixer_b16", "round": 2, "steady_us": 2875.9, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 6.77109e-05, "model": "mixer_b16", "round": 2, "steady_us": 3144.4, "system": "torch-compile"}
-{"kind": "models", "model": "mixer_b16", "round": 3, "steady_us": 3827.1, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 3.71933e-05, "model": "mixer_b16", "round": 3, "steady_us": 3273.7, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 6.77109e-05, "model": "mixer_b16", "round": 3, "steady_us": 3127.6, "system": "torch-compile"}
-{"kind": "models", "model": "vit-tiny", "round": 1, "steady_us": 1661.3, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 1.23978e-05, "model": "vit-tiny", "round": 1, "steady_us": 3764.4, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 1.19209e-05, "model": "vit-tiny", "round": 1, "steady_us": 1943.5, "system": "torch-compile"}
-{"kind": "models", "model": "vit-tiny", "round": 2, "steady_us": 1700.1, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 1.23978e-05, "model": "vit-tiny", "round": 2, "steady_us": 3670.8, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 1.19209e-05, "model": "vit-tiny", "round": 2, "steady_us": 2470.5, "system": "torch-compile"}
-{"kind": "models", "model": "vit-tiny", "round": 3, "steady_us": 1671.3, "system": "ours"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 1.23978e-05, "model": "vit-tiny", "round": 3, "steady_us": 3722.4, "system": "torch-eager"}
-{"argmax_match": 1, "kind": "models", "maxabsdiff": 1.19209e-05, "model": "vit-tiny", "round": 3, "steady_us": 2147.8, "system": "torch-compile"}
 {"kind": "dynamic_series", "length": 32, "round": 1, "system": "ours", "us": 1034.0}
 {"kind": "dynamic_series", "length": 48, "round": 1, "system": "ours", "us": 405890.0}
 {"kind": "dynamic_series", "length": 64, "round": 1, "system": "ours", "us": 1444003.1}
@@ -3869,63 +3788,159 @@
 {"acc": 0.0, "breaks": -1, "compile_ms": 311.648, "compiled_in_timed": 0, "dtype": "float16", "first_run_ms": 0.188, "graphs": -1, "iters": 200, "k": 1, "kernels": 2, "kind": "micro", "mode": "triton", "n": 256000, "steady_us": 134.072304, "variant": 13, "warm_s": 0.333568}
 {"acc": 0.0, "breaks": -1, "compile_ms": -1, "compiled_in_timed": 0, "dtype": "float16", "first_run_ms": 4148.379, "graphs": -1, "iters": 200, "k": 1, "kernels": 0, "kind": "micro", "mode": "torch-tensorrt", "n": 256000, "steady_us": 358.389616, "variant": 13, "warm_s": 4.19743}
 {"acc": 0.001251, "breaks": -1, "compile_ms": 794.717, "compiled_in_timed": 0, "dtype": "float16", "first_run_ms": 0.869, "graphs": -1, "iters": 200, "k": 1, "kernels": 0, "kind": "micro", "mode": "jax", "n": 256000, "steady_us": 96.532106, "variant": 13, "warm_s": 0.065627}
-{"compile_ms": 7211.3, "first_run_ms": 4.7, "kind": "models", "maxabsdiff": 1.05763, "model": "distilgpt2", "round": 1, "steady_us": 1000.9, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 2857.0, "kind": "models", "maxabsdiff": 1.05759, "model": "distilgpt2", "round": 1, "steady_us": 3779.9, "system": "torch-tensorrt"}
-{"compile_ms": 7240.2, "first_run_ms": 4.7, "kind": "models", "maxabsdiff": 1.05763, "model": "distilgpt2", "round": 2, "steady_us": 1002.2, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 2839.8, "kind": "models", "maxabsdiff": 1.05759, "model": "distilgpt2", "round": 2, "steady_us": 3778.7, "system": "torch-tensorrt"}
-{"compile_ms": 6950.5, "first_run_ms": 4.9, "kind": "models", "maxabsdiff": 1.05763, "model": "distilgpt2", "round": 3, "steady_us": 1008.2, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 2864.5, "kind": "models", "maxabsdiff": 1.05759, "model": "distilgpt2", "round": 3, "steady_us": 3710.3, "system": "torch-tensorrt"}
-{"compile_ms": 1131.8, "first_run_ms": 1.6, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 1, "steady_us": 112.1, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 1775.7, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 1, "steady_us": 1393.5, "system": "torch-tensorrt"}
-{"compile_ms": 1147.7, "first_run_ms": 1.6, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 2, "steady_us": 77.8, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 1790.4, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 2, "steady_us": 1398.5, "system": "torch-tensorrt"}
-{"compile_ms": 1149.2, "first_run_ms": 1.6, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 3, "steady_us": 88.6, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 1776.2, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 3, "steady_us": 1382.8, "system": "torch-tensorrt"}
-{"compile_ms": 10743.5, "first_run_ms": 18.1, "kind": "models", "maxabsdiff": 0.00014174, "model": "smollm2-135m", "round": 1, "steady_us": 2647.8, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 21838.5, "kind": "models", "maxabsdiff": 0.000152111, "model": "smollm2-135m", "round": 1, "steady_us": 3751.1, "system": "torch-tensorrt"}
-{"compile_ms": 10559.7, "first_run_ms": 18.9, "kind": "models", "maxabsdiff": 0.000113487, "model": "smollm2-135m", "round": 2, "steady_us": 2671.6, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 22029.7, "kind": "models", "maxabsdiff": 0.000152111, "model": "smollm2-135m", "round": 2, "steady_us": 3764.1, "system": "torch-tensorrt"}
-{"compile_ms": 10605.3, "first_run_ms": 18.1, "kind": "models", "maxabsdiff": 0.000113487, "model": "smollm2-135m", "round": 3, "steady_us": 2622.6, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 22056.2, "kind": "models", "maxabsdiff": 0.000152111, "model": "smollm2-135m", "round": 3, "steady_us": 3745.5, "system": "torch-tensorrt"}
-{"compile_ms": 5946.9, "first_run_ms": 1.8, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 1, "steady_us": 111.4, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 4227.3, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 1, "steady_us": 486.2, "system": "torch-tensorrt"}
-{"compile_ms": 5653.8, "first_run_ms": 1.8, "kind": "models", "maxabsdiff": 3.43323e-05, "model": "bert-tiny", "round": 2, "steady_us": 111.4, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 4001.6, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 2, "steady_us": 436.0, "system": "torch-tensorrt"}
-{"compile_ms": 5942.2, "first_run_ms": 1.7, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 3, "steady_us": 110.6, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 4082.3, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 3, "steady_us": 432.4, "system": "torch-tensorrt"}
-{"compile_ms": 7140.8, "first_run_ms": 2.8, "kind": "models", "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 1, "steady_us": 242.1, "system": "jax"}
-{"compile_ms": 1005.5, "first_run_ms": 20.1, "kind": "models", "maxabsdiff": 2.47955e-05, "model": "bert-mini", "round": 1, "steady_us": 3690.8, "system": "iree"}
-{"compile_ms": -1, "first_run_ms": 4944.6, "kind": "models", "maxabsdiff": 2.47955e-05, "model": "bert-mini", "round": 1, "steady_us": 666.8, "system": "torch-tensorrt"}
-{"compile_ms": 6969.3, "first_run_ms": 2.8, "kind": "models", "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 2, "steady_us": 243.1, "system": "jax"}
-{"compile_ms": 998.9, "first_run_ms": 20.7, "kind": "models", "maxabsdiff": 2.47955e-05, "model": "bert-mini", "round": 2, "steady_us": 3613.3, "system": "iree"}
-{"compile_ms": -1, "first_run_ms": 4995.7, "kind": "models", "maxabsdiff": 2.47955e-05, "model": "bert-mini", "round": 2, "steady_us": 682.3, "system": "torch-tensorrt"}
-{"compile_ms": 7199.8, "first_run_ms": 2.9, "kind": "models", "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 3, "steady_us": 241.4, "system": "jax"}
-{"compile_ms": 1008.9, "first_run_ms": 20.5, "kind": "models", "maxabsdiff": 2.47955e-05, "model": "bert-mini", "round": 3, "steady_us": 3617.8, "system": "iree"}
-{"compile_ms": -1, "first_run_ms": 4883.8, "kind": "models", "maxabsdiff": 2.47955e-05, "model": "bert-mini", "round": 3, "steady_us": 667.0, "system": "torch-tensorrt"}
-{"compile_ms": 601.6, "first_run_ms": 3.9, "kind": "models", "maxabsdiff": 1.14441e-05, "model": "resnet18-b1", "round": 1, "steady_us": 1094.5, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 4658.6, "kind": "models", "maxabsdiff": 9.53674e-06, "model": "resnet18-b1", "round": 1, "steady_us": 1012.5, "system": "torch-tensorrt"}
-{"compile_ms": 598.7, "first_run_ms": 3.9, "kind": "models", "maxabsdiff": 1.14441e-05, "model": "resnet18-b1", "round": 2, "steady_us": 1123.5, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 4629.9, "kind": "models", "maxabsdiff": 9.53674e-06, "model": "resnet18-b1", "round": 2, "steady_us": 1009.2, "system": "torch-tensorrt"}
-{"compile_ms": 598.6, "first_run_ms": 3.9, "kind": "models", "maxabsdiff": 1.14441e-05, "model": "resnet18-b1", "round": 3, "steady_us": 1097.0, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 4550.2, "kind": "models", "maxabsdiff": 9.53674e-06, "model": "resnet18-b1", "round": 3, "steady_us": 1010.1, "system": "torch-tensorrt"}
-{"compile_ms": 912.6, "first_run_ms": 4.5, "kind": "models", "maxabsdiff": 1.52588e-05, "model": "resnet18-b8", "round": 1, "steady_us": 2285.1, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 23741.2, "kind": "models", "maxabsdiff": 9.53674e-06, "model": "resnet18-b8", "round": 1, "steady_us": 2014.1, "system": "torch-tensorrt"}
-{"compile_ms": 935.6, "first_run_ms": 4.4, "kind": "models", "maxabsdiff": 1.52588e-05, "model": "resnet18-b8", "round": 2, "steady_us": 2277.3, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 4793.9, "kind": "models", "maxabsdiff": 9.53674e-06, "model": "resnet18-b8", "round": 2, "steady_us": 2033.5, "system": "torch-tensorrt"}
-{"compile_ms": 899.3, "first_run_ms": 4.3, "kind": "models", "maxabsdiff": 1.52588e-05, "model": "resnet18-b8", "round": 3, "steady_us": 2271.0, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 4728.5, "kind": "models", "maxabsdiff": 9.53674e-06, "model": "resnet18-b8", "round": 3, "steady_us": 2027.1, "system": "torch-tensorrt"}
-{"compile_ms": 7193.0, "first_run_ms": 6.9, "kind": "models", "maxabsdiff": 3.14713e-05, "model": "mixer_b16", "round": 1, "steady_us": 2232.6, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 6594.5, "kind": "models", "maxabsdiff": 8.01086e-05, "model": "mixer_b16", "round": 1, "steady_us": 2466.9, "system": "torch-tensorrt"}
-{"compile_ms": 7306.4, "first_run_ms": 7.0, "kind": "models", "maxabsdiff": 3.14713e-05, "model": "mixer_b16", "round": 2, "steady_us": 2236.2, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 5559.9, "kind": "models", "maxabsdiff": 8.01086e-05, "model": "mixer_b16", "round": 2, "steady_us": 2465.0, "system": "torch-tensorrt"}
-{"compile_ms": 7331.0, "first_run_ms": 6.9, "kind": "models", "maxabsdiff": 3.14713e-05, "model": "mixer_b16", "round": 3, "steady_us": 2233.4, "system": "jax"}
-{"compile_ms": -1, "first_run_ms": 5626.9, "kind": "models", "maxabsdiff": 8.01086e-05, "model": "mixer_b16", "round": 3, "steady_us": 2464.9, "system": "torch-tensorrt"}
-{"compile_ms": 7035.8, "first_run_ms": 7.9, "kind": "models", "maxabsdiff": 1.07288e-05, "model": "vit-tiny", "round": 1, "steady_us": 732.6, "system": "jax"}
-{"compile_ms": 1666.8, "first_run_ms": 39.4, "kind": "models", "maxabsdiff": 1.54972e-05, "model": "vit-tiny", "round": 1, "steady_us": 24971.8, "system": "iree"}
-{"compile_ms": -1, "first_run_ms": 8168.0, "kind": "models", "maxabsdiff": 1.23978e-05, "model": "vit-tiny", "round": 1, "steady_us": 1050.2, "system": "torch-tensorrt"}
-{"compile_ms": 6408.9, "first_run_ms": 7.6, "kind": "models", "maxabsdiff": 1.07288e-05, "model": "vit-tiny", "round": 2, "steady_us": 741.0, "system": "jax"}
-{"compile_ms": 1693.3, "first_run_ms": 39.5, "kind": "models", "maxabsdiff": 1.54972e-05, "model": "vit-tiny", "round": 2, "steady_us": 24999.2, "system": "iree"}
-{"compile_ms": -1, "first_run_ms": 7558.8, "kind": "models", "maxabsdiff": 1.23978e-05, "model": "vit-tiny", "round": 2, "steady_us": 1062.7, "system": "torch-tensorrt"}
-{"compile_ms": 6214.9, "first_run_ms": 7.1, "kind": "models", "maxabsdiff": 1.07288e-05, "model": "vit-tiny", "round": 3, "steady_us": 736.8, "system": "jax"}
-{"compile_ms": 1680.0, "first_run_ms": 39.7, "kind": "models", "maxabsdiff": 1.54972e-05, "model": "vit-tiny", "round": 3, "steady_us": 25015.8, "system": "iree"}
-{"compile_ms": -1, "first_run_ms": 7839.8, "kind": "models", "maxabsdiff": 1.23978e-05, "model": "vit-tiny", "round": 3, "steady_us": 1147.5, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 558.2, "kind": "models", "model": "distilgpt2", "round": 1, "steady_us": 1352.6, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 133.2, "kind": "models", "maxabsdiff": 0.000144958, "model": "distilgpt2", "round": 1, "steady_us": 2698.5, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1546.7, "kind": "models", "maxabsdiff": 0.000137329, "model": "distilgpt2", "round": 1, "steady_us": 1365.2, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 7172.4, "first_run_ms": 4.5, "kind": "models", "maxabsdiff": 0.000137329, "model": "distilgpt2", "round": 1, "steady_us": 999.8, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 2843.5, "kind": "models", "maxabsdiff": 0.000167847, "model": "distilgpt2", "round": 1, "steady_us": 3712.4, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 604.3, "kind": "models", "model": "distilgpt2", "round": 2, "steady_us": 1385.9, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 131.7, "kind": "models", "maxabsdiff": 0.000144958, "model": "distilgpt2", "round": 2, "steady_us": 2727.2, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1551.2, "kind": "models", "maxabsdiff": 0.000137329, "model": "distilgpt2", "round": 2, "steady_us": 1347.1, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 7313.3, "first_run_ms": 4.9, "kind": "models", "maxabsdiff": 0.000137329, "model": "distilgpt2", "round": 2, "steady_us": 1001.6, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 2770.6, "kind": "models", "maxabsdiff": 0.000167847, "model": "distilgpt2", "round": 2, "steady_us": 3647.5, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 528.9, "kind": "models", "model": "distilgpt2", "round": 3, "steady_us": 1377.2, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 126.6, "kind": "models", "maxabsdiff": 0.000144958, "model": "distilgpt2", "round": 3, "steady_us": 2719.8, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1541.8, "kind": "models", "maxabsdiff": 0.000137329, "model": "distilgpt2", "round": 3, "steady_us": 1348.5, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 6827.6, "first_run_ms": 4.6, "kind": "models", "maxabsdiff": 0.000137329, "model": "distilgpt2", "round": 3, "steady_us": 998.9, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 2861.7, "kind": "models", "maxabsdiff": 0.000167847, "model": "distilgpt2", "round": 3, "steady_us": 3665.3, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 93.1, "kind": "models", "model": "tiny-gpt2", "round": 1, "steady_us": 191.4, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 485.9, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 1, "steady_us": 1594.8, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1186.3, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 1, "steady_us": 418.4, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 1145.4, "first_run_ms": 1.6, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 1, "steady_us": 88.6, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1780.5, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 1, "steady_us": 1352.3, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 109.6, "kind": "models", "model": "tiny-gpt2", "round": 2, "steady_us": 209.7, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 477.2, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 2, "steady_us": 1587.8, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1178.5, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 2, "steady_us": 407.3, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 1140.0, "first_run_ms": 1.7, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 2, "steady_us": 91.2, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1834.1, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 2, "steady_us": 1381.1, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 103.4, "kind": "models", "model": "tiny-gpt2", "round": 3, "steady_us": 209.5, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 475.1, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 3, "steady_us": 1600.8, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1176.7, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 3, "steady_us": 394.9, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 1146.0, "first_run_ms": 1.6, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 3, "steady_us": 89.7, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1851.3, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 3, "steady_us": 1403.1, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 511.1, "kind": "models", "model": "smollm2-135m", "round": 1, "steady_us": 4079.6, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 540.3, "kind": "models", "maxabsdiff": 0.000151277, "model": "smollm2-135m", "round": 1, "steady_us": 14873.3, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 3789.8, "kind": "models", "maxabsdiff": 0.000166893, "model": "smollm2-135m", "round": 1, "steady_us": 5073.0, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 10672.9, "first_run_ms": 18.3, "kind": "models", "maxabsdiff": 0.000133514, "model": "smollm2-135m", "round": 1, "steady_us": 2666.1, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 22058.0, "kind": "models", "maxabsdiff": 0.000152111, "model": "smollm2-135m", "round": 1, "steady_us": 3737.7, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 509.6, "kind": "models", "model": "smollm2-135m", "round": 2, "steady_us": 4077.9, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 552.7, "kind": "models", "maxabsdiff": 0.000151277, "model": "smollm2-135m", "round": 2, "steady_us": 14256.9, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 3912.7, "kind": "models", "maxabsdiff": 0.000166893, "model": "smollm2-135m", "round": 2, "steady_us": 5860.2, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 10675.3, "first_run_ms": 18.6, "kind": "models", "maxabsdiff": 0.00014174, "model": "smollm2-135m", "round": 2, "steady_us": 2724.2, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 22321.1, "kind": "models", "maxabsdiff": 0.000152111, "model": "smollm2-135m", "round": 2, "steady_us": 3739.2, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 491.3, "kind": "models", "model": "smollm2-135m", "round": 3, "steady_us": 4105.7, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 542.2, "kind": "models", "maxabsdiff": 0.000151277, "model": "smollm2-135m", "round": 3, "steady_us": 14317.0, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 3963.4, "kind": "models", "maxabsdiff": 0.000166893, "model": "smollm2-135m", "round": 3, "steady_us": 5815.5, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 10420.3, "first_run_ms": 19.5, "kind": "models", "maxabsdiff": 0.000113487, "model": "smollm2-135m", "round": 3, "steady_us": 2654.5, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 21928.0, "kind": "models", "maxabsdiff": 0.000152111, "model": "smollm2-135m", "round": 3, "steady_us": 3751.4, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 120.7, "kind": "models", "model": "bert-tiny", "round": 1, "steady_us": 405.9, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 97.6, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 1, "steady_us": 1076.7, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1110.4, "kind": "models", "maxabsdiff": 2.76566e-05, "model": "bert-tiny", "round": 1, "steady_us": 522.8, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 5482.6, "first_run_ms": 1.7, "kind": "models", "maxabsdiff": 3.43323e-05, "model": "bert-tiny", "round": 1, "steady_us": 111.3, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 4196.5, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 1, "steady_us": 440.7, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 115.9, "kind": "models", "model": "bert-tiny", "round": 2, "steady_us": 408.3, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 97.2, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 2, "steady_us": 1065.6, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1109.3, "kind": "models", "maxabsdiff": 2.76566e-05, "model": "bert-tiny", "round": 2, "steady_us": 521.3, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 5908.6, "first_run_ms": 1.8, "kind": "models", "maxabsdiff": 3.43323e-05, "model": "bert-tiny", "round": 2, "steady_us": 114.6, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 4289.3, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 2, "steady_us": 435.1, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 116.1, "kind": "models", "model": "bert-tiny", "round": 3, "steady_us": 409.0, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 95.4, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 3, "steady_us": 1069.3, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1124.6, "kind": "models", "maxabsdiff": 2.76566e-05, "model": "bert-tiny", "round": 3, "steady_us": 522.8, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 5808.8, "first_run_ms": 1.7, "kind": "models", "maxabsdiff": 3.43323e-05, "model": "bert-tiny", "round": 3, "steady_us": 111.3, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 4036.8, "kind": "models", "maxabsdiff": 3.05176e-05, "model": "bert-tiny", "round": 3, "steady_us": 435.5, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 185.6, "kind": "models", "model": "bert-mini", "round": 1, "steady_us": 654.7, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 91.9, "kind": "models", "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 1, "steady_us": 1758.4, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1269.2, "kind": "models", "maxabsdiff": 1.81198e-05, "model": "bert-mini", "round": 1, "steady_us": 794.4, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 6873.5, "first_run_ms": 2.7, "kind": "models", "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 1, "steady_us": 244.6, "system": "jax"}
+{"argmax_match": 1, "compile_ms": 1008.8, "first_run_ms": 20.7, "kind": "models", "maxabsdiff": 2.47955e-05, "model": "bert-mini", "round": 1, "steady_us": 3641.8, "system": "iree"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 4925.4, "kind": "models", "maxabsdiff": 2.47955e-05, "model": "bert-mini", "round": 1, "steady_us": 659.3, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 190.6, "kind": "models", "model": "bert-mini", "round": 2, "steady_us": 652.7, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 86.4, "kind": "models", "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 2, "steady_us": 1768.7, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1290.1, "kind": "models", "maxabsdiff": 1.81198e-05, "model": "bert-mini", "round": 2, "steady_us": 805.3, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 6958.5, "first_run_ms": 2.7, "kind": "models", "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 2, "steady_us": 242.0, "system": "jax"}
+{"argmax_match": 1, "compile_ms": 992.5, "first_run_ms": 20.2, "kind": "models", "maxabsdiff": 2.47955e-05, "model": "bert-mini", "round": 2, "steady_us": 3639.3, "system": "iree"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 4855.8, "kind": "models", "maxabsdiff": 2.47955e-05, "model": "bert-mini", "round": 2, "steady_us": 656.6, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 180.8, "kind": "models", "model": "bert-mini", "round": 3, "steady_us": 653.3, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 86.5, "kind": "models", "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 3, "steady_us": 1770.9, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1278.6, "kind": "models", "maxabsdiff": 1.81198e-05, "model": "bert-mini", "round": 3, "steady_us": 845.1, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 7164.9, "first_run_ms": 2.9, "kind": "models", "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 3, "steady_us": 241.9, "system": "jax"}
+{"argmax_match": 1, "compile_ms": 996.7, "first_run_ms": 20.3, "kind": "models", "maxabsdiff": 2.47955e-05, "model": "bert-mini", "round": 3, "steady_us": 3597.3, "system": "iree"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 4745.4, "kind": "models", "maxabsdiff": 2.47955e-05, "model": "bert-mini", "round": 3, "steady_us": 661.1, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 125.5, "kind": "models", "model": "resnet18-b1", "round": 1, "steady_us": 711.6, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 193.2, "kind": "models", "maxabsdiff": 0.00963783, "model": "resnet18-b1", "round": 1, "steady_us": 1572.0, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1044.2, "kind": "models", "maxabsdiff": 0.00617647, "model": "resnet18-b1", "round": 1, "steady_us": 1078.7, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 610.6, "first_run_ms": 3.9, "kind": "models", "maxabsdiff": 0.0100265, "model": "resnet18-b1", "round": 1, "steady_us": 1112.0, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 4705.5, "kind": "models", "maxabsdiff": 0.0100203, "model": "resnet18-b1", "round": 1, "steady_us": 1000.7, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 125.7, "kind": "models", "model": "resnet18-b1", "round": 2, "steady_us": 713.3, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 183.4, "kind": "models", "maxabsdiff": 0.00963783, "model": "resnet18-b1", "round": 2, "steady_us": 1631.6, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1087.5, "kind": "models", "maxabsdiff": 0.00617647, "model": "resnet18-b1", "round": 2, "steady_us": 1098.7, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 581.8, "first_run_ms": 4.0, "kind": "models", "maxabsdiff": 0.0100265, "model": "resnet18-b1", "round": 2, "steady_us": 1097.2, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 4524.9, "kind": "models", "maxabsdiff": 0.0100203, "model": "resnet18-b1", "round": 2, "steady_us": 995.7, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 136.5, "kind": "models", "model": "resnet18-b1", "round": 3, "steady_us": 719.9, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 183.1, "kind": "models", "maxabsdiff": 0.00963783, "model": "resnet18-b1", "round": 3, "steady_us": 1379.2, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1035.5, "kind": "models", "maxabsdiff": 0.00617647, "model": "resnet18-b1", "round": 3, "steady_us": 973.8, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 578.4, "first_run_ms": 3.9, "kind": "models", "maxabsdiff": 0.0100265, "model": "resnet18-b1", "round": 3, "steady_us": 1097.7, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 4828.9, "kind": "models", "maxabsdiff": 0.0100203, "model": "resnet18-b1", "round": 3, "steady_us": 993.9, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 158.3, "kind": "models", "model": "resnet18-b8", "round": 1, "steady_us": 2717.7, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 190.5, "kind": "models", "maxabsdiff": 0.00571394, "model": "resnet18-b8", "round": 1, "steady_us": 2268.8, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1084.7, "kind": "models", "maxabsdiff": 0.0115871, "model": "resnet18-b8", "round": 1, "steady_us": 2193.4, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 924.3, "first_run_ms": 4.7, "kind": "models", "maxabsdiff": 0.00675011, "model": "resnet18-b8", "round": 1, "steady_us": 2270.2, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 4678.3, "kind": "models", "maxabsdiff": 0.00674629, "model": "resnet18-b8", "round": 1, "steady_us": 2027.7, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 146.0, "kind": "models", "model": "resnet18-b8", "round": 2, "steady_us": 2703.6, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 177.4, "kind": "models", "maxabsdiff": 0.00571394, "model": "resnet18-b8", "round": 2, "steady_us": 2246.5, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1024.9, "kind": "models", "maxabsdiff": 0.0115871, "model": "resnet18-b8", "round": 2, "steady_us": 2210.9, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 942.3, "first_run_ms": 4.3, "kind": "models", "maxabsdiff": 0.00675011, "model": "resnet18-b8", "round": 2, "steady_us": 2262.1, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 4599.5, "kind": "models", "maxabsdiff": 0.00674629, "model": "resnet18-b8", "round": 2, "steady_us": 2029.7, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 143.7, "kind": "models", "model": "resnet18-b8", "round": 3, "steady_us": 2703.8, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 193.1, "kind": "models", "maxabsdiff": 0.00571394, "model": "resnet18-b8", "round": 3, "steady_us": 2246.2, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1065.1, "kind": "models", "maxabsdiff": 0.0115871, "model": "resnet18-b8", "round": 3, "steady_us": 2199.9, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 947.8, "first_run_ms": 4.3, "kind": "models", "maxabsdiff": 0.00675011, "model": "resnet18-b8", "round": 3, "steady_us": 2281.5, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 5102.9, "kind": "models", "maxabsdiff": 0.00674629, "model": "resnet18-b8", "round": 3, "steady_us": 2034.7, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 220.3, "kind": "models", "model": "mixer_b16", "round": 1, "steady_us": 3813.8, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 127.0, "kind": "models", "maxabsdiff": 3.71933e-05, "model": "mixer_b16", "round": 1, "steady_us": 2938.2, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1130.9, "kind": "models", "maxabsdiff": 6.77109e-05, "model": "mixer_b16", "round": 1, "steady_us": 3119.1, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 7314.6, "first_run_ms": 6.9, "kind": "models", "maxabsdiff": 3.14713e-05, "model": "mixer_b16", "round": 1, "steady_us": 2230.8, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 5751.5, "kind": "models", "maxabsdiff": 8.01086e-05, "model": "mixer_b16", "round": 1, "steady_us": 2451.4, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 218.0, "kind": "models", "model": "mixer_b16", "round": 2, "steady_us": 3814.9, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 134.8, "kind": "models", "maxabsdiff": 3.71933e-05, "model": "mixer_b16", "round": 2, "steady_us": 2937.2, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1173.5, "kind": "models", "maxabsdiff": 6.77109e-05, "model": "mixer_b16", "round": 2, "steady_us": 3134.3, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 7310.7, "first_run_ms": 6.9, "kind": "models", "maxabsdiff": 3.14713e-05, "model": "mixer_b16", "round": 2, "steady_us": 2234.4, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 5911.8, "kind": "models", "maxabsdiff": 8.01086e-05, "model": "mixer_b16", "round": 2, "steady_us": 2468.8, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 222.8, "kind": "models", "model": "mixer_b16", "round": 3, "steady_us": 3814.5, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 122.4, "kind": "models", "maxabsdiff": 3.71933e-05, "model": "mixer_b16", "round": 3, "steady_us": 2867.9, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1175.8, "kind": "models", "maxabsdiff": 6.77109e-05, "model": "mixer_b16", "round": 3, "steady_us": 3128.6, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 7424.8, "first_run_ms": 6.9, "kind": "models", "maxabsdiff": 3.14713e-05, "model": "mixer_b16", "round": 3, "steady_us": 2236.8, "system": "jax"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 5873.7, "kind": "models", "maxabsdiff": 8.01086e-05, "model": "mixer_b16", "round": 3, "steady_us": 2455.0, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 166.9, "kind": "models", "model": "vit-tiny", "round": 1, "steady_us": 1688.9, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 131.2, "kind": "models", "maxabsdiff": 1.23978e-05, "model": "vit-tiny", "round": 1, "steady_us": 3698.3, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1735.4, "kind": "models", "maxabsdiff": 1.19209e-05, "model": "vit-tiny", "round": 1, "steady_us": 2015.6, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 6231.0, "first_run_ms": 7.2, "kind": "models", "maxabsdiff": 1.14441e-05, "model": "vit-tiny", "round": 1, "steady_us": 720.5, "system": "jax"}
+{"argmax_match": 1, "compile_ms": 1680.4, "first_run_ms": 39.5, "kind": "models", "maxabsdiff": 1.54972e-05, "model": "vit-tiny", "round": 1, "steady_us": 24959.6, "system": "iree"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 7706.2, "kind": "models", "maxabsdiff": 1.23978e-05, "model": "vit-tiny", "round": 1, "steady_us": 1040.8, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 170.4, "kind": "models", "model": "vit-tiny", "round": 2, "steady_us": 1653.7, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 122.0, "kind": "models", "maxabsdiff": 1.23978e-05, "model": "vit-tiny", "round": 2, "steady_us": 3607.0, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1679.8, "kind": "models", "maxabsdiff": 1.19209e-05, "model": "vit-tiny", "round": 2, "steady_us": 2022.4, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 6238.2, "first_run_ms": 7.1, "kind": "models", "maxabsdiff": 1.14441e-05, "model": "vit-tiny", "round": 2, "steady_us": 723.1, "system": "jax"}
+{"argmax_match": 1, "compile_ms": 1632.3, "first_run_ms": 39.8, "kind": "models", "maxabsdiff": 1.54972e-05, "model": "vit-tiny", "round": 2, "steady_us": 24972.3, "system": "iree"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 7721.6, "kind": "models", "maxabsdiff": 1.23978e-05, "model": "vit-tiny", "round": 2, "steady_us": 1059.7, "system": "torch-tensorrt"}
+{"compile_ms": -1, "first_run_ms": 153.1, "kind": "models", "model": "vit-tiny", "round": 3, "steady_us": 1618.0, "system": "ours"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 122.3, "kind": "models", "maxabsdiff": 1.23978e-05, "model": "vit-tiny", "round": 3, "steady_us": 3730.2, "system": "torch-eager"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 1670.1, "kind": "models", "maxabsdiff": 1.19209e-05, "model": "vit-tiny", "round": 3, "steady_us": 2043.5, "system": "torch-compile"}
+{"argmax_match": 1, "compile_ms": 6527.3, "first_run_ms": 7.1, "kind": "models", "maxabsdiff": 1.07288e-05, "model": "vit-tiny", "round": 3, "steady_us": 730.1, "system": "jax"}
+{"argmax_match": 1, "compile_ms": 1679.1, "first_run_ms": 39.4, "kind": "models", "maxabsdiff": 1.54972e-05, "model": "vit-tiny", "round": 3, "steady_us": 24952.6, "system": "iree"}
+{"argmax_match": 1, "compile_ms": -1, "first_run_ms": 7876.4, "kind": "models", "maxabsdiff": 1.23978e-05, "model": "vit-tiny", "round": 3, "steady_us": 1096.6, "system": "torch-tensorrt"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 0.00571394, "model": "resnet18-b8", "round": 1, "steady_us": 2703.4, "variant": "tf32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 0.00571394, "model": "resnet18-b8", "round": 2, "steady_us": 2718.3, "variant": "tf32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 0.00571394, "model": "resnet18-b8", "round": 3, "steady_us": 2747.6, "variant": "tf32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 1.00136e-05, "model": "resnet18-b8", "round": 1, "steady_us": 3189.2, "variant": "fp32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 1.00136e-05, "model": "resnet18-b8", "round": 2, "steady_us": 3195.5, "variant": "fp32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 1.00136e-05, "model": "resnet18-b8", "round": 3, "steady_us": 3188.8, "variant": "fp32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 0.00963783, "model": "resnet18-b1", "round": 1, "steady_us": 714.0, "variant": "tf32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 0.00963783, "model": "resnet18-b1", "round": 2, "steady_us": 704.1, "variant": "tf32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 0.00963783, "model": "resnet18-b1", "round": 3, "steady_us": 713.6, "variant": "tf32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 8.58307e-06, "model": "resnet18-b1", "round": 1, "steady_us": 771.5, "variant": "fp32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 8.58307e-06, "model": "resnet18-b1", "round": 2, "steady_us": 776.8, "variant": "fp32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 8.58307e-06, "model": "resnet18-b1", "round": 3, "steady_us": 782.4, "variant": "fp32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 8.58307e-06, "model": "resnet18-b8", "round": 1, "steady_us": 3065.6, "variant": "torch-fp32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 8.58307e-06, "model": "resnet18-b8", "round": 2, "steady_us": 3051.0, "variant": "torch-fp32"}
+{"experiment": "tf32", "kind": "ablation", "maxabsdiff": 8.58307e-06, "model": "resnet18-b8", "round": 3, "steady_us": 3070.4, "variant": "torch-fp32"}

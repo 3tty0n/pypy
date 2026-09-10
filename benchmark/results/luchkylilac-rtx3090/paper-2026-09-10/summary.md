@@ -56,15 +56,15 @@
 
 | model | ours | torch.compile | torch eager | JAX/XLA | IREE | TensorRT | ratio ours/compile | ratio jax/compile | correctness |
 |---|---|---|---|---|---|---|---|---|---|
-| bert-mini | 672.5 | 778.1 | 1802.2 | 242.1 | 3617.8 | 667.0 | 0.86x | 0.31x | 2.09808e-05 |
-| bert-tiny | 392.4 | 532.5 | 1090.0 | 111.4 | n/a | 436.0 | 0.74x | 0.21x | 3.05176e-05 |
-| distilgpt2 | 1374.5 | 1323.8 | 2739.8 | 1002.2 | n/a | 3778.7 | 1.04x | 0.76x | 0.000144958 |
-| mixer_b16 | 3802.5 | 3127.6 | 3037.3 | 2233.4 | n/a | 2465.0 | 1.22x | 0.71x | 3.71933e-05 |
-| resnet18-b1 | 765.6 | 1058.4 | 1568.0 | 1097.0 | n/a | 1010.1 | 0.72x | 1.04x | 0.00524807 |
-| resnet18-b8 | 3193.9 | 2186.6 | 2255.2 | 2277.3 | n/a | 2027.1 | 1.46x | 1.04x | 0.00887299 |
-| smollm2-135m | 4062.3 | 5199.4 | 15699.0 | 2647.8 | n/a | 3751.1 | 0.78x | 0.51x | 0.000151277 |
-| tiny-gpt2 | 195.6 | 418.4 | 1643.7 | 88.6 | n/a | 1393.5 | 0.47x | 0.21x | 2.6077e-08 |
-| vit-tiny | 1671.3 | 2147.8 | 3722.4 | 736.8 | 24999.2 | 1062.7 | 0.78x | 0.34x | 1.23978e-05 |
+| bert-mini | 653.3 | 805.3 | 1768.7 | 242.0 | 3639.3 | 659.3 | 0.81x | 0.30x | 2.09808e-05 |
+| bert-tiny | 408.3 | 522.8 | 1069.3 | 111.3 | n/a | 435.5 | 0.78x | 0.21x | 3.05176e-05 |
+| distilgpt2 | 1377.2 | 1348.5 | 2719.8 | 999.8 | n/a | 3665.3 | 1.02x | 0.74x | 0.000144958 |
+| mixer_b16 | 3814.5 | 3128.6 | 2937.2 | 2234.4 | n/a | 2455.0 | 1.22x | 0.71x | 3.71933e-05 |
+| resnet18-b1 | 713.3 | 1078.7 | 1572.0 | 1097.7 | n/a | 995.7 | 0.66x | 1.02x | 0.00963783 |
+| resnet18-b8 | 2703.8 | 2199.9 | 2246.5 | 2270.2 | n/a | 2029.7 | 1.23x | 1.03x | 0.00571394 |
+| smollm2-135m | 4079.6 | 5815.5 | 14317.0 | 2666.1 | n/a | 3739.2 | 0.70x | 0.46x | 0.000151277 |
+| tiny-gpt2 | 209.5 | 407.3 | 1594.8 | 89.7 | n/a | 1381.1 | 0.51x | 0.22x | 2.6077e-08 |
+| vit-tiny | 1653.7 | 2022.4 | 3698.3 | 723.1 | 24959.6 | 1059.7 | 0.82x | 0.36x | 1.23978e-05 |
 
 ## Ablations (median steady_us)
 
@@ -82,18 +82,29 @@
 | precision | float16 | smollm2-135m | 2215.7 |  |
 | precision | float32 | distilgpt2 | 1374.5 |  |
 | precision | float32 | smollm2-135m | 4103.3 |  |
+| tf32 | fp32 | resnet18-b1 | 776.8 |  |
+| tf32 | fp32 | resnet18-b8 | 3189.2 |  |
+| tf32 | tf32 | resnet18-b1 | 713.6 |  |
+| tf32 | tf32 | resnet18-b8 | 2718.3 |  |
+| tf32 | torch-fp32 | resnet18-b8 | 3065.6 |  |
 
 ## Compilation overhead (median; break-even vs torch eager, iterations)
 
 | workload | system | compile_ms | first_run_ms | steady_us | break-even |
 |---|---|---|---|---|---|
-| bert-mini | torch-tensorrt | n/a | 4944.6 | 667.0 | n/a |
-| bert-mini | jax | 7140.8 | 2.8 | 242.1 | n/a |
-| bert-mini | iree | 1005.5 | 20.5 | 3617.8 | n/a |
-| bert-tiny | torch-tensorrt | n/a | 4082.3 | 436.0 | n/a |
-| bert-tiny | jax | 5942.2 | 1.8 | 111.4 | n/a |
-| distilgpt2 | torch-tensorrt | n/a | 2857.0 | 3778.7 | n/a |
-| distilgpt2 | jax | 7211.3 | 4.7 | 1002.2 | n/a |
+| bert-mini | torch-compile | n/a | 1278.6 | 805.3 | 1237 |
+| bert-mini | torch-tensorrt | n/a | 4855.8 | 659.3 | 4299 |
+| bert-mini | jax | 6958.5 | 2.7 | 242.0 | 4503 |
+| bert-mini | iree | 996.7 | 20.3 | 3639.3 | n/a |
+| bert-mini | ours | n/a | 185.6 | 653.3 | 89 |
+| bert-tiny | torch-compile | n/a | 1110.4 | 522.8 | 1854 |
+| bert-tiny | torch-tensorrt | n/a | 4196.5 | 435.5 | 6468 |
+| bert-tiny | jax | 5808.8 | 1.7 | 111.3 | 5964 |
+| bert-tiny | ours | n/a | 116.1 | 408.3 | 29 |
+| distilgpt2 | torch-compile | n/a | 1546.7 | 1348.5 | 1032 |
+| distilgpt2 | torch-tensorrt | n/a | 2843.5 | 3665.3 | n/a |
+| distilgpt2 | jax | 7172.4 | 4.6 | 999.8 | 4096 |
+| distilgpt2 | ours | n/a | 558.2 | 1377.2 | 318 |
 | micro v0 k1 n1000000 | torch-tensorrt | n/a | 39.1 | 80.7 | n/a |
 | micro v0 k1 n1000000 | jax | 195.7 | 0.5 | 43.3 | n/a |
 | micro v0 k1 n1000000 | iree | 550.1 | 25.8 | 5773.4 | n/a |
@@ -181,19 +192,31 @@
 | micro v9 k1 n25600 | jax | 374.8 | 0.8 | 263.3 | n/a |
 | micro v9 k1 n256000 | torch-tensorrt | n/a | 2148.9 | 1565.2 | n/a |
 | micro v9 k1 n256000 | jax | 810.4 | 1.2 | 350.7 | n/a |
-| mixer_b16 | torch-tensorrt | n/a | 5626.9 | 2465.0 | n/a |
-| mixer_b16 | jax | 7306.4 | 6.9 | 2233.4 | n/a |
-| resnet18-b1 | torch-tensorrt | n/a | 4629.9 | 1010.1 | n/a |
-| resnet18-b1 | jax | 598.7 | 3.9 | 1097.0 | n/a |
-| resnet18-b8 | torch-tensorrt | n/a | 4793.9 | 2027.1 | n/a |
-| resnet18-b8 | jax | 912.6 | 4.4 | 2277.3 | n/a |
-| smollm2-135m | torch-tensorrt | n/a | 22029.7 | 3751.1 | n/a |
-| smollm2-135m | jax | 10605.3 | 18.1 | 2647.8 | n/a |
-| tiny-gpt2 | torch-tensorrt | n/a | 1776.2 | 1393.5 | n/a |
-| tiny-gpt2 | jax | 1147.7 | 1.6 | 88.6 | n/a |
-| vit-tiny | torch-tensorrt | n/a | 7839.8 | 1062.7 | n/a |
-| vit-tiny | jax | 6408.9 | 7.6 | 736.8 | n/a |
-| vit-tiny | iree | 1680.0 | 39.5 | 24999.2 | n/a |
+| mixer_b16 | torch-compile | n/a | 1173.5 | 3128.6 | n/a |
+| mixer_b16 | torch-tensorrt | n/a | 5873.7 | 2455.0 | 11918 |
+| mixer_b16 | jax | 7314.6 | 6.9 | 2234.4 | 10237 |
+| mixer_b16 | ours | n/a | 220.3 | 3814.5 | n/a |
+| resnet18-b1 | torch-compile | n/a | 1044.2 | 1078.7 | 1745 |
+| resnet18-b1 | torch-tensorrt | n/a | 4705.5 | 995.7 | 7847 |
+| resnet18-b1 | jax | 581.8 | 3.9 | 1097.7 | 848 |
+| resnet18-b1 | ours | n/a | 125.7 | 713.3 | -67 |
+| resnet18-b8 | torch-compile | n/a | 1065.1 | 2199.9 | 18768 |
+| resnet18-b8 | torch-tensorrt | n/a | 4678.3 | 2029.7 | 20700 |
+| resnet18-b8 | jax | 942.3 | 4.3 | 2270.2 | n/a |
+| resnet18-b8 | ours | n/a | 146.0 | 2703.8 | n/a |
+| smollm2-135m | torch-compile | n/a | 3912.7 | 5815.5 | 396 |
+| smollm2-135m | torch-tensorrt | n/a | 22058.0 | 3739.2 | 2034 |
+| smollm2-135m | jax | 10672.9 | 18.6 | 2666.1 | 871 |
+| smollm2-135m | ours | n/a | 509.6 | 4079.6 | -3 |
+| tiny-gpt2 | torch-compile | n/a | 1178.5 | 407.3 | 591 |
+| tiny-gpt2 | torch-tensorrt | n/a | 1834.1 | 1381.1 | 6350 |
+| tiny-gpt2 | jax | 1145.4 | 1.6 | 89.7 | 445 |
+| tiny-gpt2 | ours | n/a | 103.4 | 209.5 | -270 |
+| vit-tiny | torch-compile | n/a | 1679.8 | 2022.4 | 929 |
+| vit-tiny | torch-tensorrt | n/a | 7721.6 | 1059.7 | 2880 |
+| vit-tiny | jax | 6238.2 | 7.1 | 723.1 | 2058 |
+| vit-tiny | iree | 1679.1 | 39.5 | 24959.6 | n/a |
+| vit-tiny | ours | n/a | 166.9 | 1653.7 | 22 |
 
 ## Dynamic sequence length (median steady_us per length)
 

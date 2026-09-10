@@ -16,8 +16,8 @@ run_gpt2() {
   "$RUN_PYPY" $jitflags "$APP/gpt2.py" "$weights" "$ITERS" "$WARMUP"
 }
 run_resnet() {
-  local jitflags=$1 weights=$2
-  "$RUN_PYPY" $jitflags "$APP/resnet.py" "$weights" "$ITERS" "$WARMUP" 1
+  local jitflags=$1 weights=$2 batch=${3:-1}
+  "$RUN_PYPY" $jitflags "$APP/resnet.py" "$weights" "$ITERS" "$WARMUP" "$batch"
 }
 
 # One ablation row, to both writers: exp variant model round steady diff note
@@ -75,7 +75,25 @@ exp_precision() {
   done
 }
 
-ALL_EXPERIMENTS="fusion flat_block budget_mb precision"
+exp_tf32() {
+  for batch in 8 1; do
+    for tf32 in 1 0; do
+      variant=tf32; [ "$tf32" = 0 ] && variant=fp32
+      for round in $(seq "$ROUNDS"); do
+        out=$(RTENSOR_TF32=$tf32 run_resnet "$JIT_FLAGS" "$WEIGHTS/resnet18" "$batch")
+        torch_tf32=1; [ "$tf32" = 0 ] && torch_tf32=0
+        tdiff=$(TORCH_CUDNN_TF32=$torch_tf32 "$TORCH_PYTHON" "$APP/resnet_torch.py" eager "$WEIGHTS/resnet18" "$ITERS" "$WARMUP" "$batch" 2>/dev/null)
+        ab_row tf32 "$variant" "resnet18-b$batch" "$round" "$(steady_of "$out")" "$(diff_of "$tdiff")" ""
+      done
+    done
+  done
+  for round in $(seq "$ROUNDS"); do
+    out=$(TORCH_CUDNN_TF32=0 "$TORCH_PYTHON" "$APP/resnet_torch.py" compile "$WEIGHTS/resnet18" "$ITERS" "$WARMUP" 8 2>/dev/null)
+    ab_row tf32 "torch-fp32" "resnet18-b8" "$round" "$(steady_of "$out")" "$(diff_of "$out")" ""
+  done
+}
+
+ALL_EXPERIMENTS="fusion flat_block budget_mb precision tf32"
 EXPERIMENTS=${EXPERIMENTS:-}
 if [ "$#" -gt 0 ]; then EXPERIMENTS="$*"; fi
 EXPERIMENTS=${EXPERIMENTS:-$ALL_EXPERIMENTS}

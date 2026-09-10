@@ -323,6 +323,24 @@ label table in `plot.py`. The two implementations still have to be written
 separately - `benchmark/bench/` for the RPython side, `benchmark/torch_bench.py`
 for the baseline - which is the comparison the harness exists to make.
 
+## Implementation size
+
+`bench.sh size` counts non-blank, non-comment lines per component and writes
+`$OUT/figures/impl_size.tex`:
+
+| component | lines |
+|---|---|
+| Triton codegen | 798 |
+| kernel cache/launch | 281 |
+| device runtime | 1370 |
+| tensor ops | 1469 |
+| JIT fusion pass | 275 |
+| app-level module | 433 |
+| Python library | 539 |
+| rpython/metatensor tests | 1529 |
+| pypy/module/_metatensor tests | 691 |
+| **total (impl)** | **5165** |
+
 ## Result files
 
 Each stage appends to its tsv as before, and every measurement also lands in

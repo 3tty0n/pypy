@@ -1,5 +1,5 @@
 host          luchkylilac
-date          2026-09-10T17:46:21+09:00
+date          2026-09-10T21:54:11+09:00
 gpu           NVIDIA GeForce RTX 3090
 gpu_memory    24576 MiB
 compute_cap   86
@@ -22,4 +22,4 @@ iters         200
 rounds        3
 budget_mb     8
 jit_flags     --jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000
-commit        382c4f554e
+commit        b37bad9100

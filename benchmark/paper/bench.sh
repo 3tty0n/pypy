@@ -2,7 +2,7 @@
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 ALL_MODELS="distilgpt2 tiny-gpt2 smollm2-135m bert-tiny bert-mini resnet18-b1 resnet18-b8 mixer_b16 vit-tiny"
-ALL_EXPERIMENTS="fusion flat_block budget_mb precision"
+ALL_EXPERIMENTS="fusion flat_block budget_mb precision tf32"
 
 usage() {
   cat <<EOF
@@ -27,6 +27,7 @@ commands:
   gap [MODEL...]         launches, kernel granularity and GPU utilisation per
                          system, into \$OUT/gap.tsv (needs nsys)
   summarize              render \$OUT/summary.md from the tsv files
+  size                   render \$OUT/figures/impl_size.tex, print the table
   check [GROUP...]       smallest run that exercises every mode; groups are
                          prereq micro dtypes torch baselines models ablation
                          dynamic report
@@ -123,6 +124,11 @@ run_cmd() {
     summarize)
       source "$HERE/config.sh"
       python3 "$HERE/summarize.py" "$OUT"
+      ;;
+    size)
+      source "$HERE/config.sh"
+      mkdir -p "$OUT/figures"
+      "${RTENSOR_PYTHON:-python3}" "$HERE/impl_size.py" --tex "$OUT/figures/impl_size.tex"
       ;;
     check)
       bash "$HERE/check.sh" "$@"

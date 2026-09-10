@@ -1,6 +1,12 @@
+import os
+
 import torch
 
 import torch_common
+
+if os.environ.get('TORCH_CUDNN_TF32') == '0':
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cuda.matmul.allow_tf32 = False
 
 
 def main():

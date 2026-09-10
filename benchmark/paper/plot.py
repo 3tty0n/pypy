@@ -1117,8 +1117,93 @@ def fig_compare_dynamic(out, args):
     return fig, "compare_dynamic"
 
 
+def fig_integration(out, args):
+    """Language-integration cost: the five control-flow micro variants (guard,
+    force, value guard, exception, side effect) at k=4 n=1M float64, one row
+    per system.  torch's graphs/breaks land in the launches_per_iter/graphs
+    tsv columns (see the README note on micro.tsv's shifted torch columns),
+    read here by that same shift rather than by their header name."""
+    rows = read_tsv(os.path.join(out, "micro.tsv"))
+    variants, k, n = [1, 2, 3, 4, 5], 4, 1000000
+    dtype_of = lambda r: r.get("breaks") or r.get("graphs") or "float64"
+    g = collections.defaultdict(lambda: collections.defaultdict(list))
+    for r in rows:
+        try:
+            v, rk, rn = int(r["variant"]), int(r["k"]), int(r["n"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if v in variants and rk == k and rn == n and dtype_of(r) == "float64":
+            g[v][r["mode"]].append(r)
+    if not g:
+        return None
+
+    def fnum(recs, field):
+        xs = [float(x[field]) for x in recs
+              if x.get(field) not in (None, "", "-1")]
+        return statistics.median(xs) if xs else None
+
+    table, bars = [], []
+    for v in variants:
+        m = g.get(v, {})
+        ours_us = fnum(m.get("fused", []), "steady_us")
+        ours_launches = fnum(m.get("fused", []), "launches_per_iter")
+        tc_us = fnum(m.get("torch-compile", []), "steady_us")
+        tc_graphs = fnum(m.get("torch-compile", []), "launches_per_iter")
+        tc_breaks = fnum(m.get("torch-compile", []), "graphs")
+        eager_us = fnum(m.get("torch-eager", []), "steady_us")
+        jax_us = fnum(m.get("jax", []), "steady_us")
+        ratio = tc_us / ours_us if tc_us and ours_us else None
+        label = VARIANT_LABEL.get(v, "v%d" % v)
+        table.append([
+            label,
+            "%.1f" % ours_us if ours_us else "n/a",
+            "%.2f" % ours_launches if ours_launches is not None else "n/a",
+            "%.1f" % tc_us if tc_us else "n/a",
+            "%d" % tc_graphs if tc_graphs is not None else "n/a",
+            "%d" % tc_breaks if tc_breaks is not None else "n/a",
+            "%.1f" % eager_us if eager_us else "n/a",
+            "%.1f" % jax_us if jax_us else "n/a",
+            "%.2f" % ratio if ratio else "n/a",
+        ])
+        bars.append((label, {"ours": ours_us, "torch-compile": tc_us,
+                             "torch-eager": eager_us, "jax": jax_us}))
+
+    systems = [s for s in ["ours", "torch-compile", "torch-eager", "jax"]
+               if any(b[1].get(s) for b in bars)]
+    h = 0.8 / len(systems)
+    fig, ax = plt.subplots(figsize=(args.width, 0.42 * len(bars) + 0.8))
+    y = list(range(len(bars)))
+    for si_, s in enumerate(systems):
+        off = (si_ - (len(systems) - 1) / 2) * h
+        vals = [b[1].get(s) or 0 for b in bars]
+        ax.barh([yv + off for yv in y], vals, height=h * 0.88,
+                color=SERIES[si_ % len(SERIES)], linewidth=0,
+                hatch=HATCH[si_ % len(HATCH)] if args.texture else None,
+                label=SYSTEM_LABEL.get(s, s))
+    ax.set_yticks(y, [b[0] for b in bars])
+    ax.set_xlabel("steady-state time per iteration (µs)")
+    ax.xaxis.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    despine(ax, keep=("left",))
+    ax.tick_params(axis="y", length=0)
+    ax.legend(loc="lower right")
+    if args.titles:
+        ax.set_title("Language integration cost")
+
+    write_table(os.path.join(args.outdir, "integration.tex"),
+                "control-flow variants at k=4 n=1M float64: steady us, "
+                "MetaTensor launches/iter, torch.compile graphs/breaks, "
+                "ratio torch.compile/ours",
+                ["variant", "MetaTensor us", "launches/iter",
+                 "torch.compile us", "graphs", "breaks", "eager us",
+                 "JAX us", "compile/ours"],
+                table)
+    return fig, "integration"
+
+
 FIGURES = collections.OrderedDict([
     ("micro_speedup", fig_micro_speedup),
+    ("integration", fig_integration),
     ("fusion", fig_fusion),
     ("models", fig_models),
     ("dynamic", fig_dynamic),

@@ -114,46 +114,46 @@ TF train n=25.6k & torch.compile & n/a & n/a & 3191 & n/a \\
 TF train n=25.6k & Torch-TensorRT & n/a & 2363 & 4072 & n/a \\
 TF train n=25.6k & JAX/XLA & 4325 & 7 & 1493 & n/a \\
 TF train n=191.5k & torch.compile & n/a & n/a & 78479 & n/a \\
-distilgpt2 & torch.compile & n/a & n/a & 1324 & n/a \\
-distilgpt2 & Torch-TensorRT & n/a & 2857 & 3779 & n/a \\
-distilgpt2 & JAX/XLA & 7211 & 5 & 1002 & n/a \\
-distilgpt2 & MetaTensor & n/a & n/a & 1374 & n/a \\
-tiny-gpt2 & torch.compile & n/a & n/a & 418 & n/a \\
-tiny-gpt2 & Torch-TensorRT & n/a & 1776 & 1394 & n/a \\
-tiny-gpt2 & JAX/XLA & 1148 & 2 & 89 & n/a \\
-tiny-gpt2 & MetaTensor & n/a & n/a & 196 & n/a \\
-smollm2-135m & torch.compile & n/a & n/a & 5199 & n/a \\
-smollm2-135m & Torch-TensorRT & n/a & 22030 & 3751 & n/a \\
-smollm2-135m & JAX/XLA & 10605 & 18 & 2648 & n/a \\
-smollm2-135m & MetaTensor & n/a & n/a & 4062 & n/a \\
-bert-tiny & torch.compile & n/a & n/a & 532 & n/a \\
-bert-tiny & Torch-TensorRT & n/a & 4082 & 436 & n/a \\
-bert-tiny & JAX/XLA & 5942 & 2 & 111 & n/a \\
-bert-tiny & MetaTensor & n/a & n/a & 392 & n/a \\
-bert-mini & torch.compile & n/a & n/a & 778 & n/a \\
-bert-mini & Torch-TensorRT & n/a & 4945 & 667 & n/a \\
-bert-mini & JAX/XLA & 7141 & 3 & 242 & n/a \\
-bert-mini & IREE & 1006 & 20 & 3618 & n/a \\
-bert-mini & MetaTensor & n/a & n/a & 672 & n/a \\
-resnet18-b1 & torch.compile & n/a & n/a & 1058 & n/a \\
-resnet18-b1 & Torch-TensorRT & n/a & 4630 & 1010 & n/a \\
-resnet18-b1 & JAX/XLA & 599 & 4 & 1097 & n/a \\
-resnet18-b1 & MetaTensor & n/a & n/a & 766 & n/a \\
-resnet18-b8 & torch.compile & n/a & n/a & 2187 & n/a \\
-resnet18-b8 & Torch-TensorRT & n/a & 4794 & 2027 & n/a \\
-resnet18-b8 & JAX/XLA & 913 & 4 & 2277 & n/a \\
-resnet18-b8 & MetaTensor & n/a & n/a & 3194 & n/a \\
-mixer\_b16 & torch.compile & n/a & n/a & 3128 & n/a \\
-mixer\_b16 & Torch-TensorRT & n/a & 5627 & 2465 & n/a \\
-mixer\_b16 & JAX/XLA & 7306 & 7 & 2233 & n/a \\
-mixer\_b16 & MetaTensor & n/a & n/a & 3802 & n/a \\
-vit-tiny & torch.compile & n/a & n/a & 2148 & n/a \\
-vit-tiny & Torch-TensorRT & n/a & 7840 & 1063 & n/a \\
-vit-tiny & JAX/XLA & 6409 & 8 & 737 & n/a \\
-vit-tiny & IREE & 1680 & 40 & 24999 & n/a \\
-vit-tiny & MetaTensor & n/a & n/a & 1671 & n/a \\
 TF train n=256k & Torch-TensorRT & n/a & 2498 & 135812 & n/a \\
 TF train n=256k & JAX/XLA & 4894 & 99 & 74368 & n/a \\
+distilgpt2 & torch.compile & n/a & 1547 & 1348 & 1032 \\
+distilgpt2 & Torch-TensorRT & n/a & 2844 & 3665 & n/a \\
+distilgpt2 & JAX/XLA & 7172 & 5 & 1000 & 4096 \\
+distilgpt2 & MetaTensor & n/a & 558 & 1377 & 318 \\
+tiny-gpt2 & torch.compile & n/a & 1178 & 407 & 591 \\
+tiny-gpt2 & Torch-TensorRT & n/a & 1834 & 1381 & 6350 \\
+tiny-gpt2 & JAX/XLA & 1145 & 2 & 90 & 445 \\
+tiny-gpt2 & MetaTensor & n/a & 103 & 210 & -270 \\
+smollm2-135m & torch.compile & n/a & 3913 & 5816 & 396 \\
+smollm2-135m & Torch-TensorRT & n/a & 22058 & 3739 & 2034 \\
+smollm2-135m & JAX/XLA & 10673 & 19 & 2666 & 871 \\
+smollm2-135m & MetaTensor & n/a & 510 & 4080 & -3 \\
+bert-tiny & torch.compile & n/a & 1110 & 523 & 1854 \\
+bert-tiny & Torch-TensorRT & n/a & 4196 & 436 & 6468 \\
+bert-tiny & JAX/XLA & 5809 & 2 & 111 & 5964 \\
+bert-tiny & MetaTensor & n/a & 116 & 408 & 29 \\
+bert-mini & torch.compile & n/a & 1279 & 805 & 1237 \\
+bert-mini & Torch-TensorRT & n/a & 4856 & 659 & 4299 \\
+bert-mini & JAX/XLA & 6958 & 3 & 242 & 4503 \\
+bert-mini & IREE & 997 & 20 & 3639 & n/a \\
+bert-mini & MetaTensor & n/a & 186 & 653 & 89 \\
+resnet18-b1 & torch.compile & n/a & 1044 & 1079 & 1745 \\
+resnet18-b1 & Torch-TensorRT & n/a & 4706 & 996 & 7847 \\
+resnet18-b1 & JAX/XLA & 582 & 4 & 1098 & 848 \\
+resnet18-b1 & MetaTensor & n/a & 126 & 713 & -67 \\
+resnet18-b8 & torch.compile & n/a & 1065 & 2200 & 18768 \\
+resnet18-b8 & Torch-TensorRT & n/a & 4678 & 2030 & 20700 \\
+resnet18-b8 & JAX/XLA & 942 & 4 & 2270 & n/a \\
+resnet18-b8 & MetaTensor & n/a & 146 & 2704 & n/a \\
+mixer\_b16 & torch.compile & n/a & 1174 & 3129 & n/a \\
+mixer\_b16 & Torch-TensorRT & n/a & 5874 & 2455 & 11918 \\
+mixer\_b16 & JAX/XLA & 7315 & 7 & 2234 & 10237 \\
+mixer\_b16 & MetaTensor & n/a & 220 & 3814 & n/a \\
+vit-tiny & torch.compile & n/a & 1680 & 2022 & 929 \\
+vit-tiny & Torch-TensorRT & n/a & 7722 & 1060 & 2880 \\
+vit-tiny & JAX/XLA & 6238 & 7 & 723 & 2058 \\
+vit-tiny & IREE & 1679 & 40 & 24960 & n/a \\
+vit-tiny & MetaTensor & n/a & 167 & 1654 & 22 \\
 \bottomrule
 \end{tabular}
 % median compile / first-run cost and break-even iteration count against torch eager
