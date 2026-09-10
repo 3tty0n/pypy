@@ -2,23 +2,23 @@
 \toprule
 experiment & model & setting & us & range \\
 \midrule
-budget mb & distilgpt2 & 8 & 1368 & 1364-1381 \\
-budget mb & distilgpt2 & 64 & 1378 & 1369-1384 \\
-flat block & distilgpt2 & 256 & 1332 & 1329-1337 \\
-flat block & distilgpt2 & 4096 & 1383 & 1374-1386 \\
-flat block & resnet18 & 256 & 680 & 679-705 \\
-flat block & resnet18 & 4096 & 743 & 741-744 \\
-fusion & distilgpt2 & off & 2028 & 2007-2041 \\
-fusion & distilgpt2 & on & 1389 & 1361-1394 \\
-precision & distilgpt2 & float16 & 961 & 945-976 \\
-precision & distilgpt2 & float32 & 1374 & 1368-1385 \\
-precision & smollm2-135m & float16 & 2216 & 2199-2244 \\
-precision & smollm2-135m & float32 & 4103 & 4093-4117 \\
-tf32 & resnet18-b1 & fp32 & 777 & 772-782 \\
-tf32 & resnet18-b1 & tf32 & 714 & 704-714 \\
-tf32 & resnet18-b8 & fp32 & 3189 & 3189-3196 \\
-tf32 & resnet18-b8 & tf32 & 2718 & 2703-2748 \\
-tf32 & resnet18-b8 & torch-fp32 & 3066 & 3051-3070 \\
+budget mb & distilgpt2 & 8 & 1350 & 1341-1355 \\
+budget mb & distilgpt2 & 64 & 1355 & 1342-1360 \\
+flat block & distilgpt2 & 256 & 1318 & 1311-1323 \\
+flat block & distilgpt2 & 4096 & 1344 & 1344-1350 \\
+flat block & resnet18 & 256 & 624 & 623-630 \\
+flat block & resnet18 & 4096 & 688 & 682-688 \\
+fusion & distilgpt2 & off & 2021 & 2010-2032 \\
+fusion & distilgpt2 & on & 1360 & 1348-1366 \\
+precision & distilgpt2 & float16 & 917 & 915-1019 \\
+precision & distilgpt2 & float32 & 1362 & 1339-1363 \\
+precision & smollm2-135m & float16 & 2179 & 2161-2184 \\
+precision & smollm2-135m & float32 & 4086 & 4080-4094 \\
+tf32 & resnet18-b1 & fp32 & 773 & 761-775 \\
+tf32 & resnet18-b1 & tf32 & 714 & 706-714 \\
+tf32 & resnet18-b8 & fp32 & 3209 & 3195-3210 \\
+tf32 & resnet18-b8 & tf32 & 2736 & 2731-2740 \\
+tf32 & resnet18-b8 & torch-fp32 & 3060 & 3051-3078 \\
 \bottomrule
 \end{tabular}
 % median us per iteration over the rounds, with the observed range
