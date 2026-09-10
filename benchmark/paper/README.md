@@ -243,63 +243,75 @@ Known comparability limits:
 
 ### Where the JAX gap comes from
 
-On the small transformers JAX/XLA is 1.4 to 2.6 times faster than MetaTensor,
+On the small transformers JAX/XLA is 1.3 to 2.7 times faster than MetaTensor,
 and `bench.sh gap` says how much of that is dispatch and how much is the
 kernels themselves. Every system is measured the same way: the steady-state
 wall time from a plain run, and per-forward launch counts and GPU busy time
 from two nsys CUDA traces at different iteration counts, differenced so that
 setup, upload, warm-up and compilation cancel. `--cuda-graph-trace=node` is
 required, or the kernels XLA and Inductor launch from inside a CUDA graph are
-invisible. On a 3090 (`results/luchkylilac-rtx3090/paper-2026-09-10`, after the
-fusion pass folds epilogues around a GEMM into the cuBLAS call):
+invisible. On a 3090, after the batched attention products moved to a tuned
+cuBLASLt algorithm:
 
     model       system         us/iter  launches  kernels  GPU us  util   mix
-    tiny-gpt2   MetaTensor       238.6      26.0       13    79.7  0.33   gemm=13 gen=13
-    tiny-gpt2   torch.compile    408.0      31.0       16    71.9  0.18   gemm=9 gen=20 other=2
-    tiny-gpt2   JAX/XLA           90.0      30.0       19    54.6  0.61   gemm=9 gen=21
-    bert-tiny   MetaTensor       280.6      30.0       13   192.7  0.69   gemm=16 gen=14
-    bert-tiny   torch.compile    530.4      36.0       12   201.6  0.38   gemm=20 gen=16
-    bert-tiny   JAX/XLA          111.4      32.0       19   112.2  1.01   gemm=14 gen=18
-    bert-mini   MetaTensor       495.9      67.0       15   379.4  0.77   gemm=43 gen=24
-    bert-mini   torch.compile    859.1      89.0       15   395.0  0.46   gemm=59 gen=30
-    bert-mini   JAX/XLA          241.8      58.0       19   244.2  1.01   gemm=26 gen=32
-    distilgpt2  MetaTensor      1361.1      99.0       15  1257.4  0.92   copy=6 gemm=55 gen=38
-    distilgpt2  torch.compile   1339.3      98.0       17  1188.3  0.89   copy=6 gemm=43 gen=37 other=12
-    distilgpt2  JAX/XLA         1000.7     111.0       21  1011.6  1.01   copy=6 gemm=43 gen=62
-    vit-tiny    MetaTensor      1267.5     175.0       16  1191.8  0.94   gemm=99 gen=76
-    vit-tiny    torch.compile   2042.7     248.0       21  1338.0  0.65   gemm=160 gen=87 other=1
-    vit-tiny    JAX/XLA          748.6     171.0       17   746.4  1.00   gemm=73 gen=98
+    tiny-gpt2   MetaTensor       238.1      26.0       13    82.0  0.34   gemm=13 gen=13
+    tiny-gpt2   torch.compile    413.9      31.0       16    72.0  0.17   gemm=9 gen=20 other=2
+    tiny-gpt2   JAX/XLA           89.3      30.0       19    54.3  0.61   gemm=9 gen=21
+    bert-mini   MetaTensor       432.9      67.0       14   320.4  0.74   gemm=43 gen=24
+    bert-mini   torch.compile    911.2      89.0       15   395.0  0.43   gemm=59 gen=30
+    bert-mini   JAX/XLA          243.0      58.0       19   244.1  1.00   gemm=26 gen=32
+    vit-tiny    MetaTensor       985.7     175.0       15   868.2  0.88   gemm=99 gen=76
+    vit-tiny    torch.compile   2380.0     248.0       21  1303.6  0.55   gemm=160 gen=87 other=1
+    vit-tiny    JAX/XLA          738.4     171.0       17   748.9  1.01   gemm=73 gen=98
 
 `launches` is per forward and counts everything nsys sees, so it is larger than
 `_metatensor.launch_count()`, which counts our own kernels but not the cuBLAS
 GEMMs. `util` is GPU busy over wall time; JAX sits at 1.00 because its
 dispatch is asynchronous and the queue never empties, so a value near 1.0 is
-the ceiling and the small excess is measurement slack.
+the ceiling and the small excess is measurement slack. The `us/iter` column
+comes from the gap harness, which runs the three systems back to back on one
+GPU; a model run on its own is 5-15% faster (bert-mini 401, vit-tiny 974,
+tiny-gpt2 179) and `models.tsv` is the number to quote.
 
-Fusing the epilogue into the GEMM closed most of the kernel-splitting half of
-the old gap. MetaTensor now launches *fewer* generated kernels than JAX/XLA on
-every model here (14 vs 18 on bert-tiny, 24 vs 32 on bert-mini, 38 vs 62 on
-distilgpt2, 76 vs 98 on vit-tiny, 13 vs 21 on tiny-gpt2) - a reversal of the
-1.6-1.9x more it used to launch. GPU busy time closed with it: MetaTensor now
-runs 1.2-1.7x longer than JAX on the GPU (193 vs 112 us on bert-tiny, 379 vs
-244 on bert-mini, 1192 vs 746 on vit-tiny), down from 2.0-2.4x.
+`gemm=43` on bert-mini is not 43 matrix products. Attributing the trace kernel
+by kernel gives 26 GEMM calls - the same 26 XLA issues, and exactly what the
+model asks for: four layers of (qkv, attention scores, attention context,
+output projection, mlp fc, mlp projection) plus the mlm dense and the vocab
+projection - and 17 `cublasLt::splitKreduce_kernel` launches, the second half
+of the split-K algorithms cuBLAS picks for the skinny 64-row shapes. Those are
+cuBLAS internals, not a fusion boundary we chose, and forcing them off (by
+handing cuBLAS a zero-size workspace) makes the GEMMs themselves slower, so
+they stay. The same holds for vit-tiny: 99 = 74 calls + 25 reductions.
 
-What is left is not the epilogue anymore. First, GEMM count: MetaTensor still
-splits matmuls that XLA keeps whole (43 GEMM launches against JAX's 26 on
-bert-mini, 99 against 73 on vit-tiny, 55 against 43 on distilgpt2), so total
-launches per forward land at or above JAX's even where generated-kernel
-launches are now below it (67 vs 58 on bert-mini, 175 vs 171 on vit-tiny).
-Second, dispatch: MetaTensor's utilisation is still 0.33-0.94 against JAX's
-~1.00, worst exactly where GPU work is smallest - tiny-gpt2 spends 159 of 239
-us per forward not running a kernel, the same shape of cost as before, just on
-a smaller total. torch.compile pays the same tax harder still (0.18 on
-tiny-gpt2) and only catches up where GPU work dominates.
+What is left is not the GEMM count either. Fusing the epilogue into the GEMM
+closed the kernel-splitting half of the old gap, and MetaTensor now launches
+fewer generated kernels than JAX/XLA on every model here (24 vs 32 on
+bert-mini, 76 vs 98 on vit-tiny, 13 vs 21 on tiny-gpt2). What remains is GPU
+time inside the products themselves, and dispatch:
 
-One thing follows now instead of two. Epilogue fusion was the bigger lever and
-it is largely spent; batching the remaining launches - one submission per
-forward rather than one per kernel - and cutting the GEMM count to match XLA's
-fusion boundaries are what would close what is left, and neither is a
-per-kernel tuning problem anymore.
+- *Kernel choice.* `cublasSgemmStridedBatched` takes the first algorithm the
+  cuBLASLt heuristic offers, and for attention shapes that is a 128x128-tile
+  kernel that leaves the GPU almost empty - 11 us for 2 MFLOP on bert-mini's
+  4x(64x64x64), 28 us on vit-tiny's 3x(197x64x197). The list holds better
+  entries; `rt_lt_bmm` in `rpython/metatensor/cuda.c` times the candidates the
+  first time a shape appears and caches the winner with its descriptors. That
+  took bert-mini's eight attention products from 94 to 36 us of GPU time and
+  vit-tiny's twenty-four from 476 to 150, which is most of the 379 -> 320 and
+  1192 -> 868 us above. `RTENSOR_NO_CUBLASLT=1` falls back to the plain call.
+- *Dispatch.* Interposing on the driver (`RTENSOR_CUBLAS` accepts a shim, and
+  `cuLaunchKernel` is interposable with `LD_PRELOAD`) puts 89-93% of a steady
+  iteration inside a CUDA entry point: `cublasSgemm_v2` costs about 4 us of
+  host time before it has enqueued anything, `cuLaunchKernel` about 2 us on
+  this host. bert-mini and vit-tiny spend that time behind GPU work and are
+  effectively GPU-bound; tiny-gpt2, with 80 us of GPU work behind 26 calls, is
+  not - roughly 50 us of its iteration is host time in the driver and only
+  ~15 us is the interpreter and the launch helper above it. Nothing above the
+  driver is worth cutting there; the lever is fewer submissions per forward.
+
+So the two remaining levers are XLA's fusion boundaries around attention -
+which need a `tl.dot`-capable code generator, since the codegen here has none
+- and one submission per forward instead of one per kernel.
+
 
 ## Checking a setup
 
@@ -356,8 +368,10 @@ tsv files.
 
 Runtime knobs (see also `benchmark/README.md`): `RTENSOR_FLAT_BLOCK`
 (elements per block for elementwise/gather kernels, default 4096; smaller
-values trade off differently per workload, see the root README) and
-`RTENSOR_BUDGET_MB` (device GC byte threshold before a GC pass, default 8).
+values trade off differently per workload, see the root README),
+`RTENSOR_BUDGET_MB` (device GC byte threshold before a GC pass, default 8) and
+`RTENSOR_NO_CUBLASLT` (set to anything to keep batched matmuls on plain
+`cublasSgemmStridedBatched` instead of the algorithm tuned per shape).
 
 ## Cloud / Docker
 

@@ -1753,6 +1753,25 @@ def test_matmul_float32_matches_float64():
         assert abs(hg[i] - hr[i]) <= 1e-04 * (abs(hr[i]) + 1.0)
 
 
+def _attn_pair(dt):
+    """Strided attention on a fused qkv buffer, the shape the models use."""
+    heads, rows, dh = 3, 4, 2
+    d = heads * dh
+    qkv = _dtype_matrix(rows, 3 * d, 3, dt)
+    f = nn.Tensor(qkv)
+    s = f.attn_scores(f, heads, rows, dh, 3 * d, 3 * d, 0, d)
+    return device.host(s.attn_context(f, heads, rows, dh, 3 * d, 2 * d).t), rows * d
+
+
+def test_attn_float32_matches_float64():
+    # float32 batched attention takes the tuned cuBLASLt path, float64 does not.
+    kernels.init_dtype(core.F32)
+    hr, n = _attn_pair(core.F64)
+    hg, _ = _attn_pair(core.F32)
+    for i in range(n):
+        assert abs(hg[i] - hr[i]) <= 1e-04 * (abs(hr[i]) + 1.0)
+
+
 def test_dtype_mismatch_raises():
     import py
     a = core.from_list([1.0, 2.0], core.F32)

@@ -4,6 +4,7 @@
 #include <string.h>
 #include <time.h>
 #include <dlfcn.h>
+#include <stdint.h>
 
 #ifndef RPY_EXPORTED
 #  define RPY_EXPORTED extern __attribute__((visibility("default")))
@@ -530,6 +531,262 @@ static void rt_set_math(long tf32)
     p_cublasSetMathMode(cublas_handle, (tf32 && tf32_env) ? RT_TF32_MATH : 0);
 }
 
+/* ==== cuBLASLt: pick the batched algorithm by measuring it, once per shape ====
+
+   cublasSgemmStridedBatched takes the first algorithm cuBLASLt's heuristic
+   offers, and for the attention shapes these models use - a handful of small
+   64x64x64 or 197x197x64 products - that is a 128x128-tile kernel that leaves
+   the GPU nearly empty: 11 us for 2 MFLOP.  The heuristic list holds better
+   entries; only measuring says which.  So the first time a shape appears its
+   candidates are timed and the winner is cached with its descriptors, and
+   every later call is one cublasLtMatmul with a fixed algorithm.  */
+
+typedef struct { unsigned long long data[8]; } rt_lt_algo;
+typedef struct {
+    rt_lt_algo algo;
+    size_t workspace;
+    int state;
+    float waves;
+    int reserved[4];
+} rt_lt_heur;
+
+#define RT_LT_TRANSA 3
+#define RT_LT_TRANSB 4
+#define RT_LT_BATCH_COUNT 5
+#define RT_LT_BATCH_STRIDE 6
+#define RT_LT_PREF_WORKSPACE 1
+#define RT_LT_R_32F 0
+#define RT_LT_COMPUTE_32F 68
+
+typedef int (*ltcreate_t)(void **);
+typedef int (*ltdesccreate_t)(void **, int compute, int scale);
+typedef int (*ltsetattr_t)(void *, int attr, const void *buf, size_t n);
+typedef int (*ltdestroy_t)(void *);
+typedef int (*ltlayout_t)(void **, int dtype, unsigned long long rows,
+                          unsigned long long cols, long ld);
+typedef int (*ltprefcreate_t)(void **);
+typedef int (*ltheur_t)(void *lt, void *op, void *a, void *b, void *c, void *d,
+                        void *pref, int requested, rt_lt_heur *results,
+                        int *returned);
+typedef int (*ltmatmul_t)(void *lt, void *op, const void *alpha,
+                          const void *A, void *La, const void *B, void *Lb,
+                          const void *beta, const void *C, void *Lc,
+                          void *D, void *Ld, const rt_lt_algo *algo,
+                          void *ws, size_t wsbytes, void *stream);
+
+static void *lt_lib, *lt_handle, *lt_ws;
+static size_t lt_ws_bytes = 8u << 20;
+static ltdesccreate_t p_ltDescCreate;
+static ltsetattr_t p_ltDescSetAttr, p_ltLayoutSetAttr, p_ltPrefSetAttr;
+static ltdestroy_t p_ltDescDestroy, p_ltLayoutDestroy, p_ltPrefDestroy;
+static ltlayout_t p_ltLayoutCreate;
+static ltprefcreate_t p_ltPrefCreate;
+static ltheur_t p_ltHeuristic;
+static ltmatmul_t p_ltMatmul;
+static int lt_inited;
+
+/* ponytail: linear scan over a handful of shapes; a hash table if a model
+   ever brings hundreds. */
+#define RT_LT_KEYS 12
+#define RT_LT_MAX 128
+typedef struct {
+    long key[RT_LT_KEYS];
+    void *op, *La, *Lb, *Lc;
+    rt_lt_algo algo;
+    int usable;
+} rt_lt_entry;
+static rt_lt_entry lt_cache[RT_LT_MAX];
+static int lt_ncache;
+
+static int rt_lt_init(void)
+{
+    const char *path;
+    char buf[512];
+    if (lt_inited) return lt_inited > 0;
+    lt_inited = -1;
+    if (getenv("RTENSOR_NO_CUBLASLT")) return 0;
+    if (!rt_cublas_init()) return 0;
+    lt_lib = dlopen("libcublasLt.so.13", RTLD_NOW | RTLD_GLOBAL);
+    if (!lt_lib) lt_lib = dlopen("libcublasLt.so.12", RTLD_NOW | RTLD_GLOBAL);
+    if (!lt_lib) lt_lib = dlopen("libcublasLt.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!lt_lib) {
+        /* the venv ships libcublasLt next to libcublas under its own name */
+        path = getenv("RTENSOR_CUBLAS");
+        if (!path) path = RTENSOR_CUBLAS_DEFAULT;
+        {
+            const char *base = strstr(path, "libcublas.");
+            if (base && (size_t)(base - path) + strlen(base) + 3 < sizeof(buf)) {
+                memcpy(buf, path, base - path);
+                snprintf(buf + (base - path), sizeof(buf) - (base - path),
+                         "libcublasLt.%s", base + strlen("libcublas."));
+                lt_lib = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
+            }
+        }
+    }
+    if (!lt_lib) return 0;
+    p_ltDescCreate = (ltdesccreate_t)dlsym(lt_lib, "cublasLtMatmulDescCreate");
+    p_ltDescSetAttr = (ltsetattr_t)dlsym(lt_lib, "cublasLtMatmulDescSetAttribute");
+    p_ltDescDestroy = (ltdestroy_t)dlsym(lt_lib, "cublasLtMatmulDescDestroy");
+    p_ltLayoutCreate = (ltlayout_t)dlsym(lt_lib, "cublasLtMatrixLayoutCreate");
+    p_ltLayoutSetAttr = (ltsetattr_t)dlsym(lt_lib, "cublasLtMatrixLayoutSetAttribute");
+    p_ltLayoutDestroy = (ltdestroy_t)dlsym(lt_lib, "cublasLtMatrixLayoutDestroy");
+    p_ltPrefCreate = (ltprefcreate_t)dlsym(lt_lib, "cublasLtMatmulPreferenceCreate");
+    p_ltPrefSetAttr = (ltsetattr_t)dlsym(lt_lib, "cublasLtMatmulPreferenceSetAttribute");
+    p_ltPrefDestroy = (ltdestroy_t)dlsym(lt_lib, "cublasLtMatmulPreferenceDestroy");
+    p_ltHeuristic = (ltheur_t)dlsym(lt_lib, "cublasLtMatmulAlgoGetHeuristic");
+    p_ltMatmul = (ltmatmul_t)dlsym(lt_lib, "cublasLtMatmul");
+    if (!p_ltDescCreate || !p_ltDescSetAttr || !p_ltLayoutCreate ||
+        !p_ltLayoutSetAttr || !p_ltPrefCreate || !p_ltPrefSetAttr ||
+        !p_ltHeuristic || !p_ltMatmul) return 0;
+    /* cublasLtCreate lives in the same library as the rest of Lt. */
+    {
+        ltcreate_t create = (ltcreate_t)dlsym(lt_lib, "cublasLtCreate");
+        if (!create || create(&lt_handle) != 0) return 0;
+    }
+    {
+        CUdeviceptr p = 0;
+        if (cuMemAlloc(&p, lt_ws_bytes) != CUDA_SUCCESS) return 0;
+        lt_ws = (void *)p;
+    }
+    lt_inited = 1;
+    return 1;
+}
+
+static void rt_lt_destroy(rt_lt_entry *e)
+{
+    if (e->op && p_ltDescDestroy) p_ltDescDestroy(e->op);
+    if (e->La && p_ltLayoutDestroy) p_ltLayoutDestroy(e->La);
+    if (e->Lb && p_ltLayoutDestroy) p_ltLayoutDestroy(e->Lb);
+    if (e->Lc && p_ltLayoutDestroy) p_ltLayoutDestroy(e->Lc);
+    e->op = e->La = e->Lb = e->Lc = 0;
+}
+
+/* Descriptors in cuBLASLt's column-major world, matching what
+   rt_cuda_bmm hands cublasSgemmStridedBatched: the first operand is our B. */
+static int rt_lt_build(rt_lt_entry *e, long batch, long rows, long inner,
+                       long cols, long ta, long tb, long lda, long ldb,
+                       long ldc, long long sa, long long sb, long long sc)
+{
+    int compute = RT_LT_COMPUTE_32F, scale = RT_LT_R_32F;
+    int opB = tb ? 1 : 0, opA = ta ? 1 : 0;
+    int32_t bc = (int32_t)batch;
+    if (p_ltDescCreate(&e->op, compute, scale) != 0) return 0;
+    if (p_ltDescSetAttr(e->op, RT_LT_TRANSA, &opB, sizeof(opB)) != 0) return 0;
+    if (p_ltDescSetAttr(e->op, RT_LT_TRANSB, &opA, sizeof(opA)) != 0) return 0;
+    if (p_ltLayoutCreate(&e->La, RT_LT_R_32F,
+                         (unsigned long long)(tb ? inner : cols),
+                         (unsigned long long)(tb ? cols : inner), ldb) != 0)
+        return 0;
+    if (p_ltLayoutCreate(&e->Lb, RT_LT_R_32F,
+                         (unsigned long long)(ta ? rows : inner),
+                         (unsigned long long)(ta ? inner : rows), lda) != 0)
+        return 0;
+    if (p_ltLayoutCreate(&e->Lc, RT_LT_R_32F, (unsigned long long)cols,
+                         (unsigned long long)rows, ldc) != 0)
+        return 0;
+    if (batch > 1) {
+        if (p_ltLayoutSetAttr(e->La, RT_LT_BATCH_COUNT, &bc, sizeof(bc)) != 0 ||
+            p_ltLayoutSetAttr(e->Lb, RT_LT_BATCH_COUNT, &bc, sizeof(bc)) != 0 ||
+            p_ltLayoutSetAttr(e->Lc, RT_LT_BATCH_COUNT, &bc, sizeof(bc)) != 0 ||
+            p_ltLayoutSetAttr(e->La, RT_LT_BATCH_STRIDE, &sb, sizeof(sb)) != 0 ||
+            p_ltLayoutSetAttr(e->Lb, RT_LT_BATCH_STRIDE, &sa, sizeof(sa)) != 0 ||
+            p_ltLayoutSetAttr(e->Lc, RT_LT_BATCH_STRIDE, &sc, sizeof(sc)) != 0)
+            return 0;
+    }
+    return 1;
+}
+
+/* Time every candidate on the real operands and keep the fastest. */
+static int rt_lt_tune(rt_lt_entry *e, const float *A, const float *B, float *C)
+{
+    rt_lt_heur res[8];
+    void *pref = 0;
+    float alpha = 1.0f, beta = 0.0f;
+    int nres = 0, i, j, best = -1;
+    double bestt = 0.0;
+    if (p_ltPrefCreate(&pref) != 0) return 0;
+    if (p_ltPrefSetAttr(pref, RT_LT_PREF_WORKSPACE, &lt_ws_bytes,
+                        sizeof(lt_ws_bytes)) != 0) {
+        p_ltPrefDestroy(pref);
+        return 0;
+    }
+    if (p_ltHeuristic(lt_handle, e->op, e->La, e->Lb, e->Lc, e->Lc, pref,
+                      8, res, &nres) != 0 || nres <= 0) {
+        p_ltPrefDestroy(pref);
+        return 0;
+    }
+    p_ltPrefDestroy(pref);
+    for (i = 0; i < nres; i++) {
+        double t0;
+        if (res[i].state != 0) continue;
+        for (j = 0; j < 3; j++)
+            if (p_ltMatmul(lt_handle, e->op, &alpha, B, e->La, A, e->Lb,
+                           &beta, C, e->Lc, C, e->Lc, &res[i].algo,
+                           lt_ws, lt_ws_bytes, 0) != 0)
+                goto next;
+        if (cuCtxSynchronize() != CUDA_SUCCESS) goto next;
+        t0 = rt_cuda_now();
+        for (j = 0; j < 20; j++)
+            p_ltMatmul(lt_handle, e->op, &alpha, B, e->La, A, e->Lb,
+                       &beta, C, e->Lc, C, e->Lc, &res[i].algo,
+                       lt_ws, lt_ws_bytes, 0);
+        cuCtxSynchronize();
+        t0 = rt_cuda_now() - t0;
+        if (best < 0 || t0 < bestt) { best = i; bestt = t0; }
+    next:;
+    }
+    if (best < 0) return 0;
+    e->algo = res[best].algo;
+    return 1;
+}
+
+static rt_lt_entry *rt_lt_lookup(const long *key, long batch, long rows,
+                                 long inner, long cols, long ta, long tb,
+                                 long lda, long ldb, long ldc, long long sa,
+                                 long long sb, long long sc,
+                                 const float *A, const float *B, float *C)
+{
+    int i, k;
+    rt_lt_entry *e;
+    for (i = 0; i < lt_ncache; i++) {
+        for (k = 0; k < RT_LT_KEYS; k++)
+            if (lt_cache[i].key[k] != key[k]) break;
+        if (k == RT_LT_KEYS) return &lt_cache[i];
+    }
+    if (lt_ncache >= RT_LT_MAX) return 0;
+    e = &lt_cache[lt_ncache++];
+    for (k = 0; k < RT_LT_KEYS; k++) e->key[k] = key[k];
+    e->usable = 0;
+    if (rt_lt_build(e, batch, rows, inner, cols, ta, tb, lda, ldb, ldc,
+                    sa, sb, sc) && rt_lt_tune(e, A, B, C))
+        e->usable = 1;
+    else
+        rt_lt_destroy(e);
+    return e;
+}
+
+/* Returns 0 when Lt cannot serve this call and the legacy path should. */
+static int rt_lt_bmm(long a, long b, long c, long batch, long rows,
+                     long inner, long cols, long ta, long tb, long lda,
+                     long ldb, long ldc, long long sa, long long sb,
+                     long long sc)
+{
+    long key[RT_LT_KEYS];
+    rt_lt_entry *e;
+    float alpha = 1.0f, beta = 0.0f;
+    if (!rt_lt_init()) return 0;
+    key[0] = batch; key[1] = rows; key[2] = inner; key[3] = cols;
+    key[4] = ta; key[5] = tb; key[6] = lda; key[7] = ldb; key[8] = ldc;
+    key[9] = (long)sa; key[10] = (long)sb; key[11] = (long)sc;
+    e = rt_lt_lookup(key, batch, rows, inner, cols, ta, tb, lda, ldb, ldc,
+                     sa, sb, sc, (const float *)a, (const float *)b,
+                     (float *)c);
+    if (!e || !e->usable) return 0;
+    return p_ltMatmul(lt_handle, e->op, &alpha, (const void *)b, e->La,
+                      (const void *)a, e->Lb, &beta, (const void *)c, e->Lc,
+                      (void *)c, e->Lc, &e->algo, lt_ws, lt_ws_bytes, 0) == 0;
+}
+
 /* ==== cuBLAS gemm ==== */
 
 RPY_EXPORTED int rt_cuda_matmul(long a, long b, long c, long rows,
@@ -580,7 +837,12 @@ RPY_EXPORTED int rt_cuda_bmm(long a, long b, long c, long batch, long rows,
     long long strc = sc > 0 ? (long long)sc : (long long)(rows * cols);
     if (!rt_cublas_init()) return 0;
     if (dtype == 1) {
+        if (rt_lt_bmm(a, b, c, batch, rows, inner, cols, ta, tb, lda, ldb,
+                      ldc, stra, strb, strc))
+            return 1;
         if (!p_cublasSgemmStridedBatched) return 0;
+        /* a preceding convolution may have left the handle in TF32 */
+        rt_set_math(0);
         return p_cublasSgemmStridedBatched(
             cublas_handle, tb ? 1 : 0, ta ? 1 : 0,
             (int)cols, (int)rows, (int)inner, &alphaf,
