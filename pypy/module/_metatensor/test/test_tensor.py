@@ -398,3 +398,7 @@ class AppTestTensor(object):
         import _metatensor
         assert isinstance(_metatensor.mem_total(), int)
         assert _metatensor.mem_total() >= 0
+
+    def test_alloc_failed(self):
+        import _metatensor
+        assert _metatensor.alloc_failed() is False

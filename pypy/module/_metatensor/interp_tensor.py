@@ -471,3 +471,7 @@ def launch_count(space):
 
 def mem_total(space):
     return space.newint(device.mem_total())
+
+
+def alloc_failed(space):
+    return space.newbool(device.alloc_failed())

@@ -10,6 +10,7 @@ class Module(MixedModule):
         'kernel_count': 'interp_tensor.kernel_count',
         'launch_count': 'interp_tensor.launch_count',
         'mem_total': 'interp_tensor.mem_total',
+        'alloc_failed': 'interp_tensor.alloc_failed',
     }
 
     appleveldefs = {

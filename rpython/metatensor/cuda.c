@@ -192,17 +192,23 @@ static void push(buf_t **arr, long *n, long *cap, CUdeviceptr p, long size)
     (*n)++;
 }
 
+static int fell_back_to_cpu;
+
 static long alloc_failed(long nbytes)
 {
-    static int warned;
-    if (!warned) {
+    if (!fell_back_to_cpu) {
         const char *nm = 0;
         cuGetErrorName(rt_last_err, &nm);
-        warned = 1;
         fprintf(stderr, "metatensor: cuMemAlloc(%ld) failed with %ld MB live (%s), falling back to CPU\n",
                 nbytes, live_bytes >> 20, nm ? nm : "?");
     }
+    fell_back_to_cpu = 1;
     return 0;
+}
+
+RPY_EXPORTED long rt_cuda_alloc_failed(void)
+{
+    return fell_back_to_cpu;
 }
 
 RPY_EXPORTED long rt_cuda_alloc(long nbytes, long zero)

@@ -66,6 +66,7 @@ RPY_EXTERN void rt_cuda_set_budget(long bytes);
 RPY_EXTERN long rt_cuda_mem_total(void);
 RPY_EXTERN long rt_cuda_live_bytes(void);
 RPY_EXTERN long rt_cuda_launch_count(void);
+RPY_EXTERN long rt_cuda_alloc_failed(void);
 RPY_EXTERN int rt_cuda_needs_gc(long nbytes);
 RPY_EXTERN int rt_cuda_has_free(long nbytes);
 RPY_EXTERN void rt_cuda_sync(void);
@@ -201,12 +202,20 @@ rt_cuda_launch_count = rffi.llexternal('rt_cuda_launch_count', [],
                                        lltype.Signed, compilation_info=eci,
                                        releasegil=False)
 
+rt_cuda_alloc_failed = rffi.llexternal('rt_cuda_alloc_failed', [],
+                                       lltype.Signed, compilation_info=eci,
+                                       releasegil=False)
+
 def launch_count():
     return rt_cuda_launch_count()
 
 def mem_total():
     """Bytes of device memory on GPU 0, or 0 when there is no usable GPU."""
     return rt_cuda_mem_total()
+
+def alloc_failed():
+    """True if a device allocation has fallen back to the CPU."""
+    return rt_cuda_alloc_failed() != 0
 
 class Profile(object):
     def __init__(self):
