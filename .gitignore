@@ -10,6 +10,7 @@
 *~
 __pycache__/
 *.hypothesis/
+bin/
 bin/pypy-c
 include/*.h
 include/numpy/
@@ -51,3 +52,7 @@ lib/pypy*
 pypy/doc/config/*.rst
 pypy/doc/config/*.txt
 pypy/doc/_build
+site-packages/
+
+CLAUDE.md
+AGENTS.md
