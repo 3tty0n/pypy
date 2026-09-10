@@ -50,6 +50,7 @@ set. `bench.sh all` clears `$OUT/*.tsv` first for a clean run.
     benchmark/paper/bench.sh models distilgpt2 resnet18-b1
     benchmark/paper/bench.sh ablation fusion
     benchmark/paper/bench.sh summarize
+    benchmark/paper/bench.sh gap bert-tiny           # launch/utilisation analysis
     benchmark/paper/bench.sh plot                    # figures into $OUT/figures
 
 ## Two binaries, two micro columns
@@ -90,6 +91,7 @@ two systems.
     dynamic         cost against sequence length
     precision       speedup at float64/32/16
     ablation        one runtime knob at a time
+    gap             launches and GPU utilisation per system, per model
 
 Flags: `--only NAME` (repeatable), `--format pdf,png`, `--column
 single|double` to override the per-figure default, `--texture` to hatch the
@@ -238,6 +240,63 @@ Known comparability limits:
   the Triton baseline (where it is the number of distinct kernels) report it.
 - The precision sweep (float32/float16) runs jax and triton at those dtypes
   too; IREE is float64 only there.
+
+### Where the JAX gap comes from
+
+On the small transformers JAX/XLA is two to four times faster than MetaTensor,
+and `bench.sh gap` says how much of that is dispatch and how much is the
+kernels themselves. Every system is measured the same way: the steady-state
+wall time from a plain run, and per-forward launch counts and GPU busy time
+from two nsys CUDA traces at different iteration counts, differenced so that
+setup, upload, warm-up and compilation cancel. `--cuda-graph-trace=node` is
+required, or the kernels XLA and Inductor launch from inside a CUDA graph are
+invisible. On a 3090 (`results/luchkylilac-rtx3090/paper-2026-09-10`):
+
+    model       system         us/iter  launches  kernels  GPU us  util   mix
+    tiny-gpt2   MetaTensor       254.5      29.0       13    90.1  0.35   gemm=13 gen=16
+    tiny-gpt2   torch.compile    435.0      31.0       16    71.8  0.17   gemm=9 gen=20 other=2
+    tiny-gpt2   JAX/XLA           96.0      30.0       19    54.4  0.57   gemm=9 gen=21
+    bert-tiny   MetaTensor       433.7      56.0       18   260.4  0.60   gemm=16 gen=40
+    bert-tiny   torch.compile    482.9      36.0       12   201.5  0.42   gemm=20 gen=16
+    bert-tiny   JAX/XLA          117.4      32.0       19   110.4  0.94   gemm=14 gen=18
+    bert-mini   MetaTensor       691.8     111.3       30   497.7  0.72   gemm=43 gen=68
+    bert-mini   torch.compile    783.5      89.0       15   394.7  0.50   gemm=59 gen=30
+    bert-mini   JAX/XLA          245.0      58.0       19   244.7  1.00   gemm=26 gen=32
+    distilgpt2  MetaTensor      1399.4     105.0       15  1299.6  0.93   copy=6 gemm=55 gen=44
+    distilgpt2  torch.compile   1362.6      98.0       17  1188.5  0.87   copy=6 gemm=43 gen=37 other=12
+    distilgpt2  JAX/XLA         1002.0     111.0       22  1002.6  1.00   copy=6 gemm=43 gen=62
+    vit-tiny    MetaTensor      1683.3     271.1       24  1402.0  0.83   gemm=99 gen=172
+    vit-tiny    torch.compile   2446.8     248.0       21  1319.7  0.54   gemm=160 gen=87 other=1
+    vit-tiny    JAX/XLA          740.5     171.0       17   750.8  1.01   gemm=73 gen=98
+
+`launches` is per forward and counts everything nsys sees, so it is larger than
+`_metatensor.launch_count()`, which counts our own kernels but not the cuBLAS
+GEMMs (bert-tiny: 40 plus 16). `util` is GPU busy over wall time; JAX sits at
+1.00 because its dispatch is asynchronous and the queue never empties, so a
+value near 1.0 is the ceiling and the small excess is measurement slack.
+
+The gap splits about evenly in two. Half of it is work: for the same model
+MetaTensor keeps the GPU busy 2.0-2.4x longer than JAX (260 vs 110 us on
+bert-tiny, 498 vs 245 on bert-mini, 1402 vs 751 on vit-tiny), because it
+launches 1.6-1.9x more kernels to do it. The mix says why: MetaTensor never
+fuses across a matmul boundary, so every bias, GELU and residual around a
+cuBLAS GEMM is its own Triton kernel (68 generated launches on bert-mini
+against JAX's 32), while XLA folds those epilogues into `gemm_fusion_*` and
+merges the elementwise chains between them - fewer, larger kernels, and 43
+GEMM launches against our 26 means we also split GEMMs that XLA keeps whole.
+The other half is dispatch: MetaTensor's utilisation is 0.35-0.93 against
+JAX's 1.00, and the missing wall time divided by the launch count is 1-6 us
+per launch of interpreter and JIT work between kernels. That cost is fixed per
+launch, so it is invisible on distilgpt2 (0.93 util, and the end-to-end gap
+there is only 1.4x) and dominant on tiny-gpt2, where 165 of 254 us per forward
+is spent not running a kernel. torch.compile pays the same tax harder still
+(0.17 on tiny-gpt2) and only catches up where GPU work dominates.
+
+Two things follow. Fusing the epilogue into the GEMM removes launches and GPU
+time at once, and is worth more than any per-kernel tuning at these sizes.
+Batching the remaining launches - one submission per forward rather than one
+per kernel - is what would close the dispatch half, which no amount of kernel
+work can touch.
 
 ## Checking a setup
 

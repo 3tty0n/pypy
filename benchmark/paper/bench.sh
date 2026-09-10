@@ -24,6 +24,8 @@ commands:
   ablation [EXP...]      ablations; no args = all
                          names: $ALL_EXPERIMENTS
   dynamic                dynamic sequence-length experiment
+  gap [MODEL...]         launches, kernel granularity and GPU utilisation per
+                         system, into \$OUT/gap.tsv (needs nsys)
   summarize              render \$OUT/summary.md from the tsv files
   check [GROUP...]       smallest run that exercises every mode; groups are
                          prereq micro dtypes torch baselines models ablation
@@ -109,6 +111,14 @@ run_cmd() {
       ;;
     dynamic)
       bash "$HERE/run_dynamic.sh" "$@"
+      ;;
+    gap)
+      source "$HERE/config.sh"
+      paper_setup_pypy
+      trap paper_cleanup_pypy EXIT
+      PYPY="$RUN_PYPY" WEIGHTS="$WEIGHTS" ITERS="$ITERS" WARMUP="$WARMUP" \
+        ROUNDS="$ROUNDS" JIT_FLAGS="$JIT_FLAGS" \
+        "${RTENSOR_PYTHON:-python3}" "$HERE/gap_analysis.py" "$OUT" "$@"
       ;;
     summarize)
       source "$HERE/config.sh"

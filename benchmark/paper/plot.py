@@ -74,6 +74,7 @@ SINGLE_COL, DOUBLE_COL = 3.25, 6.75   # MLSys column and text widths, inches
 # Figures whose row labels are long enough that a single column would leave no
 # room for the plot itself.  --column overrides this.
 WIDE = {"micro_speedup", "fusion", "models", "ablation", "micro_baselines",
+        "gap",
         "compare_speedup", "compare_models"}
 
 SYSTEM_LABEL = {
@@ -836,6 +837,70 @@ def fig_compile_overhead(out, args):
 
 # --- machines --------------------------------------------------------------
 
+
+def fig_gap(out, args):
+    """Two things explain the same gap and they are in different units, so they
+    get one panel each against a shared list of models: how many kernels a
+    forward launches, and how much of the wall clock those kernels occupy."""
+    rows = read_tsv(os.path.join(out, "gap.tsv"))
+    rows = [r for r in rows if r.get("launches_per_iter")]
+    if not rows:
+        return None
+    g = collections.defaultdict(dict)
+    for r in rows:
+        g[r["model"]][r["system"]] = r
+    systems = [s for s in ["ours", "torch-compile", "jax"]
+               if any(s in d for d in g.values())]
+    models = sorted(g, key=lambda m: float(g[m].get("ours", {}).get("steady_us") or 0))
+
+    def col(sys_, model, key, default=0.0):
+        v = g[model].get(sys_, {}).get(key)
+        return float(v) if v else default
+
+    fig, axes = plt.subplots(1, 2, figsize=(args.width, 0.42 * len(models) + 0.9),
+                             sharey=True)
+    h = 0.8 / len(systems)
+    y = list(range(len(models)))
+    panels = [(axes[0], "launches_per_iter", "kernel launches per forward"),
+              (axes[1], "gpu_util", "GPU busy / wall time")]
+    for ax, key, xlabel in panels:
+        for si_, s in enumerate(systems):
+            off = (si_ - (len(systems) - 1) / 2) * h
+            ax.barh([v + off for v in y], [col(s, m, key) for m in models],
+                    height=h * 0.88, color=SERIES[si_ % len(SERIES)],
+                    linewidth=0,
+                    hatch=HATCH[si_ % len(HATCH)] if args.texture else None,
+                    label=SYSTEM_LABEL[s])
+        ax.set_xlabel(xlabel)
+        ax.xaxis.grid(True, zorder=0)
+        ax.set_axisbelow(True)
+        despine(ax, keep=("left",))
+        ax.tick_params(axis="y", length=0)
+    axes[1].set_xlim(0, 1)
+    axes[0].set_yticks(y, models)
+    axes[0].legend(loc="lower right", ncol=1)
+    if args.titles:
+        fig.suptitle("Where the gap comes from")
+
+    header = ["model", "system", "us/iter", "launches", "kernels", "GPU us",
+              "GPU util", "mix"]
+    table_rows = []
+    for m in models:
+        for s in systems:
+            r = g[m].get(s)
+            if not r:
+                continue
+            table_rows.append([m, SYSTEM_LABEL[s], r["steady_us"],
+                               r["launches_per_iter"], r["kernels"],
+                               r["gpu_busy_us"], r["gpu_util"],
+                               r["notes"] or "-"])
+    write_table(os.path.join(args.outdir, "gap.tex"),
+                "per forward: nsys launch counts and GPU busy time against the "
+                "measured wall time; mix is gemm/generated/copy launches",
+                header, table_rows)
+    return fig, "gap"
+
+
 def machine_label(path):
     """The accelerator, never the host: a published figure should not name
     somebody's server. Runs predating machine.txt fall back to the directory."""
@@ -1061,6 +1126,7 @@ FIGURES = collections.OrderedDict([
     ("ablation", fig_ablation),
     ("micro_baselines", fig_micro_baselines),
     ("compile_overhead", fig_compile_overhead),
+    ("gap", fig_gap),
 ])
 
 COMPARE_FIGURES = collections.OrderedDict([

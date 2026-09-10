@@ -1,0 +1,22 @@
+\begin{tabular}{lrrrrrrr}
+\toprule
+model & system & us/iter & launches & kernels & GPU us & GPU util & mix \\
+\midrule
+tiny-gpt2 & MetaTensor & 254.5 & 29.0 & 13 & 90.1 & 0.354 & gemm=13 gen=16 \\
+tiny-gpt2 & torch.compile & 435.0 & 31.0 & 16 & 71.8 & 0.165 & gemm=9 gen=20 other=2 \\
+tiny-gpt2 & JAX/XLA & 96.0 & 30.0 & 19 & 54.4 & 0.567 & gemm=9 gen=21 \\
+bert-tiny & MetaTensor & 433.7 & 56.0 & 18 & 260.4 & 0.600 & gemm=16 gen=40 \\
+bert-tiny & torch.compile & 482.9 & 36.0 & 12 & 201.5 & 0.417 & gemm=20 gen=16 \\
+bert-tiny & JAX/XLA & 117.4 & 32.0 & 19 & 110.4 & 0.941 & gemm=14 gen=18 \\
+bert-mini & MetaTensor & 691.8 & 111.3 & 30 & 497.7 & 0.719 & gemm=43 gen=68 \\
+bert-mini & torch.compile & 783.5 & 89.0 & 15 & 394.7 & 0.504 & gemm=59 gen=30 \\
+bert-mini & JAX/XLA & 245.0 & 58.0 & 19 & 244.7 & 0.999 & gemm=26 gen=32 \\
+distilgpt2 & MetaTensor & 1399.4 & 105.0 & 15 & 1299.6 & 0.929 & copy=6 gemm=55 gen=44 \\
+distilgpt2 & torch.compile & 1362.6 & 98.0 & 17 & 1188.5 & 0.872 & copy=6 gemm=43 gen=37 other=12 \\
+distilgpt2 & JAX/XLA & 1002.0 & 111.0 & 22 & 1002.6 & 1.001 & copy=6 gemm=43 gen=62 \\
+vit-tiny & MetaTensor & 1683.3 & 271.1 & 24 & 1402.0 & 0.833 & gemm=99 gen=172 \\
+vit-tiny & torch.compile & 2446.8 & 248.0 & 21 & 1319.7 & 0.539 & gemm=160 gen=87 other=1 \\
+vit-tiny & JAX/XLA & 740.5 & 171.0 & 17 & 750.8 & 1.014 & gemm=73 gen=98 \\
+\bottomrule
+\end{tabular}
+% per forward: nsys launch counts and GPU busy time against the measured wall time; mix is gemm/generated/copy launches
