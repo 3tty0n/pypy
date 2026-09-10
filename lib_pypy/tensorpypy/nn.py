@@ -121,7 +121,9 @@ class Conv2d(Module):
         else:
             cols = x.im2col_nhwc(self.c, self.h, self.w, self.k, self.pad,
                                  self.stride)
-        y = cols.matmul(self.weight)
+        # conv GEMM: tensor cores in TF32, matching cuDNN's default for a
+        # convolution.  Plain matmuls elsewhere stay in strict fp32.
+        y = cols.matmul(self.weight, False, True)
         if self.bias is not None:
             y = y.add(self.bias)
         return y

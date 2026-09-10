@@ -77,7 +77,8 @@ RPY_EXTERN int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
                               long elems_per_block, int shared, int nextra,
                               long cols);
 RPY_EXTERN int rt_cuda_matmul(long a, long b, long c, long rows, long inner,
-                              long cols, long ta, long tb, long dtype);
+                              long cols, long ta, long tb, long dtype,
+                              long tf32);
 RPY_EXTERN int rt_cuda_bmm(long a, long b, long c, long batch, long rows,
                            long inner, long cols, long ta, long tb,
                            long dtype, long lda, long ldb, long ldc,
@@ -128,9 +129,7 @@ rt_cuda_sync = rffi.llexternal('rt_cuda_sync', [], lltype.Void,
                                 releasegil=False)
 rt_cuda_matmul = rffi.llexternal(
     'rt_cuda_matmul',
-    [lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
-     lltype.Signed, lltype.Signed, lltype.Signed, lltype.Signed,
-     lltype.Signed],
+    [lltype.Signed] * 10,
     rffi.INT, compilation_info=eci,
                                 releasegil=False)
 rt_cuda_bmm = rffi.llexternal(

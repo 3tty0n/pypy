@@ -133,11 +133,11 @@ class W_Tensor(W_Root):
     def descr_item(self, space):
         return space.newfloat(self.tensor.item())
 
-    @unwrap_spec(transpose_b=bool)
-    def descr_matmul(self, space, w_other, transpose_b=False):
+    @unwrap_spec(transpose_b=bool, tf32=bool)
+    def descr_matmul(self, space, w_other, transpose_b=False, tf32=False):
         try:
             return W_Tensor(self.tensor.matmul(self._other(space, w_other),
-                                               transpose_b))
+                                               transpose_b, 1 if tf32 else 0))
         except ValueError:
             raise _mismatch(space)
 
@@ -297,7 +297,7 @@ class W_Tensor(W_Root):
                                                    stride + 1)
         rows = ops.tensor_size(t) // (c * h * w)
         y = runtime.tensor_matmul(runtime.im2col(t, c, h, w, k, pad, stride),
-                                  weight, rows * ohw, o, c * k * k, 0, 0)
+                                  weight, rows * ohw, o, c * k * k, 0, 0, 1)
         if w_bias is not None and not space.is_none(w_bias):
             y = ops.tensor_add(y, self._other(space, w_bias).t,
                                    core.BC_R_ROW)

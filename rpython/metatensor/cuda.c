@@ -50,6 +50,8 @@ static void *cublas_handle;
 static cublasCreate_v2_t p_cublasCreate_v2;
 static cublasDgemm_v2_t p_cublasDgemm_v2;
 static cublasDgemmStridedBatched_t p_cublasDgemmStridedBatched;
+typedef int (*cublasSetMathMode_t)(void *handle, int mode);
+static cublasSetMathMode_t p_cublasSetMathMode;
 static cublasSgemm_v2_t p_cublasSgemm_v2;
 static cublasSgemmStridedBatched_t p_cublasSgemmStridedBatched;
 static cublasHgemm_t p_cublasHgemm;
@@ -167,6 +169,8 @@ static int rt_cublas_init(void)
     p_cublasDgemm_v2 = (cublasDgemm_v2_t)dlsym(cublas_lib, "cublasDgemm_v2");
     p_cublasDgemmStridedBatched = (cublasDgemmStridedBatched_t)dlsym(
         cublas_lib, "cublasDgemmStridedBatched");
+    p_cublasSetMathMode = (cublasSetMathMode_t)dlsym(cublas_lib,
+                                                     "cublasSetMathMode");
     p_cublasSgemm_v2 = (cublasSgemm_v2_t)dlsym(cublas_lib, "cublasSgemm_v2");
     p_cublasSgemmStridedBatched = (cublasSgemmStridedBatched_t)dlsym(
         cublas_lib, "cublasSgemmStridedBatched");
@@ -509,11 +513,28 @@ RPY_EXPORTED int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
     }
 }
 
+/* Convolution runs its GEMM on the tensor cores in TF32, which is what cuDNN
+   does for a conv under torch's default (cudnn.allow_tf32 on, matmul off);
+   plain matmuls stay in strict fp32, again as torch does.  RTENSOR_TF32=0
+   turns the tensor-core path off everywhere. */
+#define RT_TF32_MATH 3
+static int tf32_env = -1;
+
+static void rt_set_math(long tf32)
+{
+    if (!p_cublasSetMathMode) return;
+    if (tf32_env < 0) {
+        const char *e = getenv("RTENSOR_TF32");
+        tf32_env = e ? atoi(e) : 1;
+    }
+    p_cublasSetMathMode(cublas_handle, (tf32 && tf32_env) ? RT_TF32_MATH : 0);
+}
+
 /* ==== cuBLAS gemm ==== */
 
 RPY_EXPORTED int rt_cuda_matmul(long a, long b, long c, long rows,
                                 long inner, long cols, long ta, long tb,
-                                long dtype)
+                                long dtype, long tf32)
 {
     double alpha = 1.0, beta = 0.0;
     float alphaf = 1.0f, betaf = 0.0f;
@@ -523,6 +544,7 @@ RPY_EXPORTED int rt_cuda_matmul(long a, long b, long c, long rows,
     if (!rt_cublas_init()) return 0;
     if (dtype == 1) {
         if (!p_cublasSgemm_v2) return 0;
+        rt_set_math(tf32);
         return p_cublasSgemm_v2(cublas_handle, tb ? 1 : 0, ta ? 1 : 0,
                                 (int)cols, (int)rows, (int)inner, &alphaf,
                                 (const float *)b, ldb, (const float *)a, lda,

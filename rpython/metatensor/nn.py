@@ -109,21 +109,22 @@ class Tensor(object):
                 r.node = NoGradNode(inputs)
         return r
 
-    def _matmul(self, other, rows, cols, inner, tb):
+    def _matmul(self, other, rows, cols, inner, tb, tf32=0):
         needs = self.requires_grad or other.requires_grad
         node = None
         if needs:
             node = MatmulNode(self, other, rows, cols, inner, tb)
         return self._wrap(
-            runtime.tensor_matmul(self.t, other.t, rows, cols, inner, 0, tb),
+            runtime.tensor_matmul(self.t, other.t, rows, cols, inner, 0, tb,
+                                  tf32),
             node, needs)
 
-    def matmul(self, other, transpose_b=False):
+    def matmul(self, other, transpose_b=False, tf32=0):
         if transpose_b:
             rows, cols, inner = ops.matmul_shape_t(self.t, other.t)
-            return self._matmul(other, rows, cols, inner, 1)
+            return self._matmul(other, rows, cols, inner, 1, tf32)
         rows, cols, inner = ops.matmul_shape(self.t, other.t)
-        return self._matmul(other, rows, cols, inner, 0)
+        return self._matmul(other, rows, cols, inner, 0, tf32)
 
     def bmm(self, other, batch, rows, cols, inner, tb):
         needs = self.requires_grad or other.requires_grad
@@ -872,7 +873,7 @@ class Conv2d(object):
         rows = ops.tensor_size(x.t) // (self.c * hw)
         cols = runtime.im2col(x.t, self.c, self.h, self.w, 3, 1)
         y = runtime.tensor_matmul(cols, self.weight.t, rows * hw, self.o,
-                                  self.c * 9, 0, 0)
+                                  self.c * 9, 0, 0, 1)
         y = ops.tensor_add(y, self.bias.t, core.BC_R_ROW)
         return x._forward_only(runtime.col2chw(y, rows, hw, self.o),
                                self.weight)

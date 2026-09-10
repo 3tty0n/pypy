@@ -31,7 +31,7 @@ def matmul_cpu(a, b, rows, cols, inner, ta, tb):
     return r
 
 @jit.dont_look_inside
-def _tensor_matmul_impl(a, b, rows, cols, inner, ta, tb):
+def _tensor_matmul_impl(a, b, rows, cols, inner, ta, tb, tf32):
     if gpu_enabled() and a.dtype == b.dtype:
         dt = a.dtype
         dptr_a = dev(a)
@@ -44,7 +44,7 @@ def _tensor_matmul_impl(a, b, rows, cols, inner, ta, tb):
             if outptr != 0:
                 ok = rffi.cast(lltype.Signed, rt_cuda_matmul(
                     dptr_a, dptr_b, outptr, rows, inner, cols, ta, tb,
-                    dt)) != 0
+                    dt, tf32)) != 0
                 if ok:
                     shape = lltype.malloc(SHAPEARRAY, 2)
                     shape[0] = rows
@@ -54,9 +54,9 @@ def _tensor_matmul_impl(a, b, rows, cols, inner, ta, tb):
     return matmul_cpu(a, b, rows, cols, inner, ta, tb)
 
 @jit.dont_look_inside
-def tensor_matmul(a, b, rows, cols, inner, ta, tb):
+def tensor_matmul(a, b, rows, cols, inner, ta, tb, tf32=0):
     t0 = prof_begin()
-    r = _tensor_matmul_impl(a, b, rows, cols, inner, ta, tb)
+    r = _tensor_matmul_impl(a, b, rows, cols, inner, ta, tb, tf32)
     prof_end(intmask(2), intmask(rows * 1000000 + inner * 1000 + cols), t0)
     return r
 
