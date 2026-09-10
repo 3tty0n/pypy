@@ -1,5 +1,5 @@
 host          stillinlove
-date          2026-09-10T20:23:57+09:00
+date          2026-09-11T00:02:29+09:00
 gpu           NVIDIA GeForce RTX 5070 Ti
 gpu_memory    16303 MiB
 compute_cap   120
@@ -15,4 +15,4 @@ iters         200
 rounds        3
 budget_mb     8
 jit_flags     --jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000
-commit        3344da91ae
+commit        9742ffadf2

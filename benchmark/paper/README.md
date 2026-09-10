@@ -69,9 +69,11 @@ title in the caption).
 
 compares `$OUT` against one or two other result directories (three machines is
 the limit: the categorical palette is used in fixed order and never cycled, so
-a fourth would need a hue that does not exist). Each series is named from the
-other run's `machine.txt`, falling back to its `<host>-<gpu>` directory name
-for runs recorded before that file existed.
+a fourth would need a hue that does not exist). Each series is named by its
+accelerator alone - a figure that ends up in a paper has no business naming
+somebody's server - read from the run's `machine.txt` and falling back to the
+`<gpu>` half of its directory name for runs recorded before that file existed.
+Two runs on the same model of accelerator are separated by their run date.
 
     compare_speedup   speedup per benchmark, one series per machine
     compare_models    end-to-end ratio per model, one series per machine

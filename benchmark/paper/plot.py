@@ -471,27 +471,53 @@ def fig_ablation(out, args):
 def machine_label(path):
     """Name a result directory by the accelerator that produced it.
 
-    machine.txt is authoritative; runs recorded before it existed fall back to
-    the <host>-<gpu> directory name, which is why the layout carries both.
+    The accelerator only - a published figure has no business naming somebody's
+    server. machine.txt is authoritative for the GPU; runs recorded before it
+    existed fall back to the <host>-<gpu> directory name.
     """
-    host = gpu = None
+    gpu = None
     txt = os.path.join(path, "machine.txt")
     if os.path.exists(txt):
         for line in open(txt):
             key, _, value = line.partition(" ")
-            value = value.strip()
-            if key == "host" and value:
-                host = value
-            elif key == "gpu" and value:
-                gpu = value
-    if not (host and gpu):
+            if key == "gpu" and value.strip():
+                gpu = value.strip()
+    if not gpu:
         parent = os.path.basename(os.path.dirname(os.path.abspath(path)))
         if "-" in parent:
-            h, _, g = parent.partition("-")
-            host = host or h
-            gpu = gpu or g
-    gpu = pretty_gpu(gpu or "unknown GPU")
-    return "%s (%s)" % (gpu, host) if host else gpu
+            gpu = parent.partition("-")[2]
+    return pretty_gpu(gpu or "unknown GPU")
+
+
+def machine_labels(paths):
+    """Labels for a set of runs, kept distinct without falling back to a host.
+
+    Two runs on the same model of accelerator would otherwise share a label;
+    the run date separates them, which is public information about the run
+    rather than about the machine it happened on.
+    """
+    labels = [machine_label(p) for p in paths]
+    if len(set(labels)) == len(labels):
+        return labels
+    out = []
+    for path, label in zip(paths, labels):
+        if labels.count(label) > 1:
+            out.append("%s, %s" % (label, run_date(path)))
+        else:
+            out.append(label)
+    return out
+
+
+def run_date(path):
+    txt = os.path.join(path, "machine.txt")
+    if os.path.exists(txt):
+        for line in open(txt):
+            key, _, value = line.partition(" ")
+            if key == "date" and value.strip():
+                return value.strip()[:10]
+    base = os.path.basename(os.path.abspath(path))
+    m = re.search(r"\d{4}-\d{2}-\d{2}", base)
+    return m.group(0) if m else base
 
 
 def pretty_gpu(name):
@@ -541,7 +567,7 @@ def fig_compare_speedup(out, args):
     the ordering holds where the absolute times do not."""
     outs = [out] + args.compare
     rows = [_speedup_rows(o) for o in outs]
-    labels = [machine_label(o) for o in outs]
+    labels = machine_labels(outs)
     common = set(rows[0])
     for r in rows[1:]:
         common &= set(r)
@@ -573,7 +599,7 @@ def fig_compare_speedup(out, args):
 def fig_compare_models(out, args):
     """End-to-end ratio to torch.compile, per model, per machine."""
     outs = [out] + args.compare
-    labels = [machine_label(o) for o in outs]
+    labels = machine_labels(outs)
     per = []
     for o in outs:
         g = collections.defaultdict(lambda: collections.defaultdict(list))
@@ -606,7 +632,7 @@ def fig_compare_models(out, args):
 def fig_compare_dynamic(out, args):
     """Cost against sequence length, as a ratio so two GPUs share one axis."""
     outs = [out] + args.compare
-    labels = [machine_label(o) for o in outs]
+    labels = machine_labels(outs)
     series, lengths = [], None
     for o in outs:
         g = collections.defaultdict(list)
