@@ -254,15 +254,22 @@ invisible. On a 3090, after the batched attention products moved to a tuned
 cuBLASLt algorithm:
 
     model       system         us/iter  launches  kernels  GPU us  util   mix
-    tiny-gpt2   MetaTensor       238.1      26.0       13    82.0  0.34   gemm=13 gen=13
-    tiny-gpt2   torch.compile    413.9      31.0       16    72.0  0.17   gemm=9 gen=20 other=2
+    tiny-gpt2   MetaTensor       226.5      27.2       13    88.1  0.39   gemm=14 gen=13
+    tiny-gpt2   torch.compile    404.4      31.0       16    71.9  0.18   gemm=9 gen=20 other=2
     tiny-gpt2   JAX/XLA           89.3      30.0       19    54.3  0.61   gemm=9 gen=21
-    bert-mini   MetaTensor       432.9      67.0       14   320.4  0.74   gemm=43 gen=24
-    bert-mini   torch.compile    911.2      89.0       15   395.0  0.43   gemm=59 gen=30
+    bert-mini   MetaTensor       442.1      67.0       14   320.8  0.73   gemm=43 gen=24
+    bert-mini   torch.compile    870.9      89.0       15   395.4  0.45   gemm=59 gen=30
     bert-mini   JAX/XLA          243.0      58.0       19   244.1  1.00   gemm=26 gen=32
-    vit-tiny    MetaTensor       985.7     175.0       15   868.2  0.88   gemm=99 gen=76
-    vit-tiny    torch.compile   2380.0     248.0       21  1303.6  0.55   gemm=160 gen=87 other=1
+    vit-tiny    MetaTensor      1027.9     175.0       15   868.3  0.85   gemm=99 gen=76
+    vit-tiny    torch.compile   2398.5     248.0       21  1318.9  0.55   gemm=160 gen=87 other=1
     vit-tiny    JAX/XLA          738.4     171.0       17   748.9  1.01   gemm=73 gen=98
+
+(JAX/XLA rows above are carried over from the previous run: this run's `bench.sh
+gap` hit a host NVML/driver library mismatch — `nvidia-smi` and the JAX venv
+both report "No visible GPU devices" / "Driver/library version mismatch" even
+though torch and MetaTensor still see the GPU fine — so the jax gap subprocess
+failed on every model and `gap.tsv` carries `notes=run failed` for those rows.
+MetaTensor and torch.compile rows above are this run's numbers.)
 
 `launches` is per forward and counts everything nsys sees, so it is larger than
 `_metatensor.launch_count()`, which counts our own kernels but not the cuBLAS
@@ -270,8 +277,8 @@ GEMMs. `util` is GPU busy over wall time; JAX sits at 1.00 because its
 dispatch is asynchronous and the queue never empties, so a value near 1.0 is
 the ceiling and the small excess is measurement slack. The `us/iter` column
 comes from the gap harness, which runs the three systems back to back on one
-GPU; a model run on its own is 5-15% faster (bert-mini 401, vit-tiny 974,
-tiny-gpt2 179) and `models.tsv` is the number to quote.
+GPU; a model run on its own is 1-20% faster (bert-mini 429, vit-tiny 1018,
+tiny-gpt2 180) and `models.tsv` is the number to quote.
 
 `gemm=43` on bert-mini is not 43 matrix products. Attributing the trace kernel
 by kernel gives 26 GEMM calls - the same 26 XLA issues, and exactly what the

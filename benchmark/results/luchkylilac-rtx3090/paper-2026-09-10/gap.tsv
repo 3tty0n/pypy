@@ -1,16 +1,16 @@
 model	system	steady_us	launches_per_iter	kernels	gpu_busy_us	gpu_util	notes
-bert-tiny	ours	280.6	30.0	13	192.7	0.687	gemm=16 gen=14
-bert-tiny	torch-compile	530.4	36.0	12	201.6	0.380	gemm=20 gen=16
-bert-tiny	jax	111.4	32.0	19	112.2	1.007	gemm=14 gen=18
-bert-mini	ours	495.9	67.0	15	379.4	0.765	gemm=43 gen=24
-bert-mini	torch-compile	859.1	89.0	15	395.0	0.460	gemm=59 gen=30
-bert-mini	jax	241.8	58.0	19	244.2	1.010	gemm=26 gen=32
-tiny-gpt2	ours	238.6	26.0	13	79.7	0.334	gemm=13 gen=13
-tiny-gpt2	torch-compile	408.0	31.0	16	71.9	0.176	gemm=9 gen=20 other=2
-tiny-gpt2	jax	90.0	30.0	19	54.6	0.607	gemm=9 gen=21
-distilgpt2	ours	1361.1	99.0	15	1257.4	0.924	copy=6 gemm=55 gen=38
-distilgpt2	torch-compile	1339.3	98.0	17	1188.3	0.887	copy=6 gemm=43 gen=37 other=12
-distilgpt2	jax	1000.7	111.0	21	1011.6	1.011	copy=6 gemm=43 gen=62
-vit-tiny	ours	1267.5	175.0	16	1191.8	0.940	gemm=99 gen=76
-vit-tiny	torch-compile	2042.7	248.0	21	1338.0	0.655	gemm=160 gen=87 other=1
-vit-tiny	jax	748.6	171.0	17	746.4	0.997	gemm=73 gen=98
+bert-tiny	ours	262.6	30.0	12	163.2	0.622	gemm=16 gen=14
+bert-tiny	torch-compile	537.2	36.0	12	201.6	0.375	gemm=20 gen=16
+bert-tiny	jax						run failed
+bert-mini	ours	442.1	67.0	14	320.8	0.726	gemm=43 gen=24
+bert-mini	torch-compile	870.9	89.0	15	395.4	0.454	gemm=59 gen=30
+bert-mini	jax						run failed
+tiny-gpt2	ours	226.5	27.2	13	88.1	0.389	gemm=14 gen=13
+tiny-gpt2	torch-compile	404.4	31.0	16	71.9	0.178	gemm=9 gen=20 other=2
+tiny-gpt2	jax						run failed
+distilgpt2	ours	1283.9	99.0	15	1192.1	0.928	copy=6 gemm=55 gen=38
+distilgpt2	torch-compile	1361.0	98.0	17	1195.8	0.879	copy=6 gemm=43 gen=37 other=12
+distilgpt2	jax						run failed
+vit-tiny	ours	1027.9	175.0	15	868.3	0.845	gemm=99 gen=76
+vit-tiny	torch-compile	2398.5	248.0	21	1318.9	0.550	gemm=160 gen=87 other=1
+vit-tiny	jax						run failed
