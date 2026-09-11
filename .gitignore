@@ -17,6 +17,7 @@ include/numpy/
 lib_pypy/ctypes_config_cache/_[^_]*_*.py
 libpypy*-c.*
 pypy-c
+metatensor-bench
 pypy/_cache
 pypy/doc/*.html
 pypy/doc/config/*.html
