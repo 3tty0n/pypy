@@ -3,57 +3,70 @@ set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 source "$HERE/config.sh"
 APP="$HERE/../applevel"
+
 paper_setup_pypy
 trap paper_cleanup_pypy EXIT
 
 SERIES="$OUT/dynamic_series.tsv"
 SUMMARY="$OUT/dynamic_summary.tsv"
-tsv_init "$SERIES" "system\tround\tlength\tus"
-tsv_init "$SUMMARY" "system\tround\tlength\tmedian_us\tloops\tbridges\trecompiles"
+tsv_init "$SERIES" "system\tround\tpass\tlength\tus\tbuild_us"
+tsv_init "$SUMMARY" "system\tround\tpass\tlength\tmedian_us\ttotal_us\tloops\tbridges\tkernels\tlaunches\tcache_hits\tgraphs\trecompiles\tcompile_ms"
 
-# A length with no samples yields an empty cell rather than aborting the stage,
-# and the venv interpreter is used because a PyPy3 may own python3 on PATH.
-median() {
+# Both drivers print the same per-iteration table; this folds it into one row
+# per (pass, length) window: median of the times, sum of the counter deltas.
+# cache_hits is launches minus newly compiled kernels, because the kernel cache
+# has no hit counter of its own and adding one would mean retranslating pypy-c.
+agg() {
   "${RTENSOR_PYTHON:-python3}" -c "
-import sys, statistics
-xs = [float(x) for x in sys.stdin if x.strip()]
-print(statistics.median(xs) if xs else '')
+import sys, statistics, collections
+g = collections.OrderedDict()
+for line in sys.stdin:
+    f = line.split('\t')
+    if len(f) != 11 or f[0] == 'pass':
+        continue
+    g.setdefault((int(f[0]), int(f[1])), []).append([float(x) for x in f[2:]])
+for (p, L), rows in g.items():
+    step = [r[0] for r in rows]
+    tot = [r[0] + r[1] for r in rows]
+    s = [sum(r[i] for r in rows) for i in range(2, 9)]
+    loops, bridges, kernels, launches, _graphs, recomp, cms = s
+    graphs = max(r[6] for r in rows)
+    # torch reports compile_ms as -1 (not separable from the iteration that
+    # triggers it); summing that would turn it into a count of iterations.
+    if min(r[8] for r in rows) < 0:
+        cms = -1.0
+    print('%d\t%d\t%.1f\t%.1f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.3f' % (
+        p, L, statistics.median(step), statistics.median(tot),
+        loops, bridges, kernels, launches, launches - kernels,
+        graphs, recomp, cms))
 "
 }
 
+# $1 system, $2 round, stdin the driver's per-iteration table.
+emit() {
+  local system=$1 round=$2 out=$3
+  echo "$out" | tail -n +2 | while IFS=$'\t' read -r p length step build rest; do
+    [ -n "$length" ] || continue
+    echo -e "$system\t$round\t$p\t$length\t$step\t$build" >> "$SERIES"
+    bench_record dynamic_series system="$system" round="$round" pass="$p" \
+      length="$length" us="$step" build_us="$build"
+  done
+  echo "$out" | agg | while IFS=$'\t' read -r p length med tot loops bridges kernels launches hits graphs recomp cms; do
+    echo -e "$system\t$round\t$p\t$length\t$med\t$tot\t$loops\t$bridges\t$kernels\t$launches\t$hits\t$graphs\t$recomp\t$cms" >> "$SUMMARY"
+    bench_record dynamic system="$system" round="$round" pass="$p" \
+      length="$length" median_us="$med" total_us="$tot" loops="$loops" \
+      bridges="$bridges" kernels="$kernels" launches="$launches" \
+      cache_hits="$hits" graphs="$graphs" recompiles="$recomp" \
+      compile_ms="$cms"
+  done
+}
+
 run_ours() {
-  local round=$1
-  local jitlog="$OUT/.dyn_jit_$round.log"
-  out=$(PYPYLOG=jit-summary:"$jitlog" "$RUN_PYPY" $JIT_FLAGS "$APP/dynamic_gpt2.py" "$WEIGHTS/distilgpt2" "$ITERS")
-  loops=$(grep 'Total # of loops:' "$jitlog" | grep -o '[0-9]*$' | tail -1)
-  bridges=$(grep 'Total # of bridges:' "$jitlog" | grep -o '[0-9]*$' | tail -1)
-  echo "$out" | tail -n +2 | while IFS=$'\t' read -r length us; do
-    echo -e "ours\t$round\t$length\t$us" >> "$SERIES"
-      bench_record dynamic_series system=ours round="$round" length="$length" us="$us"
-  done
-  for length in 32 48 64 96 128; do
-    m=$(echo "$out" | tail -n +2 | awk -F'\t' -v l="$length" '$1==l{print $2}' | median)
-    echo -e "ours\t$round\t$length\t$m\t${loops:-0}\t${bridges:-0}\t0" >> "$SUMMARY"
-    bench_record dynamic system=ours round="$round" length="$length" \
-      median_us="$m" loops="${loops:-0}" bridges="${bridges:-0}" recompiles=0
-  done
-  rm -f "$jitlog"
+  emit ours "$1" "$("$RUN_PYPY" $JIT_FLAGS "$APP/dynamic_gpt2.py" "$WEIGHTS/distilgpt2" "$ITERS")"
 }
 
 run_torch() {
-  local mode=$1 system=$2 round=$3
-  out=$("$TORCH_PYTHON" "$APP/dynamic_gpt2_torch.py" "$mode" "$WEIGHTS/distilgpt2" "$ITERS" 2>/dev/null)
-  recompiles=$(echo "$out" | grep '^recompiles' | cut -f2)
-  echo "$out" | grep -v '^length\|^recompiles' | while IFS=$'\t' read -r length us; do
-    echo -e "$system\t$round\t$length\t$us" >> "$SERIES"
-      bench_record dynamic_series system="$system" round="$round" length="$length" us="$us"
-  done
-  for length in 32 48 64 96 128; do
-    m=$(echo "$out" | grep -v '^length\|^recompiles' | awk -F'\t' -v l="$length" '$1==l{print $2}' | median)
-    echo -e "$system\t$round\t$length\t$m\t0\t0\t${recompiles:-0}" >> "$SUMMARY"
-    bench_record dynamic system="$system" round="$round" length="$length" \
-      median_us="$m" loops=0 bridges=0 recompiles="${recompiles:-0}"
-  done
+  emit "$2" "$3" "$("$TORCH_PYTHON" "$APP/dynamic_gpt2_torch.py" "$1" "$WEIGHTS/distilgpt2" "$ITERS" 2>/dev/null)"
 }
 
 progress_init dynamic "$ROUNDS"

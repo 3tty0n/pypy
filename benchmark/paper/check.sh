@@ -179,8 +179,9 @@ group_dynamic() {
     skip "run_dynamic.sh" "no distilgpt2 checkpoint"; return
   fi
   # The app cycles through five sequence lengths, so a full cycle is the
-  # smallest run that gives every length a sample.
-  if ITERS=${CHECK_DYNAMIC_ITERS:-5} bash "$HERE/run_dynamic.sh" >/dev/null 2>&1 &&
+  # smallest run that gives every length a sample; the sweep splits ITERS over
+  # two passes, so one cycle per pass needs ten.
+  if ITERS=${CHECK_DYNAMIC_ITERS:-10} bash "$HERE/run_dynamic.sh" >/dev/null 2>&1 &&
      [ -s "$OUT/dynamic_summary.tsv" ]; then
     ok "run_dynamic.sh" "$(( $(wc -l < "$OUT/dynamic_summary.tsv") - 1 )) rows"
   else

@@ -1,3 +1,27 @@
+"""Dynamic sequence-length sweep, PyTorch side.
+
+What the timed step contains - identical to dynamic_gpt2.py:
+
+    build_us  token ids for this length, the position slice, the causal mask
+    step_us   fwd(idx, pos, mask), then out.sum().item(), i.e. a reduction all
+              the way back to a host scalar (which also synchronizes)
+    total_us  build_us + step_us
+
+Both boundaries are reported for both systems.  They are split because the
+build is host-side input marshalling, not the runtime under test; see the
+docstring of dynamic_gpt2.py for the numbers that motivate the split.
+
+Per length window the driver reports the delta of torch._dynamo's unique-graph
+counter: graphs is the running total at the end of the window, recompiles the
+number of new graphs inside it, so a non-zero recompiles on a revisit is a
+recompilation.  compile_ms is -1: torch.compile does not expose the compile
+time separately from the first iteration that triggers it, so the cost is
+inside that iteration's step_us instead.
+
+The sweep order is explicit and is the same for every system: ORDER once per
+pass, twice, so pass 2 shows what a revisit of an already-seen length costs.
+"""
+
 import json, os, sys, time
 
 import torch
@@ -6,7 +30,8 @@ import torch._dynamo
 import gpt2_torch
 import torch_common
 
-LENGTHS = [32, 48, 64, 96, 128]
+ORDER = [32, 48, 64, 96, 128]
+PASSES = 2
 
 
 class Model(gpt2_torch.Model):
@@ -30,6 +55,12 @@ class Model(gpt2_torch.Model):
         return gpt2_torch.blocks_forward(self, self.wte[idx] + pos, mask)
 
 
+def graphs_of(mode):
+    if mode not in ('compile', 'compile-dynamic'):
+        return 0
+    return torch._dynamo.utils.counters['stats']['unique_graphs']
+
+
 def main():
     mode = sys.argv[1]
     outdir = sys.argv[2]
@@ -41,44 +72,39 @@ def main():
     flat = torch_common.flat_weights(outdir)
     model = Model(cfg, flat, dtype, dev).to(dev, dtype).eval()
 
-    dynamic = mode == 'compile-dynamic'
     fwd = model.forward
     if mode in ('compile', 'compile-dynamic'):
         torch._dynamo.reset()
-        fwd = torch.compile(model.forward, dynamic=dynamic)
+        fwd = torch.compile(model.forward, dynamic=mode == 'compile-dynamic')
 
-    def step(t):
+    def build(t):
         ids = [tokens[i % len(tokens)] for i in range(t)]
         idx = torch.tensor(ids, device=dev, dtype=torch.long)
         pos, mask = model.pos_and_mask(t)
-        with torch.no_grad():
-            out = fwd(idx, pos, mask)
-        return out
+        if dev == 'cuda':
+            torch.cuda.synchronize()
+        return idx, pos, mask
 
     with torch.no_grad():
         for _ in range(5):
-            step(LENGTHS[0])
-        torch.cuda.synchronize() if dev == 'cuda' else None
+            fwd(*build(ORDER[0])).sum().item()
 
-        before = 0
-        if mode in ('compile', 'compile-dynamic'):
-            before = torch._dynamo.utils.counters['stats']['unique_graphs']
-
-        print('length\tus')
-        for i in range(iters):
-            t = LENGTHS[i % len(LENGTHS)]
-            t0 = time.time()
-            step(t)
-            if dev == 'cuda':
-                torch.cuda.synchronize()
-            us = (time.time() - t0) * 1e6
-            print('%d\t%.1f' % (t, us))
-
-        if mode in ('compile', 'compile-dynamic'):
-            after = torch._dynamo.utils.counters['stats']['unique_graphs']
-            print('recompiles\t%d' % (after - before))
-        else:
-            print('recompiles\t0')
+        per_pass = max(1, iters // PASSES)
+        print('pass\tlength\tstep_us\tbuild_us\tloops\tbridges\tkernels'
+              '\tlaunches\tgraphs\trecompiles\tcompile_ms')
+        for p in range(1, PASSES + 1):
+            for i in range(per_pass):
+                t = ORDER[i % len(ORDER)]
+                g0 = graphs_of(mode)
+                b0 = time.time()
+                idx, pos, mask = build(t)
+                b1 = time.time()
+                out = fwd(idx, pos, mask)
+                out.sum().item()
+                s1 = time.time()
+                g1 = graphs_of(mode)
+                print('%d\t%d\t%.1f\t%.1f\t0\t0\t0\t0\t%d\t%d\t-1' % (
+                    p, t, (s1 - b1) * 1e6, (b1 - b0) * 1e6, g1, g1 - g0))
 
 
 if __name__ == '__main__':
