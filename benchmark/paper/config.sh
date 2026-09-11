@@ -40,10 +40,21 @@ ROUNDS=${ROUNDS:-3}
 JIT_FLAGS=${JIT_FLAGS:---jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000}
 # Results are filed under the machine and the accelerator that produced them,
 # because a number here means nothing without both: results/<host>-<gpu>/paper-<date>.
-gpu_slug() {
+gpu_name() {
+  # nvidia-smi prints NVML errors on stdout with exit status 0, so a broken
+  # driver install would otherwise become the GPU's name.
   local name
   name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
-  if [ -z "$name" ]; then
+  case "$name" in
+    ""|*NVML*|*[Ff]ailed*|*[Ee]rror*) return 1 ;;
+  esac
+  echo "$name"
+}
+gpu_slug() {
+  local name
+  if ! name=$(gpu_name); then
+    echo "config.sh: nvidia-smi cannot see the GPU ($(nvidia-smi 2>&1 | head -1));" \
+         "a driver/NVML version mismatch needs a reboot or a matching driver package" >&2
     echo "nogpu"
     return
   fi
@@ -64,7 +75,7 @@ write_machine_txt() {
   {
     echo "host          $RUN_HOST"
     echo "date          $(date -Iseconds)"
-    echo "gpu           $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
+    echo "gpu           $(gpu_name || echo unknown)"
     echo "gpu_memory    $(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null | head -1)"
     echo "compute_cap   ${RTENSOR_CC:-unknown}"
     echo "driver        $(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)"
