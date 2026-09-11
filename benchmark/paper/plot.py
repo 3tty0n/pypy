@@ -74,6 +74,7 @@ SINGLE_COL, DOUBLE_COL = 3.25, 6.75   # MLSys column and text widths, inches
 # Figures whose row labels are long enough that a single column would leave no
 # room for the plot itself.  --column overrides this.
 WIDE = {"micro_speedup", "fusion", "models", "ablation", "micro_baselines",
+        "compile_overhead",
         "gap",
         "compare_speedup", "compare_models"}
 
@@ -411,7 +412,7 @@ def fig_models(out, args):
 
     # 3 systems keeps the original 0.26 half-height; more systems shrink to fit.
     h = 0.8 / len(systems)
-    fig, ax = plt.subplots(figsize=(args.width, 0.42 * len(models) + 0.8))
+    fig, ax = plt.subplots(figsize=(args.width, 0.42 * len(models) + 1.3))
     y = [i for i in range(len(models))]
     for si_, s in enumerate(systems):
         off = (si_ - (len(systems) - 1) / 2) * h
@@ -424,12 +425,15 @@ def fig_models(out, args):
                              [b[2] or 0 for b in stats[s]]),
                     fmt="none", zorder=4, **ERRBAR)
     ax.set_yticks(y, models)
-    ax.set_xlabel("steady-state time per iteration (\u00b5s)")
+    ax.set_xscale("log")
+    ax.set_xlim(left=50)
+    ax.set_xlabel("steady-state time per iteration (\u00b5s), log scale")
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
     ax.tick_params(axis="y", length=0)
-    ax.legend(loc="lower right", ncol=1)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=3,
+              frameon=False, columnspacing=1.2, handlelength=1.4)
     if args.titles:
         ax.set_title("End-to-end inference")
 
@@ -438,14 +442,18 @@ def fig_models(out, args):
     te = vals.get("torch-eager", [0] * len(models))
     jx = vals.get("jax", [0] * len(models))
     ir = vals.get("iree", [0] * len(models))
+    trt = vals.get("torch-tensorrt", [0] * len(models))
     header = ["model", "MetaTensor", "range", "torch.compile", "range", "eager"]
     if "jax" in systems:
         header.append("JAX/XLA")
     if "iree" in systems:
         header.append("IREE")
+    header.append("TensorRT")
     header.append("ratio")
     if "jax" in systems:
         header.append("jax/compile")
+    if "torch-tensorrt" in systems:
+        header.append("trt/compile")
     table_rows = []
     for i, m in enumerate(models):
         row = [m, "%.0f" % ov[i], spread_str(ov_st[i][1], ov_st[i][2], "%.0f"),
@@ -455,9 +463,12 @@ def fig_models(out, args):
             row.append("%.0f" % jx[i] if jx[i] else "n/a")
         if "iree" in systems:
             row.append("%.0f" % ir[i] if ir[i] else "n/a")
+        row.append("%.0f" % trt[i] if trt[i] else "n/a")
         row.append("%.2f" % (ov[i] / tc[i]) if tc[i] else "n/a")
         if "jax" in systems:
             row.append("%.2f" % (jx[i] / tc[i]) if tc[i] and jx[i] else "n/a")
+        if "torch-tensorrt" in systems:
+            row.append("%.2f" % (trt[i] / tc[i]) if tc[i] and trt[i] else "n/a")
         table_rows.append(row)
     write_table(os.path.join(args.outdir, "models.tex"),
                 "median us per iteration over the rounds, with the observed range",
@@ -661,29 +672,32 @@ def fig_micro_baselines(out, args):
     if not used:
         return None
 
-    h = 0.8 / len(used)
-    fig, ax = plt.subplots(figsize=(args.width, 0.18 * len(pts) * len(used) + 0.9))
+    # One marker per system at its ratio to MetaTensor, same convention as the
+    # app-level markers in fig_micro_speedup: 28 points x up to 6 systems as
+    # grouped bars made the figure absurdly tall, and the ratio is the number
+    # that matters here, not the absolute width of a bar.
+    markers = ["o", "s", "^", "D", "v", "P"]
+    fig, ax = plt.subplots(figsize=(args.width, 0.16 * len(pts) + 0.9))
     y = list(range(len(pts)))
     for si_, s in enumerate(used):
-        off = (si_ - (len(used) - 1) / 2) * h
         ys, xs = [], []
         for i, (_, _, m) in enumerate(pts):
             fm = med(m.get("fused", []))
             sm = med(m.get(s, []))
             if fm and sm:
-                ys.append(i + off)
+                ys.append(i)
                 xs.append(sm / fm)
         if not xs:
             continue
-        ax.barh(ys, [x - 1 for x in xs], left=1, height=h * 0.86,
-                color=SERIES[si_ % len(SERIES)], linewidth=0,
-                hatch=HATCH[si_ % len(HATCH)] if args.texture else None,
-                label=SYSTEM_LABEL.get(s, s))
+        ax.scatter(xs, ys, s=20, marker=markers[si_ % len(markers)],
+                   facecolors=SERIES[si_ % len(SERIES)], edgecolors="white",
+                   linewidth=0.5, zorder=4, label=SYSTEM_LABEL.get(s, s))
     ax.axvline(1, color=INK_2, linewidth=0.8, zorder=3)
     ax.set_xscale("log", base=2)
     ax.xaxis.set_major_formatter(FuncFormatter(
         lambda v, _: ("%g" % v).rstrip("0").rstrip(".") + "×"))
     ax.set_yticks(y, labels)
+    ax.set_ylim(-0.6, len(pts) - 0.4)
     ax.set_xlabel("time relative to MetaTensor (fused), log scale")
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
@@ -795,19 +809,32 @@ def fig_compile_overhead(out, args):
                   "%.0f" % st if st is not None else "n/a", be]
                  for key, s, c, f, st, be in rows])
 
-    keys_order = []
-    for key, s, c, f, st, be in rows:
-        if key not in keys_order:
-            keys_order.append(key)
+    # The figure is model workloads only - all 28 micro points plus 9 models
+    # in one grouped-bar figure makes the page ~4x taller than it needs to be,
+    # and the micro/table pairing already covers the micro side in
+    # micro_speedup and micro_baselines.
+    model_keys = [key for key in dict.fromkeys(k for k, s, c, f, st, be in rows)
+                  if key[0] == "models"]
+    fallback = not model_keys
+    if fallback:
+        # No model rows in this run: fall back to the micro rows, capped to
+        # the largest workloads so the figure still fits a page.
+        keys_order = list(dict.fromkeys(k for k, s, c, f, st, be in rows))
+        best = {}
+        for key, s, c, f, st, be in rows:
+            if f is not None and f > 0:
+                best[key] = max(best.get(key, 0), f)
+        keys_order = sorted(keys_order, key=lambda k: -best.get(k, 0))[:12]
+    else:
+        keys_order = model_keys
     plot_rows = [(key, s, f) for key, s, c, f, st, be in rows
-                 if f is not None and f > 0]
+                 if f is not None and f > 0 and key in keys_order]
     systems_used = [s for s in systems if any(pr[1] == s for pr in plot_rows)]
     if not plot_rows or not systems_used:
         return None
 
     h = 0.8 / len(systems_used)
-    fig, ax = plt.subplots(figsize=(
-        args.width, 0.18 * len(keys_order) * len(systems_used) + 0.9))
+    fig, ax = plt.subplots(figsize=(args.width, 0.42 * len(keys_order) + 1.3))
     y = list(range(len(keys_order)))
     for si_, s in enumerate(systems_used):
         off = (si_ - (len(systems_used) - 1) / 2) * h
@@ -829,7 +856,8 @@ def fig_compile_overhead(out, args):
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
     ax.tick_params(axis="y", length=0)
-    ax.legend(loc="lower right")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=3,
+              frameon=False, columnspacing=1.2, handlelength=1.4)
     if args.titles:
         ax.set_title("Compile / first-run overhead")
     return fig, "compile_overhead"
