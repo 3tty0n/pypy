@@ -58,7 +58,7 @@
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | bert-mini | 428.6 | 921.5 | 481.1 | 413.1 | 1804.7 | 242.6 | 3738.2 | 659.5 | 0.47x | 0.26x | 1.90735e-05 |
 | bert-tiny | 240.8 | 489.7 | 295.0 | 262.8 | 1090.2 | 111.1 | 1342.8 | 431.9 | 0.49x | 0.23x | 3.05176e-05 |
-| distilgpt2 | 1278.7 | 1350.6 | 1268.0 | 1272.9 | 2761.1 | 1014.6 | 24589.0 | 3739.8 | 0.95x | 0.75x | 0.000175476 |
+| distilgpt2 | 1278.7 | 1350.6 | 1321.6 | 1286.4 | 2761.1 | 1014.6 | 17358.9 | 3739.8 | 0.95x | 0.75x | 0.000175476 |
 | mixer_b16 | 2672.0 | 3114.9 | 3049.1 | 3124.0 | 2876.9 | 2238.2 | 1436947.2 | 2461.8 | 0.86x | 0.72x | 3.8147e-05 |
 | resnet18-b1 | 708.5 | 960.8 | 916.0 | 1055.7 | 1580.7 | 1121.8 | n/a | 989.7 | 0.74x | 1.17x | 0.00963783 |
 | resnet18-b8 | 2705.3 | 2188.9 | 2123.8 | 2135.2 | 2269.6 | 2273.1 | n/a | 2013.1 | 1.24x | 1.04x | 0.00571394 |
@@ -107,11 +107,11 @@
 | bert-tiny | iree | 862.5 | 13.7 | 1342.8 | n/a |
 | bert-tiny | ours | n/a | 115.7 | 240.8 | 22 |
 | distilgpt2 | torch-compile | n/a | 1557.6 | 1350.6 | 1013 |
-| distilgpt2 | torch-compile-ro | n/a | 1542.3 | 1268.0 | 947 |
-| distilgpt2 | torch-compile-mat | n/a | 1692.3 | 1272.9 | 1051 |
+| distilgpt2 | torch-compile-ro | n/a | 1535.0 | 1321.6 | 977 |
+| distilgpt2 | torch-compile-mat | n/a | 1630.3 | 1286.4 | 1018 |
 | distilgpt2 | torch-tensorrt | n/a | 2856.2 | 3739.8 | n/a |
 | distilgpt2 | jax | 6912.1 | 4.6 | 1014.6 | 3887 |
-| distilgpt2 | iree | 875.5 | 78.8 | 24589.0 | n/a |
+| distilgpt2 | iree | 906.7 | 76.2 | 17358.9 | n/a |
 | distilgpt2 | ours | n/a | 534.8 | 1278.7 | 274 |
 | micro v0 k1 n1000000 | torch-compile | n/a | 481.8 | 44.2 | 13120 |
 | micro v0 k1 n1000000 | torch-tensorrt | n/a | 37.9 | 80.4 | n/a |
@@ -287,28 +287,28 @@
 | vit-tiny | iree | 1697.7 | 71.1 | 36791.8 | n/a |
 | vit-tiny | ours | n/a | 143.5 | 974.8 | 9 |
 
-## Dynamic sequence length (median steady_us per length)
+## Dynamic sequence length (median steady_us per length, counters per window)
 
-| system | length | median_us | loops | bridges | recompiles |
-|---|---|---|---|---|---|
-| ours | 32 | 965.3 | 168 | 167 | 0 |
-| ours | 48 | 1363.5 | 168 | 167 | 0 |
-| ours | 64 | 1420.8 | 168 | 167 | 0 |
-| ours | 96 | 1689.5 | 168 | 167 | 0 |
-| ours | 128 | 1998.0 | 168 | 167 | 0 |
-| torch-compile-dynamic | 32 | 1265.0 | 0 | 0 | 0 |
-| torch-compile-dynamic | 48 | 1698.4 | 0 | 0 | 0 |
-| torch-compile-dynamic | 64 | 1750.7 | 0 | 0 | 0 |
-| torch-compile-dynamic | 96 | 1934.7 | 0 | 0 | 0 |
-| torch-compile-dynamic | 128 | 2148.8 | 0 | 0 | 0 |
-| torch-compile-static | 32 | 1197.6 | 0 | 0 | 4 |
-| torch-compile-static | 48 | 1569.6 | 0 | 0 | 4 |
-| torch-compile-static | 64 | 1610.5 | 0 | 0 | 4 |
-| torch-compile-static | 96 | 1838.2 | 0 | 0 | 4 |
-| torch-compile-static | 128 | 2065.6 | 0 | 0 | 4 |
-| torch-eager | 32 | 2447.1 | 0 | 0 | 0 |
-| torch-eager | 48 | 2610.0 | 0 | 0 | 0 |
-| torch-eager | 64 | 2603.6 | 0 | 0 | 0 |
-| torch-eager | 96 | 2681.8 | 0 | 0 | 0 |
-| torch-eager | 128 | 2767.8 | 0 | 0 | 0 |
+| system | pass | length | median_us | total_us | loops | bridges | kernels | cache_hits | recompiles |
+|---|---|---|---|---|---|---|---|---|---|
+| ours | 1 | 32 | 965.3 |  | 168 | 167 |  |  | 0 |
+| ours | 1 | 48 | 1363.5 |  | 168 | 167 |  |  | 0 |
+| ours | 1 | 64 | 1420.8 |  | 168 | 167 |  |  | 0 |
+| ours | 1 | 96 | 1689.5 |  | 168 | 167 |  |  | 0 |
+| ours | 1 | 128 | 1998.0 |  | 168 | 167 |  |  | 0 |
+| torch-compile-dynamic | 1 | 32 | 1265.0 |  | 0 | 0 |  |  | 0 |
+| torch-compile-dynamic | 1 | 48 | 1698.4 |  | 0 | 0 |  |  | 0 |
+| torch-compile-dynamic | 1 | 64 | 1750.7 |  | 0 | 0 |  |  | 0 |
+| torch-compile-dynamic | 1 | 96 | 1934.7 |  | 0 | 0 |  |  | 0 |
+| torch-compile-dynamic | 1 | 128 | 2148.8 |  | 0 | 0 |  |  | 0 |
+| torch-compile-static | 1 | 32 | 1197.6 |  | 0 | 0 |  |  | 4 |
+| torch-compile-static | 1 | 48 | 1569.6 |  | 0 | 0 |  |  | 4 |
+| torch-compile-static | 1 | 64 | 1610.5 |  | 0 | 0 |  |  | 4 |
+| torch-compile-static | 1 | 96 | 1838.2 |  | 0 | 0 |  |  | 4 |
+| torch-compile-static | 1 | 128 | 2065.6 |  | 0 | 0 |  |  | 4 |
+| torch-eager | 1 | 32 | 2447.1 |  | 0 | 0 |  |  | 0 |
+| torch-eager | 1 | 48 | 2610.0 |  | 0 | 0 |  |  | 0 |
+| torch-eager | 1 | 64 | 2603.6 |  | 0 | 0 |  |  | 0 |
+| torch-eager | 1 | 96 | 2681.8 |  | 0 | 0 |  |  | 0 |
+| torch-eager | 1 | 128 | 2767.8 |  | 0 | 0 |  |  | 0 |
 

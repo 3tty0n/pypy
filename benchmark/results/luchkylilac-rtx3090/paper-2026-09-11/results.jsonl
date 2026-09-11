@@ -3523,9 +3523,6 @@
 {"acc": -0.0, "breaks": -1, "compile_ms": 644.73, "compiled_in_timed": 0, "dtype": "float64", "first_run_ms": 19.938, "graphs": -1, "iters": 200, "k": 1, "kernels": 0, "kind": "micro", "mode": "iree", "n": 256000, "steady_us": 5921.024084, "variant": 13, "warm_s": 0.15301}
 {"acc": -0.0, "breaks": -1, "compile_ms": 439.445, "compiled_in_timed": 0, "dtype": "float32", "first_run_ms": 10.636, "graphs": -1, "iters": 200, "k": 1, "kernels": 0, "kind": "micro", "mode": "iree", "n": 256000, "steady_us": 1398.687363, "variant": 13, "warm_s": 0.066108}
 {"acc": 0.0, "breaks": -1, "compile_ms": 585.912, "compiled_in_timed": 0, "dtype": "float16", "first_run_ms": 9.122, "graphs": -1, "iters": 200, "k": 1, "kernels": 0, "kind": "micro", "mode": "iree", "n": 256000, "steady_us": 584.09214, "variant": 13, "warm_s": 0.047622}
-{"compile_ms": 875.5, "first_run_ms": 78.8, "kind": "models", "maxabsdiff": 1.11174, "model": "distilgpt2", "round": 1, "steady_us": 24589.0, "system": "iree"}
-{"compile_ms": 913.6, "first_run_ms": 91.7, "kind": "models", "maxabsdiff": 1.11174, "model": "distilgpt2", "round": 2, "steady_us": 25437.3, "system": "iree"}
-{"compile_ms": 874.9, "first_run_ms": 72.7, "kind": "models", "maxabsdiff": 1.11174, "model": "distilgpt2", "round": 3, "steady_us": 18018.9, "system": "iree"}
 {"compile_ms": 411.0, "first_run_ms": 11.7, "kind": "models", "maxabsdiff": 7.45058e-08, "model": "tiny-gpt2", "round": 1, "steady_us": 190.6, "system": "iree"}
 {"compile_ms": 385.5, "first_run_ms": 13.0, "kind": "models", "maxabsdiff": 7.45058e-08, "model": "tiny-gpt2", "round": 2, "steady_us": 1283.4, "system": "iree"}
 {"compile_ms": 400.5, "first_run_ms": 11.1, "kind": "models", "maxabsdiff": 7.45058e-08, "model": "tiny-gpt2", "round": 3, "steady_us": 189.8, "system": "iree"}
@@ -3544,12 +3541,6 @@
 {"compile_ms": 2050.3, "first_run_ms": 176.2, "kind": "models", "maxabsdiff": 0.000312805, "model": "smollm2-135m", "round": 1, "steady_us": 19095.9, "system": "iree"}
 {"compile_ms": 2047.6, "first_run_ms": 172.6, "kind": "models", "maxabsdiff": 0.000312805, "model": "smollm2-135m", "round": 2, "steady_us": 19097.1, "system": "iree"}
 {"compile_ms": 2063.4, "first_run_ms": 172.5, "kind": "models", "maxabsdiff": 0.000312805, "model": "smollm2-135m", "round": 3, "steady_us": 19105.0, "system": "iree"}
-{"compile_ms": -1, "first_run_ms": 3329.4, "kind": "models", "maxabsdiff": 1.11172, "model": "distilgpt2", "round": 1, "steady_us": 1266.0, "system": "torch-compile-ro"}
-{"compile_ms": -1, "first_run_ms": 36967.7, "kind": "models", "maxabsdiff": 1.11166, "model": "distilgpt2", "round": 1, "steady_us": 1273.3, "system": "torch-compile-mat"}
-{"compile_ms": -1, "first_run_ms": 1542.3, "kind": "models", "maxabsdiff": 1.11172, "model": "distilgpt2", "round": 2, "steady_us": 1275.3, "system": "torch-compile-ro"}
-{"compile_ms": -1, "first_run_ms": 1680.4, "kind": "models", "maxabsdiff": 1.11166, "model": "distilgpt2", "round": 2, "steady_us": 1272.9, "system": "torch-compile-mat"}
-{"compile_ms": -1, "first_run_ms": 1509.0, "kind": "models", "maxabsdiff": 1.11172, "model": "distilgpt2", "round": 3, "steady_us": 1268.0, "system": "torch-compile-ro"}
-{"compile_ms": -1, "first_run_ms": 1692.3, "kind": "models", "maxabsdiff": 1.11166, "model": "distilgpt2", "round": 3, "steady_us": 1261.1, "system": "torch-compile-mat"}
 {"compile_ms": -1, "first_run_ms": 2502.3, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 1, "steady_us": 214.1, "system": "torch-compile-ro"}
 {"compile_ms": -1, "first_run_ms": 9428.6, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 1, "steady_us": 246.5, "system": "torch-compile-mat"}
 {"compile_ms": -1, "first_run_ms": 1194.8, "kind": "models", "maxabsdiff": 2.6077e-08, "model": "tiny-gpt2", "round": 2, "steady_us": 204.0, "system": "torch-compile-ro"}
@@ -3622,3 +3613,12 @@
 {"acc": -0.0, "breaks": -1, "compile_ms": -1, "compiled_in_timed": 0, "dtype": "float64", "first_run_ms": 1674.786, "graphs": -1, "iters": 200, "k": 1, "kernels": 0, "kind": "micro", "mode": "torch-compile-mat", "n": 256000, "steady_us": 5058.306456, "variant": 13, "warm_s": 1.865124}
 {"acc": 3221914.952339, "breaks": -1, "compile_ms": -1, "compiled_in_timed": 0, "dtype": "float64", "first_run_ms": 1804.783, "graphs": -1, "iters": 200, "k": 1, "kernels": 0, "kind": "micro", "mode": "torch-compile-ro", "n": 25600, "steady_us": 528.125763, "variant": 8, "warm_s": 1.851975}
 {"acc": 3221914.952339, "breaks": -1, "compile_ms": -1, "compiled_in_timed": 0, "dtype": "float64", "first_run_ms": 1741.224, "graphs": -1, "iters": 200, "k": 1, "kernels": 0, "kind": "micro", "mode": "torch-compile-mat", "n": 25600, "steady_us": 541.328192, "variant": 8, "warm_s": 1.789289}
+{"compile_ms": -1, "first_run_ms": 1481.0, "kind": "models", "maxabsdiff": 0.000221252, "model": "distilgpt2", "round": 1, "steady_us": 1284.2, "system": "torch-compile-ro"}
+{"compile_ms": -1, "first_run_ms": 1609.7, "kind": "models", "maxabsdiff": 0.000274658, "model": "distilgpt2", "round": 1, "steady_us": 1286.4, "system": "torch-compile-mat"}
+{"compile_ms": 906.7, "first_run_ms": 80.4, "kind": "models", "maxabsdiff": 0.000267029, "model": "distilgpt2", "round": 1, "steady_us": 17582.5, "system": "iree"}
+{"compile_ms": -1, "first_run_ms": 1535.0, "kind": "models", "maxabsdiff": 0.000221252, "model": "distilgpt2", "round": 2, "steady_us": 1422.1, "system": "torch-compile-ro"}
+{"compile_ms": -1, "first_run_ms": 1737.0, "kind": "models", "maxabsdiff": 0.000274658, "model": "distilgpt2", "round": 2, "steady_us": 1284.4, "system": "torch-compile-mat"}
+{"compile_ms": 973.0, "first_run_ms": 76.0, "kind": "models", "maxabsdiff": 0.000267029, "model": "distilgpt2", "round": 2, "steady_us": 17358.9, "system": "iree"}
+{"compile_ms": -1, "first_run_ms": 1740.5, "kind": "models", "maxabsdiff": 0.000221252, "model": "distilgpt2", "round": 3, "steady_us": 1321.6, "system": "torch-compile-ro"}
+{"compile_ms": -1, "first_run_ms": 1630.3, "kind": "models", "maxabsdiff": 0.000274658, "model": "distilgpt2", "round": 3, "steady_us": 1326.3, "system": "torch-compile-mat"}
+{"compile_ms": 877.6, "first_run_ms": 76.2, "kind": "models", "maxabsdiff": 0.000267029, "model": "distilgpt2", "round": 3, "steady_us": 17144.1, "system": "iree"}
