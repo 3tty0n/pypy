@@ -107,11 +107,21 @@ def top5(flat):
     return sorted(range(len(flat)), key=lambda j: -flat[j])[:5]
 
 
+def reference_name(dtype=None):
+    """logits_pypy.bin is the float32 reference every system is checked
+    against; other dtypes get their own file so a float16 ablation run
+    cannot overwrite it."""
+    dtype = dtype or os.environ.get('RTENSOR_DTYPE', 'float32')
+    if dtype == 'float32':
+        return 'logits_pypy.bin'
+    return 'logits_pypy_%s.bin' % dtype
+
+
 def dump(outdir, flat):
     out = array.array('f', flat)
     if sys.byteorder != 'little':
         out.byteswap()
-    out.tofile(open(os.path.join(outdir, 'logits_pypy.bin'), 'wb'))
+    out.tofile(open(os.path.join(outdir, reference_name()), 'wb'))
 
 
 def report(line, order):

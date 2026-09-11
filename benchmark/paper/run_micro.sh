@@ -52,18 +52,26 @@ baseline_run() {
   echo "$line" | tr ' ' '\t' >> "$TSV"
   record_micro_line "$line"
 }
-IREE_VARIANTS=" 0 6 11 12 13 "
+# variant 9 (CNN) is the only one excluded: IREE's CUDA backend rejects the
+# conv2d lowering ("linalg.conv_2d_nhwc_hwcf ... strides failed to satisfy
+# constraint: 64-bit signless int elements") for a StableHLO conv exported by
+# jax.export, a compiler limitation, not something this harness controls.
+# Every other variant, at every dtype in the precision sweep, compiles and
+# matches jax to the printed digits (fp16 attention, variant 13, cancels to
+# ~1e-4 like every other backend's fp16 attention).
+IREE_VARIANTS=" 0 1 2 3 4 5 6 7 8 10 11 12 13 "
+BASELINES=${BASELINES:-"triton tensorrt jax iree"}
+has_baseline() { case " $BASELINES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 baselines() {
   local variant=$1 k=$2 n=$3
-  baseline_run "$TORCH_PYTHON" triton_bench.py triton "$variant" "$k" "$n" "$ITERS"
-  baseline_run "$TRT_PYTHON" torch_bench.py tensorrt "$variant" "$k" "$n" "$ITERS"
-  baseline_run "$JAX_PYTHON" jax_bench.py jax "$variant" "$k" "$n" "$ITERS"
-  case "$IREE_VARIANTS" in
-    *" $variant "*)
-      if [ "${RTENSOR_DTYPE:-float64}" = float64 ]; then
-        baseline_run "$JAX_PYTHON" jax_bench.py iree "$variant" "$k" "$n" "$ITERS"
-      fi ;;
-  esac
+  has_baseline triton && baseline_run "$TORCH_PYTHON" triton_bench.py triton "$variant" "$k" "$n" "$ITERS"
+  has_baseline tensorrt && baseline_run "$TRT_PYTHON" torch_bench.py tensorrt "$variant" "$k" "$n" "$ITERS"
+  has_baseline jax && baseline_run "$JAX_PYTHON" jax_bench.py jax "$variant" "$k" "$n" "$ITERS"
+  if has_baseline iree; then
+    case "$IREE_VARIANTS" in
+      *" $variant "*) baseline_run "$JAX_PYTHON" jax_bench.py iree "$variant" "$k" "$n" "$ITERS" ;;
+    esac
+  fi
 }
 
 app_point() {

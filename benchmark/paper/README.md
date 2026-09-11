@@ -133,7 +133,7 @@ benchmark had to change.
 | backend | script | mode / system | what it covers |
 |---|---|---|---|
 | JAX/XLA (`jax.jit`) | `benchmark/jax_bench.py`, `benchmark/applevel/jax_models.py` | `jax` | every micro variant 0-13; gpt2 (distilgpt2, tiny-gpt2), bert (tiny, mini), vit-tiny, mixer_b16, smollm2-135m (llama), resnet18 (b1, b8) |
-| IREE (StableHLO from the same JAX code, CUDA HAL) | same two scripts, mode `iree` | `iree` | micro variants 0, 6, 11, 12, 13; bert-mini, vit-tiny |
+| IREE (StableHLO from the same JAX code, CUDA HAL) | same two scripts, mode `iree` | `iree` | every micro variant except 9 (CNN), at every dtype in the precision sweep; gpt2 (distilgpt2, tiny-gpt2), bert (tiny, mini), vit-tiny, mixer_b16, smollm2-135m; not resnet18 (same conv2d limitation) |
 | handwritten Triton | `benchmark/triton_bench.py` | `triton` | micro variants 0-5 (fused elementwise chain), 6 (MLP), 11 (reduction), 12 (matmul + bias + relu), 13 (attention: Triton GEMMs + a flash-style online-softmax kernel) |
 | Torch-TensorRT 2.9 (`torch.compile(backend="tensorrt")`) | the existing `*_torch.py` and `torch_bench.py`, mode `tensorrt` | `torch-tensorrt` | every model and every micro variant, from the unchanged PyTorch definitions |
 
@@ -163,11 +163,15 @@ torch and triton.
 
 Nothing changes: `bench.sh micro` adds `jax`, `iree` (where supported) and
 `triton` rows to every point, `bench.sh models` adds `jax` (and `iree` for
-bert-mini and vit-tiny) rows, and `bench.sh check baselines` runs one point
+the models it covers) rows, and `bench.sh check baselines` runs one point
 on each and checks its accumulator against torch eager. `summarize.md` gains
 the JAX/IREE/Triton columns, an `ours/Triton` ratio (MetaTensor latency over
 handwritten-Triton latency) and a compilation-overhead table; `plot` writes
 `micro_baselines.*`, `compile_overhead.*` and the extra model bars.
+`BASELINES` (space-separated subset of `triton tensorrt jax iree`, default
+all) restricts which baseline rows `run_micro.sh`/`run_models.sh` add, so
+`BASELINES=iree ./bench.sh micro --baselines-only` fills in just the IREE
+rows of an existing result set.
 
 ### Methodology per backend
 
@@ -235,11 +239,17 @@ Known comparability limits:
   (`~/.triton`, inductor cache), so their `compile_ms` reflects that cache;
   JAX's persistent compilation cache is off, so its `compile_ms` is always
   a cold compile.
-- IREE covers a subset and its numbers include Python runtime dispatch.
+- IREE covers a subset and its numbers include Python runtime dispatch: its
+  CUDA backend rejects the conv2d lowering StableHLO/jax.export produce
+  (`linalg.conv_2d_nhwc_hwcf` strides attribute), so micro variant 9 (CNN)
+  and resnet18 (b1, b8) are absent; smollm2-135m (llama) is also absent
+  because its maxabsdiff against the stored reference already exceeds
+  tolerance on plain `jax`, a pre-existing reference mismatch unrelated to
+  IREE.
 - `kernel_count` is left empty for JAX, IREE and torch; only MetaTensor and
   the Triton baseline (where it is the number of distinct kernels) report it.
-- The precision sweep (float32/float16) runs jax and triton at those dtypes
-  too; IREE is float64 only there.
+- The precision sweep (float32/float16) runs jax, triton and iree at those
+  dtypes too.
 
 ### Where the JAX gap comes from
 

@@ -347,7 +347,7 @@ def step(h, b, i):
         if i % 7 == 0:
             h = add(h, b)
     elif variant == 3:
-        if float(total(h)) > 0.0:
+        if float(sync(total(h))) > 0.0:
             h = add(h, b)
     elif variant == 4:
         try:

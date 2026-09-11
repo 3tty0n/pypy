@@ -63,19 +63,16 @@ bert-mini	ours	1	429.2			-1	2148.9
 bert-mini	torch-eager	1	1804.7	1.90735e-05	1	-1	84.4
 bert-mini	torch-compile	1	734.6	1.81198e-05	1	-1	3862.0
 bert-mini	jax	1	241.5	2.00272e-05	1	7238.5	2.7
-bert-mini	iree	1	3645.4	2.47955e-05	1	1021.8	18.6
 bert-mini	torch-tensorrt	1	659.8	2.38419e-05	1	-1	5507.5
 bert-mini	ours	2	428.6			-1	194.6
 bert-mini	torch-eager	2	1777.5	1.90735e-05	1	-1	84.1
 bert-mini	torch-compile	2	921.5	1.81198e-05	1	-1	1282.4
 bert-mini	jax	2	244.6	2.00272e-05	1	7029.9	2.7
-bert-mini	iree	2	3627.1	2.47955e-05	1	1006.5	19.3
 bert-mini	torch-tensorrt	2	659.5	2.38419e-05	1	-1	4856.2
 bert-mini	ours	3	420.1			-1	176.4
 bert-mini	torch-eager	3	1823.3	1.90735e-05	1	-1	89.3
 bert-mini	torch-compile	3	947.8	1.81198e-05	1	-1	1302.8
 bert-mini	jax	3	242.6	2.00272e-05	1	7061.4	2.7
-bert-mini	iree	3	3614.9	2.47955e-05	1	1010.4	18.6
 bert-mini	torch-tensorrt	3	654.3	2.38419e-05	1	-1	4692.4
 resnet18-b1	ours	1	708.5			-1	5505.7
 resnet18-b1	torch-eager	1	1599.9	0.00963783	1	-1	221.1
@@ -126,17 +123,35 @@ vit-tiny	ours	1	1015.0			-1	2378.1
 vit-tiny	torch-eager	1	3819.1	1.07288e-05	1	-1	119.4
 vit-tiny	torch-compile	1	1997.3	1.2517e-05	1	-1	6839.0
 vit-tiny	jax	1	746.0	1.15037e-05	1	6174.0	6.8
-vit-tiny	iree	1	24994.8	1.54972e-05	1	1700.9	38.1
 vit-tiny	torch-tensorrt	1	1056.0	1.07884e-05	1	-1	8545.4
 vit-tiny	ours	2	966.4			-1	134.7
 vit-tiny	torch-eager	2	3826.2	1.07288e-05	1	-1	118.8
 vit-tiny	torch-compile	2	2073.3	1.2517e-05	1	-1	1778.9
 vit-tiny	jax	2	771.5	1.15037e-05	1	6705.4	7.7
-vit-tiny	iree	2	24956.6	1.54972e-05	1	1681.5	38.6
 vit-tiny	torch-tensorrt	2	1034.4	1.07884e-05	1	-1	7641.6
 vit-tiny	ours	3	974.8			-1	143.5
 vit-tiny	torch-eager	3	3839.3	1.07288e-05	1	-1	118.9
 vit-tiny	torch-compile	3	2056.3	1.2517e-05	1	-1	1700.8
 vit-tiny	jax	3	736.8	1.15037e-05	1	6744.0	7.8
-vit-tiny	iree	3	24999.4	1.54972e-05	1	1673.3	38.9
 vit-tiny	torch-tensorrt	3	1032.8	1.07884e-05	1	-1	7555.5
+distilgpt2	iree	1	24589.0	1.11174		875.5	78.8
+distilgpt2	iree	2	25437.3	1.11174		913.6	91.7
+distilgpt2	iree	3	18018.9	1.11174		874.9	72.7
+tiny-gpt2	iree	1	190.6	7.45058e-08		411.0	11.7
+tiny-gpt2	iree	2	1283.4	7.45058e-08		385.5	13.0
+tiny-gpt2	iree	3	189.8	7.45058e-08		400.5	11.1
+bert-tiny	iree	1	1460.3	3.52859e-05		878.1	13.7
+bert-tiny	iree	2	1310.5	3.52859e-05		843.6	13.4
+bert-tiny	iree	3	1342.8	3.52859e-05		862.5	14.1
+bert-mini	iree	1	3660.8	2.47955e-05		1032.2	19.6
+bert-mini	iree	2	3738.2	2.47955e-05		997.7	18.8
+bert-mini	iree	3	8169.3	2.47955e-05		1125.5	19.4
+mixer_b16	iree	1	1436947.2	4.72069e-05		1471.0	1702.1
+mixer_b16	iree	2	1439509.5	4.72069e-05		1482.3	1638.2
+mixer_b16	iree	3	1431638.2	4.72069e-05		1706.2	1660.3
+vit-tiny	iree	1	36791.8	1.54972e-05		1682.8	73.2
+vit-tiny	iree	2	37069.8	1.54972e-05		1701.5	68.9
+vit-tiny	iree	3	30227.9	1.54972e-05		1697.7	71.1
+smollm2-135m	iree	1	19095.9	0.000312805		2050.3	176.2
+smollm2-135m	iree	2	19097.1	0.000312805		2047.6	172.6
+smollm2-135m	iree	3	19105.0	0.000312805		2063.4	172.5

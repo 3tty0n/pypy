@@ -86,8 +86,13 @@ def timed(fwd, args, a):
     return logits, acc, steady_us
 
 
+def reference_name():
+    dtype = os.environ.get('RTENSOR_DTYPE', 'float32')
+    return 'logits_pypy.bin' if dtype == 'float32' else 'logits_pypy_%s.bin' % dtype
+
+
 def compare(outdir, logits, argmax=None):
-    ref = os.path.join(outdir, 'logits_pypy.bin')
+    ref = os.path.join(outdir, reference_name())
     if not os.path.exists(ref):
         return ''
     other = torch.frombuffer(open(ref, 'rb').read(),
