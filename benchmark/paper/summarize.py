@@ -52,7 +52,8 @@ def compile_table(records, lines):
         eager = g[key].get("torch-eager", {})
         e_first = known(med(eager.get("first_run_ms", [])))
         e_steady = med(eager.get("steady_us", []))
-        for system in ("torch-compile", "torch-tensorrt", "jax", "iree", "triton", "fused", "ours"):
+        for system in ("torch-compile", "torch-compile-ro", "torch-compile-mat",
+                       "torch-tensorrt", "jax", "iree", "triton", "fused", "ours"):
             if system not in g[key]:
                 continue
             d = g[key][system]
@@ -86,8 +87,8 @@ def main(out_dir):
     micro = read_tsv(os.path.join(out_dir, "micro.tsv"))
     if micro:
         lines.append("## Microbenchmarks (median steady_us over rounds)\n")
-        lines.append("| variant | k | n | fused (ours) | app-level (ours) | eager (ours) | nojit (ours) | torch.compile | torch eager | JAX/XLA | IREE | Triton | speedup vs compile | interp tax | ours/Triton |")
-        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+        lines.append("| variant | k | n | fused (ours) | app-level (ours) | eager (ours) | nojit (ours) | torch.compile | compile-ro | compile-mat | torch eager | JAX/XLA | IREE | Triton | speedup vs compile | interp tax | ours/Triton |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         groups = collections.defaultdict(lambda: collections.defaultdict(list))
         for r in micro:
             dtype = r.get("breaks") or r.get("graphs") or "float64"
@@ -97,6 +98,8 @@ def main(out_dir):
             fused = med(g.get("fused", []))
             app = med(g.get("app", []))
             compiled = med(g.get("torch-compile", []))
+            compiled_ro = med(g.get("torch-compile-ro", []))
+            compiled_mat = med(g.get("torch-compile-mat", []))
             speedup = compiled / fused if fused and compiled else None
             # What the PyPy interpreter costs on top of the mechanism: the same
             # model run app-level over the same model run as a translated
@@ -104,10 +107,11 @@ def main(out_dir):
             tax = app / fused if app and fused else None
             triton = med(g.get("triton", []))
             kernel_gap = fused / triton if fused and triton else None
-            return "| %d | %d | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+            return "| %d | %d | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
                 key[1], key[2], key[3], fmt(fused), fmt(app),
                 fmt(med(g.get("eager", []))),
                 fmt(med(g.get("nojit", []))), fmt(compiled),
+                fmt(compiled_ro), fmt(compiled_mat),
                 fmt(med(g.get("torch-eager", []))),
                 fmt(med(g.get("jax", []))), fmt(med(g.get("iree", []))),
                 fmt(triton),
@@ -121,8 +125,8 @@ def main(out_dir):
         others = [k for k in sorted(groups) if k[0] != "float64"]
         if others:
             lines.append("## Precision sweep (median steady_us)\n")
-            lines.append("| dtype | variant | k | n | fused (ours) | app-level (ours) | eager (ours) | nojit (ours) | torch.compile | torch eager | JAX/XLA | IREE | Triton | speedup vs compile | interp tax | ours/Triton |")
-            lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+            lines.append("| dtype | variant | k | n | fused (ours) | app-level (ours) | eager (ours) | nojit (ours) | torch.compile | compile-ro | compile-mat | torch eager | JAX/XLA | IREE | Triton | speedup vs compile | interp tax | ours/Triton |")
+            lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
             for key in others:
                 lines.append("| %s %s" % (key[0], row(key, groups[key])))
             lines.append("")
@@ -151,8 +155,8 @@ def main(out_dir):
     models = read_tsv(os.path.join(out_dir, "models.tsv"))
     if models:
         lines.append("## End-to-end models (median steady_us, ratio to torch.compile)\n")
-        lines.append("| model | ours | torch.compile | torch eager | JAX/XLA | IREE | TensorRT | ratio ours/compile | ratio jax/compile | correctness |")
-        lines.append("|---|---|---|---|---|---|---|---|---|---|")
+        lines.append("| model | ours | torch.compile | compile-ro | compile-mat | torch eager | JAX/XLA | IREE | TensorRT | ratio ours/compile | ratio jax/compile | correctness |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
         g = collections.defaultdict(lambda: collections.defaultdict(list))
         corr = collections.defaultdict(list)
         for r in models:
@@ -162,6 +166,8 @@ def main(out_dir):
         for model in sorted(g):
             ours = med(g[model].get("ours", []))
             compiled = med(g[model].get("torch-compile", []))
+            compiled_ro = med(g[model].get("torch-compile-ro", []))
+            compiled_mat = med(g[model].get("torch-compile-mat", []))
             eager = med(g[model].get("torch-eager", []))
             ratio = ours / compiled if ours and compiled else None
             jax_ = med(g[model].get("jax", []))
@@ -169,8 +175,9 @@ def main(out_dir):
             jratio = jax_ / compiled if jax_ and compiled else None
             c = corr.get(model, [])
             cstr = c[0] if c else ""
-            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
-                model, fmt(ours), fmt(compiled), fmt(eager), fmt(jax_),
+            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+                model, fmt(ours), fmt(compiled), fmt(compiled_ro), fmt(compiled_mat),
+                fmt(eager), fmt(jax_),
                 fmt(iree), fmt(med(g[model].get("torch-tensorrt", []))),
                 fmt(ratio, "%.2fx") if ratio else "n/a",
                 fmt(jratio, "%.2fx") if jratio else "n/a", cstr))

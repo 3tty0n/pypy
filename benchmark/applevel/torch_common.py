@@ -50,10 +50,16 @@ def hf_kwargs(a):
 
 
 def compiled(fwd, a):
-    """eager: as is; compile: Inductor; tensorrt: Torch-TensorRT through the
-    torch.compile front end, so the same model definition serves all three."""
+    """eager: as is; compile: Inductor; compile-ro/compile-mat: Inductor under
+    reduce-overhead (CUDA graphs) / max-autotune; tensorrt: Torch-TensorRT
+    through the torch.compile front end, so the same model definition serves
+    all systems."""
     if a.mode == 'compile':
         return torch.compile(fwd)
+    if a.mode == 'compile-ro':
+        return torch.compile(fwd, mode='reduce-overhead')
+    if a.mode == 'compile-mat':
+        return torch.compile(fwd, mode='max-autotune')
     if a.mode == 'tensorrt':
         import torch_tensorrt  # noqa: F401  registers the backend
         return torch.compile(fwd, backend='tensorrt',
@@ -83,6 +89,14 @@ def timed(fwd, args, a):
             torch.cuda.synchronize()
         acc = logits.double().sum().item()
         steady_us = (time.time() - t0) / a.iters * 1e6
+        if a.mode in ('compile-ro', 'compile-mat'):
+            # Both modes turn cudagraphs on (reduce-overhead always,
+            # max-autotune by default) and replay into a static output
+            # buffer; the caller (argmax/compare) reads logits again after
+            # this returns, and the timed loop above is already done, so
+            # cloning here costs nothing in the measured region while making
+            # that later read safe against the buffer being reused.
+            logits = logits.clone()
     return logits, acc, steady_us
 
 

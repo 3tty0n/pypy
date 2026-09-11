@@ -44,6 +44,10 @@ def make_input(rows, cols):
 def compiled(fn):
     if mode == "compile":
         return torch.compile(fn, dynamic=False)
+    if mode == "compile-ro":
+        return torch.compile(fn, dynamic=False, mode="reduce-overhead")
+    if mode == "compile-mat":
+        return torch.compile(fn, dynamic=False, mode="max-autotune")
     if mode == "tensorrt":
         import torch_tensorrt  # noqa: F401
         return torch.compile(fn, dynamic=False, backend="tensorrt",
@@ -53,9 +57,33 @@ def compiled(fn):
     return fn
 
 
+# max-autotune also turns cudagraphs on by default (not just reduce-overhead).
+CUDAGRAPH_MODES = ("compile-ro", "compile-mat")
+
+
+def mark_step():
+    # A no-op outside cudagraph mode; before every model invocation under a
+    # cudagraph mode so cudagraph trees knows a new generation started.
+    if mode in CUDAGRAPH_MODES:
+        torch.compiler.cudagraph_mark_step_begin()
+
+
+def cg_persist(x):
+    """Under a cudagraph mode a call's output lives in a static cudagraph
+    buffer that the next replay overwrites; these benchmarks feed each call's
+    output back in as the next call's input (a real recurrence, not a fixed
+    input replayed each time), so that buffer has to be cloned to survive
+    into the next generation - mark_step_begin() alone raises "accessing
+    tensor output of CUDAGraphs that has been overwritten". The clone is
+    genuine cost of this access pattern under cudagraphs, so it stays inside
+    the timed loop rather than being hidden."""
+    return x.clone() if mode in CUDAGRAPH_MODES else x
+
+
 def loop(step, x, iters):
     for _ in range(iters):
-        x = step(x)
+        mark_step()
+        x = cg_persist(step(x))
     torch.cuda.synchronize()
     return x.sum().item()
 
@@ -116,6 +144,7 @@ def run_mlp_train(iters):
     step = compiled(step)
     loss = 0.0
     for _ in range(iters):
+        mark_step()
         loss = sgd(params, step())
     torch.cuda.synchronize()
     return loss
@@ -193,6 +222,7 @@ def run_transformer_train(iters):
     step = compiled(step)
     loss = 0.0
     for _ in range(iters):
+        mark_step()
         loss = sgd(params, step())
     torch.cuda.synchronize()
     return loss
@@ -223,6 +253,7 @@ def run_cnn(iters):
     acc = 0.0
     with torch.no_grad():
         for _ in range(iters):
+            mark_step()
             acc += step(x).sum().item()
     torch.cuda.synchronize()
     return acc
@@ -322,17 +353,18 @@ def step(h, b, i):
 
 
 graphs = breaks = -1
-if mode == "compile":
+if mode in ("compile", "compile-ro", "compile-mat"):
     import torch._dynamo
     ex = torch._dynamo.explain(step)(w, b, 0)
     graphs, breaks = ex.graph_count, ex.graph_break_count
-    step = torch.compile(step, dynamic=False)
+    step = compiled(step)
 
 
 def run(iters):
     h = w
     for i in range(iters):
-        h = step(h, b, i)
+        mark_step()
+        h = cg_persist(step(h, b, i))
     torch.cuda.synchronize()
     return h.sum().item()
 

@@ -60,12 +60,17 @@ baseline_run() {
 # matches jax to the printed digits (fp16 attention, variant 13, cancels to
 # ~1e-4 like every other backend's fp16 attention).
 IREE_VARIANTS=" 0 1 2 3 4 5 6 7 8 10 11 12 13 "
-BASELINES=${BASELINES:-"triton tensorrt jax iree"}
+BASELINES=${BASELINES:-"triton tensorrt compile-ro compile-mat jax iree"}
 has_baseline() { case " $BASELINES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 baselines() {
   local variant=$1 k=$2 n=$3
   has_baseline triton && baseline_run "$TORCH_PYTHON" triton_bench.py triton "$variant" "$k" "$n" "$ITERS"
   has_baseline tensorrt && baseline_run "$TRT_PYTHON" torch_bench.py tensorrt "$variant" "$k" "$n" "$ITERS"
+  # Reachable both from the normal torch section below (run_point calls
+  # baselines() at the end of every point) and from --baselines-only, which
+  # calls only baselines().
+  has_baseline compile-ro && torchrun compile-ro "$variant" "$k" "$n" "$ITERS"
+  has_baseline compile-mat && torchrun compile-mat "$variant" "$k" "$n" "$ITERS"
   has_baseline jax && baseline_run "$JAX_PYTHON" jax_bench.py jax "$variant" "$k" "$n" "$ITERS"
   if has_baseline iree; then
     case "$IREE_VARIANTS" in

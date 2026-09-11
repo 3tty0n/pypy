@@ -96,7 +96,7 @@ group_dtypes() {
 group_torch() {
   echo "== torch baselines =="
   local mode line
-  for mode in compile eager; do
+  for mode in compile compile-ro compile-mat eager; do
     line=$("$TORCH_PYTHON" "$HERE/../torch_bench.py" "$mode" 8 1 25600 "$ITERS" 2>/dev/null | tail -1)
     if [ -z "$line" ]; then bad "torch-$mode runs"; continue; fi
     local steady acc

@@ -136,6 +136,8 @@ benchmark had to change.
 | IREE (StableHLO from the same JAX code, CUDA HAL) | same two scripts, mode `iree` | `iree` | every micro variant except 9 (CNN), at every dtype in the precision sweep; gpt2 (distilgpt2, tiny-gpt2), bert (tiny, mini), vit-tiny, mixer_b16, smollm2-135m; not resnet18 (same conv2d limitation) |
 | handwritten Triton | `benchmark/triton_bench.py` | `triton` | micro variants 0-5 (fused elementwise chain), 6 (MLP), 11 (reduction), 12 (matmul + bias + relu), 13 (attention: Triton GEMMs + a flash-style online-softmax kernel) |
 | Torch-TensorRT 2.9 (`torch.compile(backend="tensorrt")`) | the existing `*_torch.py` and `torch_bench.py`, mode `tensorrt` | `torch-tensorrt` | every model and every micro variant, from the unchanged PyTorch definitions |
+| torch.compile, `mode="reduce-overhead"` (CUDA graphs) | same scripts, mode `compile-ro` | `torch-compile-ro` | every model and every micro variant, same PyTorch definitions |
+| torch.compile, `mode="max-autotune"` | same scripts, mode `compile-mat` | `torch-compile-mat` | every model and every micro variant, same PyTorch definitions |
 
 ### Installing
 
@@ -161,21 +163,30 @@ torch and triton.
 
 ### Running
 
-Nothing changes: `bench.sh micro` adds `jax`, `iree` (where supported) and
-`triton` rows to every point, `bench.sh models` adds `jax` (and `iree` for
-the models it covers) rows, and `bench.sh check baselines` runs one point
-on each and checks its accumulator against torch eager. `summarize.md` gains
-the JAX/IREE/Triton columns, an `ours/Triton` ratio (MetaTensor latency over
-handwritten-Triton latency) and a compilation-overhead table; `plot` writes
-`micro_baselines.*`, `compile_overhead.*` and the extra model bars. IREE
-is one to two orders of magnitude behind XLA on this GPU and flattens every
-axis it shares, so the figures leave it out by default; the tables always
-carry it, and `bench.sh plot --iree` writes `models_iree.*`,
-`micro_baselines_iree.*` and `compile_overhead_iree.*` with it included.
-`BASELINES` (space-separated subset of `triton tensorrt jax iree`, default
-all) restricts which baseline rows `run_micro.sh`/`run_models.sh` add, so
+Nothing changes: `bench.sh micro` adds `jax`, `iree` (where supported),
+`triton`, `compile-ro` and `compile-mat` rows to every point, `bench.sh
+models` adds `jax` (and `iree` for the models it covers), `compile-ro` and
+`compile-mat` rows, and `bench.sh check baselines` runs one point on each and
+checks its accumulator against torch eager. `summarize.md` gains the
+JAX/IREE/Triton/compile-ro/compile-mat columns, an `ours/Triton` ratio
+(MetaTensor latency over handwritten-Triton latency) and a
+compilation-overhead table; `plot` writes `micro_baselines.*`,
+`compile_overhead.*` and the extra model bars. IREE is one to two orders of
+magnitude behind XLA on this GPU and flattens every axis it shares, so the
+figures leave it out by default; the tables always carry it, and `bench.sh
+plot --iree` writes `models_iree.*`, `micro_baselines_iree.*` and
+`compile_overhead_iree.*` with it included. `BASELINES` (space-separated
+subset of `triton tensorrt compile-ro compile-mat jax iree`, default all)
+restricts which baseline rows `run_micro.sh`/`run_models.sh` add, so
 `BASELINES=iree ./bench.sh micro --baselines-only` fills in just the IREE
-rows of an existing result set.
+rows of an existing result set, and `BASELINES="compile-ro compile-mat"
+./bench.sh models --baselines-only` fills in just the two new
+torch.compile-mode rows. `torch-compile-ro` runs under `mode="reduce-overhead"`
+(CUDA graphs); the harness already reuses the same input tensors across
+iterations that mode needs, and `torch_common.timed` clones the final output
+once, after the timed loop, so the accuracy check that reads it back doesn't
+race the next CUDA graph replay. `torch-compile-mat` runs under
+`mode="max-autotune"`, which can take minutes to compile per point.
 
 ### Methodology per backend
 

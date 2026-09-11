@@ -15,8 +15,9 @@ commands:
                          (--dtype float32 sets RTENSOR_DTYPE/TORCH_DTYPE;
                           --applevel runs variants 0/8/9/13 through pypy-c
                           instead of metatensor-bench, adding "app" rows;
-                          triton rows always, jax/iree rows when JAX_PYTHON
-                          is set - see README "Other backends";
+                          triton rows always, torch-compile-ro/-mat rows
+                          (CUDA graphs / max-autotune) always, jax/iree rows
+                          when JAX_PYTHON is set - see README "Other backends";
                           --baselines-only adds only those rows)
   models [--baselines-only] [NAME...]
                          end-to-end models; no args = all

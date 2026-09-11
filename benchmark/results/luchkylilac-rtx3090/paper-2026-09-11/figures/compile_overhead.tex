@@ -78,11 +78,15 @@ matmul n=256k & JAX/XLA & 1570 & 1 & 257 & 5704 \\
 matmul n=256k & IREE & 241 & 10 & 560 & n/a \\
 matmul n=256k & Triton (handwritten) & 308 & 0 & 300 & 409 \\
 attention n=25.6k & torch.compile & n/a & 1803 & 598 & n/a \\
+attention n=25.6k & torch.compile (reduce-overhead) & n/a & 1726 & 620 & n/a \\
+attention n=25.6k & torch.compile (max-autotune) & n/a & 1801 & 612 & n/a \\
 attention n=25.6k & Torch-TensorRT & n/a & 2147 & 580 & 151841 \\
 attention n=25.6k & JAX/XLA & 1957 & 1 & 124 & 3637 \\
 attention n=25.6k & IREE & 325 & 15 & 7168 & n/a \\
 attention n=25.6k & Triton (handwritten) & 311 & 1 & 1233 & n/a \\
 attention n=256k & torch.compile & n/a & 1827 & 5024 & n/a \\
+attention n=256k & torch.compile (reduce-overhead) & n/a & 1843 & 5044 & n/a \\
+attention n=256k & torch.compile (max-autotune) & n/a & 1697 & 5001 & n/a \\
 attention n=256k & Torch-TensorRT & n/a & 2070 & 4869 & 134859 \\
 attention n=256k & JAX/XLA & 1981 & 5 & 3739 & 1503 \\
 attention n=256k & IREE & 637 & 20 & 5266 & n/a \\
@@ -106,10 +110,14 @@ MLP train n=256k & Torch-TensorRT & n/a & 2200 & 3089 & n/a \\
 MLP train n=256k & JAX/XLA & 2280 & 4 & 1971 & 1834 \\
 MLP train n=256k & IREE & 435 & 42 & 31740 & n/a \\
 TF block n=25.6k & torch.compile & n/a & 1785 & 516 & 36888 \\
+TF block n=25.6k & torch.compile (reduce-overhead) & n/a & 1805 & 525 & 47605 \\
+TF block n=25.6k & torch.compile (max-autotune) & n/a & 1866 & 540 & 91442 \\
 TF block n=25.6k & Torch-TensorRT & n/a & 2191 & 563 & n/a \\
 TF block n=25.6k & JAX/XLA & 1263 & 1 & 267 & 3413 \\
 TF block n=25.6k & IREE & 533 & 10 & 890 & n/a \\
 TF block n=256k & torch.compile & n/a & 1792 & 29625 & n/a \\
+TF block n=256k & torch.compile (reduce-overhead) & n/a & 1924 & 29544 & n/a \\
+TF block n=256k & torch.compile (max-autotune) & n/a & 1886 & 27367 & n/a \\
 TF block n=256k & Torch-TensorRT & n/a & 2256 & 27305 & n/a \\
 TF block n=256k & JAX/XLA & 1531 & 17 & 15363 & 105 \\
 TF block n=256k & IREE & 20835 & 116 & 53175 & n/a \\
@@ -127,44 +135,62 @@ TF train n=191.5k & torch.compile & n/a & 1878 & 78668 & 5450 \\
 TF train n=191.5k & Torch-TensorRT & n/a & 2455 & 79038 & n/a \\
 TF train n=191.5k & JAX/XLA & 4927 & 72 & 41813 & 125 \\
 distilgpt2 & torch.compile & n/a & 1558 & 1351 & 1013 \\
+distilgpt2 & torch.compile (reduce-overhead) & n/a & 1542 & 1268 & 947 \\
+distilgpt2 & torch.compile (max-autotune) & n/a & 1692 & 1273 & 1051 \\
 distilgpt2 & Torch-TensorRT & n/a & 2856 & 3740 & n/a \\
 distilgpt2 & JAX/XLA & 6912 & 5 & 1015 & 3887 \\
 distilgpt2 & IREE & 876 & 79 & 24589 & n/a \\
 distilgpt2 & MetaTensor & n/a & 535 & 1279 & 274 \\
 tiny-gpt2 & torch.compile & n/a & 1179 & 409 & 577 \\
+tiny-gpt2 & torch.compile (reduce-overhead) & n/a & 1195 & 204 & 505 \\
+tiny-gpt2 & torch.compile (max-autotune) & n/a & 1217 & 246 & 537 \\
 tiny-gpt2 & Torch-TensorRT & n/a & 1844 & 1385 & 5571 \\
 tiny-gpt2 & JAX/XLA & 1142 & 2 & 81 & 432 \\
 tiny-gpt2 & IREE & 400 & 12 & 191 & -43 \\
 tiny-gpt2 & MetaTensor & n/a & 114 & 194 & -250 \\
 smollm2-135m & torch.compile & n/a & 3863 & 5207 & 316 \\
+smollm2-135m & torch.compile (reduce-overhead) & n/a & 4015 & 3778 & 291 \\
+smollm2-135m & torch.compile (max-autotune) & n/a & 4322 & 3810 & 317 \\
 smollm2-135m & Torch-TensorRT & n/a & 21936 & 3792 & 1794 \\
 smollm2-135m & JAX/XLA & 10616 & 18 & 2651 & 772 \\
 smollm2-135m & IREE & 2050 & 173 & 19097 & n/a \\
 smollm2-135m & MetaTensor & n/a & 495 & 3661 & -4 \\
 bert-tiny & torch.compile & n/a & 1118 & 490 & 1700 \\
+bert-tiny & torch.compile (reduce-overhead) & n/a & 1128 & 295 & 1296 \\
+bert-tiny & torch.compile (max-autotune) & n/a & 1245 & 263 & 1388 \\
 bert-tiny & Torch-TensorRT & n/a & 4212 & 432 & 6251 \\
 bert-tiny & JAX/XLA & 5870 & 2 & 111 & 5898 \\
 bert-tiny & IREE & 862 & 14 & 1343 & n/a \\
 bert-tiny & MetaTensor & n/a & 116 & 241 & 22 \\
 bert-mini & torch.compile & n/a & 1303 & 922 & 1380 \\
+bert-mini & torch.compile (reduce-overhead) & n/a & 1294 & 481 & 914 \\
+bert-mini & torch.compile (max-autotune) & n/a & 1388 & 413 & 937 \\
 bert-mini & Torch-TensorRT & n/a & 4856 & 660 & 4167 \\
 bert-mini & JAX/XLA & 7061 & 3 & 243 & 4468 \\
 bert-mini & IREE & 1032 & 19 & 3738 & n/a \\
 bert-mini & MetaTensor & n/a & 195 & 429 & 80 \\
 resnet18-b1 & torch.compile & n/a & 1018 & 961 & 1336 \\
+resnet18-b1 & torch.compile (reduce-overhead) & n/a & 1075 & 916 & 1330 \\
+resnet18-b1 & torch.compile (max-autotune) & n/a & 1731 & 1056 & 2934 \\
 resnet18-b1 & Torch-TensorRT & n/a & 4644 & 990 & 7535 \\
 resnet18-b1 & JAX/XLA & 588 & 4 & 1122 & 875 \\
 resnet18-b1 & MetaTensor & n/a & 125 & 708 & -75 \\
 resnet18-b8 & torch.compile & n/a & 1079 & 2189 & 11048 \\
+resnet18-b8 & torch.compile (reduce-overhead) & n/a & 1081 & 2124 & 6130 \\
+resnet18-b8 & torch.compile (max-autotune) & n/a & 1518 & 2135 & 9907 \\
 resnet18-b8 & Torch-TensorRT & n/a & 4814 & 2013 & 18038 \\
 resnet18-b8 & JAX/XLA & 935 & 4 & 2273 & n/a \\
 resnet18-b8 & MetaTensor & n/a & 153 & 2705 & n/a \\
 mixer\_b16 & torch.compile & n/a & 1244 & 3115 & n/a \\
+mixer\_b16 & torch.compile (reduce-overhead) & n/a & 1307 & 3049 & n/a \\
+mixer\_b16 & torch.compile (max-autotune) & n/a & 1401 & 3124 & n/a \\
 mixer\_b16 & Torch-TensorRT & n/a & 5985 & 2462 & 14117 \\
 mixer\_b16 & JAX/XLA & 7200 & 7 & 2238 & 11088 \\
 mixer\_b16 & IREE & 1482 & 1660 & 1436947 & n/a \\
 mixer\_b16 & MetaTensor & n/a & 181 & 2672 & 272 \\
 vit-tiny & torch.compile & n/a & 1779 & 2056 & 938 \\
+vit-tiny & torch.compile (reduce-overhead) & n/a & 1796 & 1414 & 695 \\
+vit-tiny & torch.compile (max-autotune) & n/a & 2000 & 1349 & 759 \\
 vit-tiny & Torch-TensorRT & n/a & 7642 & 1034 & 2695 \\
 vit-tiny & JAX/XLA & 6705 & 8 & 746 & 2141 \\
 vit-tiny & IREE & 1698 & 71 & 36792 & n/a \\

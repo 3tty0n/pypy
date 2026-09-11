@@ -40,7 +40,7 @@ record() {
 #   64-bit signless int elements") for a StableHLO conv from jax.export, the
 #   same compiler limitation as micro variant 9 (CNN).
 IREE_MODELS=" distilgpt2 tiny-gpt2 bert-tiny bert-mini vit-tiny mixer_b16 smollm2-135m "
-BASELINES=${BASELINES:-"triton tensorrt jax iree"}
+BASELINES=${BASELINES:-"triton tensorrt compile-ro compile-mat jax iree"}
 has_baseline() { case " $BASELINES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 jax_rows() {
   local model=$1 jaxmodel=$2 weights=$3 round=$4; shift 4
@@ -71,6 +71,14 @@ model() {
       record "$model" torch-eager "$round" "$out"
       out=$("$TORCH_PYTHON" "$APP/$torchscript" compile "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null)
       record "$model" torch-compile "$round" "$out"
+    fi
+    if has_baseline compile-ro; then
+      out=$("$TORCH_PYTHON" "$APP/$torchscript" compile-ro "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null) &&
+        record "$model" torch-compile-ro "$round" "$out"
+    fi
+    if has_baseline compile-mat; then
+      out=$("$TORCH_PYTHON" "$APP/$torchscript" compile-mat "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null) &&
+        record "$model" torch-compile-mat "$round" "$out"
     fi
     jax_rows "$model" "$jaxmodel" "$weights" "$round" "$@"
     if has_baseline tensorrt && [ -n "${TRT_PYTHON:-}" ]; then

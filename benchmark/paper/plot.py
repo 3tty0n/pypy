@@ -65,11 +65,11 @@ from matplotlib.ticker import FuncFormatter
 # contrast check flags as "relief required": the .tex table beside each figure
 # is that relief.
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#8a5cd6", "#6b6b6b",
-          "#c04a8a"]
+          "#c04a8a", "#4fa8e0", "#a0522d"]
 POS, NEG = "#2a78d6", "#e34948"      # diverging poles, neutral midpoint is the rule line
 INK, INK_2, GRID = "#0b0b0b", "#52514e", "#d9d8d4"
 # Opt-in only: texture is for print and full CVD, never decoration.
-HATCH = ["", "///", "...", "xxx", "\\\\", "++", "oo"]
+HATCH = ["", "///", "...", "xxx", "\\\\", "++", "oo", "--", "||"]
 
 SINGLE_COL, DOUBLE_COL = 3.25, 6.75   # MLSys column and text widths, inches
 # Figures whose row labels are long enough that a single column would leave no
@@ -82,6 +82,8 @@ WIDE = {"micro_speedup", "fusion", "models", "ablation", "micro_baselines",
 SYSTEM_LABEL = {
     "ours": "MetaTensor",
     "torch-compile": "torch.compile",
+    "torch-compile-ro": "torch.compile (reduce-overhead)",
+    "torch-compile-mat": "torch.compile (max-autotune)",
     "torch-eager": "PyTorch eager",
     "torch-compile-dynamic": "torch.compile (dynamic)",
     "torch-compile-static": "torch.compile (static)",
@@ -209,13 +211,14 @@ def spread_str(lo, hi, fmt="%.1f"):
 
 # One colour, hatch and marker per system, whatever subset a figure shows.
 SYSTEM_STYLE = {s: i for i, s in enumerate(
-    ["ours", "torch-compile", "torch-eager", "jax", "iree", "torch-tensorrt",
-     "triton"])}
+    ["ours", "torch-compile", "torch-compile-ro", "torch-compile-mat",
+     "torch-eager", "jax", "iree", "torch-tensorrt", "triton"])}
+MARKERS = "osD^vP*Xh"
 
 
 def style_of(system):
     i = SYSTEM_STYLE.get(system, 0)
-    return SERIES[i % len(SERIES)], HATCH[i % len(HATCH)], "osD^vP*"[i % 7]
+    return SERIES[i % len(SERIES)], HATCH[i % len(HATCH)], MARKERS[i % len(MARKERS)]
 
 
 def drawn(systems, args):
@@ -425,7 +428,8 @@ def fig_models(out, args):
     g = collections.defaultdict(lambda: collections.defaultdict(list))
     for r in rows:
         g[r["model"]][r["system"]].append(float(r["steady_us"]))
-    systems = [s for s in ["ours", "torch-compile", "torch-eager", "jax", "iree", "torch-tensorrt"]
+    systems = [s for s in ["ours", "torch-compile", "torch-compile-ro", "torch-compile-mat",
+                           "torch-eager", "jax", "iree", "torch-tensorrt"]
                if any(s in d for d in g.values())]
     models = sorted(g, key=lambda m: med(g[m].get("ours", [])) or 0)
     stats = {s: [band(g[m].get(s, [])) for m in models] for s in systems}
@@ -462,11 +466,14 @@ def fig_models(out, args):
 
     ov, ov_st = vals.get("ours", [0] * len(models)), stats.get("ours", [(None, None, None)] * len(models))
     tc, tc_st = vals.get("torch-compile", [0] * len(models)), stats.get("torch-compile", [(None, None, None)] * len(models))
+    tcro, tcro_st = vals.get("torch-compile-ro", [0] * len(models)), stats.get("torch-compile-ro", [(None, None, None)] * len(models))
+    tcmat, tcmat_st = vals.get("torch-compile-mat", [0] * len(models)), stats.get("torch-compile-mat", [(None, None, None)] * len(models))
     te = vals.get("torch-eager", [0] * len(models))
     jx = vals.get("jax", [0] * len(models))
     ir = vals.get("iree", [0] * len(models))
     trt = vals.get("torch-tensorrt", [0] * len(models))
-    header = ["model", "MetaTensor", "range", "torch.compile", "range", "eager"]
+    header = ["model", "MetaTensor", "range", "torch.compile", "range",
+              "compile-ro", "range", "compile-mat", "range", "eager"]
     if "jax" in systems:
         header.append("JAX/XLA")
     if "iree" in systems:
@@ -481,6 +488,10 @@ def fig_models(out, args):
     for i, m in enumerate(models):
         row = [m, "%.0f" % ov[i], spread_str(ov_st[i][1], ov_st[i][2], "%.0f"),
                "%.0f" % tc[i], spread_str(tc_st[i][1], tc_st[i][2], "%.0f"),
+               "%.0f" % tcro[i] if tcro[i] else "n/a",
+               spread_str(tcro_st[i][1], tcro_st[i][2], "%.0f"),
+               "%.0f" % tcmat[i] if tcmat[i] else "n/a",
+               spread_str(tcmat_st[i][1], tcmat_st[i][2], "%.0f"),
                "%.0f" % te[i]]
         if "jax" in systems:
             row.append("%.0f" % jx[i] if jx[i] else "n/a")
@@ -678,7 +689,8 @@ def fig_micro_baselines(out, args):
     """Every backend against the same fused baseline: grouped diverging bars,
     one row per point, same log-ratio convention as fig_micro_speedup."""
     g = micro_values(read_tsv(os.path.join(out, "micro.tsv")))
-    systems = ["torch-eager", "torch-compile", "jax", "iree", "triton", "torch-tensorrt"]
+    systems = ["torch-eager", "torch-compile", "torch-compile-ro", "torch-compile-mat",
+               "jax", "iree", "triton", "torch-tensorrt"]
     pts = []
     for (dtype, v, k, n), m in g.items():
         if dtype != "float64" or not m.get("fused"):
@@ -768,7 +780,8 @@ def fig_compile_overhead(out, args):
     records = read_jsonl(os.path.join(out, "results.jsonl"))
     if not records:
         return None
-    systems = ["torch-compile", "torch-tensorrt", "jax", "iree", "triton", "ours"]
+    systems = ["torch-compile", "torch-compile-ro", "torch-compile-mat",
+               "torch-tensorrt", "jax", "iree", "triton", "ours"]
 
     def workload_key(r):
         if r.get("kind") == "micro" and r.get("dtype") == "float64":
