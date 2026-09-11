@@ -84,7 +84,7 @@ write_machine_txt() {
     echo "cpu_threads   $(nproc)"
     echo "kernel        $(uname -sr)"
     if [ -n "$RTENSOR_PYTHON" ] && [ -x "$RTENSOR_PYTHON" ]; then
-      "$RTENSOR_PYTHON" - <<'PY' 2>/dev/null
+      "$RTENSOR_PYTHON" - <<'PY' 2>/dev/null || true
 import importlib
 for mod in ("torch", "triton", "transformers"):
     try:
@@ -94,7 +94,7 @@ for mod in ("torch", "triton", "transformers"):
 PY
     fi
     if [ -n "$JAX_PYTHON" ]; then
-      "$JAX_PYTHON" - <<'PY' 2>/dev/null
+      "$JAX_PYTHON" - <<'PY' 2>/dev/null || true
 import importlib
 for mod, attr in (("jax", "__version__"), ("jaxlib", "__version__"),
                   ("iree.compiler", "version"), ("iree.runtime", "version")):
@@ -113,7 +113,7 @@ PY
       echo "jax           - (JAX_PYTHON unset)"
     fi
     if [ -n "$TRT_PYTHON" ]; then
-      "$TRT_PYTHON" - <<'PY' 2>/dev/null
+      "$TRT_PYTHON" - <<'PY' 2>/dev/null || true
 import importlib
 for mod in ("torch_tensorrt", "tensorrt"):
     try:

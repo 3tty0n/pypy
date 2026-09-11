@@ -1,8 +1,8 @@
 iree-base-compiler==3.11.0
 iree-base-runtime==3.11.0
+jax==0.11.1
 jax-cuda13-pjrt==0.11.1
 jax-cuda13-plugin==0.11.1
-jax==0.11.1
 jaxlib==0.11.1
 ml-dtypes==0.6.0
 numpy==2.5.3
