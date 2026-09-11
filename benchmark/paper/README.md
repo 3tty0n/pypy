@@ -167,7 +167,11 @@ the models it covers) rows, and `bench.sh check baselines` runs one point
 on each and checks its accumulator against torch eager. `summarize.md` gains
 the JAX/IREE/Triton columns, an `ours/Triton` ratio (MetaTensor latency over
 handwritten-Triton latency) and a compilation-overhead table; `plot` writes
-`micro_baselines.*`, `compile_overhead.*` and the extra model bars.
+`micro_baselines.*`, `compile_overhead.*` and the extra model bars. IREE
+is one to two orders of magnitude behind XLA on this GPU and flattens every
+axis it shares, so the figures leave it out by default; the tables always
+carry it, and `bench.sh plot --iree` writes `models_iree.*`,
+`micro_baselines_iree.*` and `compile_overhead_iree.*` with it included.
 `BASELINES` (space-separated subset of `triton tensorrt jax iree`, default
 all) restricts which baseline rows `run_micro.sh`/`run_models.sh` add, so
 `BASELINES=iree ./bench.sh micro --baselines-only` fills in just the IREE

@@ -64,11 +64,12 @@ from matplotlib.ticker import FuncFormatter
 # Aqua (2.82:1) and yellow (2.17:1) sit below 3:1 against white, which the
 # contrast check flags as "relief required": the .tex table beside each figure
 # is that relief.
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#8a5cd6", "#6b6b6b"]
+SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#8a5cd6", "#6b6b6b",
+          "#c04a8a"]
 POS, NEG = "#2a78d6", "#e34948"      # diverging poles, neutral midpoint is the rule line
 INK, INK_2, GRID = "#0b0b0b", "#52514e", "#d9d8d4"
 # Opt-in only: texture is for print and full CVD, never decoration.
-HATCH = ["", "///", "...", "xxx", "\\\\", "++"]
+HATCH = ["", "///", "...", "xxx", "\\\\", "++", "oo"]
 
 SINGLE_COL, DOUBLE_COL = 3.25, 6.75   # MLSys column and text widths, inches
 # Figures whose row labels are long enough that a single column would leave no
@@ -204,6 +205,26 @@ ERRBAR = dict(ecolor=INK_2, elinewidth=0.7, capsize=1.4, capthick=0.7)
 
 def spread_str(lo, hi, fmt="%.1f"):
     return (fmt + "-" + fmt) % (lo, hi) if lo is not None else "n/a"
+
+
+# One colour, hatch and marker per system, whatever subset a figure shows.
+SYSTEM_STYLE = {s: i for i, s in enumerate(
+    ["ours", "torch-compile", "torch-eager", "jax", "iree", "torch-tensorrt",
+     "triton"])}
+
+
+def style_of(system):
+    i = SYSTEM_STYLE.get(system, 0)
+    return SERIES[i % len(SERIES)], HATCH[i % len(HATCH)], "osD^vP*"[i % 7]
+
+
+def drawn(systems, args):
+    """IREE runs one to two orders of magnitude behind XLA on this GPU and
+    flattens every axis it shares; the tables keep it, the figures show it
+    only with --iree (written with an _iree suffix)."""
+    if getattr(args, "iree", False):
+        return list(systems)
+    return [s for s in systems if s != "iree"]
 
 
 def micro_label(variant, k, n):
@@ -410,15 +431,17 @@ def fig_models(out, args):
     stats = {s: [band(g[m].get(s, [])) for m in models] for s in systems}
     vals = {s: [b[0] or 0 for b in stats[s]] for s in systems}
 
+    shown = drawn(systems, args)
     # 3 systems keeps the original 0.26 half-height; more systems shrink to fit.
-    h = 0.8 / len(systems)
+    h = 0.8 / len(shown)
     fig, ax = plt.subplots(figsize=(args.width, 0.42 * len(models) + 1.3))
     y = [i for i in range(len(models))]
-    for si_, s in enumerate(systems):
-        off = (si_ - (len(systems) - 1) / 2) * h
+    for si_, s in enumerate(shown):
+        off = (si_ - (len(shown) - 1) / 2) * h
+        color, hatch, _ = style_of(s)
         ax.barh([v + off for v in y], vals[s], height=h * 0.88,
-                color=SERIES[si_ % len(SERIES)], linewidth=0,
-                hatch=HATCH[si_ % len(HATCH)] if args.texture else None,
+                color=color, linewidth=0,
+                hatch=hatch if args.texture else None,
                 label=SYSTEM_LABEL[s])
         ax.errorbar(vals[s], [v + off for v in y],
                     xerr=err(vals[s], [b[1] or 0 for b in stats[s]],
@@ -676,10 +699,9 @@ def fig_micro_baselines(out, args):
     # app-level markers in fig_micro_speedup: 28 points x up to 6 systems as
     # grouped bars made the figure absurdly tall, and the ratio is the number
     # that matters here, not the absolute width of a bar.
-    markers = ["o", "s", "^", "D", "v", "P"]
     fig, ax = plt.subplots(figsize=(args.width, 0.16 * len(pts) + 0.9))
     y = list(range(len(pts)))
-    for si_, s in enumerate(used):
+    for si_, s in enumerate(drawn(used, args)):
         ys, xs = [], []
         for i, (_, _, m) in enumerate(pts):
             fm = med(m.get("fused", []))
@@ -689,8 +711,9 @@ def fig_micro_baselines(out, args):
                 xs.append(sm / fm)
         if not xs:
             continue
-        ax.scatter(xs, ys, s=20, marker=markers[si_ % len(markers)],
-                   facecolors=SERIES[si_ % len(SERIES)], edgecolors="white",
+        color, _, marker = style_of(s)
+        ax.scatter(xs, ys, s=20, marker=marker,
+                   facecolors=color, edgecolors="white",
                    linewidth=0.5, zorder=4, label=SYSTEM_LABEL.get(s, s))
     ax.axvline(1, color=INK_2, linewidth=0.8, zorder=3)
     ax.set_xscale("log", base=2)
@@ -829,7 +852,8 @@ def fig_compile_overhead(out, args):
         keys_order = model_keys
     plot_rows = [(key, s, f) for key, s, c, f, st, be in rows
                  if f is not None and f > 0 and key in keys_order]
-    systems_used = [s for s in systems if any(pr[1] == s for pr in plot_rows)]
+    systems_used = [s for s in drawn(systems, args)
+                    if any(pr[1] == s for pr in plot_rows)]
     if not plot_rows or not systems_used:
         return None
 
@@ -846,7 +870,7 @@ def fig_compile_overhead(out, args):
                 xs.append(match[0])
         if not xs:
             continue
-        ax.barh(ys, xs, height=h * 0.86, color=SERIES[si_ % len(SERIES)],
+        ax.barh(ys, xs, height=h * 0.86, color=style_of(s)[0],
                 linewidth=0, hatch=HATCH[si_ % len(HATCH)] if args.texture else None,
                 label=SYSTEM_LABEL.get(s, s))
     ax.set_xscale("log")
@@ -1271,6 +1295,9 @@ def main(argv=None):
                    help="hatch the fills, for grayscale print and full CVD")
     p.add_argument("--titles", action="store_true",
                    help="draw titles on the axes (for slides; a paper uses captions)")
+    p.add_argument("--iree", action="store_true",
+                   help="include IREE in the figures (files get an _iree suffix); "
+                        "the tables always carry it")
     args = p.parse_args(argv)
 
     if not args.out:
@@ -1306,6 +1333,8 @@ def main(argv=None):
             print("skip %s (no rows in %s)" % (name, args.out), file=sys.stderr)
             continue
         fig, stem = made
+        if args.iree and stem in ("models", "micro_baselines", "compile_overhead"):
+            stem += "_iree"
         for ext in args.format.split(","):
             path = os.path.join(args.outdir, "%s.%s" % (stem, ext.strip()))
             fig.savefig(path)
