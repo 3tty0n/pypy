@@ -421,6 +421,53 @@ def fig_fusion(out, args):
     return fig, "fusion"
 
 
+def fig_fusion_stats(out, args):
+    """Mechanism accounting: how big the fusion regions are and what ended
+    them.  The bars are the force reasons per model (see fusion_stats.py and
+    the README); the table carries the sizes next to them."""
+    rows = read_tsv(os.path.join(out, "fusion.tsv"))
+    if not rows:
+        return None
+    reasons = [("forced_library", "library call"), ("forced_item", ".item()"),
+               ("forced_loop", "loop/guard exit"),
+               ("forced_leafcap", "leaf cap"), ("forced_assign", "assign"),
+               ("forced_other", "other")]
+    num = lambda r, k: float(r.get(k) or 0)
+    fig, ax = plt.subplots(figsize=(args.width, 0.3 * len(rows) + 0.9))
+    y = list(range(len(rows)))
+    left = [0.0] * len(rows)
+    for i, (key, label) in enumerate(reasons):
+        vals = [num(r, key) for r in rows]
+        if not any(vals):
+            continue
+        ax.barh(y, vals, left=left, height=0.7, linewidth=0,
+                color=SERIES[i % len(SERIES)],
+                hatch=HATCH[i % len(HATCH)] if args.texture else None,
+                label=label)
+        left = [a + b for a, b in zip(left, vals)]
+    ax.set_yticks(y, [r["model"] for r in rows])
+    ax.set_xlabel("fusion regions in the compiled traces, by what forced them")
+    ax.xaxis.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    despine(ax, keep=("left",))
+    ax.tick_params(axis="y", length=0)
+    ax.legend(loc="lower right", fontsize=6)
+    if args.titles:
+        ax.set_title("Why each fusion region ends")
+    write_table(os.path.join(args.outdir, "fusion_stats.tex"),
+                "per model forward: distinct fused kernels, kernel launches "
+                "per iteration, DAG nodes per kernel, extra outputs, and the "
+                "force reason of every region in the compiled traces",
+                ["model", "kernels", "launches/iter", "nodes min", "median",
+                 "max", "extra outs", "library", ".item()", "loop", "leaf cap",
+                 "assign", "other"],
+                [[r["model"], r["kernels"], r["launches_per_iter"],
+                  r["nodes_min"], r["nodes_median"], r["nodes_max"],
+                  r["extra_outputs_total"]] +
+                 [r[k] for k, _ in reasons] for r in rows])
+    return fig, "fusion_stats"
+
+
 def fig_models(out, args):
     """Three systems per model, all in the same unit: grouped bars from zero."""
     rows = read_tsv(os.path.join(out, "models.tsv"))
@@ -1450,6 +1497,7 @@ FIGURES = collections.OrderedDict([
     ("micro_speedup", fig_micro_speedup),
     ("integration", fig_integration),
     ("fusion", fig_fusion),
+    ("fusion_stats", fig_fusion_stats),
     ("models", fig_models),
     ("dynamic", fig_dynamic),
     ("precision", fig_precision),

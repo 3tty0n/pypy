@@ -28,6 +28,9 @@ commands:
   warmup [--n N]         per-forward warm-up trace (tiny-gpt2, distilgpt2;
                          ours/torch-eager/torch-compile/torch-compile-ro/jax;
                          cold+warm kernel caches; N forwards, default 300)
+  fusion [MODEL...]      fusion-region statistics per model forward (kernels,
+                         nodes per kernel, why each region was cut) into
+                         \$OUT/fusion.tsv; no args = all eight paper models
   gap [MODEL...]         launches, kernel granularity and GPU utilisation per
                          system, into \$OUT/gap.tsv (needs nsys)
   summarize              render \$OUT/summary.md from the tsv files
@@ -120,6 +123,14 @@ run_cmd() {
     warmup)
       if [ "$1" = "--n" ]; then N=$2; shift 2; fi
       N="$N" bash "$HERE/run_warmup.sh" "$@"
+      ;;
+    fusion)
+      source "$HERE/config.sh"
+      paper_setup_pypy
+      trap paper_cleanup_pypy EXIT
+      PYPY="$RUN_PYPY" WEIGHTS="$WEIGHTS" ITERS="$ITERS" WARMUP="$WARMUP" \
+        JIT_FLAGS="$JIT_FLAGS" \
+        "${RTENSOR_PYTHON:-python3}" "$HERE/fusion_stats.py" "$OUT" "$@"
       ;;
     gap)
       source "$HERE/config.sh"

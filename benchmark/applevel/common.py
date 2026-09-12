@@ -69,6 +69,10 @@ FIRST_RUN_MS = [None]
 # other iterations executed at all; a launch count that tracks the iteration
 # count does.
 LAUNCHES_PER_ITER = [None]
+# RTENSOR_STATS=1: the kernel-name counter either side of the run, so a
+# caller can tell which rtensor_k<n>.ttir files this model's fusion regions
+# produced (everything below the first value is the start-up single-op set).
+KERNEL_WINDOW = [None, None]
 
 
 def timed(model, args, iters, warmup):
@@ -94,6 +98,7 @@ def timed(model, args, iters, warmup):
                 print('iter=%d us=%.1f' % (i, dt))
         warmup_common.report_trace(us, compiled if has_counters else None)
         sys.exit(0)
+    KERNEL_WINDOW[0] = _metatensor.kernel_count()
     # The first forward carries the tracing and kernel compilation; it is
     # timed on its own so the compile cost can sit next to the steady state.
     t0 = time.time()
@@ -112,6 +117,7 @@ def timed(model, args, iters, warmup):
     # Read after acc: the graph is lazy, so the launches happen when the
     # result is forced, not when the expression is built.
     LAUNCHES_PER_ITER[0] = float(_metatensor.launch_count() - launches0) / iters
+    KERNEL_WINDOW[1] = _metatensor.kernel_count()
     return logits, acc, steady_us
 
 
@@ -159,6 +165,9 @@ def dump(outdir, flat):
 def report(line, order):
     if LAUNCHES_PER_ITER[0] is not None:
         line += ' launches_per_iter=%.1f' % LAUNCHES_PER_ITER[0]
+    if os.environ.get('RTENSOR_STATS') and KERNEL_WINDOW[1] is not None:
+        line += ' kernel_count_begin=%d kernel_count_end=%d' % (
+            KERNEL_WINDOW[0], KERNEL_WINDOW[1])
     if FIRST_RUN_MS[0] is not None:
         line += ' compile_ms=-1 first_run_ms=%.1f' % FIRST_RUN_MS[0]
     print(line)

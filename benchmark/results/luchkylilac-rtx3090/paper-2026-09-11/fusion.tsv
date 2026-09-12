@@ -1,0 +1,9 @@
+model	kernels	launches_per_iter	nodes_min	nodes_median	nodes_max	extra_outputs_total	forced_library	forced_item	forced_loop	forced_leafcap	forced_assign	forced_other
+tiny-gpt2	7	13.2	1	16	29	2	30	0	14	0	0	0
+bert-tiny	6	14.3	1	26	545	0	31	0	15	0	0	0
+bert-mini	6	24.3	1	26	545	0	34	0	17	0	0	0
+distilgpt2	7	38.2	1	16	29	2	39	0	21	0	0	0
+vit-tiny	7	76.3	1	17	88	2	39	0	21	0	0	0
+mixer_b16	6	63.4	2	26	88	2	33	0	9	0	0	0
+smollm2-135m	6	212.1	1	6	16	1	39	0	19	0	0	0
+resnet18-b1	3	39.0	3	4	6	0	18	0	19	0	0	0

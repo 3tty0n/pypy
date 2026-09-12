@@ -51,6 +51,7 @@ set. `bench.sh all` clears `$OUT/*.tsv` first for a clean run.
     benchmark/paper/bench.sh ablation fusion
     benchmark/paper/bench.sh summarize
     benchmark/paper/bench.sh gap bert-tiny           # launch/utilisation analysis
+    benchmark/paper/bench.sh fusion bert-tiny        # fusion-region statistics
     benchmark/paper/bench.sh plot                    # figures into $OUT/figures
 
 ## Two binaries, two micro columns
@@ -476,6 +477,58 @@ for the baseline - which is the comparison the harness exists to make.
 | rpython/metatensor tests | 1571 |
 | pypy/module/_metatensor tests | 691 |
 | **total (impl)** | **5263** |
+
+## Fusion statistics
+
+`bench.sh fusion [MODEL...]` (`fusion_stats.py`) describes the regions the
+fusion pass actually built, one run per model, into `$OUT/fusion.tsv`:
+
+| column | what it is | where it comes from |
+| --- | --- | --- |
+| `kernels` | distinct fused kernels compiled for this forward | one `rtensor_k<n>.ttir` per compiled kernel, deduplicated by kernel body |
+| `launches_per_iter` | kernel launches the steady-state forward issues | `_metatensor.launch_count()` delta over the timed loop, as in `models.tsv` |
+| `nodes_min/median/max` | DAG nodes per kernel (`len(KERNEL.nodes)`) | the highest `%v<k>` in the TTIR minus inputs and folded constants |
+| `extra_outputs_total` | values escaping a region as an extra output | the `%out<k>` parameters of the compiled kernels |
+| `forced_*` | why each region ended, counted over every compiled trace | the optimized trace, see below |
+
+The run sets `PYPYLOG=jit-log-opt`, `RTENSOR_KERNEL_CACHE=0` and a fresh
+`TMPDIR`, so every kernel writes its Triton IR under its own name; both land
+in `/tmp/fusion-stats` (`--tmp` to move them), never in `$OUT`, because they
+are megabytes per model. `RTENSOR_STATS=1` makes the model scripts print
+`kernel_count_begin/end` around the forward - the `<n>` range that belongs to
+the model rather than to the ~100 single-op kernels built at start-up. The
+kernel is a `ConstPtr` in the trace and so says nothing about its size, which
+is why the sizes come from the IR and only the reasons from the trace.
+
+**Force reasons.** Each fusion region is one residual `tensor_launch` call in
+the optimized trace. The category is the first operation that consumes the
+launch's result (a `tensor_output` read of that same kernel is skipped, it is
+the multi-output path, not a cut):
+
+- `forced_library` - a library call the pass cannot fuse through: `matmul`,
+  `bmm`, conv/`im2col`, the head split/merge and the gathers.
+- `forced_item` - a host read (`.item()` and friends).
+- `forced_loop` - the value escapes the region the pass can see: stored into
+  a heap object (`setfield_gc` on a `Tensor`), passed to the next iteration
+  (`jump`), or still live at the end of the trace.
+- `forced_leafcap` - the consumer is another fused kernel or a residual
+  elementwise op, which is what `_too_wide` leaves behind when forcing the
+  arguments could not bring the chain under `core.max_inputs()`
+  (`RTENSOR_MAX_INPUTS`).
+- `forced_assign` - `tensor.assign`, which forces every live chain
+  (`OptTensor.force_live`).
+- `forced_other` - anything else; the script prints the unattributed consumer
+  names on stderr so the category cannot hide a mistake.
+
+`forced_leafcap` and `forced_assign` are the two the trace cannot separate
+perfectly: `force_live` materializes chains that are unrelated to the assign,
+and those land under whatever consumes them next. The counts are static -
+one per launch site per compiled trace, including the traces that only cover a
+cold path - so read them as proportions; `launches_per_iter` is the dynamic
+number.
+
+`bench.sh plot --only fusion_stats` renders the same numbers as
+`figures/fusion_stats.tex` plus a stacked bar of the reasons.
 
 ## Result files
 
