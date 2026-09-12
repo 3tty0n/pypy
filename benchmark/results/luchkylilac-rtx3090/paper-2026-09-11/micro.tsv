@@ -1,4 +1,4 @@
-mode	variant	k	n	iters	warm_s	steady_us	kernels	acc	compiled_in_timed	launches_per_iter	graphs	breaks	compile_ms	first_run_ms
+mode	variant	k	n	iters	warm_s	steady_us	kernels	acc	compiled_in_timed	launches_per_iter	graphs	breaks	compile_ms	first_run_ms	binary
 fused	0	1	1000000	200	0.001521	29.075146	52	1000000.000000	0	1.015000	float64				d161d7cb4db2
 eager	0	1	1000000	200	0.002687	77.500343	51	1000000.000000	0	3.005000	float64				d161d7cb4db2
 nojit	0	1	1000000	200	0.002335	77.430010	51	1000000.000000	0	3.005000	float64				d161d7cb4db2

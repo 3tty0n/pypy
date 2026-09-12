@@ -257,8 +257,16 @@ tsv_pad_row() {
 }
 
 tsv_init() {
-  local path=$1 header=$2
-  [ -f "$path" ] || echo -e "$header" > "$path"
+  local path=$1 header=$2 have want
+  [ -f "$path" ] || { echo -e "$header" > "$path"; return; }
+  # A result set started before a column was added keeps its rows readable
+  # by name: when the file's header is a prefix of the current one, the
+  # header line is brought up to date (rows written since are already wide).
+  have=$(head -1 "$path")
+  want=$(echo -e "$header")
+  if [ "$have" != "$want" ] && [ "${want#"$have"}" != "$want" ]; then
+    { echo "$want"; tail -n +2 "$path"; } > "$path.tmp" && mv "$path.tmp" "$path"
+  fi
 }
 
 # Per-row provenance for micro.tsv/results.jsonl: which binary or package
