@@ -88,32 +88,32 @@
 
 | experiment | variant | model | steady_us | launches/iter | note |
 |---|---|---|---|---|---|
-| budget_mb | 64 | distilgpt2 | 1284.9 | n/a |  |
-| budget_mb | 8 | distilgpt2 | 1289.1 | n/a |  |
-| flat_block | 256 | distilgpt2 | 1260.2 | n/a |  |
-| flat_block | 256 | resnet18 | 633.3 | n/a |  |
-| flat_block | 4096 | distilgpt2 | 1298.2 | n/a |  |
-| flat_block | 4096 | resnet18 | 687.7 | n/a |  |
-| fusion | off | distilgpt2 | 1945.4 | n/a | enable_opts minus tensor |
-| fusion | on | distilgpt2 | 1290.8 | n/a |  |
-| max_inputs | mi4 | bert-mini | 488.3 | 34.3 |  |
-| max_inputs | mi4 | distilgpt2 | 1318.7 | 45.2 |  |
-| max_inputs | mi4 | mixer_b16 | 2735.2 | 76.4 |  |
-| max_inputs | mi6 | bert-mini | 432.8 | 24.3 |  |
-| max_inputs | mi6 | distilgpt2 | 1304.9 | 38.2 |  |
-| max_inputs | mi6 | mixer_b16 | 2697.4 | 63.4 |  |
-| max_inputs | mi8 | bert-mini | 424.5 | 24.3 |  |
-| max_inputs | mi8 | distilgpt2 | 1294.0 | 38.2 |  |
-| max_inputs | mi8 | mixer_b16 | 2691.1 | 63.4 |  |
-| precision | float16 | distilgpt2 | 914.7 | n/a |  |
-| precision | float16 | smollm2-135m | 2211.3 | n/a |  |
-| precision | float32 | distilgpt2 | 1285.1 | n/a |  |
-| precision | float32 | smollm2-135m | 3683.5 | n/a |  |
-| tf32 | fp32 | resnet18-b1 | 784.8 | n/a |  |
-| tf32 | fp32 | resnet18-b8 | 3204.9 | n/a |  |
-| tf32 | tf32 | resnet18-b1 | 720.4 | n/a |  |
-| tf32 | tf32 | resnet18-b8 | 2714.9 | n/a |  |
-| tf32 | torch-fp32 | resnet18-b8 | 3071.7 | n/a |  |
+| budget_mb | 64 | distilgpt2 | 1300.2 | n/a |  |
+| budget_mb | 8 | distilgpt2 | 1281.7 | n/a |  |
+| flat_block | 256 | distilgpt2 | 1256.4 | n/a |  |
+| flat_block | 256 | resnet18 | 629.1 | n/a |  |
+| flat_block | 4096 | distilgpt2 | 1285.8 | n/a |  |
+| flat_block | 4096 | resnet18 | 689.7 | n/a |  |
+| fusion | off | distilgpt2 | 1952.7 | n/a | enable_opts minus tensor |
+| fusion | on | distilgpt2 | 1291.8 | n/a |  |
+| max_inputs | mi4 | bert-mini | 470.8 | 34.3 |  |
+| max_inputs | mi4 | distilgpt2 | 1315.5 | 45.2 |  |
+| max_inputs | mi4 | mixer_b16 | 2757.1 | 76.4 |  |
+| max_inputs | mi6 | bert-mini | 428.0 | 24.3 |  |
+| max_inputs | mi6 | distilgpt2 | 1288.1 | 38.2 |  |
+| max_inputs | mi6 | mixer_b16 | 2682.7 | 63.4 |  |
+| max_inputs | mi8 | bert-mini | 428.5 | 24.3 |  |
+| max_inputs | mi8 | distilgpt2 | 1282.3 | 38.2 |  |
+| max_inputs | mi8 | mixer_b16 | 2680.8 | 63.4 |  |
+| precision | float16 | distilgpt2 | 916.6 | n/a |  |
+| precision | float16 | smollm2-135m | 2212.3 | n/a |  |
+| precision | float32 | distilgpt2 | 1287.7 | n/a |  |
+| precision | float32 | smollm2-135m | 3684.8 | n/a |  |
+| tf32 | fp32 | resnet18-b1 | 785.9 | n/a |  |
+| tf32 | fp32 | resnet18-b8 | 3200.5 | n/a |  |
+| tf32 | tf32 | resnet18-b1 | 718.2 | n/a |  |
+| tf32 | tf32 | resnet18-b8 | 2718.2 | n/a |  |
+| tf32 | torch-fp32 | resnet18-b8 | 3053.7 | n/a |  |
 
 ## Deoptimization cost (median over rounds, us per iteration)
 
@@ -387,26 +387,26 @@
 
 | model | system | cache | first (ms) | steady_at | steady_us | crossover vs eager |
 |---|---|---|---|---|---|---|
-| distilgpt2 | jax | cold | 4.71 | 31 | 1175.7 | 1 |
-| distilgpt2 | jax | warm | 52.54 | 22 | 1164.3 | 1 |
-| distilgpt2 | ours | cold | 3779.15 | 167 | 1254.6 | none |
-| distilgpt2 | ours | warm | 565.79 | 127 | 1254.4 | 271 |
-| distilgpt2 | torch-compile | cold | 4085.52 | 21 | 1422.5 | none |
-| distilgpt2 | torch-compile | warm | 1493.33 | 55 | 1415.1 | none |
-| distilgpt2 | torch-compile-ro | cold | 3231.27 | 82 | 1302.8 | none |
-| distilgpt2 | torch-compile-ro | warm | 1531.10 | 40 | 1311.8 | none |
-| distilgpt2 | torch-eager | cold | 127.09 | 8 | 3018.4 | none |
-| distilgpt2 | torch-eager | warm | 135.17 | 2 | 3051.6 | none |
-| tiny-gpt2 | jax | cold | 1.56 | 42 | 161.2 | 1 |
-| tiny-gpt2 | jax | warm | 42.99 | 15 | 158.1 | 1 |
-| tiny-gpt2 | ours | cold | 546.47 | none | 176.1 | 1 |
-| tiny-gpt2 | ours | warm | 114.34 | none | 176.4 | 1 |
-| tiny-gpt2 | torch-compile | cold | 3107.74 | 30 | 370.4 | none |
-| tiny-gpt2 | torch-compile | warm | 1181.06 | 18 | 369.9 | none |
-| tiny-gpt2 | torch-compile-ro | cold | 2358.63 | 159 | 190.3 | none |
-| tiny-gpt2 | torch-compile-ro | warm | 1183.25 | 136 | 203.4 | none |
-| tiny-gpt2 | torch-eager | cold | 969.69 | 2 | 1581.3 | none |
-| tiny-gpt2 | torch-eager | warm | 489.95 | 2 | 1579.8 | none |
+| distilgpt2 | jax | cold | 4.66 | 13 | 1186.4 | 1 |
+| distilgpt2 | jax | warm | 50.25 | 6 | 1184.4 | 1 |
+| distilgpt2 | ours | cold | 3571.19 | 127 | 1249.0 | none |
+| distilgpt2 | ours | warm | 549.90 | 167 | 1253.8 | 235 |
+| distilgpt2 | torch-compile | cold | 3990.15 | 4 | 1394.9 | none |
+| distilgpt2 | torch-compile | warm | 1570.84 | 80 | 1476.2 | none |
+| distilgpt2 | torch-compile-ro | cold | 3487.50 | 53 | 1298.7 | none |
+| distilgpt2 | torch-compile-ro | warm | 1592.98 | 13 | 1314.5 | none |
+| distilgpt2 | torch-eager | cold | 136.45 | 2 | 3033.6 | none |
+| distilgpt2 | torch-eager | warm | 136.84 | 2 | 3216.1 | none |
+| tiny-gpt2 | jax | cold | 1.61 | 15 | 159.6 | 1 |
+| tiny-gpt2 | jax | warm | 45.61 | 21 | 160.0 | 1 |
+| tiny-gpt2 | ours | cold | 548.42 | none | 174.5 | 1 |
+| tiny-gpt2 | ours | warm | 114.39 | none | 177.5 | 1 |
+| tiny-gpt2 | torch-compile | cold | 3180.74 | 23 | 329.7 | none |
+| tiny-gpt2 | torch-compile | warm | 1173.77 | 112 | 367.3 | none |
+| tiny-gpt2 | torch-compile-ro | cold | 2358.31 | 58 | 188.8 | none |
+| tiny-gpt2 | torch-compile-ro | warm | 1193.33 | 104 | 203.5 | none |
+| tiny-gpt2 | torch-eager | cold | 971.07 | 3 | 1577.0 | none |
+| tiny-gpt2 | torch-eager | warm | 479.32 | 3 | 1567.2 | none |
 
 ## Warm-up: kernel compiles (ours, median over rounds; cold_compiles = Triton subprocess compiles over the whole trace, first_forward_compiles = at iter 0)
 
@@ -421,44 +421,44 @@
 
 | system | pass | length | median_us | total_us | loops | bridges | kernels | cache_hits | recompiles |
 |---|---|---|---|---|---|---|---|---|---|
-| ours | 1 | 32 | 974.5 | 1165.5 | 0 | 4 | 1 | 978 | 0 |
-| ours | 1 | 48 | 1382.9 | 1671.9 | 5 | 2 | 1 | 1084 | 0 |
-| ours | 1 | 64 | 1439.0 | 1823.6 | 3 | 1 | 3 | 1028 | 0 |
-| ours | 1 | 96 | 1707.4 | 2396.0 | 1 | 1 | 0 | 912 | 0 |
-| ours | 1 | 128 | 2038.5 | 2857.9 | 0 | 1 | 0 | 918 | 0 |
-| ours | 2 | 32 | 943.5 | 1136.6 | 0 | 0 | 0 | 900 | 0 |
-| ours | 2 | 48 | 1334.5 | 1624.4 | 0 | 0 | 0 | 900 | 0 |
-| ours | 2 | 64 | 1381.4 | 1802.5 | 0 | 0 | 0 | 900 | 0 |
-| ours | 2 | 96 | 1631.0 | 2363.1 | 0 | 0 | 0 | 900 | 0 |
-| ours | 2 | 128 | 1960.0 | 2780.1 | 0 | 0 | 0 | 900 | 0 |
-| torch-compile-dynamic | 1 | 32 | 1095.3 | 1234.9 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-dynamic | 1 | 48 | 1507.0 | 1652.2 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-dynamic | 1 | 64 | 1554.7 | 1705.0 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-dynamic | 1 | 96 | 1732.6 | 1895.4 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-dynamic | 1 | 128 | 1930.3 | 2106.8 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-dynamic | 2 | 32 | 1071.1 | 1209.8 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-dynamic | 2 | 48 | 1477.8 | 1622.1 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-dynamic | 2 | 64 | 1524.3 | 1672.5 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-dynamic | 2 | 96 | 1669.7 | 1833.1 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-dynamic | 2 | 128 | 1861.1 | 2033.6 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-static | 1 | 32 | 1000.0 | 1126.4 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-static | 1 | 48 | 1356.8 | 1488.3 | 0 | 0 | 0 | 0 | 1 |
-| torch-compile-static | 1 | 64 | 1393.2 | 1533.2 | 0 | 0 | 0 | 0 | 1 |
-| torch-compile-static | 1 | 96 | 1626.2 | 1774.8 | 0 | 0 | 0 | 0 | 1 |
-| torch-compile-static | 1 | 128 | 1787.4 | 1950.2 | 0 | 0 | 0 | 0 | 1 |
-| torch-compile-static | 2 | 32 | 998.0 | 1122.9 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-static | 2 | 48 | 1343.3 | 1476.0 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-static | 2 | 64 | 1390.1 | 1525.9 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-static | 2 | 96 | 1618.5 | 1768.9 | 0 | 0 | 0 | 0 | 0 |
-| torch-compile-static | 2 | 128 | 1784.3 | 1944.3 | 0 | 0 | 0 | 0 | 0 |
-| torch-eager | 1 | 32 | 2167.0 | 2290.9 | 0 | 0 | 0 | 0 | 0 |
-| torch-eager | 1 | 48 | 2356.3 | 2483.9 | 0 | 0 | 0 | 0 | 0 |
-| torch-eager | 1 | 64 | 2363.0 | 2498.9 | 0 | 0 | 0 | 0 | 0 |
-| torch-eager | 1 | 96 | 2427.3 | 2573.1 | 0 | 0 | 0 | 0 | 0 |
-| torch-eager | 1 | 128 | 2496.3 | 2653.5 | 0 | 0 | 0 | 0 | 0 |
-| torch-eager | 2 | 32 | 2169.3 | 2291.4 | 0 | 0 | 0 | 0 | 0 |
-| torch-eager | 2 | 48 | 2347.9 | 2477.4 | 0 | 0 | 0 | 0 | 0 |
-| torch-eager | 2 | 64 | 2355.8 | 2489.2 | 0 | 0 | 0 | 0 | 0 |
-| torch-eager | 2 | 96 | 2414.7 | 2561.0 | 0 | 0 | 0 | 0 | 0 |
-| torch-eager | 2 | 128 | 2481.1 | 2641.6 | 0 | 0 | 0 | 0 | 0 |
+| ours | 1 | 32 | 973.5 | 1160.8 | 0 | 4 | 1 | 978 | 0 |
+| ours | 1 | 48 | 1378.0 | 1662.0 | 5 | 2 | 1 | 1084 | 0 |
+| ours | 1 | 64 | 1454.7 | 1818.0 | 3 | 1 | 3 | 1028 | 0 |
+| ours | 1 | 96 | 1702.9 | 2351.5 | 1 | 1 | 0 | 912 | 0 |
+| ours | 1 | 128 | 2033.5 | 2830.5 | 0 | 1 | 0 | 918 | 0 |
+| ours | 2 | 32 | 942.0 | 1143.0 | 0 | 0 | 0 | 900 | 0 |
+| ours | 2 | 48 | 1333.5 | 1622.0 | 0 | 0 | 0 | 900 | 0 |
+| ours | 2 | 64 | 1379.0 | 1812.4 | 0 | 0 | 0 | 900 | 0 |
+| ours | 2 | 96 | 1634.0 | 2366.4 | 0 | 0 | 0 | 900 | 0 |
+| ours | 2 | 128 | 1948.2 | 2796.9 | 0 | 0 | 0 | 900 | 0 |
+| torch-compile-dynamic | 1 | 32 | 1078.1 | 1205.5 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-dynamic | 1 | 48 | 1496.4 | 1631.9 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-dynamic | 1 | 64 | 1547.4 | 1688.8 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-dynamic | 1 | 96 | 1721.5 | 1873.3 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-dynamic | 1 | 128 | 1920.0 | 2083.1 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-dynamic | 2 | 32 | 1072.3 | 1198.5 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-dynamic | 2 | 48 | 1465.8 | 1598.2 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-dynamic | 2 | 64 | 1524.5 | 1662.2 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-dynamic | 2 | 96 | 1716.5 | 1867.5 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-dynamic | 2 | 128 | 1910.8 | 2071.5 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-static | 1 | 32 | 1014.5 | 1142.6 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-static | 1 | 48 | 1364.0 | 1501.4 | 0 | 0 | 0 | 0 | 1 |
+| torch-compile-static | 1 | 64 | 1402.8 | 1542.5 | 0 | 0 | 0 | 0 | 1 |
+| torch-compile-static | 1 | 96 | 1631.4 | 1786.2 | 0 | 0 | 0 | 0 | 1 |
+| torch-compile-static | 1 | 128 | 1802.1 | 1965.7 | 0 | 0 | 0 | 0 | 1 |
+| torch-compile-static | 2 | 32 | 1002.0 | 1130.3 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-static | 2 | 48 | 1352.8 | 1485.2 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-static | 2 | 64 | 1393.8 | 1531.5 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-static | 2 | 96 | 1624.7 | 1775.8 | 0 | 0 | 0 | 0 | 0 |
+| torch-compile-static | 2 | 128 | 1791.8 | 1952.5 | 0 | 0 | 0 | 0 | 0 |
+| torch-eager | 1 | 32 | 2220.5 | 2350.3 | 0 | 0 | 0 | 0 | 0 |
+| torch-eager | 1 | 48 | 2408.4 | 2545.2 | 0 | 0 | 0 | 0 | 0 |
+| torch-eager | 1 | 64 | 2402.9 | 2542.0 | 0 | 0 | 0 | 0 | 0 |
+| torch-eager | 1 | 96 | 2473.4 | 2626.2 | 0 | 0 | 0 | 0 | 0 |
+| torch-eager | 1 | 128 | 2538.6 | 2703.1 | 0 | 0 | 0 | 0 | 0 |
+| torch-eager | 2 | 32 | 2213.8 | 2340.6 | 0 | 0 | 0 | 0 | 0 |
+| torch-eager | 2 | 48 | 2397.1 | 2528.7 | 0 | 0 | 0 | 0 | 0 |
+| torch-eager | 2 | 64 | 2404.4 | 2546.4 | 0 | 0 | 0 | 0 | 0 |
+| torch-eager | 2 | 96 | 2470.2 | 2623.8 | 0 | 0 | 0 | 0 | 0 |
+| torch-eager | 2 | 128 | 2520.7 | 2682.1 | 0 | 0 | 0 | 0 | 0 |
 

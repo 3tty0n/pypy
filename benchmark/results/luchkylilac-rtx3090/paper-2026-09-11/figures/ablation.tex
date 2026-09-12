@@ -2,32 +2,32 @@
 \toprule
 experiment & model & setting & us & range & launches/iter \\
 \midrule
-budget mb & distilgpt2 & 8 & 1289 & 1284-1297 &  \\
-budget mb & distilgpt2 & 64 & 1285 & 1280-1293 &  \\
-flat block & distilgpt2 & 256 & 1260 & 1253-1260 &  \\
-flat block & distilgpt2 & 4096 & 1298 & 1287-1298 &  \\
-flat block & resnet18 & 256 & 633 & 627-656 &  \\
-flat block & resnet18 & 4096 & 688 & 687-726 &  \\
-fusion & distilgpt2 & off & 1945 & 1943-1968 &  \\
-fusion & distilgpt2 & on & 1291 & 1290-1299 &  \\
-max inputs & bert-mini & mi4 & 488 & 468-498 & 34.3 \\
-max inputs & bert-mini & mi6 & 433 & 424-435 & 24.3 \\
-max inputs & bert-mini & mi8 & 424 & 422-430 & 24.3 \\
-max inputs & distilgpt2 & mi4 & 1319 & 1313-1328 & 45.2 \\
-max inputs & distilgpt2 & mi6 & 1305 & 1283-1312 & 38.2 \\
-max inputs & distilgpt2 & mi8 & 1294 & 1289-1301 & 38.2 \\
-max inputs & mixer\_b16 & mi4 & 2735 & 2732-2752 & 76.4 \\
-max inputs & mixer\_b16 & mi6 & 2697 & 2695-2710 & 63.4 \\
-max inputs & mixer\_b16 & mi8 & 2691 & 2678-2697 & 63.4 \\
-precision & distilgpt2 & float16 & 915 & 906-978 &  \\
-precision & distilgpt2 & float32 & 1285 & 1280-1290 &  \\
-precision & smollm2-135m & float16 & 2211 & 2206-2213 &  \\
-precision & smollm2-135m & float32 & 3684 & 3674-3691 &  \\
-tf32 & resnet18-b1 & fp32 & 785 & 773-787 &  \\
-tf32 & resnet18-b1 & tf32 & 720 & 714-726 &  \\
-tf32 & resnet18-b8 & fp32 & 3205 & 3194-3208 &  \\
-tf32 & resnet18-b8 & tf32 & 2715 & 2702-2731 &  \\
-tf32 & resnet18-b8 & torch-fp32 & 3072 & 3066-3074 &  \\
+budget mb & distilgpt2 & 8 & 1282 & 1278-1287 &  \\
+budget mb & distilgpt2 & 64 & 1300 & 1283-1301 &  \\
+flat block & distilgpt2 & 256 & 1256 & 1256-1263 &  \\
+flat block & distilgpt2 & 4096 & 1286 & 1282-1286 &  \\
+flat block & resnet18 & 256 & 629 & 629-630 &  \\
+flat block & resnet18 & 4096 & 690 & 690-690 &  \\
+fusion & distilgpt2 & off & 1953 & 1949-1954 &  \\
+fusion & distilgpt2 & on & 1292 & 1289-1300 &  \\
+max inputs & bert-mini & mi4 & 471 & 466-478 & 34.3 \\
+max inputs & bert-mini & mi6 & 428 & 427-430 & 24.3 \\
+max inputs & bert-mini & mi8 & 428 & 421-429 & 24.3 \\
+max inputs & distilgpt2 & mi4 & 1316 & 1304-1329 & 45.2 \\
+max inputs & distilgpt2 & mi6 & 1288 & 1283-1300 & 38.2 \\
+max inputs & distilgpt2 & mi8 & 1282 & 1277-1284 & 38.2 \\
+max inputs & mixer\_b16 & mi4 & 2757 & 2756-2768 & 76.4 \\
+max inputs & mixer\_b16 & mi6 & 2683 & 2682-2694 & 63.4 \\
+max inputs & mixer\_b16 & mi8 & 2681 & 2668-2691 & 63.4 \\
+precision & distilgpt2 & float16 & 917 & 914-1009 &  \\
+precision & distilgpt2 & float32 & 1288 & 1283-1295 &  \\
+precision & smollm2-135m & float16 & 2212 & 2185-2251 &  \\
+precision & smollm2-135m & float32 & 3685 & 3684-3690 &  \\
+tf32 & resnet18-b1 & fp32 & 786 & 778-786 &  \\
+tf32 & resnet18-b1 & tf32 & 718 & 717-727 &  \\
+tf32 & resnet18-b8 & fp32 & 3200 & 3196-3209 &  \\
+tf32 & resnet18-b8 & tf32 & 2718 & 2710-2723 &  \\
+tf32 & resnet18-b8 & torch-fp32 & 3054 & 3046-3068 &  \\
 \bottomrule
 \end{tabular}
 % median us per iteration over the rounds, with the observed range, and launches/iter where the experiment records it

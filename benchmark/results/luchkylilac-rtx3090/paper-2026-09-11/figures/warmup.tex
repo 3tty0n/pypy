@@ -2,26 +2,26 @@
 \toprule
 model & system & cache & first forward (ms) & steady\_at (iters) & steady (us) & crossover vs eager (iters) \\
 \midrule
-distilgpt2 & PyTorch eager & warm & 135.17 & 2 & 3051.6 & none \\
-distilgpt2 & PyTorch eager & cold & 127.09 & 8 & 3018.4 & none \\
-distilgpt2 & MetaTensor & warm & 565.79 & 127 & 1254.4 & 271 \\
-distilgpt2 & MetaTensor & cold & 3779.15 & 167 & 1254.6 & none \\
-distilgpt2 & torch.compile & warm & 1493.33 & 55 & 1415.1 & none \\
-distilgpt2 & torch.compile & cold & 4085.52 & 21 & 1422.5 & none \\
-distilgpt2 & torch.compile (reduce-overhead) & warm & 1531.10 & 40 & 1311.8 & none \\
-distilgpt2 & torch.compile (reduce-overhead) & cold & 3231.27 & 82 & 1302.8 & none \\
-distilgpt2 & JAX/XLA & warm & 52.54 & 22 & 1164.3 & 1 \\
-distilgpt2 & JAX/XLA & cold & 4.71 & 31 & 1175.7 & 1 \\
-tiny-gpt2 & PyTorch eager & warm & 489.95 & 2 & 1579.8 & none \\
-tiny-gpt2 & PyTorch eager & cold & 969.69 & 2 & 1581.3 & none \\
-tiny-gpt2 & MetaTensor & warm & 114.34 & none & 176.4 & 1 \\
-tiny-gpt2 & MetaTensor & cold & 546.47 & none & 176.1 & 1 \\
-tiny-gpt2 & torch.compile & warm & 1181.06 & 18 & 369.9 & none \\
-tiny-gpt2 & torch.compile & cold & 3107.74 & 30 & 370.4 & none \\
-tiny-gpt2 & torch.compile (reduce-overhead) & warm & 1183.25 & 136 & 203.4 & none \\
-tiny-gpt2 & torch.compile (reduce-overhead) & cold & 2358.63 & 159 & 190.3 & none \\
-tiny-gpt2 & JAX/XLA & warm & 42.99 & 15 & 158.1 & 1 \\
-tiny-gpt2 & JAX/XLA & cold & 1.56 & 42 & 161.2 & 1 \\
+distilgpt2 & PyTorch eager & warm & 136.84 & 2 & 3216.1 & none \\
+distilgpt2 & PyTorch eager & cold & 136.45 & 2 & 3033.6 & none \\
+distilgpt2 & MetaTensor & warm & 549.90 & 167 & 1253.8 & 235 \\
+distilgpt2 & MetaTensor & cold & 3571.19 & 127 & 1249.0 & none \\
+distilgpt2 & torch.compile & warm & 1570.84 & 80 & 1476.2 & none \\
+distilgpt2 & torch.compile & cold & 3990.15 & 4 & 1394.9 & none \\
+distilgpt2 & torch.compile (reduce-overhead) & warm & 1592.98 & 13 & 1314.5 & none \\
+distilgpt2 & torch.compile (reduce-overhead) & cold & 3487.50 & 53 & 1298.7 & none \\
+distilgpt2 & JAX/XLA & warm & 50.25 & 6 & 1184.4 & 1 \\
+distilgpt2 & JAX/XLA & cold & 4.66 & 13 & 1186.4 & 1 \\
+tiny-gpt2 & PyTorch eager & warm & 479.32 & 3 & 1567.2 & none \\
+tiny-gpt2 & PyTorch eager & cold & 971.07 & 3 & 1577.0 & none \\
+tiny-gpt2 & MetaTensor & warm & 114.39 & none & 177.5 & 1 \\
+tiny-gpt2 & MetaTensor & cold & 548.42 & none & 174.5 & 1 \\
+tiny-gpt2 & torch.compile & warm & 1173.77 & 112 & 367.3 & none \\
+tiny-gpt2 & torch.compile & cold & 3180.74 & 23 & 329.7 & none \\
+tiny-gpt2 & torch.compile (reduce-overhead) & warm & 1193.33 & 104 & 203.5 & none \\
+tiny-gpt2 & torch.compile (reduce-overhead) & cold & 2358.31 & 58 & 188.8 & none \\
+tiny-gpt2 & JAX/XLA & warm & 45.61 & 21 & 160.0 & 1 \\
+tiny-gpt2 & JAX/XLA & cold & 1.61 & 15 & 159.6 & 1 \\
 \bottomrule
 \end{tabular}
 % first forward and steady-state onset from a fresh process, median over the rounds; crossover is the first forward at which cumulative time drops below torch-eager's
