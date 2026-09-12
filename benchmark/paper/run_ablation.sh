@@ -7,7 +7,11 @@ paper_setup_pypy
 trap paper_cleanup_pypy EXIT
 
 TSV="$OUT/ablation.tsv"
-tsv_init "$TSV" "experiment\tvariant\tmodel\tround\tsteady_us\tmaxabsdiff\tnote"
+tsv_init "$TSV" "experiment\tvariant\tmodel\tround\tsteady_us\tmaxabsdiff\tnote\tbinary"
+
+# Every row here runs on our own translated pypy-c; identify it by its hash
+# the same way run_models.sh identifies the "ours" system.
+PYPY_SHA=$(sha256sum "$PYPY" 2>/dev/null | cut -c1-12)
 
 NOFUSE_OPTS="enable_opts=intbounds:rewrite:virtualize:string:pure:earlyforce:heap:unroll"
 
@@ -22,9 +26,9 @@ run_resnet() {
 
 # One ablation row, to both writers: exp variant model round steady diff note
 ab_row() {
-  echo -e "$1\t$2\t$3\t$4\t$5\t$6\t$7" >> "$TSV"
+  echo -e "$1\t$2\t$3\t$4\t$5\t$6\t$7\t${PYPY_SHA:-unknown}" >> "$TSV"
   bench_record ablation experiment="$1" variant="$2" model="$3" round="$4" \
-    steady_us="$5" maxabsdiff="$6" note="$7"
+    steady_us="$5" maxabsdiff="$6" note="$7" binary="${PYPY_SHA:-unknown}"
 }
 
 exp_fusion() {

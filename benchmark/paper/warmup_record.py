@@ -3,7 +3,7 @@
 into rows appended to $OUT/warmup.tsv, plus a one-line summary that
 run_warmup.sh picks up with the existing field_of() shell helper.
 
-    warmup_record.py MODEL SYSTEM CACHE ROUND TSV_PATH SERIES_OUT [EAGER_PATH] < trace
+    warmup_record.py MODEL SYSTEM CACHE ROUND TSV_PATH SERIES_OUT BINARY [EAGER_PATH] < trace
 
 SERIES_OUT always gets this run's per-iteration series (one float per line),
 so a later system in the same (model, cache, round) can pass it back in as
@@ -17,11 +17,11 @@ def parse_kv(line):
 
 
 def main(argv):
-    if len(argv) < 7:
+    if len(argv) < 8:
         raise SystemExit('usage: warmup_record.py MODEL SYSTEM CACHE ROUND '
-                          'TSV_PATH SERIES_OUT [EAGER_PATH]')
-    model, system, cache, round_, tsv_path, series_out = argv[1:7]
-    eager_path = argv[7] if len(argv) > 7 else None
+                          'TSV_PATH SERIES_OUT BINARY [EAGER_PATH]')
+    model, system, cache, round_, tsv_path, series_out, binary = argv[1:8]
+    eager_path = argv[8] if len(argv) > 8 else None
 
     us = []
     total_us = steady_us = None
@@ -38,8 +38,8 @@ def main(argv):
                 # instrumentation); blank for every other system.
                 compiled = kv.get('compiled', '')
                 launches = kv.get('launches', '')
-                tsv.write('%s\t%s\t%s\t%s\t%d\t%.1f\t%s\t%s\n' %
-                          (model, system, cache, round_, i, u, compiled, launches))
+                tsv.write('%s\t%s\t%s\t%s\t%d\t%.1f\t%s\t%s\t%s\n' %
+                          (model, system, cache, round_, i, u, compiled, launches, binary))
             elif line.startswith('total_us='):
                 kv = parse_kv(line)
                 total_us = float(kv['total_us'])

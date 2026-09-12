@@ -25,21 +25,30 @@ N=${N:-300}
 # compiled>0 means that forward spawned the Triton compile subprocess (a
 # disk-cache miss); launches counts every kernel dispatch, hit or miss.
 TSV="$OUT/warmup.tsv"
-tsv_init "$TSV" "model\tsystem\tcache\tround\titer\tus\tcompiled\tlaunches"
+tsv_init "$TSV" "model\tsystem\tcache\tround\titer\tus\tcompiled\tlaunches\tbinary"
 SERIES_DIR="$OUT/.warmup_series"
 mkdir -p "$SERIES_DIR"
+
+# Per-row provenance, same convention as run_models.sh.
+PYPY_SHA=$(sha256sum "$PYPY" 2>/dev/null | cut -c1-12)
+TORCH_VER=$([ -n "$TORCH_PYTHON" ] && [ -x "$TORCH_PYTHON" ] && \
+  "$TORCH_PYTHON" -c "import torch; print('torch-' + torch.__version__)" 2>/dev/null || echo unknown)
+JAX_VER=$([ -n "${JAX_PYTHON:-}" ] && [ -x "${JAX_PYTHON:-}" ] && \
+  "$JAX_PYTHON" -c "import jax; print('jax-' + jax.__version__)" 2>/dev/null || echo unknown)
+binary_of() { case "$1" in ours) echo "${PYPY_SHA:-unknown}" ;; jax) echo "$JAX_VER" ;; *) echo "$TORCH_VER" ;; esac; }
 
 record_one() {
   # model system cache round <<< trace stdout on stdin
   local model=$1 system=$2 cache=$3 round=$4 eager=$5
   local series="$SERIES_DIR/${model}_${cache}_${round}_${system}"
+  local binary=$(binary_of "$system")
   local out
   if [ -n "$eager" ]; then
     out=$("$RTENSOR_PYTHON" "$HERE/warmup_record.py" \
-      "$model" "$system" "$cache" "$round" "$TSV" "$series" "$eager")
+      "$model" "$system" "$cache" "$round" "$TSV" "$series" "$binary" "$eager")
   else
     out=$("$RTENSOR_PYTHON" "$HERE/warmup_record.py" \
-      "$model" "$system" "$cache" "$round" "$TSV" "$series")
+      "$model" "$system" "$cache" "$round" "$TSV" "$series" "$binary")
   fi
   local first=$(field_of "$out" first_us) total=$(field_of "$out" total_us)
   local steady=$(field_of "$out" steady_us)
@@ -50,7 +59,8 @@ record_one() {
   bench_record warmup model="$model" system="$system" cache="$cache" \
     round="$round" total_us="${total:-}" steady_us="${steady:-}" \
     steady_at="${steady_at:-}" first_us="${first:-}" crossover="${crossover:-}" \
-    cold_compiles="${cold_compiles:-}" first_forward_compiles="${first_compiles:-}"
+    cold_compiles="${cold_compiles:-}" first_forward_compiles="${first_compiles:-}" \
+    binary="$binary"
   echo "$series"
 }
 

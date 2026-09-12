@@ -1,52 +1,52 @@
-experiment	variant	model	round	steady_us	maxabsdiff	note
-fusion	on	distilgpt2	1	1265.7		
-fusion	off	distilgpt2	1	1924.8		enable_opts minus tensor
-fusion	on	distilgpt2	2	1276.6		
-fusion	off	distilgpt2	2	1935.0		enable_opts minus tensor
-fusion	on	distilgpt2	3	1268.3		
-fusion	off	distilgpt2	3	1923.8		enable_opts minus tensor
-flat_block	256	distilgpt2	1	1241.0		
-flat_block	256	resnet18	1	648.0		
-flat_block	256	distilgpt2	2	1247.4		
-flat_block	256	resnet18	2	620.1		
-flat_block	256	distilgpt2	3	1230.9		
-flat_block	256	resnet18	3	626.1		
-flat_block	4096	distilgpt2	1	1274.7		
-flat_block	4096	resnet18	1	686.2		
-flat_block	4096	distilgpt2	2	1271.3		
-flat_block	4096	resnet18	2	686.4		
-flat_block	4096	distilgpt2	3	1275.4		
-flat_block	4096	resnet18	3	686.1		
-budget_mb	8	distilgpt2	1	1266.8		
-budget_mb	8	distilgpt2	2	1279.7		
-budget_mb	8	distilgpt2	3	1260.3		
-budget_mb	64	distilgpt2	1	1267.3		
-budget_mb	64	distilgpt2	2	1272.6		
-budget_mb	64	distilgpt2	3	1284.1		
-precision	float32	distilgpt2	1	1267.9	0.000175476	
-precision	float32	smollm2-135m	1	3686.7	0.000151277	
-precision	float32	distilgpt2	2	1262.7	0.000175476	
-precision	float32	smollm2-135m	2	3671.9	0.000151277	
-precision	float32	distilgpt2	3	1274.5	0.000175476	
-precision	float32	smollm2-135m	3	3655.5	0.000151277	
-precision	float16	distilgpt2	1	914.1	1.125	
-precision	float16	smollm2-135m	1	2183.8	0.1875	
-precision	float16	distilgpt2	2	916.3	1.125	
-precision	float16	smollm2-135m	2	2184.6	0.1875	
-precision	float16	distilgpt2	3	898.5	1.125	
-precision	float16	smollm2-135m	3	2186.1	0.1875	
-tf32	tf32	resnet18-b8	1	2717.1	0.00571394	
-tf32	tf32	resnet18-b8	2	2714.2	0.00571394	
-tf32	tf32	resnet18-b8	3	2729.6	0.00571394	
-tf32	fp32	resnet18-b8	1	3191.0	1.00136e-05	
-tf32	fp32	resnet18-b8	2	3196.9	1.00136e-05	
-tf32	fp32	resnet18-b8	3	3199.4	1.00136e-05	
-tf32	tf32	resnet18-b1	1	714.6	0.00963783	
-tf32	tf32	resnet18-b1	2	713.6	0.00963783	
-tf32	tf32	resnet18-b1	3	713.7	0.00963783	
-tf32	fp32	resnet18-b1	1	786.8	8.58307e-06	
-tf32	fp32	resnet18-b1	2	773.7	8.58307e-06	
-tf32	fp32	resnet18-b1	3	760.0	8.58307e-06	
-tf32	torch-fp32	resnet18-b8	1	3047.1	8.58307e-06	
-tf32	torch-fp32	resnet18-b8	2	3060.3	8.58307e-06	
-tf32	torch-fp32	resnet18-b8	3	3040.4	8.58307e-06	
+experiment	variant	model	round	steady_us	maxabsdiff	note	binary
+fusion	on	distilgpt2	1	1298.6			fb8a4ec1238c
+fusion	off	distilgpt2	1	1968.5		enable_opts minus tensor	fb8a4ec1238c
+fusion	on	distilgpt2	2	1290.8			fb8a4ec1238c
+fusion	off	distilgpt2	2	1942.9		enable_opts minus tensor	fb8a4ec1238c
+fusion	on	distilgpt2	3	1289.9			fb8a4ec1238c
+fusion	off	distilgpt2	3	1945.4		enable_opts minus tensor	fb8a4ec1238c
+flat_block	256	distilgpt2	1	1260.4			fb8a4ec1238c
+flat_block	256	resnet18	1	655.6			fb8a4ec1238c
+flat_block	256	distilgpt2	2	1253.1			fb8a4ec1238c
+flat_block	256	resnet18	2	633.3			fb8a4ec1238c
+flat_block	256	distilgpt2	3	1260.2			fb8a4ec1238c
+flat_block	256	resnet18	3	627.3			fb8a4ec1238c
+flat_block	4096	distilgpt2	1	1298.5			fb8a4ec1238c
+flat_block	4096	resnet18	1	726.5			fb8a4ec1238c
+flat_block	4096	distilgpt2	2	1286.7			fb8a4ec1238c
+flat_block	4096	resnet18	2	687.0			fb8a4ec1238c
+flat_block	4096	distilgpt2	3	1298.2			fb8a4ec1238c
+flat_block	4096	resnet18	3	687.7			fb8a4ec1238c
+budget_mb	8	distilgpt2	1	1296.6			fb8a4ec1238c
+budget_mb	8	distilgpt2	2	1283.5			fb8a4ec1238c
+budget_mb	8	distilgpt2	3	1289.1			fb8a4ec1238c
+budget_mb	64	distilgpt2	1	1293.3			fb8a4ec1238c
+budget_mb	64	distilgpt2	2	1280.2			fb8a4ec1238c
+budget_mb	64	distilgpt2	3	1284.9			fb8a4ec1238c
+precision	float32	distilgpt2	1	1289.6	0.000190735		fb8a4ec1238c
+precision	float32	smollm2-135m	1	3683.5	0.000201941		fb8a4ec1238c
+precision	float32	distilgpt2	2	1285.1	0.000190735		fb8a4ec1238c
+precision	float32	smollm2-135m	2	3673.8	0.000201941		fb8a4ec1238c
+precision	float32	distilgpt2	3	1280.5	0.000190735		fb8a4ec1238c
+precision	float32	smollm2-135m	3	3691.3	0.000201941		fb8a4ec1238c
+precision	float16	distilgpt2	1	905.8	1.125		fb8a4ec1238c
+precision	float16	smollm2-135m	1	2206.1	0.28125		fb8a4ec1238c
+precision	float16	distilgpt2	2	914.7	1.125		fb8a4ec1238c
+precision	float16	smollm2-135m	2	2212.9	0.28125		fb8a4ec1238c
+precision	float16	distilgpt2	3	978.0	1.125		fb8a4ec1238c
+precision	float16	smollm2-135m	3	2211.3	0.28125		fb8a4ec1238c
+tf32	tf32	resnet18-b8	1	2714.9	0.00571394		fb8a4ec1238c
+tf32	tf32	resnet18-b8	2	2702.1	0.00571394		fb8a4ec1238c
+tf32	tf32	resnet18-b8	3	2731.1	0.00571394		fb8a4ec1238c
+tf32	fp32	resnet18-b8	1	3193.7	1.00136e-05		fb8a4ec1238c
+tf32	fp32	resnet18-b8	2	3204.9	1.00136e-05		fb8a4ec1238c
+tf32	fp32	resnet18-b8	3	3208.1	1.00136e-05		fb8a4ec1238c
+tf32	tf32	resnet18-b1	1	726.2	0.00963783		fb8a4ec1238c
+tf32	tf32	resnet18-b1	2	720.4	0.00963783		fb8a4ec1238c
+tf32	tf32	resnet18-b1	3	713.5	0.00963783		fb8a4ec1238c
+tf32	fp32	resnet18-b1	1	784.8	8.58307e-06		fb8a4ec1238c
+tf32	fp32	resnet18-b1	2	787.3	8.58307e-06		fb8a4ec1238c
+tf32	fp32	resnet18-b1	3	773.4	8.58307e-06		fb8a4ec1238c
+tf32	torch-fp32	resnet18-b8	1	3066.5	8.58307e-06		fb8a4ec1238c
+tf32	torch-fp32	resnet18-b8	2	3071.7	8.58307e-06		fb8a4ec1238c
+tf32	torch-fp32	resnet18-b8	3	3074.3	8.58307e-06		fb8a4ec1238c
