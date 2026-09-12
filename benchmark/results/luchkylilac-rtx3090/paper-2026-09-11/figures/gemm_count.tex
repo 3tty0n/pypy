@@ -4,14 +4,19 @@ model & system & gemm & gen & other \\
 \midrule
 bert-tiny & MetaTensor & 16 & 14 & 0 \\
 bert-tiny & torch.compile & 20 & 16 & 0 \\
+bert-tiny & JAX/XLA & 14 & 18 & 0 \\
 bert-mini & MetaTensor & 43 & 24 & 0 \\
 bert-mini & torch.compile & 59 & 30 & 0 \\
-tiny-gpt2 & MetaTensor & 14 & 13 & 0 \\
+bert-mini & JAX/XLA & 26 & 32 & 0 \\
+tiny-gpt2 & MetaTensor & 13 & 13 & 0 \\
 tiny-gpt2 & torch.compile & 9 & 20 & 2 \\
+tiny-gpt2 & JAX/XLA & 9 & 21 & 0 \\
 distilgpt2 & MetaTensor & 55 & 38 & 6 \\
 distilgpt2 & torch.compile & 43 & 37 & 18 \\
+distilgpt2 & JAX/XLA & 43 & 62 & 6 \\
 vit-tiny & MetaTensor & 99 & 76 & 0 \\
 vit-tiny & torch.compile & 160 & 87 & 1 \\
+vit-tiny & JAX/XLA & 73 & 98 & 0 \\
 \bottomrule
 \end{tabular}
-% kernel launches per forward, attributed: matrix products, generated elementwise/reduction kernels, everything else (from paper-2026-09-10: this run has no nsys trace)
+% kernel launches per forward, attributed: matrix products, generated elementwise/reduction kernels, everything else
