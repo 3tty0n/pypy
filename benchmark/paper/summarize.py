@@ -307,24 +307,28 @@ def main(out_dir):
     ablation = read_tsv(os.path.join(out_dir, "ablation.tsv"))
     if ablation:
         lines.append("## Ablations (median steady_us)\n")
-        lines.append("| experiment | variant | model | steady_us | note |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| experiment | variant | model | steady_us | launches/iter | note |")
+        lines.append("|---|---|---|---|---|---|")
         g = collections.defaultdict(list)
+        launches = collections.defaultdict(list)
         notes = {}
         for r in ablation:
             key = (r["experiment"], r["variant"], r["model"])
             if r.get("steady_us"):
                 g[key].append(float(r["steady_us"]))
+            if r.get("launches_per_iter"):
+                launches[key].append(float(r["launches_per_iter"]))
             if r.get("note"):
                 notes[key] = r["note"]
         for key in sorted(g) if g else sorted(notes):
             steady = med(g.get(key, []))
-            lines.append("| %s | %s | %s | %s | %s |" % (
-                key[0], key[1], key[2], fmt(steady), notes.get(key, "")))
+            lines.append("| %s | %s | %s | %s | %s | %s |" % (
+                key[0], key[1], key[2], fmt(steady),
+                fmt(med(launches.get(key, [])), "%.1f"), notes.get(key, "")))
         for key in sorted(notes):
             if key not in g:
-                lines.append("| %s | %s | %s | %s | %s |" % (
-                    key[0], key[1], key[2], "n/a", notes[key]))
+                lines.append("| %s | %s | %s | %s | %s | %s |" % (
+                    key[0], key[1], key[2], "n/a", "", notes[key]))
         lines.append("")
 
     deopt = read_tsv(os.path.join(out_dir, "deopt.tsv"))

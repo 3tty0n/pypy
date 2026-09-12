@@ -2,7 +2,7 @@
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 ALL_MODELS="distilgpt2 tiny-gpt2 smollm2-135m bert-tiny bert-mini resnet18-b1 resnet18-b8 mixer_b16 vit-tiny"
-ALL_EXPERIMENTS="fusion flat_block budget_mb precision tf32"
+ALL_EXPERIMENTS="fusion flat_block budget_mb precision tf32 max_inputs"
 
 usage() {
   cat <<EOF
@@ -35,6 +35,8 @@ commands:
   warmup [--n N]         per-forward warm-up trace (tiny-gpt2, distilgpt2;
                          ours/torch-eager/torch-compile/torch-compile-ro/jax;
                          cold+warm kernel caches; N forwards, default 300)
+  explain                torch._dynamo.explain graph structure per model,
+                         into \$OUT/explain.tsv
   fusion [MODEL...]      fusion-region statistics per model forward (kernels,
                          nodes per kernel, why each region was cut) into
                          \$OUT/fusion.tsv; no args = all eight paper models
@@ -137,6 +139,9 @@ run_cmd() {
     warmup)
       if [ "$1" = "--n" ]; then N=$2; shift 2; fi
       N="$N" bash "$HERE/run_warmup.sh" "$@"
+      ;;
+    explain)
+      bash "$HERE/explain_models.sh" "$@"
       ;;
     fusion)
       source "$HERE/config.sh"

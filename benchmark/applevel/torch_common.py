@@ -4,6 +4,23 @@ import torch
 
 import warmup_common
 
+# Documented policy: matmul TF32 off, cudnn TF32 on, unless TORCH_CUDNN_TF32
+# overrides both (resnet_torch.py's existing knob, kept working - it re-sets
+# the same two flags after this runs, which is a harmless no-op override).
+if os.environ.get('TORCH_CUDNN_TF32') == '0':
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+else:
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = True
+_tf32_matmul = int(torch.backends.cuda.matmul.allow_tf32)
+_tf32_cudnn = int(torch.backends.cudnn.allow_tf32)
+if os.environ.get('TORCH_CUDNN_TF32') != '0' and (_tf32_matmul, _tf32_cudnn) != (0, 1):
+    raise AssertionError('tf32 policy violated: tf32_matmul=%d tf32_cudnn=%d' %
+                         (_tf32_matmul, _tf32_cudnn))
+sys.stderr.write('torch_common: tf32_matmul=%d tf32_cudnn=%d\n' %
+                 (_tf32_matmul, _tf32_cudnn))
+
 
 class Args(object):
     pass
@@ -97,9 +114,22 @@ def profile_launches(fwd, args, a, n=5):
         return None
 
 
+def explain(fwd, args):
+    """mode=explain: one torch._dynamo.explain call, no timing. Prints
+    'graphs=<n> breaks=<n> ops=<n>' and exits."""
+    import torch._dynamo as dynamo
+    with torch.no_grad():
+        out = dynamo.explain(fwd)(*args)
+    print('graphs=%d breaks=%d ops=%d' %
+         (out.graph_count, out.graph_break_count, out.op_count))
+    sys.exit(0)
+
+
 def timed(fwd, args, a):
     """Warm-up, sync, timed loop, sync.  The first forward is timed on its
     own into a.first_run_ms: for compile mode that is compile plus one run."""
+    if a.mode == 'explain':
+        explain(fwd, args)
     with torch.no_grad():
         n = warmup_common.trace_n()
         if n:

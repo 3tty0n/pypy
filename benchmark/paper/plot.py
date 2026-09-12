@@ -714,10 +714,13 @@ def fig_ablation(out, args):
     if not rows:
         return None
     g = collections.defaultdict(list)
+    gl = collections.defaultdict(list)
     for r in rows:
+        key = (r["experiment"], r["model"], r["variant"])
         if r.get("steady_us"):
-            g[(r["experiment"], r["model"], r["variant"])].append(
-                float(r["steady_us"]))
+            g[key].append(float(r["steady_us"]))
+        if r.get("launches_per_iter"):
+            gl[key].append(float(r["launches_per_iter"]))
     if not g:
         return None
 
@@ -763,12 +766,30 @@ def fig_ablation(out, args):
     if args.titles:
         ax.set_title("Ablations")
     write_table(os.path.join(args.outdir, "ablation.tex"),
-                "median us per iteration over the rounds, with the observed range",
-                ["experiment", "model", "setting", "us", "range"],
+                "median us per iteration over the rounds, with the observed "
+                "range, and launches/iter where the experiment records it",
+                ["experiment", "model", "setting", "us", "range", "launches/iter"],
                 [[e.replace("_", " "), m, v, "%.0f" % band(g[(e, m, v)])[0],
-                  spread_str(*band(g[(e, m, v)])[1:], fmt="%.0f")]
+                  spread_str(*band(g[(e, m, v)])[1:], fmt="%.0f"),
+                  "%.1f" % statistics.median(gl[(e, m, v)]) if gl.get((e, m, v)) else ""]
                  for (e, m, v) in sorted(g, key=lambda k: (k[0], k[1], setting_key(k[2])))])
     return fig, "ablation"
+
+
+def fig_explain(out, args):
+    """Table only: Dynamo graph count/break count/op count per model, one
+    row each, no rounds to spread over."""
+    rows = read_tsv(os.path.join(out, "explain.tsv"))
+    if not rows:
+        return None
+    write_table(os.path.join(args.outdir, "explain.tex"),
+                "torch._dynamo.explain graph structure per model",
+                ["model", "graphs", "breaks", "ops"],
+                [[r["model"], r.get("graphs", ""), r.get("breaks", ""),
+                  r.get("ops", "")] for r in rows])
+    fig, ax = plt.subplots(figsize=(args.width, 0.3))
+    ax.axis("off")
+    return fig, "explain"
 
 
 DEOPT_PATTERNS = ["never", "alternate", "both-hot", "fresh", "probe-a",
@@ -1716,6 +1737,7 @@ FIGURES = collections.OrderedDict([
     ("batch", fig_batch),
     ("precision", fig_precision),
     ("ablation", fig_ablation),
+    ("explain", fig_explain),
     ("deopt", fig_deopt),
     ("micro_baselines", fig_micro_baselines),
     ("compile_overhead", fig_compile_overhead),

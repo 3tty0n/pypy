@@ -87,25 +87,34 @@
 
 ## Ablations (median steady_us)
 
-| experiment | variant | model | steady_us | note |
-|---|---|---|---|---|
-| budget_mb | 64 | distilgpt2 | 1284.9 |  |
-| budget_mb | 8 | distilgpt2 | 1289.1 |  |
-| flat_block | 256 | distilgpt2 | 1260.2 |  |
-| flat_block | 256 | resnet18 | 633.3 |  |
-| flat_block | 4096 | distilgpt2 | 1298.2 |  |
-| flat_block | 4096 | resnet18 | 687.7 |  |
-| fusion | off | distilgpt2 | 1945.4 | enable_opts minus tensor |
-| fusion | on | distilgpt2 | 1290.8 |  |
-| precision | float16 | distilgpt2 | 914.7 |  |
-| precision | float16 | smollm2-135m | 2211.3 |  |
-| precision | float32 | distilgpt2 | 1285.1 |  |
-| precision | float32 | smollm2-135m | 3683.5 |  |
-| tf32 | fp32 | resnet18-b1 | 784.8 |  |
-| tf32 | fp32 | resnet18-b8 | 3204.9 |  |
-| tf32 | tf32 | resnet18-b1 | 720.4 |  |
-| tf32 | tf32 | resnet18-b8 | 2714.9 |  |
-| tf32 | torch-fp32 | resnet18-b8 | 3071.7 |  |
+| experiment | variant | model | steady_us | launches/iter | note |
+|---|---|---|---|---|---|
+| budget_mb | 64 | distilgpt2 | 1284.9 | n/a |  |
+| budget_mb | 8 | distilgpt2 | 1289.1 | n/a |  |
+| flat_block | 256 | distilgpt2 | 1260.2 | n/a |  |
+| flat_block | 256 | resnet18 | 633.3 | n/a |  |
+| flat_block | 4096 | distilgpt2 | 1298.2 | n/a |  |
+| flat_block | 4096 | resnet18 | 687.7 | n/a |  |
+| fusion | off | distilgpt2 | 1945.4 | n/a | enable_opts minus tensor |
+| fusion | on | distilgpt2 | 1290.8 | n/a |  |
+| max_inputs | mi4 | bert-mini | 488.3 | 34.3 |  |
+| max_inputs | mi4 | distilgpt2 | 1318.7 | 45.2 |  |
+| max_inputs | mi4 | mixer_b16 | 2735.2 | 76.4 |  |
+| max_inputs | mi6 | bert-mini | 432.8 | 24.3 |  |
+| max_inputs | mi6 | distilgpt2 | 1304.9 | 38.2 |  |
+| max_inputs | mi6 | mixer_b16 | 2697.4 | 63.4 |  |
+| max_inputs | mi8 | bert-mini | 424.5 | 24.3 |  |
+| max_inputs | mi8 | distilgpt2 | 1294.0 | 38.2 |  |
+| max_inputs | mi8 | mixer_b16 | 2691.1 | 63.4 |  |
+| precision | float16 | distilgpt2 | 914.7 | n/a |  |
+| precision | float16 | smollm2-135m | 2211.3 | n/a |  |
+| precision | float32 | distilgpt2 | 1285.1 | n/a |  |
+| precision | float32 | smollm2-135m | 3683.5 | n/a |  |
+| tf32 | fp32 | resnet18-b1 | 784.8 | n/a |  |
+| tf32 | fp32 | resnet18-b8 | 3204.9 | n/a |  |
+| tf32 | tf32 | resnet18-b1 | 720.4 | n/a |  |
+| tf32 | tf32 | resnet18-b8 | 2714.9 | n/a |  |
+| tf32 | torch-fp32 | resnet18-b8 | 3071.7 | n/a |  |
 
 ## Deoptimization cost (median over rounds, us per iteration)
 

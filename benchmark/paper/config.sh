@@ -171,6 +171,18 @@ PY
     echo "warmup_micro  ${WARMUP}"
     echo "max_inputs    $(max_inputs_effective)"
     echo "compute_cap_r $(resolved_cc)"
+    if [ -n "$TORCH_PYTHON" ] && [ -x "$TORCH_PYTHON" ]; then
+      "$TORCH_PYTHON" - <<'PY' 2>/dev/null || true
+import torch
+print("torch_tf32_matmul %d" % int(torch.backends.cuda.matmul.allow_tf32))
+print("torch_tf32_cudnn  %d" % int(torch.backends.cudnn.allow_tf32))
+PY
+    else
+      echo "torch_tf32_matmul unknown"
+      echo "torch_tf32_cudnn  unknown"
+    fi
+    echo "jax_matmul_precision highest"
+    echo "trt_tf32      0"
     echo "pypy_c_sha256 $(sha256_of "$PYPY")"
     echo "bench_sha256  $(sha256_of "$BENCH")"
     echo "budget_mb     ${RTENSOR_BUDGET_MB}"

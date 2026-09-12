@@ -4237,3 +4237,39 @@
 {"binary": "fb8a4ec1238c", "experiment": "tf32", "kind": "ablation", "maxabsdiff": 8.58307e-06, "model": "resnet18-b8", "round": 1, "steady_us": 3066.5, "variant": "torch-fp32"}
 {"binary": "fb8a4ec1238c", "experiment": "tf32", "kind": "ablation", "maxabsdiff": 8.58307e-06, "model": "resnet18-b8", "round": 2, "steady_us": 3071.7, "variant": "torch-fp32"}
 {"binary": "fb8a4ec1238c", "experiment": "tf32", "kind": "ablation", "maxabsdiff": 8.58307e-06, "model": "resnet18-b8", "round": 3, "steady_us": 3074.3, "variant": "torch-fp32"}
+{"breaks": 0, "graphs": 1, "kind": "explain", "model": "distilgpt2", "ops": 174}
+{"breaks": 0, "graphs": 1, "kind": "explain", "model": "tiny-gpt2", "ops": 70}
+{"breaks": 0, "graphs": 1, "kind": "explain", "model": "smollm2-135m", "ops": 1116}
+{"breaks": 0, "graphs": 1, "kind": "explain", "model": "bert-tiny", "ops": 49}
+{"breaks": 0, "graphs": 1, "kind": "explain", "model": "bert-mini", "ops": 77}
+{"breaks": 0, "graphs": 1, "kind": "explain", "model": "resnet18-b1", "ops": 68}
+{"breaks": 0, "graphs": 1, "kind": "explain", "model": "resnet18-b8", "ops": 68}
+{"breaks": 0, "graphs": 1, "kind": "explain", "model": "mixer_b16", "ops": 172}
+{"breaks": 0, "graphs": 1, "kind": "explain", "model": "vit-tiny", "ops": 184}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 45.2, "maxabsdiff": 0.000160217, "model": "distilgpt2", "round": 1, "steady_us": 1328.3, "variant": "mi4"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 76.4, "maxabsdiff": 3.43323e-05, "model": "mixer_b16", "round": 1, "steady_us": 2735.2, "variant": "mi4"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 34.3, "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 1, "steady_us": 497.7, "variant": "mi4"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 45.2, "maxabsdiff": 0.000160217, "model": "distilgpt2", "round": 2, "steady_us": 1312.8, "variant": "mi4"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 76.4, "maxabsdiff": 3.43323e-05, "model": "mixer_b16", "round": 2, "steady_us": 2732.5, "variant": "mi4"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 34.3, "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 2, "steady_us": 468.4, "variant": "mi4"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 45.2, "maxabsdiff": 0.000160217, "model": "distilgpt2", "round": 3, "steady_us": 1318.7, "variant": "mi4"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 76.4, "maxabsdiff": 3.43323e-05, "model": "mixer_b16", "round": 3, "steady_us": 2752.2, "variant": "mi4"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 34.3, "maxabsdiff": 2.09808e-05, "model": "bert-mini", "round": 3, "steady_us": 488.3, "variant": "mi4"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 38.2, "maxabsdiff": 0.000190735, "model": "distilgpt2", "round": 1, "steady_us": 1304.9, "variant": "mi6"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 63.4, "maxabsdiff": 3.62396e-05, "model": "mixer_b16", "round": 1, "steady_us": 2709.9, "variant": "mi6"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 24.3, "maxabsdiff": 1.90735e-05, "model": "bert-mini", "round": 1, "steady_us": 424.5, "variant": "mi6"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 38.2, "maxabsdiff": 0.000190735, "model": "distilgpt2", "round": 2, "steady_us": 1312.2, "variant": "mi6"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 63.4, "maxabsdiff": 3.62396e-05, "model": "mixer_b16", "round": 2, "steady_us": 2694.8, "variant": "mi6"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 24.3, "maxabsdiff": 1.90735e-05, "model": "bert-mini", "round": 2, "steady_us": 434.8, "variant": "mi6"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 38.2, "maxabsdiff": 0.000190735, "model": "distilgpt2", "round": 3, "steady_us": 1282.6, "variant": "mi6"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 63.4, "maxabsdiff": 3.62396e-05, "model": "mixer_b16", "round": 3, "steady_us": 2697.4, "variant": "mi6"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 24.3, "maxabsdiff": 1.90735e-05, "model": "bert-mini", "round": 3, "steady_us": 432.8, "variant": "mi6"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 38.2, "maxabsdiff": 0.000190735, "model": "distilgpt2", "round": 1, "steady_us": 1294.0, "variant": "mi8"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 63.4, "maxabsdiff": 3.62396e-05, "model": "mixer_b16", "round": 1, "steady_us": 2697.0, "variant": "mi8"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 24.3, "maxabsdiff": 1.90735e-05, "model": "bert-mini", "round": 1, "steady_us": 424.5, "variant": "mi8"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 38.2, "maxabsdiff": 0.000190735, "model": "distilgpt2", "round": 2, "steady_us": 1301.4, "variant": "mi8"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 63.4, "maxabsdiff": 3.62396e-05, "model": "mixer_b16", "round": 2, "steady_us": 2678.0, "variant": "mi8"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 24.3, "maxabsdiff": 1.90735e-05, "model": "bert-mini", "round": 2, "steady_us": 421.9, "variant": "mi8"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 38.2, "maxabsdiff": 0.000190735, "model": "distilgpt2", "round": 3, "steady_us": 1288.8, "variant": "mi8"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 63.4, "maxabsdiff": 3.62396e-05, "model": "mixer_b16", "round": 3, "steady_us": 2691.1, "variant": "mi8"}
+{"binary": "fb8a4ec1238c", "experiment": "max_inputs", "kind": "ablation", "launches_per_iter": 24.3, "maxabsdiff": 1.90735e-05, "model": "bert-mini", "round": 3, "steady_us": 430.3, "variant": "mi8"}

@@ -7,7 +7,7 @@ paper_setup_pypy
 trap paper_cleanup_pypy EXIT
 
 TSV="$OUT/ablation.tsv"
-tsv_init "$TSV" "experiment\tvariant\tmodel\tround\tsteady_us\tmaxabsdiff\tnote\tbinary"
+tsv_init "$TSV" "experiment\tvariant\tmodel\tround\tsteady_us\tmaxabsdiff\tnote\tbinary\tlaunches_per_iter"
 
 # Every row here runs on our own translated pypy-c; identify it by its hash
 # the same way run_models.sh identifies the "ours" system.
@@ -25,10 +25,14 @@ run_resnet() {
 }
 
 # One ablation row, to both writers: exp variant model round steady diff note
+# [launches] - launches_per_iter is optional (8th arg), blank where the
+# experiment does not measure it.
 ab_row() {
-  echo -e "$1\t$2\t$3\t$4\t$5\t$6\t$7\t${PYPY_SHA:-unknown}" >> "$TSV"
+  local launches=${8:-}
+  echo -e "$1\t$2\t$3\t$4\t$5\t$6\t$7\t${PYPY_SHA:-unknown}\t$launches" >> "$TSV"
   bench_record ablation experiment="$1" variant="$2" model="$3" round="$4" \
-    steady_us="$5" maxabsdiff="$6" note="$7" binary="${PYPY_SHA:-unknown}"
+    steady_us="$5" maxabsdiff="$6" note="$7" binary="${PYPY_SHA:-unknown}" \
+    launches_per_iter="$launches"
 }
 
 exp_fusion() {
@@ -97,7 +101,26 @@ exp_tf32() {
   done
 }
 
-ALL_EXPERIMENTS="fusion flat_block budget_mb precision tf32"
+exp_max_inputs() {
+  for mi in 4 6 8; do
+    local variant="mi$mi"
+    for round in $(seq "$ROUNDS"); do
+      out=$(RTENSOR_MAX_INPUTS=$mi run_gpt2 "$JIT_FLAGS" "$WEIGHTS/distilgpt2")
+      tdiff=$("$TORCH_PYTHON" "$APP/gpt2_torch.py" eager "$WEIGHTS/distilgpt2" "$ITERS" "$WARMUP" 2>/dev/null)
+      ab_row max_inputs "$variant" distilgpt2 "$round" "$(steady_of "$out")" "$(diff_of "$tdiff")" "" "$(field_of "$out" launches_per_iter)"
+
+      out=$(RTENSOR_MAX_INPUTS=$mi "$RUN_PYPY" $JIT_FLAGS "$APP/mixer.py" "$WEIGHTS/mixer_b16" "$ITERS" "$WARMUP" 2>&1)
+      tdiff=$("$TORCH_PYTHON" "$APP/mixer_torch.py" eager "$WEIGHTS/mixer_b16" "$ITERS" "$WARMUP" 2>/dev/null)
+      ab_row max_inputs "$variant" mixer_b16 "$round" "$(steady_of "$out")" "$(diff_of "$tdiff")" "" "$(field_of "$out" launches_per_iter)"
+
+      out=$(RTENSOR_MAX_INPUTS=$mi "$RUN_PYPY" $JIT_FLAGS "$APP/bert.py" "$WEIGHTS/bert-mini" "$ITERS" "$WARMUP" 2>&1)
+      tdiff=$("$TORCH_PYTHON" "$APP/bert_torch.py" eager "$WEIGHTS/bert-mini" "$ITERS" "$WARMUP" 2>/dev/null)
+      ab_row max_inputs "$variant" bert-mini "$round" "$(steady_of "$out")" "$(diff_of "$tdiff")" "" "$(field_of "$out" launches_per_iter)"
+    done
+  done
+}
+
+ALL_EXPERIMENTS="fusion flat_block budget_mb precision tf32 max_inputs"
 EXPERIMENTS=${EXPERIMENTS:-}
 if [ "$#" -gt 0 ]; then EXPERIMENTS="$*"; fi
 EXPERIMENTS=${EXPERIMENTS:-$ALL_EXPERIMENTS}

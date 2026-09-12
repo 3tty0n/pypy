@@ -1,6 +1,13 @@
 import math, os, sys, time, torch
 import torch.nn.functional as F
 
+# Same policy as applevel/torch_common.py: matmul TF32 off, cudnn TF32 on.
+torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cudnn.allow_tf32 = True
+sys.stderr.write('torch_bench: tf32_matmul=%d tf32_cudnn=%d\n' %
+                 (int(torch.backends.cuda.matmul.allow_tf32),
+                  int(torch.backends.cudnn.allow_tf32)))
+
 mode, variant, k, n, iters = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
 # Optional 6th argument: warm-up iterations before the timed run.  Every micro
 # driver (ours, torch, jax, triton) takes it in the same position and defaults
