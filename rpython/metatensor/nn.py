@@ -735,7 +735,7 @@ def layernorm(x, gamma, beta, eps):
     epst = Tensor(runtime.scalar(eps))
     mean = x.sum(1).mul(inv, core.BC_R_SCALAR)
     d = x.sub(mean, core.BC_R_COL)
-    var = d.mul(d, core.BC_NONE).sum(1).mul(inv, core.BC_R_SCALAR)
+    var = d.mul(d, core.BC_NONE).mul(inv, core.BC_R_SCALAR).sum(1)
     denom = var.add(epst, core.BC_R_SCALAR).sqrt()
     y = d.div(denom, core.BC_R_COL)
     return y.mul(gamma, core.BC_R_ROW).add(beta, core.BC_R_ROW)
@@ -745,7 +745,7 @@ def rmsnorm(x, gamma, eps):
     c = ops.cols_of(x.t)
     inv = Tensor(runtime.scalar(1.0 / c))
     epst = Tensor(runtime.scalar(eps))
-    ms = x.mul(x, core.BC_NONE).sum(1).mul(inv, core.BC_R_SCALAR)
+    ms = x.mul(x, core.BC_NONE).mul(inv, core.BC_R_SCALAR).sum(1)
     denom = ms.add(epst, core.BC_R_SCALAR).sqrt()
     return x.div(denom, core.BC_R_COL).mul(gamma, core.BC_R_ROW)
 
