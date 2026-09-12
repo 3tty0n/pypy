@@ -46,6 +46,20 @@ typedef int (*cublasHgemmStridedBatched_t)(void *handle, int transa, int transb,
     const unsigned short *beta, unsigned short *C, int ldc,
     long long strideC, int batchCount);
 
+typedef int (*cublasDgemmBatched_t)(void *handle, int transa, int transb,
+    int m, int n, int k, const double *alpha, const double *const A[],
+    int lda, const double *const B[], int ldb, const double *beta,
+    double *const C[], int ldc, int batchCount);
+typedef int (*cublasSgemmBatched_t)(void *handle, int transa, int transb,
+    int m, int n, int k, const float *alpha, const float *const A[],
+    int lda, const float *const B[], int ldb, const float *beta,
+    float *const C[], int ldc, int batchCount);
+typedef int (*cublasHgemmBatched_t)(void *handle, int transa, int transb,
+    int m, int n, int k, const unsigned short *alpha,
+    const unsigned short *const A[], int lda,
+    const unsigned short *const B[], int ldb, const unsigned short *beta,
+    unsigned short *const C[], int ldc, int batchCount);
+
 static void *cublas_lib;
 static void *cublas_handle;
 static cublasCreate_v2_t p_cublasCreate_v2;
@@ -57,6 +71,9 @@ static cublasSgemm_v2_t p_cublasSgemm_v2;
 static cublasSgemmStridedBatched_t p_cublasSgemmStridedBatched;
 static cublasHgemm_t p_cublasHgemm;
 static cublasHgemmStridedBatched_t p_cublasHgemmStridedBatched;
+static cublasDgemmBatched_t p_cublasDgemmBatched;
+static cublasSgemmBatched_t p_cublasSgemmBatched;
+static cublasHgemmBatched_t p_cublasHgemmBatched;
 static int cublas_inited;
 
 /* ==== half <-> double conversion ==== */
@@ -178,6 +195,12 @@ static int rt_cublas_init(void)
     p_cublasHgemm = (cublasHgemm_t)dlsym(cublas_lib, "cublasHgemm");
     p_cublasHgemmStridedBatched = (cublasHgemmStridedBatched_t)dlsym(
         cublas_lib, "cublasHgemmStridedBatched");
+    p_cublasDgemmBatched = (cublasDgemmBatched_t)dlsym(
+        cublas_lib, "cublasDgemmBatched");
+    p_cublasSgemmBatched = (cublasSgemmBatched_t)dlsym(
+        cublas_lib, "cublasSgemmBatched");
+    p_cublasHgemmBatched = (cublasHgemmBatched_t)dlsym(
+        cublas_lib, "cublasHgemmBatched");
     if (!p_cublasCreate_v2 || !p_cublasDgemm_v2) return 0;
     if (p_cublasCreate_v2(&cublas_handle) != 0) return 0;
     cublas_inited = 1;
@@ -871,4 +894,141 @@ RPY_EXPORTED int rt_cuda_bmm(long a, long b, long c, long batch, long rows,
                                        &beta, (double *)c, ldc,
                                        strc,
                                        (int)batch) == 0;
+}
+
+/* ==== the two-level batch as one submission ====
+
+   The outer batch level (nb2 groups of `batch` matrices, the groups sa2/sb2/
+   sc2 elements apart) is not a single arithmetic progression, so a strided-
+   batched GEMM cannot express it and the obvious encoding is nb2 calls with
+   advanced base pointers - 32 cuBLAS calls per attention op at batch 32, and
+   about 5 us of host time each.  cublasXgemmBatched takes a device array of
+   pointers instead of a stride, which does express it: one submission for all
+   nb2*batch products, preceded by one small HtoD copy of the pointers.  */
+
+#define RT_PTR_SLOTS 8
+static void *ptr_host[RT_PTR_SLOTS];
+static CUdeviceptr ptr_dev[RT_PTR_SLOTS];
+static CUevent ptr_done[RT_PTR_SLOTS];
+static long ptr_cap;
+static int ptr_slot;
+
+/* ponytail: the pointer arrays are rebuilt and copied on every call rather
+   than cached on (base pointers, strides); one 3*nb2*batch*8 byte async copy
+   is ~3 KB at batch 32 and is dwarfed by the calls it replaces.  The copy is
+   asynchronous on the null stream, so the host buffer it reads from must not
+   be rewritten until it has run: slots rotate, and each carries an event that
+   the next user of the slot waits on - which, RT_PTR_SLOTS submissions later,
+   has all but always already fired. */
+static int rt_ptr_slot(long n)
+{
+    int i;
+    if (ptr_cap < n) {
+        cuCtxSynchronize();
+        for (i = 0; i < RT_PTR_SLOTS; i++) {
+            if (ptr_host[i]) cuMemFreeHost(ptr_host[i]);
+            if (ptr_dev[i]) cuMemFree(ptr_dev[i]);
+            ptr_host[i] = 0;
+            ptr_dev[i] = 0;
+        }
+        ptr_cap = 0;
+        for (i = 0; i < RT_PTR_SLOTS; i++) {
+            if (cuMemAllocHost(&ptr_host[i], n * sizeof(void *)) != CUDA_SUCCESS)
+                return -1;
+            if (cuMemAlloc(&ptr_dev[i], n * sizeof(void *)) != CUDA_SUCCESS)
+                return -1;
+            if (!ptr_done[i] &&
+                cuEventCreate(&ptr_done[i], CU_EVENT_DISABLE_TIMING) !=
+                    CUDA_SUCCESS)
+                return -1;
+        }
+        ptr_cap = n;
+    }
+    i = ptr_slot;
+    ptr_slot = (ptr_slot + 1) % RT_PTR_SLOTS;
+    cuEventSynchronize(ptr_done[i]);
+    return i;
+}
+
+RPY_EXPORTED int rt_cuda_bmm2(long a, long b, long c, long nb2, long sa2,
+                              long sb2, long sc2, long batch, long rows,
+                              long inner, long cols, long ta, long tb,
+                              long dtype, long lda_, long ldb_, long ldc_,
+                              long sa, long sb, long sc)
+{
+    double alpha = 1.0, beta = 0.0;
+    float alphaf = 1.0f, betaf = 0.0f;
+    unsigned short alphah = 0x3c00, betah = 0;
+    int ldb = ldb_ > 0 ? (int)ldb_ : (tb ? (int)inner : (int)cols);
+    int lda = lda_ > 0 ? (int)lda_ : (ta ? (int)rows : (int)inner);
+    int ldc = ldc_ > 0 ? (int)ldc_ : (int)cols;
+    long stra = sa > 0 ? sa : rows * inner;
+    long strb = sb > 0 ? sb : inner * cols;
+    long strc = sc > 0 ? sc : rows * cols;
+    long esz = dtype == 1 ? 4 : (dtype == 2 ? 2 : 8);
+    long total = nb2 * batch, g, t, i;
+    char **h;
+    char **da, **db, **dc;
+    int slot, ok;
+
+    if (nb2 <= 1)
+        return rt_cuda_bmm(a, b, c, batch, rows, inner, cols, ta, tb, dtype,
+                           lda_, ldb_, ldc_, sa, sb, sc);
+    if (!rt_cublas_init()) return 0;
+    if (dtype == 1 ? !p_cublasSgemmBatched
+                   : (dtype == 2 ? !p_cublasHgemmBatched
+                                 : !p_cublasDgemmBatched)) {
+        /* no pointer-array gemm in this cuBLAS: the nb2 strided calls this
+           replaces are still correct, just slower. */
+        for (g = 0; g < nb2; g++)
+            if (!rt_cuda_bmm(a + g * sa2 * esz, b + g * sb2 * esz,
+                             c + g * sc2 * esz, batch, rows, inner, cols,
+                             ta, tb, dtype, lda_, ldb_, ldc_, sa, sb, sc))
+                return 0;
+        return 1;
+    }
+    slot = rt_ptr_slot(3 * total);
+    if (slot < 0) return 0;
+    h = (char **)ptr_host[slot];
+    i = 0;
+    for (g = 0; g < nb2; g++)
+        for (t = 0; t < batch; t++)
+            h[i++] = (char *)a + (g * sa2 + t * stra) * esz;
+    for (g = 0; g < nb2; g++)
+        for (t = 0; t < batch; t++)
+            h[i++] = (char *)b + (g * sb2 + t * strb) * esz;
+    for (g = 0; g < nb2; g++)
+        for (t = 0; t < batch; t++)
+            h[i++] = (char *)c + (g * sc2 + t * strc) * esz;
+    if (cuMemcpyHtoDAsync(ptr_dev[slot], h, 3 * total * sizeof(void *), 0)
+            != CUDA_SUCCESS)
+        return 0;
+    cuEventRecord(ptr_done[slot], 0);
+    da = (char **)ptr_dev[slot];
+    db = da + total;
+    dc = db + total;
+    /* cuBLAS is column-major, so our B is its first operand, as everywhere
+       else here. */
+    if (dtype == 1) {
+        rt_set_math(0);
+        ok = p_cublasSgemmBatched(
+            cublas_handle, tb ? 1 : 0, ta ? 1 : 0,
+            (int)cols, (int)rows, (int)inner, &alphaf,
+            (const float *const *)db, ldb, (const float *const *)da, lda,
+            &betaf, (float *const *)dc, ldc, (int)total) == 0;
+    } else if (dtype == 2) {
+        ok = p_cublasHgemmBatched(
+            cublas_handle, tb ? 1 : 0, ta ? 1 : 0,
+            (int)cols, (int)rows, (int)inner, &alphah,
+            (const unsigned short *const *)db, ldb,
+            (const unsigned short *const *)da, lda,
+            &betah, (unsigned short *const *)dc, ldc, (int)total) == 0;
+    } else {
+        ok = p_cublasDgemmBatched(
+            cublas_handle, tb ? 1 : 0, ta ? 1 : 0,
+            (int)cols, (int)rows, (int)inner, &alpha,
+            (const double *const *)db, ldb, (const double *const *)da, lda,
+            &beta, (double *const *)dc, ldc, (int)total) == 0;
+    }
+    return ok;
 }

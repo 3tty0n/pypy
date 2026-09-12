@@ -1096,6 +1096,36 @@ class TestTransformer(LLJitMixin):
             for i in range(batch * rows * cols):
                 assert abs(hr[i] - hg[g * batch * sc + i]) < 1e-9
 
+    def test_bmm_outer_batch_interleaved_matches_separate_calls(self):
+        """The attention layout: the outer stride is not batch*sa, so no
+        single arithmetic progression covers both levels and the pointer
+        array is the only one-call encoding.  nb2 >= 2 and batch >= 2 so the
+        two levels cannot be confused for each other."""
+        nb2, batch, rows, cols, inner = 3, 2, 2, 3, 4
+        lda = batch * inner
+        ldb = batch * cols
+        sa, sb = inner, cols
+        sa2, sb2 = rows * lda, inner * ldb
+        sc, sc2 = rows * cols, batch * rows * cols
+        a = core.zeros([nb2 * rows, lda])
+        b = core.zeros([nb2 * inner, ldb])
+        for i in range(nb2 * rows * lda):
+            a.host[i] = ((i * 3) % 7) - 3.0
+        for i in range(nb2 * inner * ldb):
+            b.host[i] = ((i * 5) % 11) - 5.0
+        got = runtime.tensor_bmm(a, b, batch, rows, cols, inner, 0, 0,
+                                 lda, ldb, cols, sa, sb, sc, 0, 0, 0, 0, 0,
+                                 0, nb2, sa2, sb2, sc2)
+        assert ops.tensor_size(got) == nb2 * batch * rows * cols
+        hg = device.host(got)
+        for g in range(nb2):
+            ref = runtime.tensor_bmm(a, b, batch, rows, cols, inner, 0, 0,
+                                     lda, ldb, cols, sa, sb, sc, 0, 0,
+                                     g * sa2, g * sb2, 0)
+            hr = device.host(ref)
+            for i in range(batch * rows * cols):
+                assert abs(hr[i] - hg[g * sc2 + i]) < 1e-9
+
     def test_attn_strided_matches_dense(self):
         heads, rows, dh = 3, 4, 2
         d = heads * dh

@@ -3,7 +3,7 @@ from rpython.rlib.rarithmetic import intmask
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 from rpython.metatensor.core import (NDTYPES, F16, GA_ROWS, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_ROTHALF, GA_MAXPOOL, GA_MAXPOOL_NHWC, HOSTARRAY, NEG_INF, NULLTENSOR, SHAPEARRAY, _shape2, cols, config, nbytes, new_tensor, policy)
-from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, gpu_enabled, host, prof_begin, prof_end, rt_cuda_alloc, rt_cuda_bmm, rt_cuda_copy, rt_cuda_free, rt_cuda_launch, rt_cuda_matmul)
+from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, gpu_enabled, host, prof_begin, prof_end, rt_cuda_alloc, rt_cuda_bmm2, rt_cuda_copy, rt_cuda_free, rt_cuda_launch, rt_cuda_matmul)
 from rpython.metatensor.kernels import (gather_kernel)
 
 def matmul_cpu(a, b, rows, cols, inner, ta, tb):
@@ -128,19 +128,14 @@ def _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
                 isz = nbytes(1, dt)
                 # The outer batch level is a second, independent stride on
                 # each operand, which a strided-batched GEMM cannot express
-                # (it has one stride per operand). nb2 calls with the base
-                # pointers advanced is the whole of it; nb2 == 1 is the
-                # single call this always was.
-                ok = True
-                for g in range(nb2):
-                    if rffi.cast(lltype.Signed, rt_cuda_bmm(
-                            dptr_a + (oa + g * sa2) * isz,
-                            dptr_b + (ob + g * sb2) * isz,
-                            outptr + (oc + g * sc2) * isz,
-                            batch, rows, inner, cols,
-                            ta, tb, dt, lda, ldb, ldc, sa, sb, sc)) == 0:
-                        ok = False
-                        break
+                # (it has one stride per operand).  rt_cuda_bmm2 issues the
+                # whole two-level batch as one gemmBatched over a device
+                # array of pointers; nb2 == 1 is the single strided call
+                # this always was.
+                ok = rffi.cast(lltype.Signed, rt_cuda_bmm2(
+                    dptr_a + oa * isz, dptr_b + ob * isz, outptr + oc * isz,
+                    nb2, sa2, sb2, sc2, batch, rows, inner, cols,
+                    ta, tb, dt, lda, ldb, ldc, sa, sb, sc)) != 0
                 if ok:
                     return device_tensor(outn, outptr,
                                          _shape2(outrows, outn // outrows),
