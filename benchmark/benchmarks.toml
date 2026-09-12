@@ -88,8 +88,9 @@ label = "TF train"
 sizes = [25600, 256000]
 
 # Precision sweep: the same points again at every dtype. Kept separate because
-# it is a second pass over a subset, not part of the float64 grid.
+# it is a second pass over a subset, not part of the float64 grid; float64
+# itself is already measured by the grid, so the sweep does not repeat it.
 [precision]
 variants = [8, 11, 13]
 sizes = [256000]
-dtypes = ["float64", "float32", "float16"]
+dtypes = ["float32", "float16"]

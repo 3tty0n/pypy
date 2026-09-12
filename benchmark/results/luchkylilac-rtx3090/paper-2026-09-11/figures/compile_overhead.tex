@@ -9,13 +9,13 @@ elementwise k=1 n=1M & Torch-TensorRT & n/a & 37 & 81 & n/a \\
 elementwise k=1 n=1M & JAX/XLA & 196 & 1 & 45 & 4806 \\
 elementwise k=1 n=1M & IREE & 563 & 24 & 5751 & n/a \\
 elementwise k=1 n=1M & Triton (handwritten) & 312 & 0 & 31 & 5754 \\
-elementwise k=4 n=1M & torch.compile & n/a & 430 & 68 & 1614 \\
-elementwise k=4 n=1M & torch.compile (reduce-overhead) & n/a & 464 & 134 & 2399 \\
-elementwise k=4 n=1M & torch.compile (max-autotune) & n/a & 470 & 134 & 2426 \\
-elementwise k=4 n=1M & Torch-TensorRT & n/a & 40 & 322 & n/a \\
-elementwise k=4 n=1M & JAX/XLA & 206 & 1 & 88 & 760 \\
-elementwise k=4 n=1M & IREE & 565 & 24 & 5747 & n/a \\
-elementwise k=4 n=1M & Triton (handwritten) & 309 & 0 & 39 & 999 \\
+elementwise k=4 n=1M & torch.compile & n/a & 433 & 68 & 1624 \\
+elementwise k=4 n=1M & torch.compile (reduce-overhead) & n/a & 431 & 134 & 2210 \\
+elementwise k=4 n=1M & torch.compile (max-autotune) & n/a & 489 & 134 & 2540 \\
+elementwise k=4 n=1M & Torch-TensorRT & n/a & 39 & 322 & n/a \\
+elementwise k=4 n=1M & JAX/XLA & 208 & 1 & 88 & 771 \\
+elementwise k=4 n=1M & IREE & 567 & 24 & 5807 & n/a \\
+elementwise k=4 n=1M & Triton (handwritten) & 282 & 0 & 39 & 900 \\
 elementwise k=8 n=1M & torch.compile & n/a & 429 & 133 & 799 \\
 elementwise k=8 n=1M & torch.compile (reduce-overhead) & n/a & 506 & 198 & 1101 \\
 elementwise k=8 n=1M & torch.compile (max-autotune) & n/a & 441 & 199 & 950 \\
@@ -114,13 +114,13 @@ attention n=25.6k & Torch-TensorRT & n/a & 2094 & 582 & 1039097 \\
 attention n=25.6k & JAX/XLA & 2050 & 1 & 124 & 3930 \\
 attention n=25.6k & IREE & 336 & 12 & 2837 & n/a \\
 attention n=25.6k & Triton (handwritten) & 291 & 1 & 1253 & n/a \\
-attention n=256k & torch.compile & n/a & 1743 & 5004 & n/a \\
-attention n=256k & torch.compile (reduce-overhead) & n/a & 1755 & 5037 & n/a \\
-attention n=256k & torch.compile (max-autotune) & n/a & 1776 & 5025 & n/a \\
-attention n=256k & Torch-TensorRT & n/a & 2187 & 4876 & 1051142 \\
-attention n=256k & JAX/XLA & 1972 & 5 & 3703 & 1451 \\
-attention n=256k & IREE & 642 & 19 & 5157 & n/a \\
-attention n=256k & Triton (handwritten) & 305 & 5 & 4682 & 195 \\
+attention n=256k & torch.compile & n/a & 1818 & 5028 & n/a \\
+attention n=256k & torch.compile (reduce-overhead) & n/a & 1750 & 5020 & n/a \\
+attention n=256k & torch.compile (max-autotune) & n/a & 1750 & 5017 & n/a \\
+attention n=256k & Torch-TensorRT & n/a & 2168 & 4866 & 669654 \\
+attention n=256k & JAX/XLA & 1969 & 5 & 3699 & 1461 \\
+attention n=256k & IREE & 647 & 19 & 5162 & n/a \\
+attention n=256k & Triton (handwritten) & 294 & 5 & 4679 & 175 \\
 MLP n=25.6k & torch.compile & n/a & 1704 & 382 & 139763 \\
 MLP n=25.6k & torch.compile (reduce-overhead) & n/a & 2018 & 409 & n/a \\
 MLP n=25.6k & torch.compile (max-autotune) & n/a & 1953 & 430 & n/a \\
@@ -153,12 +153,12 @@ TF block n=25.6k & torch.compile (max-autotune) & n/a & 1815 & 540 & 82742 \\
 TF block n=25.6k & Torch-TensorRT & n/a & 2271 & 564 & n/a \\
 TF block n=25.6k & JAX/XLA & 1327 & 1 & 267 & 3609 \\
 TF block n=25.6k & IREE & 498 & 10 & 936 & n/a \\
-TF block n=256k & torch.compile & n/a & 1851 & 29785 & n/a \\
-TF block n=256k & torch.compile (reduce-overhead) & n/a & 1768 & 29773 & n/a \\
-TF block n=256k & torch.compile (max-autotune) & n/a & 1886 & 27687 & n/a \\
-TF block n=256k & Torch-TensorRT & n/a & 2268 & 27453 & n/a \\
-TF block n=256k & JAX/XLA & 1532 & 17 & 15424 & 103 \\
-TF block n=256k & IREE & 21183 & 104 & 38531 & n/a \\
+TF block n=256k & torch.compile & n/a & 1818 & 29777 & n/a \\
+TF block n=256k & torch.compile (reduce-overhead) & n/a & 1738 & 29790 & n/a \\
+TF block n=256k & torch.compile (max-autotune) & n/a & 1904 & 27802 & n/a \\
+TF block n=256k & Torch-TensorRT & n/a & 2250 & 27367 & 68668 \\
+TF block n=256k & JAX/XLA & 1536 & 17 & 15400 & 103 \\
+TF block n=256k & IREE & 21177 & 103 & 38539 & n/a \\
 CNN n=25.6k & torch.compile & n/a & 1789 & 876 & n/a \\
 CNN n=25.6k & torch.compile (reduce-overhead) & n/a & 1744 & 861 & n/a \\
 CNN n=25.6k & torch.compile (max-autotune) & n/a & 1708 & 871 & n/a \\
