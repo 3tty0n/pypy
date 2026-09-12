@@ -26,6 +26,15 @@ process:
 
 Usage:
     pypy-c [--jit ...] recovery_probe.py [--save REF | --ref REF] [--nostats]
+                                        [--times]
+
+`--times` runs only the two cases whose guards really fail and times every
+iteration of the two cases whose guards
+really fail at a known point - (a), whose branch takes both outcomes, and (e),
+whose shape and int change at the halfway iteration - and prints a
+`deopt-probe` line per case with the cost of the failing iteration, of the
+iterations right after it (where the bridge is traced and compiled) and of a
+later revisit.
 
 `--save` writes the per-case observed values and effect logs; `--ref` compares
 against that file, which is how the interpreter-only (--jit off) run becomes
@@ -34,6 +43,7 @@ case disagrees with its in-process expectation or with the reference file.
 """
 
 import sys
+import time
 
 import _metatensor
 import tensorpypy as tp
@@ -51,6 +61,16 @@ if '--nostats' in sys.argv:
 N = 64
 ITERS = 300
 HALF = ITERS // 2
+
+
+# --times sets this to a list; the two timed cases then stamp every iteration.
+# It stays None otherwise so the traced loops are exactly what they were.
+TIMES = None
+
+
+def tick():
+    if TIMES is not None:
+        TIMES.append(time.time())
 
 
 def g(v):
@@ -82,6 +102,7 @@ def case_shared_branch():
     total = 0.0
     taken = [0, 0]
     for i in range(ITERS):
+        tick()
         s = _metatensor.scalar(float(1 + (i % 4)), 'float64')
         h = (x * b + b).relu() * s          # live, unforced, used twice below
         v = h.sum().item()
@@ -92,6 +113,7 @@ def case_shared_branch():
             out = h * b
             taken[1] += 1
         total += out.sum().item()
+    tick()
     return g(total), "true=%d false=%d" % (taken[0], taken[1])
 
 
@@ -240,10 +262,12 @@ def case_promotion():
     bs = {N: tp.asarray([0.5] * N), N + 32: tp.asarray([0.5] * (N + 32))}
     total = 0.0
     for i in range(ITERS):
+        tick()
         n = N if i < HALF else N + 32       # shape changes halfway
         k = 1 if i < HALF else 2            # Python int changes halfway
         h = (xs[n] * bs[n] + bs[n]).relu()
         total += h.sum().item() * k
+    tick()
     return g(total), "shapes=%d,%d" % (N, N + 32)
 
 
@@ -267,13 +291,68 @@ CASES = [
 ]
 
 
+def _median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    if not n:
+        return -1.0
+    if n % 2:
+        return xs[n // 2]
+    return (xs[n // 2 - 1] + xs[n // 2]) / 2.0
+
+
+def timed_cases():
+    """One `deopt-probe` line per case whose guards really fail.
+
+    (e) fails at a known iteration (HALF), so its three numbers are exact.
+    (a) flips its branch every few iterations from the start, so there is no
+    single first failure to point at; peak_i is where the JIT paid for the
+    other side and steady/revisit is everything after it."""
+    global TIMES
+    out = []
+    for name, fn, fail_at in (('a', case_shared_branch, -1),
+                              ('e', case_promotion, HALF)):
+        TIMES = []
+        c0 = counters()
+        fn()
+        c1 = counters()
+        stamps = TIMES
+        TIMES = None
+        us = [(stamps[i + 1] - stamps[i]) * 1e6
+              for i in range(len(stamps) - 1)]
+        # iteration 0 is the cold trace; the peak after it is the compile.
+        peak = max(us[1:])
+        peak_i = us.index(peak)
+        first = us[fail_at] if fail_at >= 0 else -1.0
+        after = _median(us[fail_at + 1:fail_at + 6]) if fail_at >= 0 else \
+            _median(us[peak_i + 1:peak_i + 6])
+        out.append("deopt-probe case=%s steady_us=%.1f first_fail_us=%.1f "
+                   "after_fail_us=%.1f revisit_us=%.1f peak_us=%.1f "
+                   "peak_i=%d cold_us=%.1f launches_per_iter=%.3f "
+                   "loops=%d bridges=%d"
+                   % (name, _median(us[len(us) * 3 // 4:]), first, after,
+                      _median(us[len(us) * 3 // 4:]), peak, peak_i, us[0],
+                      float(c1[2] - c0[2]) / ITERS, c1[0] - c0[0],
+                      c1[1] - c0[1]))
+    return out
+
+
 def main(argv):
     argv = [a for a in argv if a != '--nostats']
+    times = '--times' in argv
+    argv = [a for a in argv if a != '--times']
     save = ref = None
     if len(argv) >= 3 and argv[1] == '--save':
         save = argv[2]
     elif len(argv) >= 3 and argv[1] == '--ref':
         ref = argv[2]
+
+    # The timing pass has to be the first thing that runs these two loops:
+    # the compile it is measuring happens once per process.
+    if times:
+        for line in timed_cases():
+            print(line)
+        return 0
 
     reference = {}
     if ref is not None:

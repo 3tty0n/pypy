@@ -89,6 +89,29 @@
 | tf32 | tf32 | resnet18-b8 | 2717.1 |  |
 | tf32 | torch-fp32 | resnet18-b8 | 3047.1 |  |
 
+## Deoptimization cost (median over rounds, us per iteration)
+
+| system | pattern | steady_us | first_fail_us | after_fail_us | peak_us | cold_us | launches/it | loops | bridges |
+|---|---|---|---|---|---|---|---|---|---|
+| ours | never | 37.9 | n/a | n/a | 64 | 4912 | 2.02 | 0 | 0 |
+| torch-compile | never | 186.7 | n/a | n/a | 299 | 539525 | n/a | 0 | n/a |
+| torch-compile-ro | never | 253.4 | n/a | n/a | 314 | 584032 | n/a | 0 | n/a |
+| torch-eager | never | 112.8 | n/a | n/a | 124 | 35224 | n/a | 0 | n/a |
+| ours | alternate | 39.1 | 73 | 59 | 362 | 5614 | 2.17 | 0 | 2 |
+| torch-compile | alternate | 191.6 | 148637 | 207 | 148637 | 559130 | n/a | 2 | n/a |
+| torch-compile-ro | alternate | 257.6 | 130683 | 372 | 130683 | 553432 | n/a | 2 | n/a |
+| torch-eager | alternate | 112.3 | 121 | 112 | 134 | 40196 | n/a | 0 | n/a |
+| ours | both-hot | 38.1 | n/a | n/a | 71 | 4442 | 2.02 | 0 | 0 |
+| torch-compile | both-hot | 176.0 | n/a | n/a | 443 | 556736 | n/a | 0 | n/a |
+| torch-compile-ro | both-hot | 254.5 | n/a | n/a | 314 | 575124 | n/a | 0 | n/a |
+| torch-eager | both-hot | 112.5 | n/a | n/a | 122 | 36859 | n/a | 0 | n/a |
+| ours | fresh | 75.6 | 65 | 68 | 2095 | 4290 | 7.00 | 0 | 63 |
+| torch-compile | fresh | 165.7 | 166 | 166 | 219 | 565164 | n/a | 0 | n/a |
+| torch-compile-ro | fresh | 152.3 | 156 | 155 | 178 | 567384 | n/a | 0 | n/a |
+| torch-eager | fresh | 112.3 | 117 | 113 | 123 | 36008 | n/a | 0 | n/a |
+| ours | probe-a | 35.0 | n/a | 57 | 1701 | 3746 | 2.25 | 5 | 3 |
+| ours | probe-e | 17.9 | 1448 | 33 | 1458 | 90 | 1.09 | 3 | 4 |
+
 ## Compilation overhead (median; break-even vs torch eager, iterations)
 
 | workload | system | compile_ms | first_run_ms | steady_us | break-even |

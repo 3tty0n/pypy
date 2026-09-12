@@ -435,6 +435,53 @@ A recompile is therefore visible as a counter, not as a shifted median: with
 not move the median. That is deliberate - the median is the steady state, the
 counter is the event.
 
+## What a guard failure costs
+
+    benchmark/paper/bench.sh deopt              # all patterns, $OUT/deopt.tsv
+    benchmark/paper/bench.sh deopt alternate    # one pattern
+
+`run_deopt.sh` measures the other side of the trace contract: the steady state
+assumes a guard holds, and this is the bill when it does not.
+`benchmark/applevel/deopt_probe.py` runs micro.py's variant 3 (the
+data-dependent branch on `h.sum().item()`) under four schedules of the
+promoted scalar that decides the branch:
+
+    never       +1 forever; the guard never fails
+    alternate   +1 through warm-up, then flipping every iteration, so the
+                first timed iteration that goes the other way is the first
+                guard failure and compiles a bridge
+    both-hot    flipping through warm-up too, so both paths are compiled
+                before the timed loop starts
+    fresh       a different value every iteration, so the promoted-value guard
+                fails every time and no bridge can ever become the hot path
+
+Every iteration is timed, warm-up included, which is what separates the four
+reported numbers: `steady_us` is the median of the last quarter of the timed
+iterations, `first_fail_us` the single iteration where the guard first fails,
+`after_fail_us` the median of the five after it, and `peak_us` the most
+expensive iteration of the run. `peak_us` is the one to read as "the
+deoptimization": with `trace_eagerness=2` the bridge is not traced on the
+first failure but a few failures later, so the compile lands after
+`first_fail_us`, not on it.
+
+The same driver runs the torch side of the same loop (`--mode eager`,
+`compile`, `compile-ro`) on the same schedules. `.item()` is a graph break
+there on every iteration, but the branch outcome is baked into the compiled
+frame, so a flip is a dynamo recompilation rather than a bridge.
+
+`bench.sh deopt` also runs `recovery_probe.py --times`, which times every
+iteration of the two probe cases whose guards really fail - (a), whose branch
+takes both outcomes throughout, and (e), whose shape and Python int change at
+the halfway iteration - and rows them as `probe-a` and `probe-e`. `--times`
+runs only those two cases, because the compile it is measuring happens once
+per process and a correctness pass ahead of it would have paid for it already.
+
+These are single iterations, not medians of a loop, so they are the rows most
+exposed to anything else using the GPU: a contended run shows a peak one to
+three orders of magnitude above a quiet one. Three rounds and the median over
+them is the defence; a `peak_us` near a second means something else was on the
+device.
+
 ## Checking a setup
 
     benchmark/paper/bench.sh check          # every mode, ~100 s

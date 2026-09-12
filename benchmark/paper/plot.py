@@ -76,6 +76,7 @@ SINGLE_COL, DOUBLE_COL = 3.25, 6.75   # MLSys column and text widths, inches
 # Figures whose row labels are long enough that a single column would leave no
 # room for the plot itself.  --column overrides this.
 WIDE = {"micro_speedup", "fusion", "models", "ablation", "micro_baselines",
+        "deopt",
         "compile_overhead",
         "gap", "warmup",
         "compare_speedup", "compare_models"}
@@ -767,6 +768,118 @@ def fig_ablation(out, args):
                   spread_str(*band(g[(e, m, v)])[1:], fmt="%.0f")]
                  for (e, m, v) in sorted(g, key=lambda k: (k[0], k[1], setting_key(k[2])))])
     return fig, "ablation"
+
+
+DEOPT_PATTERNS = ["never", "alternate", "both-hot", "fresh", "probe-a",
+                  "probe-e"]
+DEOPT_LABEL = {
+    "never": "guard holds",
+    "alternate": "guard fails every iter",
+    "both-hot": "both paths hot",
+    "fresh": "fresh value every iter",
+    "probe-a": "probe (a) shared branch",
+    "probe-e": "probe (e) shape change",
+}
+
+
+def fig_deopt(out, args):
+    """Two questions, two panels, same rows.  Left: what an iteration costs
+    once the dust settles, which is where a bridge either did or did not
+    recover the steady state.  Right: the most expensive single iteration of
+    the run - the deoptimization itself.  That one spans four orders of
+    magnitude between a bridge compile and a dynamo recompilation, so it is
+    markers on a log axis, not bar length."""
+    rows = read_tsv(os.path.join(out, "deopt.tsv"))
+    if not rows:
+        return None
+    g = collections.defaultdict(lambda: collections.defaultdict(list))
+    for r in rows:
+        for col in ("steady_us", "first_fail_us", "after_fail_us", "peak_us",
+                    "launches_per_iter", "loops", "bridges", "cold_us"):
+            v = r.get(col)
+            if v not in (None, ""):
+                g[(r["pattern"], r["system"])][col].append(float(v))
+    patterns = [p for p in DEOPT_PATTERNS if any(k[0] == p for k in g)]
+    systems = drawn([s for s in ("ours", "torch-eager", "torch-compile",
+                                 "torch-compile-ro")
+                     if any(k[1] == s for k in g)], args)
+    if not patterns:
+        return None
+
+    fig, (ax, ax2) = plt.subplots(
+        1, 2, figsize=(args.width, 0.58 * len(patterns) + 0.9),
+        gridspec_kw={"width_ratios": [1.25, 1]})
+    height = 0.8 / len(systems)
+    for si, system in enumerate(systems):
+        colour, hatch, marker = style_of(system)
+        ys, xs, lows, highs, pys, pxs = [], [], [], [], [], []
+        for i, pattern in enumerate(patterns):
+            d = g.get((pattern, system))
+            if not d:
+                continue
+            y = i + ((len(systems) - 1) / 2.0 - si) * height
+            m, lo, hi = band(d.get("steady_us", []))
+            if m is not None:
+                ys.append(y)
+                xs.append(m)
+                lows.append(lo)
+                highs.append(hi)
+            pm, _, _ = band(d.get("peak_us", []))
+            if pm is not None:
+                pys.append(y)
+                pxs.append(pm)
+        ax.barh(ys, xs, height=height * 0.85, color=colour, linewidth=0,
+                label=SYSTEM_LABEL.get(system, system),
+                hatch=hatch if args.texture else None)
+        if xs:
+            ax.errorbar(xs, ys, xerr=err(xs, lows, highs), fmt="none",
+                        zorder=4, **ERRBAR)
+        ax2.plot(pxs, pys, marker, color=colour, linestyle="none",
+                 markersize=4, markeredgewidth=0)
+    ticks = [DEOPT_LABEL.get(p, p) for p in patterns]
+    ax.set_yticks(range(len(patterns)), ticks)
+    ax.set_xlabel("steady-state per iteration (\u00b5s)")
+    ax.xaxis.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    ax.set_ylim(-0.6, len(patterns) - 0.4)
+    despine(ax, keep=("left",))
+    ax.tick_params(axis="y", length=0)
+    ax2.set_xscale("log")
+    ax2.set_yticks(range(len(patterns)), ["" for _ in patterns])
+    ax2.set_xlabel("most expensive iteration (\u00b5s)")
+    ax2.xaxis.grid(True, zorder=0)
+    ax2.set_axisbelow(True)
+    ax2.set_ylim(-0.6, len(patterns) - 0.4)
+    despine(ax2, keep=("left",))
+    ax2.tick_params(axis="y", length=0)
+    ax.legend(loc="upper right", ncol=1)
+    if args.titles:
+        ax.set_title("Cost of a guard failure")
+
+    def cell(d, col, fmt="%.0f"):
+        m, _, _ = band(d.get(col, []))
+        return fmt % m if m is not None and m >= 0 else "n/a"
+
+    table = []
+    for pattern in patterns:
+        for system in ("ours", "torch-eager", "torch-compile",
+                       "torch-compile-ro"):
+            d = g.get((pattern, system))
+            if not d:
+                continue
+            table.append([SYSTEM_LABEL.get(system, system),
+                          DEOPT_LABEL.get(pattern, pattern),
+                          cell(d, "steady_us", "%.1f"),
+                          cell(d, "first_fail_us"), cell(d, "after_fail_us"),
+                          cell(d, "peak_us"), cell(d, "cold_us"),
+                          cell(d, "launches_per_iter", "%.2f"),
+                          cell(d, "loops"), cell(d, "bridges")])
+    write_table(os.path.join(args.outdir, "deopt.tex"),
+                "median over the rounds; first/after/peak are single "
+                "iterations, peak is the deoptimization itself",
+                ["system", "pattern", "steady us", "first fail", "after fail",
+                 "peak", "cold", "launch/it", "loops", "bridges"], table)
+    return fig, "deopt"
 
 
 def fig_micro_baselines(out, args):
@@ -1502,6 +1615,7 @@ FIGURES = collections.OrderedDict([
     ("dynamic", fig_dynamic),
     ("precision", fig_precision),
     ("ablation", fig_ablation),
+    ("deopt", fig_deopt),
     ("micro_baselines", fig_micro_baselines),
     ("compile_overhead", fig_compile_overhead),
     ("gap", fig_gap),

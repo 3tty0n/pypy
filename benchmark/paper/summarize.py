@@ -278,6 +278,43 @@ def main(out_dir):
                     key[0], key[1], key[2], "n/a", notes[key]))
         lines.append("")
 
+    deopt = read_tsv(os.path.join(out_dir, "deopt.tsv"))
+    if deopt:
+        # first_fail/after_fail/peak are single iterations, not medians of a
+        # loop: peak is the deoptimization itself (bridge compile here, dynamo
+        # recompilation there), steady is what the iteration costs once the
+        # system has settled on the new path.
+        lines.append("## Deoptimization cost "
+                     "(median over rounds, us per iteration)\n")
+        lines.append("| system | pattern | steady_us | first_fail_us "
+                     "| after_fail_us | peak_us | cold_us | launches/it "
+                     "| loops | bridges |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
+        g = collections.defaultdict(lambda: collections.defaultdict(list))
+        order = ["never", "alternate", "both-hot", "fresh", "probe-a",
+                 "probe-e"]
+        for r in deopt:
+            for col in ("steady_us", "first_fail_us", "after_fail_us",
+                        "peak_us", "cold_us", "launches_per_iter", "loops",
+                        "bridges"):
+                if r.get(col) not in (None, ""):
+                    g[(r["pattern"], r["system"])][col].append(float(r[col]))
+
+        def cell(d, col, spec="%.0f"):
+            v = med(d.get(col, []))
+            return fmt(v, spec) if v is not None and v >= 0 else "n/a"
+
+        for key in sorted(g, key=lambda k: (order.index(k[0])
+                                            if k[0] in order else 99, k[1])):
+            d = g[key]
+            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |"
+                         % (key[1], key[0], cell(d, "steady_us", "%.1f"),
+                            cell(d, "first_fail_us"), cell(d, "after_fail_us"),
+                            cell(d, "peak_us"), cell(d, "cold_us"),
+                            cell(d, "launches_per_iter", "%.2f"),
+                            cell(d, "loops"), cell(d, "bridges")))
+        lines.append("")
+
     records = read_jsonl(os.path.join(out_dir, "results.jsonl"))
     compile_table(records, lines)
     warmup_table(records, lines)

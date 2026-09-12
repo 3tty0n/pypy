@@ -25,6 +25,9 @@ commands:
   ablation [EXP...]      ablations; no args = all
                          names: $ALL_EXPERIMENTS
   dynamic                dynamic sequence-length experiment
+  deopt [PATTERN...]     cost of a guard failure against the steady state
+                         (patterns: never alternate both-hot fresh; plus the
+                          recovery_probe (a)/(e) rows)
   warmup [--n N]         per-forward warm-up trace (tiny-gpt2, distilgpt2;
                          ours/torch-eager/torch-compile/torch-compile-ro/jax;
                          cold+warm kernel caches; N forwards, default 300)
@@ -119,6 +122,10 @@ run_cmd() {
       ;;
     dynamic)
       bash "$HERE/run_dynamic.sh" "$@"
+      ;;
+    deopt)
+      if [ $# -gt 0 ]; then PATTERNS="$*"; export PATTERNS; fi
+      bash "$HERE/run_deopt.sh"
       ;;
     warmup)
       if [ "$1" = "--n" ]; then N=$2; shift 2; fi
