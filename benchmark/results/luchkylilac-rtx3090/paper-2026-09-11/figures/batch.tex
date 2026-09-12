@@ -1,0 +1,19 @@
+\begin{tabular}{lrrrrrrrrr}
+\toprule
+model & batch & MetaTensor & torch.compile & torch.compile (reduce-overhead) & PyTorch eager & JAX/XLA & ours/compile & ours/jax & rows identical \\
+\midrule
+bert-mini & 1 & 430 & 796 & 489 & 1785 & 245 & 0.54 & 1.76 & yes \\
+bert-mini & 2 & failed & 756 & 566 & 1753 & 342 & n/a & n/a & yes \\
+bert-mini & 4 & failed & 795 & 742 & 1713 & 495 & n/a & n/a & yes \\
+bert-mini & 8 & failed & 1066 & 1018 & 1847 & 831 & n/a & n/a & yes \\
+bert-mini & 16 & failed & 1780 & 1742 & 1852 & 1473 & n/a & n/a & yes \\
+bert-mini & 32 & failed & 3300 & 3268 & 3485 & 2802 & n/a & n/a & yes \\
+distilgpt2 & 1 & 1285 & 1349 & 1269 & 2770 & 1002 & 0.95 & 1.28 & yes \\
+distilgpt2 & 2 & failed & 1732 & 1658 & 2745 & 1536 & n/a & n/a & yes \\
+distilgpt2 & 4 & failed & 2766 & 2724 & 3124 & 2595 & n/a & n/a & yes \\
+distilgpt2 & 8 & failed & 5062 & 5010 & 5853 & 4771 & n/a & n/a & yes \\
+distilgpt2 & 16 & failed & 9087 & 9063 & 10702 & 8983 & n/a & n/a & yes \\
+distilgpt2 & 32 & failed & 17884 & 17850 & 20825 & 18007 & n/a & n/a & yes \\
+\bottomrule
+\end{tabular}
+% steady-state us per forward (the whole batch), median over the rounds, and the ours/torch.compile and ours/JAX ratios; "rows identical" is the batching check - every sequence in the batch is the same token ids, so every output row block must match the first

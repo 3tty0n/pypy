@@ -77,7 +77,8 @@ def _lds(rows, cols, inner, ta, tb, lda, ldb, ldc, sa, sb, sc):
     return lda, ldb, ldc, sa, sb, sc
 
 def bmm_cpu(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
-            sa, sb, sc, outn, outrows, oa, ob, oc):
+            sa, sb, sc, outn, outrows, oa, ob, oc, nb2=1, sa2=0, sb2=0,
+            sc2=0):
     lda, ldb, ldc, sa, sb, sc = _lds(rows, cols, inner, ta, tb, lda, ldb,
                                      ldc, sa, sb, sc)
     ha = host(a)
@@ -86,30 +87,35 @@ def bmm_cpu(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
     hr = r.host
     for i in range(outn):
         hr[i] = 0.0
-    for t in range(batch):
-        for i in range(rows):
-            for j in range(cols):
-                acc = 0.0
-                for k in range(inner):
-                    if ta:
-                        ia = oa + t * sa + k * lda + i
-                    else:
-                        ia = oa + t * sa + i * lda + k
-                    if tb:
-                        ib = ob + t * sb + j * ldb + k
-                    else:
-                        ib = ob + t * sb + k * ldb + j
-                    assert ia >= 0
-                    assert ib >= 0
-                    acc += ha[ia] * hb[ib]
-                ic = oc + t * sc + i * ldc + j
-                assert ic >= 0
-                hr[ic] = acc
+    for g in range(nb2):
+        ga = oa + g * sa2
+        gb = ob + g * sb2
+        gc = oc + g * sc2
+        for t in range(batch):
+            for i in range(rows):
+                for j in range(cols):
+                    acc = 0.0
+                    for k in range(inner):
+                        if ta:
+                            ia = ga + t * sa + k * lda + i
+                        else:
+                            ia = ga + t * sa + i * lda + k
+                        if tb:
+                            ib = gb + t * sb + j * ldb + k
+                        else:
+                            ib = gb + t * sb + k * ldb + j
+                        assert ia >= 0
+                        assert ib >= 0
+                        acc += ha[ia] * hb[ib]
+                    ic = gc + t * sc + i * ldc + j
+                    assert ic >= 0
+                    hr[ic] = acc
     return r
 
 @jit.dont_look_inside
 def _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
-                     sa, sb, sc, outn, outrows, oa, ob, oc, zc):
+                     sa, sb, sc, outn, outrows, oa, ob, oc, zc, nb2=1,
+                     sa2=0, sb2=0, sc2=0):
     if gpu_enabled() and a.dtype == b.dtype:
         dt = a.dtype
         dptr_a = dev(a)
@@ -120,28 +126,46 @@ def _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
             outptr = rt_cuda_alloc(nb, zc)
             if outptr != 0:
                 isz = nbytes(1, dt)
-                ok = rffi.cast(lltype.Signed, rt_cuda_bmm(
-                    dptr_a + oa * isz, dptr_b + ob * isz,
-                    outptr + oc * isz, batch, rows, inner, cols,
-                    ta, tb, dt, lda, ldb, ldc, sa, sb, sc)) != 0
+                # The outer batch level is a second, independent stride on
+                # each operand, which a strided-batched GEMM cannot express
+                # (it has one stride per operand). nb2 calls with the base
+                # pointers advanced is the whole of it; nb2 == 1 is the
+                # single call this always was.
+                ok = True
+                for g in range(nb2):
+                    if rffi.cast(lltype.Signed, rt_cuda_bmm(
+                            dptr_a + (oa + g * sa2) * isz,
+                            dptr_b + (ob + g * sb2) * isz,
+                            outptr + (oc + g * sc2) * isz,
+                            batch, rows, inner, cols,
+                            ta, tb, dt, lda, ldb, ldc, sa, sb, sc)) == 0:
+                        ok = False
+                        break
                 if ok:
                     return device_tensor(outn, outptr,
                                          _shape2(outrows, outn // outrows),
                                          dt)
                 rt_cuda_free(outptr, nb)
     return bmm_cpu(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
-                   sa, sb, sc, outn, outrows, oa, ob, oc)
+                   sa, sb, sc, outn, outrows, oa, ob, oc, nb2, sa2, sb2, sc2)
 
 @jit.dont_look_inside
 def tensor_bmm(a, b, batch, rows, cols, inner, ta, tb, lda=0, ldb=0, ldc=0,
-               sa=0, sb=0, sc=0, outn=0, outrows=0, oa=0, ob=0, oc=0, zc=0):
+               sa=0, sb=0, sc=0, outn=0, outrows=0, oa=0, ob=0, oc=0, zc=0,
+               nb2=1, sa2=0, sb2=0, sc2=0):
+    """nb2 is an outer batch level: nb2 groups of `batch` matrices, the groups
+    sa2/sb2/sc2 elements apart.  Attention over a folded batch of sequences
+    needs it, because there the batch is two-dimensional - (sequence, head) -
+    and the offset b*seq*lda + head*dh is not an arithmetic progression in a
+    single index, so no choice of the single stride sa can express it."""
     if outn <= 0:
-        outn = batch * rows * cols
+        outn = nb2 * batch * rows * cols
     if outrows <= 0:
-        outrows = batch * rows
+        outrows = nb2 * batch * rows
     t0 = prof_begin()
     r = _tensor_bmm_impl(a, b, batch, rows, cols, inner, ta, tb, lda, ldb,
-                         ldc, sa, sb, sc, outn, outrows, oa, ob, oc, zc)
+                         ldc, sa, sb, sc, outn, outrows, oa, ob, oc, zc,
+                         nb2, sa2, sb2, sc2)
     prof_end(intmask(3), intmask(rows * 1000000 + inner * 1000 + cols), t0)
     return r
 

@@ -67,6 +67,23 @@
 | tiny-gpt2 | 201.3 | 421.2 | 209.5 | 257.8 | 1616.5 | 86.6 | 194.2 | 1417.8 | 0.48x | 0.21x | 13.2 | 2.6077e-08 | 0.001 | pass |
 | vit-tiny | 1015.2 | 2103.9 | 1415.9 | 1340.3 | 3821.5 | 742.3 | 25055.9 | 1035.3 | 0.48x | 0.35x | 76.3 | 1.07288e-05 | 0.001 | pass |
 
+## Batch-size sweep (median steady_us per forward; per_seq = steady/B)
+
+| model | batch | ours | torch.compile | compile-ro | torch eager | JAX/XLA | ratio ours/compile | ratio ours/jax | per_seq ours | per_seq compile | per_seq jax | rows identical | failed |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| bert-mini | 1 | 430.4 | 796.0 | 488.7 | 1785.4 | 244.9 | 0.54x | 1.76x | 430.4 | 796.0 | 244.9 | yes |  |
+| bert-mini | 2 | n/a | 756.5 | 565.8 | 1753.2 | 342.3 | n/a | n/a | n/a | 378.2 | 171.1 | yes | ours |
+| bert-mini | 4 | n/a | 795.4 | 742.3 | 1713.2 | 495.2 | n/a | n/a | n/a | 198.9 | 123.8 | yes | ours |
+| bert-mini | 8 | n/a | 1065.8 | 1018.1 | 1847.3 | 830.8 | n/a | n/a | n/a | 133.2 | 103.9 | yes | ours |
+| bert-mini | 16 | n/a | 1780.3 | 1741.7 | 1851.9 | 1473.4 | n/a | n/a | n/a | 111.3 | 92.1 | yes | ours |
+| bert-mini | 32 | n/a | 3299.8 | 3268.1 | 3484.9 | 2801.6 | n/a | n/a | n/a | 103.1 | 87.5 | yes | ours |
+| distilgpt2 | 1 | 1285.0 | 1349.0 | 1269.1 | 2769.7 | 1001.5 | 0.95x | 1.28x | 1285.0 | 1349.0 | 1001.5 | yes |  |
+| distilgpt2 | 2 | n/a | 1731.9 | 1658.1 | 2744.8 | 1536.0 | n/a | n/a | n/a | 865.9 | 768.0 | yes | ours |
+| distilgpt2 | 4 | n/a | 2765.8 | 2723.9 | 3123.5 | 2595.1 | n/a | n/a | n/a | 691.4 | 648.8 | yes | ours |
+| distilgpt2 | 8 | n/a | 5061.6 | 5010.5 | 5852.9 | 4770.8 | n/a | n/a | n/a | 632.7 | 596.4 | yes | ours |
+| distilgpt2 | 16 | n/a | 9087.1 | 9062.8 | 10702.5 | 8983.4 | n/a | n/a | n/a | 567.9 | 561.5 | yes | ours |
+| distilgpt2 | 32 | n/a | 17883.9 | 17849.7 | 20825.1 | 18006.9 | n/a | n/a | n/a | 558.9 | 562.7 | yes | ours |
+
 ## Ablations (median steady_us)
 
 | experiment | variant | model | steady_us | note |

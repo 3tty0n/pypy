@@ -28,6 +28,20 @@ jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_default_matmul_precision", "highest")
 
 
+def batch_argv():
+    return int(sys.argv[6]) if len(sys.argv) > 6 else 1
+
+
+def batched(forward, idx, batch, t):
+    """B independent sequences.  The 2-D forward already *is* one sequence,
+    so vmap over a leading axis is the whole change - attention, the MLPs and
+    the norms are untouched."""
+    if batch <= 1:
+        return (idx,), forward
+    return ((jnp.broadcast_to(idx, (batch, t)),),
+            jax.vmap(forward, in_axes=(None, 0)))
+
+
 def load(outdir):
     cfg = json.load(open(os.path.join(outdir, 'index.json')))
     buf = array.array('f')
@@ -129,7 +143,8 @@ def build_gpt2(cfg, flat, dtype):
             x = gpt2_block(x, bp, h, p['mask'], eps, gelu_tanh)
         x = layer_norm(x, p['gf'], p['bf'], eps)
         return x @ p['wte'].T
-    return params, (idx,), forward
+    args, fwd = batched(forward, idx, batch_argv(), t)
+    return params, args, fwd
 
 
 def build_bert(cfg, flat, dtype):
@@ -150,7 +165,8 @@ def build_bert(cfg, flat, dtype):
         hh = gelu_erf(x @ p['wd'] + p['bd'])
         hh = layer_norm(hh, p['gm'], p['bm'], eps)
         return hh @ p['wte'].T + p['bias']
-    return params, (idx,), forward
+    args, fwd = batched(forward, idx, batch_argv(), cfg['seq'])
+    return params, args, fwd
 
 
 def patches(img, k):
@@ -278,7 +294,7 @@ def build_resnet(cfg, flat, dtype):
     """timm resnet18 in NHWC, on the exported (kh, kw, cin, cout) filters."""
     w = Weights(cfg, flat, dtype)
     eps, s = cfg['eps'], cfg['image_size']
-    batch = int(sys.argv[6]) if len(sys.argv) > 6 else 1
+    batch = batch_argv()
 
     def flt(name, k, c):
         return w.get(name).reshape(k, k, c, -1)
@@ -342,6 +358,15 @@ def tolerance():
         return 1e-3
 
 
+def batch_identical(logits, batch):
+    """The correctness check for the batching itself: B copies of the same
+    sequence must give B identical row blocks."""
+    if batch <= 1:
+        return 1
+    a = np.asarray(logits)
+    return int(np.array_equal(a, np.broadcast_to(a[:1], a.shape)))
+
+
 def compare(outdir, logits):
     ref = os.path.join(outdir, 'logits_pypy.bin')
     if not os.path.exists(ref):
@@ -398,10 +423,14 @@ def main():
     steady_us = (time.time() - t0) / iters * 1e6
     acc = float(np.asarray(logits, np.float64).sum())
 
+    batch = batch_argv()
+    ident = batch_identical(logits, batch)
     if model in ('gpt2', 'bert', 'llama'):
-        desc = 'layers=%d embd=%d heads=%d seq=%d vocab=%d' % (
+        desc = 'layers=%d embd=%d heads=%d seq=%d vocab=%d batch=%d' % (
             cfg['n_layer'], cfg['n_embd'], cfg['n_head'], cfg['seq'],
-            cfg['vocab'])
+            cfg['vocab'], batch)
+        if batch > 1:
+            logits = logits[0]
         order = np.asarray(logits).argmax(-1).tolist()
     elif model == 'resnet':
         desc = 'model=%s batch=%d classes=%d' % (
@@ -417,10 +446,11 @@ def main():
         desc = 'layers=%d embd=%d tokens=%d classes=%d' % (
             cfg['n_layer'], cfg['n_embd'], cfg['tokens'], cfg['classes'])
         order = np.argsort(-np.asarray(logits)[0])[:5].tolist()
-    print('%s %s %s dtype=%s iters=%d steady_us=%.1f checksum=%.6f '
+    print('%s %s %s dtype=%s iters=%d steady_us=%.1f per_seq_us=%.1f '
+          'batch_rows_identical=%d checksum=%.6f '
           'compile_ms=%.1f first_run_ms=%.1f' % (
-              model, mode, desc, dtname, iters, steady_us, acc, compile_ms,
-              first_ms))
+              model, mode, desc, dtname, iters, steady_us,
+              steady_us / batch, ident, acc, compile_ms, first_ms))
     print('argmax %s%s' % (' '.join(str(a) for a in order),
                            compare(outdir, logits)))
 

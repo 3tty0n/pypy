@@ -15,6 +15,7 @@ Figure forms are picked from what the data has to show, not from habit:
     fusion          the same variant before/after  -> dumbbell
     models          three systems per model        -> grouped bars, linear us
     dynamic         a measure over a length axis   -> lines
+    batch           per-sequence cost over a batch axis -> lines, log-log
     precision       two variants, three dtypes     -> small multiples
     ablation        one knob at a time             -> grouped bars
 
@@ -78,7 +79,7 @@ SINGLE_COL, DOUBLE_COL = 3.25, 6.75   # MLSys column and text widths, inches
 WIDE = {"micro_speedup", "fusion", "models", "ablation", "micro_baselines",
         "deopt",
         "compile_overhead",
-        "gap", "warmup",
+        "gap", "warmup", "batch",
         "compare_speedup", "compare_models"}
 
 SYSTEM_LABEL = {
@@ -1606,6 +1607,105 @@ def fig_warmup(out, args):
     return fig, "warmup"
 
 
+def fig_batch(out, args):
+    """Batch-size sweep: one panel per model, x = batch (log2),
+    y = per-sequence microseconds (log), one line per system.
+
+    Per sequence rather than per forward, because per forward every line
+    climbs and the figure would only say "more work takes longer".  What the
+    sweep is for is where the lines *meet*: at batch 1 the systems are
+    separated by per-launch overhead, and as the GEMMs grow that overhead is
+    amortised until only the arithmetic is left.
+    """
+    rows = read_tsv(os.path.join(out, "batch.tsv"))
+    if not rows:
+        return None
+    per_seq = collections.defaultdict(list)
+    steady = collections.defaultdict(list)
+    ident = collections.defaultdict(list)
+    failed = collections.defaultdict(list)
+    for r in rows:
+        key = (r["model"], r["system"], int(r["batch"]))
+        if (r.get("status") or "ok") != "ok" or not r.get("per_seq_us"):
+            failed[key].append(1)
+            continue
+        per_seq[key].append(float(r["per_seq_us"]))
+        steady[key].append(float(r["steady_us"]))
+        if r.get("batch_rows_identical") not in (None, ""):
+            ident[key].append(r["batch_rows_identical"])
+    if not per_seq:
+        return None
+    models = sorted({k[0] for k in per_seq})
+    systems = [s for s in ["ours", "torch-compile", "torch-compile-ro",
+                           "torch-eager", "jax"]
+               if any(k[1] == s for k in per_seq)]
+    batches = sorted({k[2] for k in per_seq} | {k[2] for k in failed})
+
+    fig, axes = plt.subplots(1, len(models), squeeze=False, sharey=True,
+                             figsize=(args.width, args.width * 0.42 + 0.5))
+    for mi, model in enumerate(models):
+        ax = axes[0][mi]
+        for s in drawn(systems, args):
+            pts = [(b, band(per_seq[(model, s, b)])) for b in batches
+                   if (model, s, b) in per_seq]
+            if not pts:
+                continue
+            xs = [p[0] for p in pts]
+            ys = [p[1][0] for p in pts]
+            color, _, marker = style_of(s)
+            ax.errorbar(xs, ys, yerr=err(ys, [p[1][1] for p in pts],
+                                         [p[1][2] for p in pts]),
+                        fmt="none", zorder=2, **ERRBAR)
+            ax.plot(xs, ys, color=color, linewidth=1.4, marker=marker,
+                    markersize=3.4, markeredgewidth=0, zorder=3,
+                    label=SYSTEM_LABEL[s] if mi == 0 else None)
+        ax.set_xscale("log", base=2)
+        ax.set_yscale("log")
+        ax.set_xticks(batches)
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: "%d" % v))
+        ax.set_xlabel("batch size (sequences per forward)")
+        ax.set_title(model)
+        ax.yaxis.grid(True, zorder=0)
+        ax.set_axisbelow(True)
+        despine(ax)
+    axes[0][0].set_ylabel("time per sequence (\u00b5s), log scale")
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="outside lower center", ncol=3,
+               frameon=False, columnspacing=1.2, handlelength=1.4)
+
+    def cell(key, table, spec="%.0f"):
+        v = med(table.get(key, []))
+        return (spec % v) if v else "n/a"
+
+    header = ["model", "batch"] + [SYSTEM_LABEL[s] for s in systems] + [
+        "ours/compile", "ours/jax", "rows identical"]
+    table_rows = []
+    for model in models:
+        for b in batches:
+            row = [model, str(b)]
+            for s in systems:
+                key = (model, s, b)
+                row.append("failed" if key in failed and key not in steady
+                           else cell(key, steady))
+            ours = med(steady.get((model, "ours", b), []))
+            tc = med(steady.get((model, "torch-compile", b), []))
+            jx = med(steady.get((model, "jax", b), []))
+            row.append("%.2f" % (ours / tc) if ours and tc else "n/a")
+            row.append("%.2f" % (ours / jx) if ours and jx else "n/a")
+            marks = [v for s in systems for v in ident.get((model, s, b), [])]
+            row.append("n/a" if not marks
+                       else ("yes" if all(v == "1" for v in marks) else "NO"))
+            table_rows.append(row)
+    write_table(os.path.join(args.outdir, "batch.tex"),
+                "steady-state us per forward (the whole batch), median over "
+                "the rounds, and the ours/torch.compile and ours/JAX ratios; "
+                "\"rows identical\" is the batching check - every sequence in "
+                "the batch is the same token ids, so every output row block "
+                "must match the first",
+                header, table_rows)
+    return fig, "batch"
+
+
 FIGURES = collections.OrderedDict([
     ("micro_speedup", fig_micro_speedup),
     ("integration", fig_integration),
@@ -1613,6 +1713,7 @@ FIGURES = collections.OrderedDict([
     ("fusion_stats", fig_fusion_stats),
     ("models", fig_models),
     ("dynamic", fig_dynamic),
+    ("batch", fig_batch),
     ("precision", fig_precision),
     ("ablation", fig_ablation),
     ("deopt", fig_deopt),

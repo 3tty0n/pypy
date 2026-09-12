@@ -144,6 +144,14 @@ def timed(fwd, args, a):
     return logits, acc, steady_us
 
 
+def batch_identical(logits):
+    """The correctness check for the batching itself: [B, seq, vocab] from B
+    copies of the same sequence must be bit-identical row block to row block."""
+    if logits.dim() < 3 or logits.shape[0] == 1:
+        return 1
+    return int((logits - logits[0]).abs().max().item() == 0.0)
+
+
 def reference_name():
     dtype = os.environ.get('RTENSOR_DTYPE', 'float32')
     return 'logits_pypy.bin' if dtype == 'float32' else 'logits_pypy_%s.bin' % dtype

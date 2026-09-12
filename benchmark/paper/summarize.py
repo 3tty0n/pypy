@@ -255,6 +255,55 @@ def main(out_dir):
                 cstr, tols.get(model, ""), vstr))
         lines.append("")
 
+    batch = read_tsv(os.path.join(out_dir, "batch.tsv"))
+    if batch:
+        # steady_us is per forward (the whole batch); per_seq_us is steady/B,
+        # which is what converges as the GEMMs grow.  "rows identical" is the
+        # check on the batching itself: B copies of one sequence must give B
+        # identical output row blocks.
+        lines.append("## Batch-size sweep "
+                     "(median steady_us per forward; per_seq = steady/B)\n")
+        lines.append("| model | batch | ours | torch.compile | compile-ro "
+                     "| torch eager | JAX/XLA | ratio ours/compile "
+                     "| ratio ours/jax | per_seq ours | per_seq compile "
+                     "| per_seq jax | rows identical | failed |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+        st = collections.defaultdict(list)
+        ps = collections.defaultdict(list)
+        ident = collections.defaultdict(list)
+        failed = collections.defaultdict(list)
+        for r in batch:
+            key = (r["model"], int(r["batch"]), r["system"])
+            if (r.get("status") or "ok") != "ok" or not r.get("steady_us"):
+                failed[(r["model"], int(r["batch"]))].append(r["system"])
+                continue
+            st[key].append(float(r["steady_us"]))
+            if r.get("per_seq_us"):
+                ps[key].append(float(r["per_seq_us"]))
+            if r.get("batch_rows_identical") not in (None, ""):
+                ident[(r["model"], int(r["batch"]))].append(
+                    r["batch_rows_identical"])
+        for model, b in sorted({(k[0], k[1]) for k in st}
+                               | set(failed)):
+            def v(system, table=st):
+                return med(table.get((model, b, system), []))
+            ours, comp = v("ours"), v("torch-compile")
+            jx = v("jax")
+            marks = ident.get((model, b), [])
+            miss = sorted(set(failed.get((model, b), [])))
+            lines.append("| %s | %d | %s | %s | %s | %s | %s | %s | %s | %s "
+                         "| %s | %s | %s | %s |" % (
+                model, b, fmt(ours), fmt(comp), fmt(v("torch-compile-ro")),
+                fmt(v("torch-eager")), fmt(jx),
+                fmt(ours / comp, "%.2fx") if ours and comp else "n/a",
+                fmt(ours / jx, "%.2fx") if ours and jx else "n/a",
+                fmt(v("ours", ps)), fmt(v("torch-compile", ps)),
+                fmt(v("jax", ps)),
+                "" if not marks else ("yes" if all(x == "1" for x in marks)
+                                      else "NO"),
+                ",".join(miss)))
+        lines.append("")
+
     ablation = read_tsv(os.path.join(out_dir, "ablation.tsv"))
     if ablation:
         lines.append("## Ablations (median steady_us)\n")

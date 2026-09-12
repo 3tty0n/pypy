@@ -49,6 +49,7 @@ set. `bench.sh all` clears `$OUT/*.tsv` first for a clean run.
     benchmark/paper/bench.sh micro 8 1 256000        # one microbenchmark point
     benchmark/paper/bench.sh models distilgpt2 resnet18-b1
     benchmark/paper/bench.sh ablation fusion
+    benchmark/paper/bench.sh batch bert-mini         # batch-size sweep
     benchmark/paper/bench.sh summarize
     benchmark/paper/bench.sh gap bert-tiny           # launch/utilisation analysis
     benchmark/paper/bench.sh fusion bert-tiny        # fusion-region statistics
@@ -434,6 +435,47 @@ A recompile is therefore visible as a counter, not as a shifted median: with
 `ITERS=200` each length gets 20 samples per pass and one 300 ms compile does
 not move the median. That is deliberate - the median is the steady state, the
 counter is the event.
+
+## The batch-size sweep
+
+    benchmark/paper/bench.sh batch                   # both models, $OUT/batch.tsv
+    benchmark/paper/bench.sh batch bert-mini         # one model
+    BATCHES="1 8 64" benchmark/paper/bench.sh batch  # a different grid
+
+`bench.sh batch` sweeps batch 1, 2, 4, 8, 16, 32 for `bert-mini` and
+`distilgpt2` across ours, torch-eager, torch.compile, torch.compile
+(reduce-overhead) and JAX/XLA, `ROUNDS` rounds each. It exists to show where
+the systems converge: at batch 1 they are separated mostly by per-launch
+overhead, and as the GEMMs grow that overhead is amortised until only the
+arithmetic is left.
+
+Batched inference here is B independent sequences of the length in
+`index.json`, all carrying the same token ids. That makes the correctness
+check for the batching itself trivial to state and impossible to fake: the
+same input must give the same output, so every block of `seq` output rows must
+be identical to the first. Each row records that as `batch_rows_identical`,
+and block 0 is still compared against `logits_pypy.bin` exactly as the
+`models` sweep does, so the batched path is checked against the unbatched
+reference as well as against itself.
+
+The systems reach a batch in their own natural form:
+
+- ours: the MetaTensor model code is 2-D, so the batch folds into the rows -
+  `x` is `[B*seq, d]`. Layer norm, the MLPs and every GEMM against a
+  `[d, ...]` weight are per row and do not change. Positions repeat per
+  sequence and the GPT-2 causal mask is the same `[heads*seq, seq]` block once
+  per sequence. Attention is the one op that has to know, and it is told
+  through a sequence-count argument on `attn_scores`/`attn_context`.
+- torch: `[B, seq]` into the HF model, which is what `distilgpt2` and
+  `bert-mini` already use; the random-weights GPT-2 path loops.
+- jax: `jax.vmap` over the existing 2-D forward, which needs no change to
+  attention or the MLPs at all.
+
+`steady_us` stays per forward, i.e. for the whole batch; `per_seq_us` is
+`steady_us / B` and is what `fig_batch` plots, because per forward every line
+climbs and the figure would only say that more work takes longer. A system
+that cannot fit a batch records the row with `status=failed` and the sweep
+continues - the shape of the curve where it exists is the point.
 
 ## What a guard failure costs
 

@@ -43,13 +43,20 @@ class CNN(Module):
 
 
 class CausalSelfAttention(Module):
-    def __init__(self, wqkv, bqkv, wo, bo, heads, mask):
+    """`seqs` > 1 means x is a folded batch: [seqs*seq, d], seqs independent
+    sequences stacked down the rows.  Every other op in the block is per row
+    and does not care, but attention has to stay inside one sequence, so the
+    count is handed to the kernel.  seqs == 1 calls the unbatched form, which
+    is the only one a pypy-c built before the batch argument landed has."""
+
+    def __init__(self, wqkv, bqkv, wo, bo, heads, mask, seqs=1):
         self.wqkv = wqkv
         self.bqkv = bqkv
         self.wo = wo
         self.bo = bo
         self.heads = heads
         self.mask = mask
+        self.seqs = seqs
 
     def forward(self, x):
         import math
@@ -57,11 +64,18 @@ class CausalSelfAttention(Module):
         d = x.shape[1]
         dh = d // h
         qkv = x.matmul(self.wqkv).add(self.bqkv)
-        s = qkv.attn_scores(qkv, h, d, 0, d).mul(
-            _scalar(1.0 / math.sqrt(dh), x.dtype))
+        if self.seqs > 1:
+            s = qkv.attn_scores(qkv, h, d, 0, d, self.seqs)
+        else:
+            s = qkv.attn_scores(qkv, h, d, 0, d)
+        s = s.mul(_scalar(1.0 / math.sqrt(dh), x.dtype))
         if self.mask is not None:
             s = s.add(self.mask)
-        c = softmax(s).attn_context(qkv, h, d, 2 * d)
+        p = softmax(s)
+        if self.seqs > 1:
+            c = p.attn_context(qkv, h, d, 2 * d, self.seqs)
+        else:
+            c = p.attn_context(qkv, h, d, 2 * d)
         return c.matmul(self.wo).add(self.bo)
 
 

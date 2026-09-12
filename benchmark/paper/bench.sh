@@ -25,6 +25,10 @@ commands:
   ablation [EXP...]      ablations; no args = all
                          names: $ALL_EXPERIMENTS
   dynamic                dynamic sequence-length experiment
+  batch [MODEL...]       batch-size sweep (1 2 4 8 16 32) for bert-mini and
+                         distilgpt2 across ours/torch-eager/torch-compile/
+                         torch-compile-ro/jax, into \$OUT/batch.tsv
+                         (BATCHES and BATCH_SYSTEMS override the grid)
   deopt [PATTERN...]     cost of a guard failure against the steady state
                          (patterns: never alternate both-hot fresh; plus the
                           recovery_probe (a)/(e) rows)
@@ -122,6 +126,9 @@ run_cmd() {
       ;;
     dynamic)
       bash "$HERE/run_dynamic.sh" "$@"
+      ;;
+    batch)
+      bash "$HERE/run_batch.sh" "$@"
       ;;
     deopt)
       if [ $# -gt 0 ]; then PATTERNS="$*"; export PATTERNS; fi

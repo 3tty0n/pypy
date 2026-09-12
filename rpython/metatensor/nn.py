@@ -136,7 +136,15 @@ class Tensor(object):
                                0, tb),
             node, needs)
 
-    def attn_scores(self, k, heads, rows, dh, lda=0, ldb=0, oa=0, ob=0):
+    def attn_scores(self, k, heads, rows, dh, lda=0, ldb=0, oa=0, ob=0,
+                    seqs=1):
+        """seqs > 1: the rows are a folded batch of `seqs` independent
+        sequences of `rows` each, and attention has to stay inside one.  That
+        makes the batch two-dimensional, (sequence, head), so it rides the
+        outer batch level of tensor_bmm: the head stride stays dh inside a
+        sequence, and a sequence is rows*lda elements further on.  The result
+        is [seqs*heads*rows, rows], sequence-major, which is the layout a mask
+        tiled once per sequence already has."""
         d = heads * dh
         if lda <= 0:
             lda = d
@@ -145,23 +153,29 @@ class Tensor(object):
         node = None
         needs = self.requires_grad or k.requires_grad
         if needs:
-            node = AttnScoresNode(self, k, heads, rows, dh, lda, ldb, oa, ob)
+            node = AttnScoresNode(self, k, heads, rows, dh, lda, ldb, oa, ob,
+                                  seqs)
         return self._wrap(runtime.tensor_bmm(
             self.t, k.t, heads, rows, rows, dh, 0, 1, lda, ldb, rows,
-            dh, dh, rows * rows, heads * rows * rows, heads * rows,
-            oa, ob), node, needs)
+            dh, dh, rows * rows, seqs * heads * rows * rows,
+            seqs * heads * rows, oa, ob, 0, 0,
+            seqs, rows * lda, rows * ldb, heads * rows * rows), node, needs)
 
-    def attn_context(self, v, heads, rows, dh, ldb=0, ob=0):
+    def attn_context(self, v, heads, rows, dh, ldb=0, ob=0, seqs=1):
+        """The mirror of attn_scores: probabilities [seqs*heads*rows, rows]
+        against v, back to [seqs*rows, d] with the heads merged into the row
+        again and the sequences still folded into the rows."""
         d = heads * dh
         if ldb <= 0:
             ldb = d
         node = None
         needs = self.requires_grad or v.requires_grad
         if needs:
-            node = AttnContextNode(self, v, heads, rows, dh, ldb, ob)
+            node = AttnContextNode(self, v, heads, rows, dh, ldb, ob, seqs)
         return self._wrap(runtime.tensor_bmm(
             self.t, v.t, heads, rows, dh, rows, 0, 0, rows, ldb, d,
-            rows * rows, dh, dh, rows * d, rows, 0, ob), node, needs)
+            rows * rows, dh, dh, seqs * rows * d, seqs * rows, 0, ob, 0, 0,
+            seqs, heads * rows * rows, rows * ldb, rows * d), node, needs)
 
     def rot_half(self, dh):
         node = None
@@ -562,7 +576,7 @@ class BmmNode(Node):
 
 
 class AttnScoresNode(Node):
-    def __init__(self, q, k, heads, rows, dh, lda, ldb, oa, ob):
+    def __init__(self, q, k, heads, rows, dh, lda, ldb, oa, ob, seqs=1):
         inputs = [q]
         inputs.append(k)
         Node.__init__(self, inputs)
@@ -573,8 +587,15 @@ class AttnScoresNode(Node):
         self.ldb = ldb
         self.oa = oa
         self.ob = ob
+        self.seqs = seqs
 
     def apply(self, g):
+        # The folded-batch form is an inference path; its backward would need
+        # the same outer batch level threaded through _bmm_slice_grad.  Refuse
+        # it rather than return a gradient that is silently wrong.
+        if self.seqs != 1:
+            raise ValueError("attn_scores backward does not support a folded "
+                             "batch of sequences (seqs > 1)")
         q = self.inputs[0]
         k = self.inputs[1]
         h, rows, dh = self.heads, self.rows, self.dh
@@ -594,7 +615,7 @@ class AttnScoresNode(Node):
 
 
 class AttnContextNode(Node):
-    def __init__(self, p, v, heads, rows, dh, ldb, ob):
+    def __init__(self, p, v, heads, rows, dh, ldb, ob, seqs=1):
         inputs = [p]
         inputs.append(v)
         Node.__init__(self, inputs)
@@ -603,8 +624,12 @@ class AttnContextNode(Node):
         self.dh = dh
         self.ldb = ldb
         self.ob = ob
+        self.seqs = seqs
 
     def apply(self, g):
+        if self.seqs != 1:
+            raise ValueError("attn_context backward does not support a "
+                             "folded batch of sequences (seqs > 1)")
         p = self.inputs[0]
         v = self.inputs[1]
         h, rows, dh = self.heads, self.rows, self.dh

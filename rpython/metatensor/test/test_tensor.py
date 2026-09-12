@@ -1038,6 +1038,64 @@ class TestTransformer(LLJitMixin):
         for i in range(rows * d):
             assert abs(hr[i] - hg[i]) < 1e-9
 
+    def test_attn_batched_matches_per_sequence(self):
+        """seqs > 1 folds B independent sequences into the rows.  Each
+        sequence carries different numbers here, so a kernel that let
+        attention reach across a sequence boundary - or that got the outer
+        stride wrong - would not match the per-sequence reference."""
+        seqs, heads, rows, dh = 3, 2, 4, 2
+        d = heads * dh
+        per = rows * 3 * d
+        qkv = core.zeros([seqs * rows, 3 * d])
+        for i in range(seqs * per):
+            qkv.host[i] = (((i * 7) % 13) - 6) / 4.0
+        f = nn.Tensor(qkv)
+        got_s = f.attn_scores(f, heads, rows, dh, 3 * d, 3 * d, 0, d, seqs)
+        got_c = got_s.attn_context(f, heads, rows, dh, 3 * d, 2 * d, seqs)
+        assert ops.tensor_shape(got_s.t, 0) == seqs * heads * rows
+        assert ops.tensor_shape(got_s.t, 1) == rows
+        assert ops.tensor_shape(got_c.t, 0) == seqs * rows
+        assert ops.tensor_shape(got_c.t, 1) == d
+        hs = device.host(got_s.t)
+        hc = device.host(got_c.t)
+        for b in range(seqs):
+            one = core.zeros([rows, 3 * d])
+            for i in range(per):
+                one.host[i] = qkv.host[b * per + i]
+            g = nn.Tensor(one)
+            ref_s = g.attn_scores(g, heads, rows, dh, 3 * d, 3 * d, 0, d)
+            ref_c = ref_s.attn_context(g, heads, rows, dh, 3 * d, 2 * d)
+            hrs = device.host(ref_s.t)
+            for i in range(heads * rows * rows):
+                assert abs(hrs[i] - hs[b * heads * rows * rows + i]) < 1e-9
+            hrc = device.host(ref_c.t)
+            for i in range(rows * d):
+                assert abs(hrc[i] - hc[b * rows * d + i]) < 1e-9
+
+    def test_bmm_outer_batch_matches_separate_calls(self):
+        """The outer batch level of tensor_bmm is nb2 groups of `batch`
+        matrices; one group at a time must give the same numbers."""
+        nb2, batch, rows, cols, inner = 2, 3, 2, 3, 4
+        a = core.zeros([nb2 * batch * rows, inner])
+        b = core.zeros([nb2 * batch * inner, cols])
+        for i in range(nb2 * batch * rows * inner):
+            a.host[i] = ((i * 3) % 7) - 3.0
+        for i in range(nb2 * batch * inner * cols):
+            b.host[i] = ((i * 5) % 11) - 5.0
+        sa, sb, sc = rows * inner, inner * cols, rows * cols
+        got = runtime.tensor_bmm(a, b, batch, rows, cols, inner, 0, 0,
+                                 0, 0, 0, sa, sb, sc, 0, 0, 0, 0, 0, 0,
+                                 nb2, batch * sa, batch * sb, batch * sc)
+        assert ops.tensor_size(got) == nb2 * batch * rows * cols
+        hg = device.host(got)
+        for g in range(nb2):
+            ref = runtime.tensor_bmm(a, b, batch, rows, cols, inner, 0, 0,
+                                     0, 0, 0, sa, sb, sc, 0, 0,
+                                     g * batch * sa, g * batch * sb, 0)
+            hr = device.host(ref)
+            for i in range(batch * rows * cols):
+                assert abs(hr[i] - hg[g * batch * sc + i]) < 1e-9
+
     def test_attn_strided_matches_dense(self):
         heads, rows, dh = 3, 4, 2
         d = heads * dh

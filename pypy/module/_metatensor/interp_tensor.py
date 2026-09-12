@@ -152,43 +152,53 @@ class W_Tensor(W_Root):
         except ValueError:
             raise _mismatch(space)
 
-    @unwrap_spec(heads=int, dcols=int, off_a=int, off_b=int)
+    @unwrap_spec(heads=int, dcols=int, off_a=int, off_b=int, seqs=int)
     def descr_attn_scores(self, space, w_other, heads, dcols=-1, off_a=0,
-                          off_b=0):
+                          off_b=0, seqs=1):
+        """seqs > 1 says the rows are a folded batch: seqs independent
+        sequences stacked down the rows, each of shape[0] // seqs rows.
+        Attention then runs per sequence and the result is
+        [seqs*heads*rows, rows], sequence-major."""
         t = self.tensor.t
         other = self._other(space, w_other)
-        if (heads <= 0 or ops.tensor_ndim(t) != 2 or
+        if (heads <= 0 or seqs <= 0 or ops.tensor_ndim(t) != 2 or
                 ops.tensor_ndim(other.t) != 2):
             raise _mismatch(space)
-        rows = ops.tensor_shape(t, 0)
+        total = ops.tensor_shape(t, 0)
+        if total % seqs != 0:
+            raise _mismatch(space)
+        rows = total // seqs
         lda = ops.tensor_shape(t, 1)
         ldb = ops.tensor_shape(other.t, 1)
         d = lda if dcols <= 0 else dcols
         if (d % heads != 0 or off_a < 0 or off_b < 0 or
                 off_a + d > lda or off_b + d > ldb or
-                ops.tensor_shape(other.t, 0) != rows or
+                ops.tensor_shape(other.t, 0) != total or
                 ops.tensor_dtype(other.t) != ops.tensor_dtype(t)):
             raise _mismatch(space)
         return W_Tensor(self.tensor.attn_scores(
-            other, heads, rows, d // heads, lda, ldb, off_a, off_b))
+            other, heads, rows, d // heads, lda, ldb, off_a, off_b, seqs))
 
-    @unwrap_spec(heads=int, dcols=int, off_b=int)
-    def descr_attn_context(self, space, w_other, heads, dcols=-1, off_b=0):
+    @unwrap_spec(heads=int, dcols=int, off_b=int, seqs=int)
+    def descr_attn_context(self, space, w_other, heads, dcols=-1, off_b=0,
+                           seqs=1):
+        """The mirror of attn_scores: [seqs*heads*rows, rows] probabilities
+        against [seqs*rows, ldb] values, back to [seqs*rows, d]."""
         t = self.tensor.t
         other = self._other(space, w_other)
-        if (heads <= 0 or ops.tensor_ndim(t) != 2 or
+        if (heads <= 0 or seqs <= 0 or ops.tensor_ndim(t) != 2 or
                 ops.tensor_ndim(other.t) != 2):
             raise _mismatch(space)
         rows = ops.tensor_shape(t, 1)
         ldb = ops.tensor_shape(other.t, 1)
         d = ldb if dcols <= 0 else dcols
-        if (ops.tensor_shape(t, 0) != heads * rows or d % heads != 0 or
+        if (ops.tensor_shape(t, 0) != seqs * heads * rows or d % heads != 0 or
                 off_b < 0 or off_b + d > ldb or
-                ops.tensor_shape(other.t, 0) != rows or
+                ops.tensor_shape(other.t, 0) != seqs * rows or
                 ops.tensor_dtype(other.t) != ops.tensor_dtype(t)):
             raise _mismatch(space)
         return W_Tensor(self.tensor.attn_context(
-            other, heads, rows, d // heads, ldb, off_b))
+            other, heads, rows, d // heads, ldb, off_b, seqs))
 
     @unwrap_spec(dh=int)
     def descr_rot_half(self, space, dh):

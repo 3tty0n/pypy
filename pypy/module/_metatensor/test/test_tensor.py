@@ -370,6 +370,40 @@ class AppTestTensor(object):
         for a, b in zip(c0, c1):
             assert abs(a - b) < 1e-9
 
+    def test_attn_batched_matches_per_sequence(self):
+        """seqs > 1 says the rows are a folded batch of independent
+        sequences; each must come out exactly as it does on its own."""
+        import _metatensor
+        seqs, rows, d, h = 3, 3, 4, 2
+        n = rows * 3 * d
+        flat = [float(((i * 7) % 13) - 6) / 8.0 for i in range(seqs * n)]
+        qkv = _metatensor.tensor(flat, [seqs * rows, 3 * d])
+        s = qkv.attn_scores(qkv, h, d, 0, d, seqs).tolist()
+        assert len(s) == seqs * h * rows * rows
+        p = _metatensor.tensor(s, [seqs * h * rows, rows])
+        c = p.attn_context(qkv, h, d, 2 * d, seqs).tolist()
+        assert len(c) == seqs * rows * d
+        for b in range(seqs):
+            one = _metatensor.tensor(flat[b * n:(b + 1) * n], [rows, 3 * d])
+            s1 = one.attn_scores(one, h, d, 0, d).tolist()
+            p1 = _metatensor.tensor(s1, [h * rows, rows])
+            c1 = p1.attn_context(one, h, d, 2 * d).tolist()
+            off = b * h * rows * rows
+            for i in range(len(s1)):
+                assert abs(s1[i] - s[off + i]) < 1e-9
+            off = b * rows * d
+            for i in range(len(c1)):
+                assert abs(c1[i] - c[off + i]) < 1e-9
+
+    def test_attn_batched_rejects_bad_sequence_count(self):
+        import _metatensor
+        qkv = _metatensor.tensor([0.0] * (6 * 12), [6, 12])
+        raises(ValueError, qkv.attn_scores, qkv, 2, 4, 0, 4, 4)
+        raises(ValueError, qkv.attn_scores, qkv, 2, 4, 0, 4, 0)
+        s = qkv.attn_scores(qkv, 2, 4, 0, 4, 2)
+        p = _metatensor.tensor(s.tolist(), [2 * 2 * 3, 3])
+        raises(ValueError, p.attn_context, qkv, 2, 4, 8, 3)
+
     def test_take_rows(self):
         import _metatensor
         table = _metatensor.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])

@@ -34,6 +34,14 @@ class Weights(object):
         values, shape = self.raw(name)
         return _metatensor.tensor(values, shape, False, self.dtype)
 
+    def tiled(self, name, batch):
+        values, shape = self.raw(name)
+        if batch == 1:
+            return _metatensor.tensor(values, shape, False, self.dtype)
+        return _metatensor.tensor(values * batch,
+                                  [shape[0] * batch] + shape[1:], False,
+                                  self.dtype)
+
     def cat(self, names):
         parts = [self.raw(n) for n in names]
         shape = parts[0][1]
@@ -128,6 +136,29 @@ def causal_mask(h, t, dtype):
             for j in range(i + 1, t):
                 mask[(head * t + i) * t + j] = -1e9
     return tensor(mask, [h * t, t], False, dtype)
+
+
+def row_block(logits, seq, b, dtype):
+    """Rows [b*seq, (b+1)*seq) of a [batch*seq, cols] tensor."""
+    idx = tensor([float(i) for i in range(b * seq, (b + 1) * seq)], [seq],
+                 False, dtype)
+    return logits.take(idx)
+
+
+def batch_rows_identical(logits, seq, batch, dtype):
+    """The correctness check for the batching itself: every sequence in the
+    batch is the same token ids, so every block of `seq` output rows must come
+    out bit-identical to the first.  Compared as a sum of squared differences
+    so the whole check stays on the device - materialising B*seq*vocab floats
+    as a Python list is gigabytes at batch 32."""
+    if batch <= 1:
+        return 1
+    base = row_block(logits, seq, 0, dtype)
+    for b in range(1, batch):
+        d = row_block(logits, seq, b, dtype).sub(base)
+        if d.mul(d).sum().item() != 0.0:
+            return 0
+    return 1
 
 
 def token_argmax(flat, t, v):

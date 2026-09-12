@@ -49,7 +49,14 @@ class Model(torch.nn.Module):
                                               self.eps)
 
     def forward(self, idx):
-        return blocks_forward(self, self.wte[idx] + self.pos, self.mask)
+        # [seq] is the unbatched form dynamic_gpt2_torch.py drives; [B, seq]
+        # is B independent sequences, which for the random-weights path is a
+        # loop - the HF path below carries the batch natively and is what
+        # distilgpt2 uses.
+        if idx.dim() == 1:
+            return blocks_forward(self, self.wte[idx] + self.pos, self.mask)
+        return torch.stack([blocks_forward(self, self.wte[i] + self.pos,
+                                           self.mask) for i in idx])
 
 
 def blocks_forward(model, x, mask):
@@ -77,7 +84,9 @@ def blocks_forward(model, x, mask):
 def main():
     a = torch_common.argv()
     cfg = a.cfg
-    idx = torch.tensor(cfg['tokens'], device=a.dev, dtype=torch.long)
+    batch = torch_common.batch_argv()
+    idx = torch.tensor([cfg['tokens']] * batch, device=a.dev,
+                       dtype=torch.long)
     if cfg['source'] == 'random':
         model = Model(cfg, torch_common.flat_weights(a.outdir), a.dtype,
                       a.dev)
@@ -86,15 +95,19 @@ def main():
         from transformers import GPT2LMHeadModel
         hf = GPT2LMHeadModel.from_pretrained(cfg['source'], **torch_common.hf_kwargs(a))
         hf = hf.to(a.dev, a.dtype).eval()
-        fwd = lambda i: hf(i.unsqueeze(0)).logits[0]
+        fwd = lambda i: hf(i).logits
     fwd = torch_common.compiled(fwd, a)
     logits, acc, steady_us = torch_common.timed(fwd, (idx,), a)
+    ident = torch_common.batch_identical(logits)
+    first = logits[0]
     torch_common.report(
         'gpt2 torch-%s layers=%d embd=%d heads=%d seq=%d vocab=%d dtype=%s '
-        'iters=%d steady_us=%.1f checksum=%.6f' %
+        'batch=%d iters=%d steady_us=%.1f per_seq_us=%.1f '
+        'batch_rows_identical=%d checksum=%.6f' %
         (a.mode, cfg['n_layer'], cfg['n_embd'], cfg['n_head'], cfg['seq'],
-         cfg['vocab'], a.dtname, a.iters, steady_us, acc),
-        logits.argmax(-1).tolist(), torch_common.compare(a.outdir, logits), a)
+         cfg['vocab'], a.dtname, batch, a.iters, steady_us,
+         steady_us / batch, ident, acc),
+        first.argmax(-1).tolist(), torch_common.compare(a.outdir, first), a)
 
 
 if __name__ == '__main__':
