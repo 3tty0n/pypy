@@ -25,6 +25,9 @@ commands:
   ablation [EXP...]      ablations; no args = all
                          names: $ALL_EXPERIMENTS
   dynamic                dynamic sequence-length experiment
+  warmup [--n N]         per-forward warm-up trace (tiny-gpt2, distilgpt2;
+                         ours/torch-eager/torch-compile/torch-compile-ro/jax;
+                         cold+warm kernel caches; N forwards, default 300)
   gap [MODEL...]         launches, kernel granularity and GPU utilisation per
                          system, into \$OUT/gap.tsv (needs nsys)
   summarize              render \$OUT/summary.md from the tsv files
@@ -113,6 +116,10 @@ run_cmd() {
       ;;
     dynamic)
       bash "$HERE/run_dynamic.sh" "$@"
+      ;;
+    warmup)
+      if [ "$1" = "--n" ]; then N=$2; shift 2; fi
+      N="$N" bash "$HERE/run_warmup.sh" "$@"
       ;;
     gap)
       source "$HERE/config.sh"

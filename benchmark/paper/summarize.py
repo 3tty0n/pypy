@@ -80,6 +80,62 @@ def compile_table(records, lines):
         lines.append("")
 
 
+def warmup_table(records, lines):
+    """Per-forward warm-up trace (kind=warmup, run_warmup.sh): first forward,
+    steady-state onset, and the crossover against torch-eager, per model,
+    system and cache state, median over the rounds."""
+    g = collections.defaultdict(lambda: collections.defaultdict(list))
+    for r in records:
+        if r.get("kind") != "warmup":
+            continue
+        key = (r.get("model"), r.get("system"), r.get("cache"))
+        for field in ("first_us", "steady_us", "steady_at", "crossover",
+                      "cold_compiles", "first_forward_compiles"):
+            if r.get(field) not in (None, ""):
+                g[key][field].append(r[field])
+    if not g:
+        return
+    lines.append("## Warm-up (median over rounds; steady_at/crossover in "
+                  "iterations, 'none' if never reached within N)\n")
+    lines.append("| model | system | cache | first (ms) | steady_at | "
+                  "steady_us | crossover vs eager |")
+    lines.append("|---|---|---|---|---|---|---|")
+    def numeric_med(xs):
+        nums = [x for x in xs if isinstance(x, (int, float))]
+        return med(nums) if nums else None
+    for key in sorted(g):
+        d = g[key]
+        first = numeric_med(d.get("first_us", []))
+        steady = numeric_med(d.get("steady_us", []))
+        sa = numeric_med(d.get("steady_at", []))
+        sa_str = "%.0f" % sa if sa is not None else "none"
+        co = numeric_med(d.get("crossover", []))
+        co_str = "%.0f" % co if co is not None else "none"
+        lines.append("| %s | %s | %s | %s | %s | %s | %s |" % (
+            key[0], key[1], key[2],
+            "%.2f" % (first / 1000.0) if first is not None else "n/a",
+            sa_str, fmt(steady), co_str))
+    lines.append("")
+
+    ours_compiles = {k: v for k, v in g.items()
+                     if k[1] == "ours" and v.get("cold_compiles")}
+    if ours_compiles:
+        lines.append("## Warm-up: kernel compiles (ours, median over rounds; "
+                      "cold_compiles = Triton subprocess compiles over the "
+                      "whole trace, first_forward_compiles = at iter 0)\n")
+        lines.append("| model | cache | cold_compiles | first_forward_compiles |")
+        lines.append("|---|---|---|---|")
+        for key in sorted(ours_compiles):
+            d = ours_compiles[key]
+            cc = numeric_med(d.get("cold_compiles", []))
+            ffc = numeric_med(d.get("first_forward_compiles", []))
+            lines.append("| %s | %s | %s | %s |" % (
+                key[0], key[2],
+                "%.0f" % cc if cc is not None else "n/a",
+                "%.0f" % ffc if ffc is not None else "n/a"))
+        lines.append("")
+
+
 def main(out_dir):
     lines = []
     lines.append("# Paper benchmark summary\n")
@@ -206,25 +262,36 @@ def main(out_dir):
                     key[0], key[1], key[2], "n/a", notes[key]))
         lines.append("")
 
-    compile_table(read_jsonl(os.path.join(out_dir, "results.jsonl")), lines)
+    records = read_jsonl(os.path.join(out_dir, "results.jsonl"))
+    compile_table(records, lines)
+    warmup_table(records, lines)
 
     dsum = read_tsv(os.path.join(out_dir, "dynamic_summary.tsv"))
     if dsum:
-        lines.append("## Dynamic sequence length (median steady_us per length)\n")
-        lines.append("| system | length | median_us | loops | bridges | recompiles |")
-        lines.append("|---|---|---|---|---|---|")
+        # pass 1 is the first visit of each length, pass 2 the revisit.  The
+        # counter columns are the delta inside that length's window, so a
+        # non-zero value on pass 2 means a revisit was not free.
+        lines.append("## Dynamic sequence length "
+                     "(median steady_us per length, counters per window)\n")
+        lines.append("| system | pass | length | median_us | total_us | loops "
+                     "| bridges | kernels | cache_hits | recompiles |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
         g = collections.defaultdict(list)
         for r in dsum:
-            key = (r["system"], r["length"])
-            g[key].append(r)
-        for key in sorted(g, key=lambda k: (k[0], int(k[1]))):
+            g[(r["system"], r.get("pass", "1"), r["length"])].append(r)
+
+        def d(rows, col):
+            vs = [float(x[col]) for x in rows if x.get(col) not in (None, "")]
+            return "%.0f" % med(vs) if vs else ""
+
+        for key in sorted(g, key=lambda k: (k[0], k[1], int(k[2]))):
             rows = g[key]
-            m = med([x["median_us"] for x in rows])
-            loops = rows[0].get("loops", "")
-            bridges = rows[0].get("bridges", "")
-            recompiles = rows[0].get("recompiles", "")
-            lines.append("| %s | %s | %s | %s | %s | %s |" % (
-                key[0], key[1], fmt(m), loops, bridges, recompiles))
+            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+                key[0], key[1], key[2],
+                fmt(med([x["median_us"] for x in rows])),
+                fmt(med([x["total_us"] for x in rows])) if rows[0].get("total_us") else "",
+                d(rows, "loops"), d(rows, "bridges"), d(rows, "kernels"),
+                d(rows, "cache_hits"), d(rows, "recompiles")))
         lines.append("")
 
     text = "\n".join(lines) + "\n"

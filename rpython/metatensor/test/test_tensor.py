@@ -1,6 +1,6 @@
 import math
 from rpython.jit.metainterp.test.support import LLJitMixin
-from rpython.rlib.jit import JitDriver
+from rpython.rlib.jit import JitDriver, promote
 from rpython.metatensor import core, device, kernels, nn, ops, runtime
 from rpython.metatensor.core import from_list
 from rpython.metatensor.ops import (tensor_add, tensor_mul, tensor_relu,
@@ -1791,3 +1791,122 @@ def test_add_output_after_compile_keeps_the_arity_the_launcher_uses():
     kernels.add_output(kernel, 2)
     assert kernel.nouts == 1 + len(kernel.outputs)
     assert not runtime.arity_mismatch(kernel)
+
+
+def _tensor_call_kinds(operations):
+    """Split a trace's calls into fused launches and single tensor ops."""
+    from rpython.jit.codewriter.effectinfo import EffectInfo
+    launches = []
+    singles = []
+    for op in operations:
+        descr = op.getdescr()
+        realref = getattr(descr, 'realdescrref', None)
+        if realref is not None:      # llgraph wraps a bridge's descrs
+            descr = realref()
+        if not hasattr(descr, 'get_extra_info'):
+            continue
+        info = descr.get_extra_info()
+        if info is None:
+            continue
+        idx = info.oopspecindex
+        if idx == EffectInfo.OS_TENSOR_LAUNCH:
+            launches.append(op)
+        elif EffectInfo.OS_TENSOR_ADD <= idx <= EffectInfo.OS_TENSOR_EQMASK:
+            singles.append(op)
+    return launches, singles
+
+
+def _loop_body(trace):
+    """The peeled body, i.e. everything from the last label on."""
+    from rpython.jit.metainterp.resoperation import rop
+    for i in range(len(trace.operations) - 1, -1, -1):
+        if trace.operations[i].getopnum() == rop.LABEL:
+            return trace.operations[i:]
+    raise AssertionError("no label in trace")
+
+
+def _bridges_of(loop):
+    """The bridges the llgraph backend attached to this trace's guards."""
+    out = []
+    for op in loop.operations:
+        descr = op.getdescr()
+        bridge = getattr(descr, '_llgraph_bridge', None)
+        if bridge is not None:
+            out.append((op, bridge))
+    return out
+
+
+class TestGuardRecovery(LLJitMixin):
+
+    def test_guard_failure_rebuilds_virtual_and_bridge_refuses(self):
+        driver = JitDriver(greens=[], reds=['n', 'k', 'w', 'b', 'acc'])
+        def f(n):
+            w = from_list([1.0, -2.0, 3.0, -4.0])
+            b = from_list([0.5, 0.25, -0.5, 2.0])
+            acc = 0.0
+            k = 1
+            while n > 0:
+                driver.jit_merge_point(n=n, k=k, acc=acc, w=w, b=b)
+                # four elementwise ops: one virtual DAG, no device memory yet
+                h = tensor_mul(w, b, 0)
+                h = tensor_add(h, b, 0)
+                h = tensor_relu(h)
+                h = tensor_mul(h, b, 0)
+                # h is still virtual here, and stays live across this guard
+                promote(k)
+                acc += tensor_item(tensor_sum(h, -1)) * k
+                n -= 1
+                if n == 30:
+                    k = 2
+            return acc
+        from rpython.jit.metainterp import resume
+        counts = {'box': 0, 'direct': 0}
+        originals = {}
+        for name, cls in (('box', resume.ResumeDataBoxReader),
+                          ('direct', resume.ResumeDataDirectReader)):
+            originals[name] = cls.tensor_op
+            def make(name, original):
+                def tensor_op(self, opcode, param, fieldnums):
+                    counts[name] += 1
+                    return original(self, opcode, param, fieldnums)
+                return tensor_op
+            cls.tensor_op = make(name, originals[name])
+        try:
+            res = self.meta_interp(f, [60])
+        finally:
+            for name, cls in (('box', resume.ResumeDataBoxReader),
+                              ('direct', resume.ResumeDataDirectReader)):
+                cls.tensor_op = originals[name]
+        from rpython.jit.metainterp.test.support import get_stats
+        stats = get_stats()
+
+        # (d) the fused result is the interpreted result
+        assert res == f(60)
+
+        loops = stats.get_all_loops()
+        assert len(loops) == 1
+        loop = loops[0]
+
+        # (a) the loop runs the whole chain as one launch
+        launches, singles = _tensor_call_kinds(_loop_body(loop))
+        assert len(launches) == 1
+        assert singles == []
+
+        # (b) the guard that keeps h virtual got a bridge compiled for it
+        assert stats.compiled_count >= 2
+        bridges = _bridges_of(loop)
+        assert len(bridges) == 1
+        guard, bridge = bridges[0]
+        assert guard.getopname() in ('guard_value', 'guard_true', 'guard_false')
+
+        # (c) the bridge re-fuses: one launch again, not one call per node
+        blaunches, bsingles = _tensor_call_kinds(_loop_body(bridge))
+        assert len(blaunches) == 1
+        assert bsingles == []
+        # and nowhere in the bridge, including its first-failure prologue, is
+        # the chain run one node at a time
+        assert _tensor_call_kinds(bridge.operations)[1] == []
+
+        # (e) both resume decoders rebuilt the chain, one call per node
+        assert counts['box'] > 0 and counts['direct'] > 0
+        assert counts['box'] == counts['direct'] == 4

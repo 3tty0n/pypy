@@ -2,6 +2,8 @@ import array, json, os, sys, time
 
 import torch
 
+import warmup_common
+
 
 class Args(object):
     pass
@@ -73,6 +75,19 @@ def timed(fwd, args, a):
     """Warm-up, sync, timed loop, sync.  The first forward is timed on its
     own into a.first_run_ms: for compile mode that is compile plus one run."""
     with torch.no_grad():
+        n = warmup_common.trace_n()
+        if n:
+            us = []
+            for i in range(n):
+                t0 = time.time()
+                logits = fwd(*args)
+                if a.dev == 'cuda':
+                    torch.cuda.synchronize()
+                dt = (time.time() - t0) * 1e6
+                us.append(dt)
+                print('iter=%d us=%.1f' % (i, dt))
+            warmup_common.report_trace(us)
+            sys.exit(0)
         t0 = time.time()
         logits = fwd(*args)
         if a.dev == 'cuda':

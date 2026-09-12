@@ -193,6 +193,14 @@ class Counter(object):
     n = 0
 counter = Counter()
 
+class MissCounter(object):
+    # Incremented only when compile_ttir actually spawns the Triton
+    # subprocess (RTENSOR_KERNEL_CACHE miss or RTENSOR_KERNEL_CACHE=0), not
+    # on a disk-cache hit; counter.n above increments on every kernel name
+    # request, hit or miss, so (counter.n delta - this delta) is cache hits.
+    n = 0
+miss_counter = MissCounter()
+
 def get_cc():
     return _env('RTENSOR_CC', 'auto')
 
@@ -241,6 +249,7 @@ def compile_ttir(src, name, warps):
     else:
         base = _env('TMPDIR', '/tmp') + '/' + name
     if not meta or not image:
+        miss_counter.n += 1
         _write(base + '.ttir', src)
         cmd = '%s -P %s %s.ttir %s.ptx %s.meta %s %d' % (
             _env('RTENSOR_PYTHON', 'python3'), _here + '/triton_compile.py',

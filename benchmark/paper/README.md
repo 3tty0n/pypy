@@ -345,6 +345,47 @@ which need a `tl.dot`-capable code generator, since the codegen here has none
 - and one submission per forward instead of one per kernel.
 
 
+## The dynamic sequence-length sweep
+
+`bench.sh dynamic` visits `[32, 48, 64, 96, 128]` in that fixed order, twice:
+pass 1 is the first visit of each length, pass 2 the revisit, so a cost that
+only appears the first time is separated from one that recurs. Every system
+walks the same order.
+
+Both drivers time the same span, and each says so at the top of the file:
+
+    build_us  token ids, the position slice and the causal mask for this length
+    step_us   the forward, then logits.sum() reduced to a host scalar
+    total_us  the two added
+
+`step_us` is what the figure plots. The build is reported separately because
+it is host-side input marshalling and not the runtime under test: in the PyPy
+driver it is a Python list build (1.9 ms for the 12x128x128 mask at t=128,
+1.1 ms for the 128x768 position slice), in the torch driver a tensor slice
+plus an H2D copy. Folded together, the figure would be a measurement of list
+construction. For the same reason the PyPy driver builds each mask once per
+length and reuses it on a revisit, while torch rebuilds it from three tensor
+ops every step.
+
+The compile counters are real per-length deltas, taken inside that length's
+window rather than as a process-wide total:
+
+- ours: `pypyjit.get_stats_snapshot()` for `TOTAL_COMPILED_LOOPS`,
+  `TOTAL_COMPILED_BRIDGES` and `counter_times` (tracing + backend, reported as
+  `compile_ms`), and `_metatensor.kernel_count()` / `launch_count()` for
+  kernels compiled and kernels launched. The kernel cache has no hit counter,
+  so `cache_hits` is launches minus newly compiled kernels.
+- torch: `torch._dynamo.utils.counters['stats']['unique_graphs']`, as a running
+  total (`graphs`) and as the delta inside the window (`recompiles`).
+  `compile_ms` is -1, as everywhere else here: torch.compile does not separate
+  the compile from the iteration that triggers it, so that cost sits inside
+  that iteration's `step_us` and shows up as a `recompiles` of 1.
+
+A recompile is therefore visible as a counter, not as a shifted median: with
+`ITERS=200` each length gets 20 samples per pass and one 300 ms compile does
+not move the median. That is deliberate - the median is the steady state, the
+counter is the event.
+
 ## Checking a setup
 
     benchmark/paper/bench.sh check          # every mode, ~100 s

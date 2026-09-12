@@ -482,6 +482,12 @@ def kernel_count(space):
     return space.newint(kernels.counter.n)
 
 
+def kernel_compile_count(space):
+    """Kernels actually compiled through the Triton subprocess (a disk-cache
+    miss), as opposed to kernel_count() which also counts disk-cache hits."""
+    return space.newint(kernels.miss_counter.n)
+
+
 def launch_count(space):
     return space.newint(device.launch_count())
 

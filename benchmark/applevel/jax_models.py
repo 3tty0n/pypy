@@ -21,6 +21,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import iree_adapter
+import warmup_common
 
 jax.config.update("jax_enable_x64", True)
 # torch eager and cuBLAS do full fp32 GEMMs by default; XLA would use TF32.
@@ -361,6 +362,17 @@ def main():
         compile_ms = (time.perf_counter() - t0) * 1e3
         run = lambda: fwd(params, *args)
         block = jax.block_until_ready
+    n = warmup_common.trace_n()
+    if n:
+        us = []
+        for i in range(n):
+            t0 = time.perf_counter()
+            logits = block(run())
+            dt = (time.perf_counter() - t0) * 1e6
+            us.append(dt)
+            print('iter=%d us=%.1f' % (i, dt))
+        warmup_common.report_trace(us)
+        sys.exit(0)
     t0 = time.perf_counter()
     logits = block(run())
     first_ms = (time.perf_counter() - t0) * 1e3

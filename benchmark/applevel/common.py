@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 '..', '..', 'lib_pypy'))
 
 import _metatensor
+import warmup_common
 
 
 def load(outdir):
@@ -66,6 +67,28 @@ FIRST_RUN_MS = [None]
 
 
 def timed(model, args, iters, warmup):
+    n = warmup_common.trace_n()
+    if n:
+        has_counters = hasattr(_metatensor, 'kernel_compile_count')
+        us, compiled = [], []
+        prev_kc = _metatensor.kernel_compile_count() if has_counters else 0
+        prev_lc = _metatensor.launch_count() if has_counters else 0
+        for i in range(n):
+            t0 = time.time()
+            logits = model(*args)
+            logits.sum().item()
+            dt = (time.time() - t0) * 1e6
+            us.append(dt)
+            if has_counters:
+                kc, lc = _metatensor.kernel_compile_count(), _metatensor.launch_count()
+                c, l = kc - prev_kc, lc - prev_lc
+                prev_kc, prev_lc = kc, lc
+                compiled.append(c)
+                print('iter=%d us=%.1f compiled=%d launches=%d' % (i, dt, c, l))
+            else:
+                print('iter=%d us=%.1f' % (i, dt))
+        warmup_common.report_trace(us, compiled if has_counters else None)
+        sys.exit(0)
     # The first forward carries the tracing and kernel compilation; it is
     # timed on its own so the compile cost can sit next to the steady state.
     t0 = time.time()

@@ -3622,3 +3622,63 @@
 {"compile_ms": -1, "first_run_ms": 1740.5, "kind": "models", "maxabsdiff": 0.000221252, "model": "distilgpt2", "round": 3, "steady_us": 1321.6, "system": "torch-compile-ro"}
 {"compile_ms": -1, "first_run_ms": 1630.3, "kind": "models", "maxabsdiff": 0.000274658, "model": "distilgpt2", "round": 3, "steady_us": 1326.3, "system": "torch-compile-mat"}
 {"compile_ms": 877.6, "first_run_ms": 76.2, "kind": "models", "maxabsdiff": 0.000267029, "model": "distilgpt2", "round": 3, "steady_us": 17144.1, "system": "iree"}
+{"cache": "cold", "first_us": 965911.4, "kind": "warmup", "model": "tiny-gpt2", "round": 1, "steady_at": 2, "steady_us": 1589.3, "system": "torch-eager", "total_us": 1444537.2}
+{"cache": "cold", "cold_compiles": 10, "crossover": 1, "first_forward_compiles": 1, "first_us": 553290.8, "kind": "warmup", "model": "tiny-gpt2", "round": 1, "steady_at": "none", "steady_us": 140.2, "system": "ours", "total_us": 4280352.6}
+{"cache": "cold", "crossover": "none", "first_us": 3243027.9, "kind": "warmup", "model": "tiny-gpt2", "round": 1, "steady_at": 36, "steady_us": 327.3, "system": "torch-compile", "total_us": 3342225.3}
+{"cache": "cold", "crossover": "none", "first_us": 2316173.1, "kind": "warmup", "model": "tiny-gpt2", "round": 1, "steady_at": 239, "steady_us": 191.3, "system": "torch-compile-ro", "total_us": 2400150.1}
+{"cache": "cold", "crossover": 1, "first_us": 1592.3, "kind": "warmup", "model": "tiny-gpt2", "round": 1, "steady_at": 19, "steady_us": 160.4, "system": "jax", "total_us": 49946.5}
+{"cache": "cold", "first_us": 968462.5, "kind": "warmup", "model": "tiny-gpt2", "round": 2, "steady_at": 6, "steady_us": 1579.3, "system": "torch-eager", "total_us": 1441871.2}
+{"cache": "cold", "cold_compiles": 10, "crossover": 1, "first_forward_compiles": 1, "first_us": 545610.0, "kind": "warmup", "model": "tiny-gpt2", "round": 2, "steady_at": "none", "steady_us": 140.0, "system": "ours", "total_us": 4248606.4}
+{"cache": "cold", "crossover": "none", "first_us": 3174848.3, "kind": "warmup", "model": "tiny-gpt2", "round": 2, "steady_at": 121, "steady_us": 330.2, "system": "torch-compile", "total_us": 3276485.2}
+{"cache": "cold", "crossover": "none", "first_us": 2385263.4, "kind": "warmup", "model": "tiny-gpt2", "round": 2, "steady_at": 66, "steady_us": 190.3, "system": "torch-compile-ro", "total_us": 2468059.3}
+{"cache": "cold", "crossover": 1, "first_us": 1573.9, "kind": "warmup", "model": "tiny-gpt2", "round": 2, "steady_at": 46, "steady_us": 160.1, "system": "jax", "total_us": 49934.6}
+{"cache": "cold", "first_us": 962997.4, "kind": "warmup", "model": "tiny-gpt2", "round": 3, "steady_at": 5, "steady_us": 1574.8, "system": "torch-eager", "total_us": 1437527.2}
+{"cache": "cold", "cold_compiles": 10, "crossover": 1, "first_forward_compiles": 1, "first_us": 552286.9, "kind": "warmup", "model": "tiny-gpt2", "round": 3, "steady_at": "none", "steady_us": 141.1, "system": "ours", "total_us": 4256617.8}
+{"cache": "cold", "crossover": "none", "first_us": 3302482.6, "kind": "warmup", "model": "tiny-gpt2", "round": 3, "steady_at": 27, "steady_us": 330.7, "system": "torch-compile", "total_us": 3403623.3}
+{"cache": "cold", "crossover": "none", "first_us": 2656785.2, "kind": "warmup", "model": "tiny-gpt2", "round": 3, "steady_at": 132, "steady_us": 212.7, "system": "torch-compile-ro", "total_us": 2750759.8}
+{"cache": "cold", "crossover": 1, "first_us": 1644.4, "kind": "warmup", "model": "tiny-gpt2", "round": 3, "steady_at": 106, "steady_us": 157.3, "system": "jax", "total_us": 52994.6}
+{"cache": "warm", "first_us": 532464.0, "kind": "warmup", "model": "tiny-gpt2", "round": 1, "steady_at": 26, "steady_us": 1688.8, "system": "torch-eager", "total_us": 1042744.4}
+{"cache": "warm", "cold_compiles": 0, "crossover": 1, "first_forward_compiles": 0, "first_us": 106471.1, "kind": "warmup", "model": "tiny-gpt2", "round": 1, "steady_at": "none", "steady_us": 135.1, "system": "ours", "total_us": 201528.3}
+{"cache": "warm", "crossover": "none", "first_us": 1343527.3, "kind": "warmup", "model": "tiny-gpt2", "round": 1, "steady_at": 7, "steady_us": 337.1, "system": "torch-compile", "total_us": 1446104.8}
+{"cache": "warm", "crossover": "none", "first_us": 1329799.7, "kind": "warmup", "model": "tiny-gpt2", "round": 1, "steady_at": 178, "steady_us": 209.8, "system": "torch-compile-ro", "total_us": 1424736.3}
+{"cache": "warm", "crossover": 1, "first_us": 46548.8, "kind": "warmup", "model": "tiny-gpt2", "round": 1, "steady_at": 15, "steady_us": 167.3, "system": "jax", "total_us": 98547.0}
+{"cache": "warm", "first_us": 525018.5, "kind": "warmup", "model": "tiny-gpt2", "round": 2, "steady_at": 50, "steady_us": 1695.6, "system": "torch-eager", "total_us": 1031020.4}
+{"cache": "warm", "cold_compiles": 0, "crossover": 1, "first_forward_compiles": 0, "first_us": 107817.9, "kind": "warmup", "model": "tiny-gpt2", "round": 2, "steady_at": "none", "steady_us": 134.0, "system": "ours", "total_us": 203871.0}
+{"cache": "warm", "crossover": "none", "first_us": 1112598.9, "kind": "warmup", "model": "tiny-gpt2", "round": 2, "steady_at": 214, "steady_us": 357.0, "system": "torch-compile", "total_us": 1221055.3}
+{"cache": "warm", "crossover": "none", "first_us": 1674661.2, "kind": "warmup", "model": "tiny-gpt2", "round": 2, "steady_at": 172, "steady_us": 211.1, "system": "torch-compile-ro", "total_us": 1767027.4}
+{"cache": "warm", "crossover": 1, "first_us": 42524.7, "kind": "warmup", "model": "tiny-gpt2", "round": 2, "steady_at": 250, "steady_us": 163.6, "system": "jax", "total_us": 91040.1}
+{"cache": "warm", "first_us": 473941.8, "kind": "warmup", "model": "tiny-gpt2", "round": 3, "steady_at": 104, "steady_us": 1686.6, "system": "torch-eager", "total_us": 970156.2}
+{"cache": "warm", "cold_compiles": 0, "crossover": 1, "first_forward_compiles": 0, "first_us": 116859.0, "kind": "warmup", "model": "tiny-gpt2", "round": 3, "steady_at": "none", "steady_us": 143.1, "system": "ours", "total_us": 214408.4}
+{"cache": "warm", "crossover": "none", "first_us": 1193977.8, "kind": "warmup", "model": "tiny-gpt2", "round": 3, "steady_at": 8, "steady_us": 371.6, "system": "torch-compile", "total_us": 1306499.0}
+{"cache": "warm", "crossover": "none", "first_us": 1182709.0, "kind": "warmup", "model": "tiny-gpt2", "round": 3, "steady_at": "none", "steady_us": 202.4, "system": "torch-compile-ro", "total_us": 1273051.0}
+{"cache": "warm", "crossover": 1, "first_us": 44710.6, "kind": "warmup", "model": "tiny-gpt2", "round": 3, "steady_at": 23, "steady_us": 159.7, "system": "jax", "total_us": 94592.8}
+{"cache": "cold", "first_us": 131295.7, "kind": "warmup", "model": "distilgpt2", "round": 1, "steady_at": 22, "steady_us": 3044.4, "system": "torch-eager", "total_us": 1052870.3}
+{"cache": "cold", "cold_compiles": 9, "crossover": "none", "first_forward_compiles": 7, "first_us": 3808725.8, "kind": "warmup", "model": "distilgpt2", "round": 1, "steady_at": 217, "steady_us": 1250.0, "system": "ours", "total_us": 4701736.0}
+{"cache": "cold", "crossover": "none", "first_us": 4115629.2, "kind": "warmup", "model": "distilgpt2", "round": 1, "steady_at": 113, "steady_us": 1429.1, "system": "torch-compile", "total_us": 4550462.7}
+{"cache": "cold", "crossover": "none", "first_us": 3361504.1, "kind": "warmup", "model": "distilgpt2", "round": 1, "steady_at": 208, "steady_us": 1299.9, "system": "torch-compile-ro", "total_us": 3790760.8}
+{"cache": "cold", "crossover": 1, "first_us": 4790.9, "kind": "warmup", "model": "distilgpt2", "round": 1, "steady_at": 22, "steady_us": 1182.1, "system": "jax", "total_us": 362554.2}
+{"cache": "cold", "first_us": 123123.6, "kind": "warmup", "model": "distilgpt2", "round": 2, "steady_at": 2, "steady_us": 3063.9, "system": "torch-eager", "total_us": 1040976.5}
+{"cache": "cold", "cold_compiles": 9, "crossover": "none", "first_forward_compiles": 7, "first_us": 3768958.1, "kind": "warmup", "model": "distilgpt2", "round": 2, "steady_at": 167, "steady_us": 1249.6, "system": "ours", "total_us": 4664136.9}
+{"cache": "cold", "crossover": "none", "first_us": 3995265.2, "kind": "warmup", "model": "distilgpt2", "round": 2, "steady_at": 31, "steady_us": 1395.3, "system": "torch-compile", "total_us": 4420969.0}
+{"cache": "cold", "crossover": "none", "first_us": 3360155.8, "kind": "warmup", "model": "distilgpt2", "round": 2, "steady_at": 119, "steady_us": 1318.0, "system": "torch-compile-ro", "total_us": 3788136.7}
+{"cache": "cold", "crossover": 1, "first_us": 5044.2, "kind": "warmup", "model": "distilgpt2", "round": 2, "steady_at": 3, "steady_us": 1164.3, "system": "jax", "total_us": 356258.2}
+{"cache": "cold", "first_us": 135102.7, "kind": "warmup", "model": "distilgpt2", "round": 3, "steady_at": 42, "steady_us": 3048.3, "system": "torch-eager", "total_us": 1050208.6}
+{"cache": "cold", "cold_compiles": 9, "crossover": "none", "first_forward_compiles": 7, "first_us": 3740093.0, "kind": "warmup", "model": "distilgpt2", "round": 3, "steady_at": 167, "steady_us": 1251.5, "system": "ours", "total_us": 4631957.1}
+{"cache": "cold", "crossover": "none", "first_us": 3987134.5, "kind": "warmup", "model": "distilgpt2", "round": 3, "steady_at": 2, "steady_us": 1407.9, "system": "torch-compile", "total_us": 4410724.9}
+{"cache": "cold", "crossover": "none", "first_us": 3282156.2, "kind": "warmup", "model": "distilgpt2", "round": 3, "steady_at": 10, "steady_us": 1308.0, "system": "torch-compile-ro", "total_us": 3707430.6}
+{"cache": "cold", "crossover": 1, "first_us": 4715.3, "kind": "warmup", "model": "distilgpt2", "round": 3, "steady_at": 18, "steady_us": 1178.1, "system": "jax", "total_us": 358765.1}
+{"cache": "warm", "first_us": 123498.7, "kind": "warmup", "model": "distilgpt2", "round": 1, "steady_at": 2, "steady_us": 3006.9, "system": "torch-eager", "total_us": 1026279.7}
+{"cache": "warm", "cold_compiles": 0, "crossover": 273, "first_forward_compiles": 0, "first_us": 549847.8, "kind": "warmup", "model": "distilgpt2", "round": 1, "steady_at": 127, "steady_us": 1254.1, "system": "ours", "total_us": 980412.0}
+{"cache": "warm", "crossover": "none", "first_us": 1561738.3, "kind": "warmup", "model": "distilgpt2", "round": 1, "steady_at": 57, "steady_us": 1396.5, "system": "torch-compile", "total_us": 1987216.0}
+{"cache": "warm", "crossover": "none", "first_us": 1566397.7, "kind": "warmup", "model": "distilgpt2", "round": 1, "steady_at": 152, "steady_us": 1320.4, "system": "torch-compile-ro", "total_us": 1995543.0}
+{"cache": "warm", "crossover": 1, "first_us": 56028.0, "kind": "warmup", "model": "distilgpt2", "round": 1, "steady_at": 6, "steady_us": 1184.1, "system": "jax", "total_us": 412793.1}
+{"cache": "warm", "first_us": 135915.5, "kind": "warmup", "model": "distilgpt2", "round": 2, "steady_at": 10, "steady_us": 3062.4, "system": "torch-eager", "total_us": 1059376.5}
+{"cache": "warm", "cold_compiles": 0, "crossover": 247, "first_forward_compiles": 0, "first_us": 549693.1, "kind": "warmup", "model": "distilgpt2", "round": 2, "steady_at": 127, "steady_us": 1253.5, "system": "ours", "total_us": 963540.3}
+{"cache": "warm", "crossover": "none", "first_us": 1461722.6, "kind": "warmup", "model": "distilgpt2", "round": 2, "steady_at": 141, "steady_us": 1399.3, "system": "torch-compile", "total_us": 1885675.7}
+{"cache": "warm", "crossover": "none", "first_us": 1550924.8, "kind": "warmup", "model": "distilgpt2", "round": 2, "steady_at": 19, "steady_us": 1329.3, "system": "torch-compile-ro", "total_us": 1989867.7}
+{"cache": "warm", "crossover": 1, "first_us": 47762.9, "kind": "warmup", "model": "distilgpt2", "round": 2, "steady_at": 19, "steady_us": 1195.8, "system": "jax", "total_us": 406700.6}
+{"cache": "warm", "first_us": 136109.4, "kind": "warmup", "model": "distilgpt2", "round": 3, "steady_at": 65, "steady_us": 3211.1, "system": "torch-eager", "total_us": 1107072.4}
+{"cache": "warm", "cold_compiles": 0, "crossover": 237, "first_forward_compiles": 0, "first_us": 548569.0, "kind": "warmup", "model": "distilgpt2", "round": 3, "steady_at": 127, "steady_us": 1256.9, "system": "ours", "total_us": 986351.5}
+{"cache": "warm", "crossover": "none", "first_us": 1572958.9, "kind": "warmup", "model": "distilgpt2", "round": 3, "steady_at": 11, "steady_us": 1398.6, "system": "torch-compile", "total_us": 1998560.4}
+{"cache": "warm", "crossover": "none", "first_us": 1603660.8, "kind": "warmup", "model": "distilgpt2", "round": 3, "steady_at": 76, "steady_us": 1308.2, "system": "torch-compile-ro", "total_us": 2025647.6}
+{"cache": "warm", "crossover": 1, "first_us": 52090.7, "kind": "warmup", "model": "distilgpt2", "round": 3, "steady_at": 35, "steady_us": 1193.6, "system": "jax", "total_us": 410674.0}

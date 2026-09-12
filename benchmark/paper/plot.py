@@ -76,7 +76,7 @@ SINGLE_COL, DOUBLE_COL = 3.25, 6.75   # MLSys column and text widths, inches
 # room for the plot itself.  --column overrides this.
 WIDE = {"micro_speedup", "fusion", "models", "ablation", "micro_baselines",
         "compile_overhead",
-        "gap",
+        "gap", "warmup",
         "compare_speedup", "compare_models"}
 
 SYSTEM_LABEL = {
@@ -511,7 +511,12 @@ def fig_models(out, args):
 
 
 def fig_dynamic(out, args):
-    """A measure across a length axis: lines, one per system."""
+    """A measure across a length axis: lines, one per system.
+
+    The line is the steady-state median per length; the compile events that
+    the sweep exists to expose are counters, not time, and live in the tables
+    beside it (dynamic.tex, dynamic_deltas.tex).
+    """
     rows = read_tsv(os.path.join(out, "dynamic_summary.tsv"))
     if not rows:
         return None
@@ -551,16 +556,47 @@ def fig_dynamic(out, args):
     ax.legend(loc="best", labelspacing=0.3, borderaxespad=0.3)
     if args.titles:
         ax.set_title("Changing sequence length")
+
+    # pass 1 is the first visit of each length, pass 2 the revisit; the deltas
+    # are per (pass, length) windows, so they are summed within a pass and
+    # taken as the median over the rounds.
+    DELTAS = ["loops", "bridges", "kernels", "cache_hits", "recompiles"]
+    passes = sorted({r.get("pass", "1") for r in rows})
+    per = collections.defaultdict(list)
+    for r in rows:
+        per[(r["system"], r.get("pass", "1"), int(r["length"]))].append(r)
+
+    def delta(key, col):
+        vs = [float(r.get(col) or 0) for r in per.get(key, [])]
+        return med(vs) if vs else 0.0
+
+    time_rows = []
+    for s in systems:
+        for p in passes:
+            row = [SYSTEM_LABEL[s], p]
+            for L in lengths:
+                vs = [float(r["median_us"]) for r in per.get((s, p, L), [])]
+                row.append("%.0f [%s]" % (band(vs)[0],
+                                          spread_str(*band(vs)[1:], fmt="%.0f"))
+                           if vs else "n/a")
+            row += ["%.0f" % sum(delta((s, p, L), c) for L in lengths)
+                    for c in DELTAS]
+            time_rows.append(row)
     write_table(os.path.join(args.outdir, "dynamic.tex"),
-                "median us per step over the rounds (range in brackets); "
-                "recompiles over the whole sweep",
-                ["system"] + [str(L) for L in lengths] + ["recompiles"],
-                [[SYSTEM_LABEL[s]]
-                 + ["%.0f [%s]" % (band(g[(s, L)])[0],
-                                   spread_str(*band(g[(s, L)])[1:], fmt="%.0f"))
-                    for L in lengths]
-                 + [next((r["recompiles"] for r in rows if r["system"] == s), "")]
-                 for s in systems])
+                "median us per step over the rounds (range in brackets), and "
+                "the compile counters summed over the pass; pass 1 is the "
+                "first visit of each length, pass 2 the revisit",
+                ["system", "pass"] + [str(L) for L in lengths]
+                + ["loops", "bridges", "kernels", "hits", "recompiles"],
+                time_rows)
+    write_table(os.path.join(args.outdir, "dynamic_deltas.tex"),
+                "per-length compile counters: the delta inside that length's "
+                "window, median over the rounds",
+                ["system", "pass", "length", "loops", "bridges", "kernels",
+                 "cache hits", "recompiles"],
+                [[SYSTEM_LABEL[s], p, str(L)]
+                 + ["%.0f" % delta((s, p, L), c) for c in DELTAS]
+                 for s in systems for p in passes for L in lengths])
     return fig, "dynamic"
 
 
@@ -1266,6 +1302,93 @@ def fig_integration(out, args):
     return fig, "integration"
 
 
+def fig_warmup(out, args):
+    """Per-forward latency from a fresh process until steady state: one panel
+    per model, cumulative time (log-log) so the crossover between systems and
+    the tail flattening into steady state both read directly off the line."""
+    rows = read_tsv(os.path.join(out, "warmup.tsv"))
+    if not rows:
+        return None
+    series = collections.defaultdict(dict)  # (model,system,cache,round) -> {iter: us}
+    for r in rows:
+        key = (r["model"], r["system"], r["cache"], r["round"])
+        series[key][int(r["iter"])] = float(r["us"])
+    models = sorted({k[0] for k in series})
+    systems = [s for s in ["torch-eager", "ours", "torch-compile",
+                           "torch-compile-ro", "jax"]
+               if any(k[1] == s for k in series)]
+
+    fig, axes = plt.subplots(1, len(models),
+                             figsize=(args.width, args.width * 0.5), squeeze=False)
+    axes = axes[0]
+    for ax, model in zip(axes, models):
+        for si_, s in enumerate(systems):
+            for cache, ls in (("warm", "-"), ("cold", "--")):
+                keys = [k for k in series
+                        if k[0] == model and k[1] == s and k[2] == cache]
+                if not keys:
+                    continue
+                curves = []
+                for k in keys:
+                    d = series[k]
+                    n = max(d) + 1
+                    acc, cum = 0.0, []
+                    for it in range(n):
+                        acc += d.get(it, 0.0)
+                        cum.append(acc / 1000.0)  # ms
+                    curves.append(cum)
+                n = min(len(c) for c in curves)
+                med_curve = [statistics.median(c[i] for c in curves)
+                            for i in range(n)]
+                ax.plot(range(1, n + 1), med_curve, color=SERIES[si_ % len(SERIES)],
+                        linestyle=ls, linewidth=1.2,
+                        label=("%s, %s cache" % (SYSTEM_LABEL.get(s, s), cache))
+                        if ax is axes[0] else None)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("forward index")
+        ax.set_title(model, fontsize=7.5)
+        despine(ax)
+    axes[0].set_ylabel("cumulative time (ms)")
+    axes[0].legend(loc="upper left", fontsize=6, labelspacing=0.25,
+                   handlelength=1.8)
+    if args.titles:
+        fig.suptitle("Warm-up: cumulative time from a fresh process")
+
+    jrows = [r for r in read_jsonl(os.path.join(out, "results.jsonl"))
+            if r.get("kind") == "warmup"]
+    g = collections.defaultdict(lambda: collections.defaultdict(list))
+    for r in jrows:
+        g[(r["model"], r["system"], r["cache"])]["first_us"].append(r.get("first_us"))
+        g[(r["model"], r["system"], r["cache"])]["steady_us"].append(r.get("steady_us"))
+        g[(r["model"], r["system"], r["cache"])]["steady_at"].append(r.get("steady_at"))
+        g[(r["model"], r["system"], r["cache"])]["crossover"].append(r.get("crossover"))
+    table = []
+    for model in models:
+        for s in systems:
+            for cache in ("warm", "cold"):
+                d = g.get((model, s, cache))
+                if not d:
+                    continue
+                first = med(d["first_us"])
+                steady = med(d["steady_us"])
+                sa = [x for x in d["steady_at"] if isinstance(x, (int, float))]
+                sa_str = "%.0f" % statistics.median(sa) if sa else "none"
+                co = [x for x in d["crossover"] if isinstance(x, (int, float))]
+                co_str = "%.0f" % statistics.median(co) if co else "none"
+                table.append([model, SYSTEM_LABEL.get(s, s), cache,
+                             "%.2f" % (first / 1000.0) if first else "n/a",
+                             sa_str, "%.1f" % steady if steady else "n/a", co_str])
+    write_table(os.path.join(args.outdir, "warmup.tex"),
+               "first forward and steady-state onset from a fresh process, "
+               "median over the rounds; crossover is the first forward at "
+               "which cumulative time drops below torch-eager's",
+               ["model", "system", "cache", "first forward (ms)",
+                "steady_at (iters)", "steady (us)", "crossover vs eager (iters)"],
+               table)
+    return fig, "warmup"
+
+
 FIGURES = collections.OrderedDict([
     ("micro_speedup", fig_micro_speedup),
     ("integration", fig_integration),
@@ -1277,6 +1400,7 @@ FIGURES = collections.OrderedDict([
     ("micro_baselines", fig_micro_baselines),
     ("compile_overhead", fig_compile_overhead),
     ("gap", fig_gap),
+    ("warmup", fig_warmup),
 ])
 
 COMPARE_FIGURES = collections.OrderedDict([
