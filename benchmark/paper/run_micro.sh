@@ -28,7 +28,7 @@ fi
 # Every driver takes WARMUP as its optional 6th argument and warms up exactly
 # that many iterations, so no two systems are timed after a different warm-up;
 # the count is recorded as `warmup` in results.jsonl.
-HEADER="mode\tvariant\tk\tn\titers\twarm_s\tsteady_us\tkernels\tacc\tcompiled_in_timed\tlaunches_per_iter\tgraphs\tbreaks\tcompile_ms\tfirst_run_ms"
+HEADER="mode\tvariant\tk\tn\titers\twarm_s\tsteady_us\tkernels\tacc\tcompiled_in_timed\tlaunches_per_iter\tgraphs\tbreaks\tcompile_ms\tfirst_run_ms\tbinary"
 TSV="$OUT/micro.tsv"
 tsv_init "$TSV" "$HEADER"
 
@@ -40,7 +40,7 @@ torchrun() {
   local line
   line=$("$TORCH_PYTHON" "$HERE/../torch_bench.py" "$@" 2>/dev/null | tail -1)
   [ -n "$line" ] || return 0
-  echo "$line" | tr ' ' '\t' >> "$TSV"
+  echo -e "$(tsv_pad_row "$(echo "$line" | tr ' ' '\t')")\t$(binary_for_line "$line")" >> "$TSV"
   record_micro_line "$line"
 }
 
@@ -52,7 +52,7 @@ baseline_run() {
   [ -n "$python" ] && [ -x "$python" ] || return 0
   line=$("$python" "$HERE/../$script" "$@" 2>/dev/null | tail -1)
   [ -n "$line" ] || return 0
-  echo "$line" | tr ' ' '\t' >> "$TSV"
+  echo -e "$(tsv_pad_row "$(echo "$line" | tr ' ' '\t')")\t$(binary_for_line "$line")" >> "$TSV"
   record_micro_line "$line"
 }
 # variant 9 (CNN) is the only one excluded: IREE's CUDA backend rejects the
@@ -90,7 +90,7 @@ app_point() {
     return 0
   fi
   line=$(echo "$line" | tail -1)
-  echo "$line" | tr ' ' '\t' >> "$TSV"
+  echo -e "$(tsv_pad_row "$(echo "$line" | tr ' ' '\t')")\t$(binary_for_line "$line")" >> "$TSV"
   record_micro_line "$line"
 }
 
@@ -109,7 +109,7 @@ run_point() {
       echo "run_micro.sh: standalone variant $variant k $k n $n mode $mode failed" >&2
       return 0
     fi
-    echo "$line" | tr ' ' '\t' >> "$TSV"
+    echo -e "$(tsv_pad_row "$(echo "$line" | tr ' ' '\t')")\t$(binary_for_line "$line")" >> "$TSV"
     record_micro_line "$line"
     if [ "$mode" = fused ]; then eff=$(echo "$line" | awk '{print $4}'); fi
   done

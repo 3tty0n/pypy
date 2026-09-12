@@ -1,5 +1,5 @@
 host          luchkylilac
-date          2026-09-13T00:58:56+09:00
+date          2026-09-13T04:29:23+09:00
 gpu           NVIDIA GeForce RTX 3090
 gpu_memory    24576 MiB
 compute_cap   86
@@ -28,8 +28,8 @@ torch_tf32_matmul 0
 torch_tf32_cudnn  1
 jax_matmul_precision highest
 trt_tf32      0
-pypy_c_sha256 fb8a4ec1238ca0e213343dc991f34dbf387ed668b824e5ce331f87051bcfd84c
-bench_sha256  20c79d33d18ccb103e32b0c4e4b54a7892ae81376cca36740df23d265cfc7a95
+pypy_c_sha256 575ebc57f8bbfc7ea8570b6fee0061d6cb3d633d5b8c74b5e669c78d69da3017
+bench_sha256  d161d7cb4db29de03b146cca709035c3978ffbbeb7590c68ff08284287018e04
 budget_mb     8
 jit_flags     --jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000
-commit        0774d9dea2
+commit        55a86c1336

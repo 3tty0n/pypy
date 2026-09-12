@@ -2,18 +2,18 @@
 \toprule
 model & batch & MetaTensor & torch.compile & torch.compile (reduce-overhead) & PyTorch eager & JAX/XLA & ours/compile & ours/jax & rows identical \\
 \midrule
-bert-mini & 1 & 425 & 796 & 489 & 1785 & 245 & 0.53 & 1.74 & yes \\
-bert-mini & 2 & 544 & 756 & 566 & 1753 & 342 & 0.72 & 1.59 & yes \\
-bert-mini & 4 & 789 & 795 & 742 & 1713 & 495 & 0.99 & 1.59 & yes \\
-bert-mini & 8 & 1299 & 1066 & 1018 & 1847 & 831 & 1.22 & 1.56 & yes \\
-bert-mini & 16 & 2324 & 1780 & 1742 & 1852 & 1473 & 1.31 & 1.58 & yes \\
-bert-mini & 32 & 4546 & 3300 & 3268 & 3485 & 2802 & 1.38 & 1.62 & yes \\
-distilgpt2 & 1 & 1291 & 1349 & 1269 & 2770 & 1002 & 0.96 & 1.29 & yes \\
-distilgpt2 & 2 & 1770 & 1732 & 1658 & 2745 & 1536 & 1.02 & 1.15 & yes \\
-distilgpt2 & 4 & 2912 & 2766 & 2724 & 3124 & 2595 & 1.05 & 1.12 & yes \\
-distilgpt2 & 8 & 5223 & 5062 & 5010 & 5853 & 4771 & 1.03 & 1.09 & yes \\
-distilgpt2 & 16 & 9804 & 9087 & 9063 & 10702 & 8983 & 1.08 & 1.09 & yes \\
-distilgpt2 & 32 & 19389 & 17884 & 17850 & 20825 & 18007 & 1.08 & 1.08 & yes \\
+bert-mini & 1 & 418 & 796 & 489 & 1785 & 245 & 0.53 & 1.71 & yes \\
+bert-mini & 2 & 596 & 756 & 566 & 1753 & 342 & 0.79 & 1.74 & yes \\
+bert-mini & 4 & 773 & 795 & 742 & 1713 & 495 & 0.97 & 1.56 & yes \\
+bert-mini & 8 & 1154 & 1066 & 1018 & 1847 & 831 & 1.08 & 1.39 & yes \\
+bert-mini & 16 & 1955 & 1780 & 1742 & 1852 & 1473 & 1.10 & 1.33 & yes \\
+bert-mini & 32 & 3639 & 3300 & 3268 & 3485 & 2802 & 1.10 & 1.30 & yes \\
+distilgpt2 & 1 & 1293 & 1349 & 1269 & 2770 & 1002 & 0.96 & 1.29 & yes \\
+distilgpt2 & 2 & 1850 & 1732 & 1658 & 2745 & 1536 & 1.07 & 1.20 & yes \\
+distilgpt2 & 4 & 2976 & 2766 & 2724 & 3124 & 2595 & 1.08 & 1.15 & yes \\
+distilgpt2 & 8 & 5137 & 5062 & 5010 & 5853 & 4771 & 1.01 & 1.08 & yes \\
+distilgpt2 & 16 & 9364 & 9087 & 9063 & 10702 & 8983 & 1.03 & 1.04 & yes \\
+distilgpt2 & 32 & 18263 & 17884 & 17850 & 20825 & 18007 & 1.02 & 1.01 & yes \\
 \bottomrule
 \end{tabular}
 % steady-state us per forward (the whole batch), median over the rounds, and the ours/torch.compile and ours/JAX ratios; "rows identical" is the batching check - every sequence in the batch is the same token ids, so every output row block must match the first

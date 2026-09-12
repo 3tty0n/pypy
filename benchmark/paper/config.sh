@@ -218,30 +218,71 @@ record_micro_line() {
   local compiled=$1
   shift
   local extra=("$@")
+  local binary; binary=$(binary_for_mode "$mode")
   if [ ${#extra[@]} -ge 5 ]; then
     bench_record micro mode="$mode" variant="$variant" k="$k" n="$n" \
       iters="$iters" warm_s="$warm" steady_us="$steady" kernels="$kernels" \
       acc="$acc" compiled_in_timed="$compiled" warmup="$WARMUP" \
       graphs="${extra[0]}" \
       breaks="${extra[1]}" dtype="${extra[2]}" compile_ms="${extra[3]}" \
-      first_run_ms="${extra[4]}"
+      first_run_ms="${extra[4]}" binary="$binary"
   elif [ ${#extra[@]} -ge 3 ]; then
     bench_record micro mode="$mode" variant="$variant" k="$k" n="$n" \
       iters="$iters" warm_s="$warm" steady_us="$steady" kernels="$kernels" \
       acc="$acc" compiled_in_timed="$compiled" warmup="$WARMUP" \
       graphs="${extra[0]}" \
-      breaks="${extra[1]}" dtype="${extra[2]}"
+      breaks="${extra[1]}" dtype="${extra[2]}" binary="$binary"
   else
     bench_record micro mode="$mode" variant="$variant" k="$k" n="$n" \
       iters="$iters" warm_s="$warm" steady_us="$steady" kernels="$kernels" \
       acc="$acc" compiled_in_timed="$compiled" warmup="$WARMUP" \
-      launches_per_iter="${extra[0]}" dtype="${extra[1]}"
+      launches_per_iter="${extra[0]}" dtype="${extra[1]}" binary="$binary"
   fi
+}
+# For appending the same value as micro.tsv's trailing column: mode is the
+# line's first field, so the caller need not track its own mode separately.
+binary_for_line() { binary_for_mode "$(echo "$1" | awk '{print $1}')"; }
+# micro.tsv rows are ragged (ours/app emit 12 fields, the baselines 15) and
+# the readers rely on that column COUNT to know where dtype lives (see
+# micro_values() in plot.py/summarize.py) - appending binary straight after a
+# short row would shift it into the "breaks" slot and corrupt dtype for every
+# ours/app row. Pad to the 15-field baseline width first so binary always
+# lands in the true 16th column, on every row shape alike.
+tsv_pad_row() {
+  local -a f
+  IFS=$'\t' read -r -a f <<< "$1"
+  while [ "${#f[@]}" -lt 15 ]; do f+=(""); done
+  local IFS=$'\t'
+  echo "${f[*]}"
 }
 
 tsv_init() {
   local path=$1 header=$2
   [ -f "$path" ] || echo -e "$header" > "$path"
+}
+
+# Per-row provenance for micro.tsv/results.jsonl: which binary or package
+# produced this line. Computed once here (machine.txt already ran every
+# version probe this needs), not per row.
+MICRO_BENCH_SHA=$(sha256_of "$BENCH" | cut -c1-12)
+MICRO_PYPY_SHA=$(sha256_of "$PYPY" | cut -c1-12)
+_mtxt_ver() { awk -v n="$1" '$1==n{print $2; exit}' "$OUT/machine.txt" 2>/dev/null; }
+MICRO_TORCH_VER="torch-$(_mtxt_ver torch)"
+MICRO_TRITON_VER="triton-$(_mtxt_ver triton)"
+MICRO_JAX_VER="jax-$(_mtxt_ver jax)"
+MICRO_IREE_VER="iree-$(_mtxt_ver iree.compiler)"
+MICRO_TRT_VER="torch_tensorrt-$(_mtxt_ver torch_tensorrt)"
+binary_for_mode() {
+  case "$1" in
+    fused|eager|nojit) echo "${MICRO_BENCH_SHA:-unknown}" ;;
+    app) echo "${MICRO_PYPY_SHA:-unknown}" ;;
+    torch-tensorrt) echo "${MICRO_TRT_VER:-unknown}" ;;
+    torch-*) echo "${MICRO_TORCH_VER:-unknown}" ;;
+    jax) echo "${MICRO_JAX_VER:-unknown}" ;;
+    iree) echo "${MICRO_IREE_VER:-unknown}" ;;
+    triton) echo "${MICRO_TRITON_VER:-unknown}" ;;
+    *) echo unknown ;;
+  esac
 }
 
 steady_of() { echo "$1" | grep -o 'steady_us=[0-9.]*' | head -1 | cut -d= -f2; }
