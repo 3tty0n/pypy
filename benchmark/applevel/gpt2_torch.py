@@ -25,11 +25,17 @@ class Model(torch.nn.Module):
         self.layers = []
         for i in range(cfg['n_layer']):
             p = 'h.%d.' % i
-            self.layers.append(tuple(get(p + k) for k in [
-                'ln_1.g', 'ln_1.b', 'attn.q.w', 'attn.q.b', 'attn.k.w',
-                'attn.k.b', 'attn.v.w', 'attn.v.b', 'attn.proj.w',
-                'attn.proj.b', 'ln_2.g', 'ln_2.b', 'mlp.fc.w', 'mlp.fc.b',
-                'mlp.proj.w', 'mlp.proj.b']))
+            # q, k and v are one [d, 3d] GEMM, as HF's Conv1D c_attn is and
+            # as the pypy/tensorpypy side already was: three separate GEMMs
+            # here would be a different architecture, not a different runtime.
+            wqkv = torch.cat([get(p + 'attn.%s.w' % c) for c in 'qkv'], dim=1)
+            bqkv = torch.cat([get(p + 'attn.%s.b' % c) for c in 'qkv'], dim=0)
+            self.layers.append((get(p + 'ln_1.g'), get(p + 'ln_1.b'),
+                                wqkv, bqkv) +
+                               tuple(get(p + k) for k in [
+                                   'attn.proj.w', 'attn.proj.b', 'ln_2.g',
+                                   'ln_2.b', 'mlp.fc.w', 'mlp.fc.b',
+                                   'mlp.proj.w', 'mlp.proj.b']))
         t = cfg['seq']
         d = cfg['n_embd']
         off = index['wpe'][0]
@@ -50,12 +56,12 @@ def blocks_forward(model, x, mask):
     t, d = x.shape
     h = model.h
     dh = d // h
-    for (g1, b1, wq, bq, wk, bk, wv, bv, wo, bo, g2, b2, wf, bf, wp,
+    for (g1, b1, wqkv, bqkv, wo, bo, g2, b2, wf, bf, wp,
          bp) in model.layers:
         n = model.ln(x, g1, b1)
-        q = (n @ wq + bq).view(t, h, dh).transpose(0, 1)
-        k = (n @ wk + bk).view(t, h, dh).transpose(0, 1)
-        v = (n @ wv + bv).view(t, h, dh).transpose(0, 1)
+        qkv = n @ wqkv + bqkv
+        q, k, v = [qkv[:, i * d:(i + 1) * d].reshape(t, h, dh).transpose(0, 1)
+                   for i in range(3)]
         s = q @ k.transpose(-1, -2) / math.sqrt(dh) + mask
         c = (s.softmax(-1) @ v).transpose(0, 1).reshape(t, d)
         x = x + (c @ wo + bo)

@@ -1910,3 +1910,124 @@ class TestGuardRecovery(LLJitMixin):
         # (e) both resume decoders rebuilt the chain, one call per node
         assert counts['box'] > 0 and counts['direct'] > 0
         assert counts['box'] == counts['direct'] == 4
+
+
+def test_all_constant_chain_is_refused_past_the_launch_arity():
+    """The cap in OptTensor has to count folded constants when the chain has
+    no tensor leaf: force_box then recollects it with folding off and makes
+    every constant a real input of the launch call."""
+    from rpython.jit.metainterp.optimizeopt.metatensor import OptTensor
+    from rpython.jit.metainterp.history import ConstPtr
+    from rpython.rtyper.lltypesystem import lltype, llmemory
+    def const(v):
+        t = from_list([v])
+        return ConstPtr(lltype.cast_opaque_ptr(llmemory.GCREF, t))
+    opt = OptTensor()
+    assert not opt._too_wide([const(0.1), const(0.2)])
+    args = [const(0.1 * (k + 1)) for k in range(core.MAX_INPUTS_LIMIT + 1)]
+    assert opt._too_wide(args)
+
+
+class TestScalarArity(LLJitMixin):
+
+    def test_scalar_chain_never_exceeds_the_launcher_arity(self):
+        driver = JitDriver(greens=[], reds=['n', 'acc'])
+        def f(n):
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, acc=acc)
+                # nine distinct cached scalars, no tensor leaf
+                h = ops.mul(runtime.scalar(0.1), runtime.scalar(0.2))
+                h = ops.add(h, runtime.scalar(0.3))
+                h = ops.mul(h, runtime.scalar(0.4))
+                h = ops.add(h, runtime.scalar(0.5))
+                h = ops.mul(h, runtime.scalar(0.6))
+                h = ops.add(h, runtime.scalar(0.7))
+                h = ops.mul(h, runtime.scalar(0.8))
+                h = ops.add(h, runtime.scalar(0.9))
+                acc += ops.item(ops.sum(h))
+                n -= 1
+            return acc
+        res = self.meta_interp(f, [10])
+        assert abs(res - f(10)) < 1e-9
+        from rpython.jit.metainterp.resoperation import rop
+        from rpython.jit.metainterp.test.support import get_stats
+        for loop in get_stats().get_all_loops():
+            for op in loop.operations:
+                if op.getopnum() == rop.CALL_R:
+                    assert op.numargs() <= 2 + core.MAX_INPUTS_LIMIT
+
+
+# every optimization except the tensor pass, as benchmark/paper's "fusion off"
+_NO_TENSOR_OPTS = 'intbounds:rewrite:virtualize:string:pure:earlyforce:heap:unroll'
+
+
+class TestInplaceHazard(LLJitMixin):
+
+    def test_deferred_read_sees_the_value_before_the_inplace_write(self):
+        driver = JitDriver(greens=[], reds=['n', 'a', 'b', 'acc'])
+        def f(n):
+            a = from_list([1.0, 1.0, 1.0, 1.0])
+            b = from_list([0.5, 0.5, 0.5, 0.5])
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, a=a, b=b, acc=acc)
+                y = ops.mul(a, b)     # deferred, still virtual
+                ops.add_(a, b)        # in-place write to y's operand
+                acc += ops.item(ops.sum(y))
+                n -= 1
+            return acc
+        assert self.meta_interp(f, [20]) == f(20)
+
+    def test_inplace_write_is_not_elided_without_the_tensor_pass(self):
+        driver = JitDriver(greens=[], reds=['n', 'a', 'b', 'acc'])
+        def f(n):
+            a = from_list([1.0, 1.0, 1.0, 1.0])
+            b = from_list([0.5, 0.5, 0.5, 0.5])
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, a=a, b=b, acc=acc)
+                ops.add_(a, b)
+                acc += ops.item(ops.sum(a))
+                n -= 1
+            return acc
+        assert self.meta_interp(f, [20], enable_opts=_NO_TENSOR_OPTS) == f(20)
+
+    def test_deferred_read_across_inplace_write_without_the_tensor_pass(self):
+        driver = JitDriver(greens=[], reds=['n', 'a', 'b', 'acc'])
+        def f(n):
+            a = from_list([1.0, 1.0, 1.0, 1.0])
+            b = from_list([0.5, 0.5, 0.5, 0.5])
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, a=a, b=b, acc=acc)
+                y = ops.mul(a, b)
+                ops.add_(a, b)
+                acc += ops.item(ops.sum(y))
+                n -= 1
+            return acc
+        assert self.meta_interp(f, [20],
+                                enable_opts=_NO_TENSOR_OPTS) == f(20)
+
+
+def test_kernel_cache_key_differs_by_compute_capability():
+    old = kernels.config.cc
+    try:
+        kernels.config.cc = '80'
+        key80 = kernels._cache_base('some ttir', 4)
+        kernels.config.cc = '86'
+        key86 = kernels._cache_base('some ttir', 4)
+        assert key80 != key86
+    finally:
+        kernels.config.cc = old
+
+
+def test_meta_with_mismatched_cc_is_not_accepted():
+    old = kernels.config.cc
+    try:
+        kernels.config.cc = '86'
+        assert kernels._meta_cc_matches('256 0 2 86\n')
+        assert not kernels._meta_cc_matches('256 0 2 80\n')
+        assert not kernels._meta_cc_matches('256 0 2\n')
+    finally:
+        kernels.config.cc = old

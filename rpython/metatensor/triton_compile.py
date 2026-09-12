@@ -1,5 +1,12 @@
 import os
 import sys
+
+if sys.argv[1] == "--cc":
+    import torch
+    major, minor = torch.cuda.get_device_capability()
+    open(sys.argv[2], "w").write(str(major * 10 + minor))
+    sys.exit(0)
+
 import triton
 from triton.backends.compiler import GPUTarget
 
@@ -25,4 +32,4 @@ cubin = c.asm.get("cubin")
 if cubin:
     open(cubin_path, "wb").write(cubin)
 extra = 2
-open(meta, "w").write("%d %d %d\n" % (md.num_warps * 32, md.shared, extra))
+open(meta, "w").write("%d %d %d %d\n" % (md.num_warps * 32, md.shared, extra, cc))

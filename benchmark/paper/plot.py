@@ -36,6 +36,7 @@ zero misencodes magnitude, so no bar chart here uses a log length.
 import argparse
 import collections
 import csv
+import glob
 import json
 import os
 import re
@@ -943,6 +944,7 @@ def fig_gap(out, args):
     """Two things explain the same gap and they are in different units, so they
     get one panel each against a shared list of models: how many kernels a
     forward launches, and how much of the wall clock those kernels occupy."""
+    write_gemm_count(out, args)
     rows = read_tsv(os.path.join(out, "gap.tsv"))
     rows = [r for r in rows if r.get("launches_per_iter")]
     if not rows:
@@ -1000,6 +1002,61 @@ def fig_gap(out, args):
                 "measured wall time; mix is gemm/generated/copy launches",
                 header, table_rows)
     return fig, "gap"
+
+
+def gap_rows(out):
+    """gap.tsv for this run, or the newest earlier run on the same machine.
+
+    `bench.sh gap` needs nsys, which is not installed everywhere; a run
+    without it has no gap.tsv at all, and the launch attribution does not
+    change from run to run the way a timing does.  Returns (rows, source),
+    source being None when the rows are this run's own."""
+    path = os.path.join(out, "gap.tsv")
+    rows = [r for r in read_tsv(path) if r.get("launches_per_iter")]
+    if rows:
+        return rows, None
+    parent = os.path.dirname(os.path.abspath(out))
+    for sib in sorted(glob.glob(os.path.join(parent, "*", "gap.tsv")),
+                      reverse=True):
+        rows = [r for r in read_tsv(sib) if r.get("launches_per_iter")]
+        if rows:
+            return rows, os.path.basename(os.path.dirname(sib))
+    return [], None
+
+
+def write_gemm_count(out, args):
+    """figures/gemm_count.tex: how a forward's launches split into matrix
+    products, generated kernels and everything else.
+
+    The reviewer's question is whether the systems are running the same
+    architecture, and the launch total alone cannot answer it - a system that
+    issues three GEMMs where another issues one fused GEMM has the same
+    total if it also fuses one elementwise kernel more.  The split comes from
+    gap.tsv's mix column ("gemm=43 gen=24 copy=6 other=2"), which
+    gap_analysis attributes kernel by kernel from the nsys trace."""
+    rows, source = gap_rows(out)
+    header = ["model", "system", "gemm", "gen", "other"]
+    table = []
+    for r in rows:
+        mix = {}
+        for part in (r.get("notes") or "").split():
+            key, sep, value = part.partition("=")
+            if sep and value.isdigit():
+                mix[key] = int(value)
+        if not mix:
+            continue
+        other = sum(v for k, v in mix.items() if k not in ("gemm", "gen"))
+        table.append([r["model"], SYSTEM_LABEL.get(r["system"], r["system"]),
+                      str(mix.get("gemm", 0)), str(mix.get("gen", 0)),
+                      str(other)])
+    if not table:
+        return
+    caption = ("kernel launches per forward, attributed: matrix products, "
+               "generated elementwise/reduction kernels, everything else")
+    if source:
+        caption += " (from %s: this run has no nsys trace)" % source
+    write_table(os.path.join(args.outdir, "gemm_count.tex"), caption,
+                header, table)
 
 
 def machine_label(path):

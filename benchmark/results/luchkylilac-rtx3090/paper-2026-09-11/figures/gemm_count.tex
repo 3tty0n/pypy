@@ -1,0 +1,17 @@
+\begin{tabular}{lrrrr}
+\toprule
+model & system & gemm & gen & other \\
+\midrule
+bert-tiny & MetaTensor & 16 & 14 & 0 \\
+bert-tiny & torch.compile & 20 & 16 & 0 \\
+bert-mini & MetaTensor & 43 & 24 & 0 \\
+bert-mini & torch.compile & 59 & 30 & 0 \\
+tiny-gpt2 & MetaTensor & 14 & 13 & 0 \\
+tiny-gpt2 & torch.compile & 9 & 20 & 2 \\
+distilgpt2 & MetaTensor & 55 & 38 & 6 \\
+distilgpt2 & torch.compile & 43 & 37 & 18 \\
+vit-tiny & MetaTensor & 99 & 76 & 0 \\
+vit-tiny & torch.compile & 160 & 87 & 1 \\
+\bottomrule
+\end{tabular}
+% kernel launches per forward, attributed: matrix products, generated elementwise/reduction kernels, everything else (from paper-2026-09-10: this run has no nsys trace)

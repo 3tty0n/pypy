@@ -202,7 +202,34 @@ class MissCounter(object):
 miss_counter = MissCounter()
 
 def get_cc():
-    return _env('RTENSOR_CC', 'auto')
+    # A cache built with cc="auto" (or unresolved) reuses cubins across GPU
+    # architectures once the key is written, so resolve the real value once,
+    # here, before the first key is built, and remember it - never put "auto"
+    # itself in a cache key.
+    if config.cc is not None:
+        return config.cc
+    if os.environ.get('RTENSOR_CPU') is not None:
+        config.cc = 'cpu'
+        return config.cc
+    cc = _env('RTENSOR_CC', 'auto')
+    if cc != 'auto':
+        config.cc = cc
+        return config.cc
+    config.cc = _detect_cc()
+    return config.cc
+
+def _detect_cc():
+    path = _env('TMPDIR', '/tmp') + '/rtensor-cc-%d' % os.getpid()
+    cmd = '%s -P %s --cc %s' % (
+        _env('RTENSOR_PYTHON', 'python3'), _here + '/triton_compile.py', path)
+    if os.system(cmd) != 0:
+        return 'unknown'
+    result = _read_or_empty(path).strip()
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    return result if result else 'unknown'
 
 def _write(path, data):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0644)
@@ -229,6 +256,10 @@ def _cache_base(src, warps):
     key = md5('%s|%d|%s' % (get_cc(), warps, src)).hexdigest()
     return _env('TMPDIR', '/tmp') + '/rtensor-k-' + key
 
+def _meta_cc_matches(meta):
+    words = meta.strip().split(' ')
+    return len(words) > 3 and words[3] == get_cc()
+
 def compile_ttir(src, name, warps):
     # Compiling one kernel starts a Python process and imports Triton, which
     # costs about 0.6 s even when Triton's own cache hits.  Every process
@@ -243,6 +274,11 @@ def compile_ttir(src, name, warps):
     if cached:
         base = _cache_base(src, warps)
         meta = _read_or_empty(base + '.meta')
+        if meta and not _meta_cc_matches(meta):
+            # The key is already cc-specific, so this only fires for a cache
+            # left over from before that (or written by hand); refuse it
+            # rather than load a cubin built for a different architecture.
+            meta = ''
         image = _read_or_empty(base + '.cubin')
         if not image:
             image = _read_or_empty(base + '.ptx')

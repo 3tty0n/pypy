@@ -4,67 +4,68 @@
 
 | variant | k | n | fused (ours) | app-level (ours) | eager (ours) | nojit (ours) | torch.compile | compile-ro | compile-mat | torch eager | JAX/XLA | IREE | Triton | speedup vs compile | interp tax | ours/Triton |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 0 | 1 | 1000000 | 28.7 | n/a | 76.7 | 76.8 | 44.2 | n/a | n/a | 78.1 | 44.1 | 5937.7 | 30.6 | 1.54x | n/a | 0.94x |
-| 0 | 4 | 10000 | 11.9 | n/a | 38.7 | 39.3 | 42.2 | n/a | n/a | 58.5 | 43.5 | 732.7 | 19.4 | 3.54x | n/a | 0.61x |
-| 0 | 4 | 100000 | 12.8 | n/a | 43.3 | 43.0 | 40.0 | n/a | n/a | 60.8 | 44.2 | 1350.2 | 19.0 | 3.13x | n/a | 0.67x |
-| 0 | 4 | 1000000 | 39.1 | n/a | 306.9 | 306.5 | 68.4 | n/a | n/a | 312.3 | 88.1 | 6747.4 | 38.5 | 1.75x | n/a | 1.02x |
-| 0 | 4 | 10000000 | 313.7 | n/a | 3026.8 | 3026.9 | 645.5 | n/a | n/a | 3044.7 | 770.5 | 60619.1 | 327.2 | 2.06x | n/a | 0.96x |
-| 0 | 8 | 1000000 | 67.3 | n/a | 612.1 | 612.5 | 132.7 | n/a | n/a | 624.5 | 160.1 | 6635.1 | 66.8 | 1.97x | n/a | 1.01x |
-| 1 | 4 | 1000000 | 41.6 | n/a | 311.5 | 310.7 | 306.9 | n/a | n/a | 316.7 | 92.8 | 9597.1 | 42.9 | 7.38x | n/a | 0.97x |
-| 2 | 4 | 1000000 | 44.0 | n/a | 311.5 | 310.7 | 306.8 | n/a | n/a | 316.6 | 92.8 | 9308.6 | 43.0 | 6.96x | n/a | 1.03x |
-| 3 | 4 | 1000000 | 99.5 | n/a | 357.5 | 365.9 | 166.9 | n/a | n/a | 376.6 | 272.2 | 132191.7 | 120.2 | 1.68x | n/a | 0.83x |
-| 4 | 4 | 1000000 | 53.3 | n/a | 338.8 | 335.6 | 331.6 | n/a | n/a | 342.2 | 120.3 | 12739.1 | 68.6 | 6.23x | n/a | 0.78x |
-| 5 | 4 | 1000000 | 56.1 | n/a | 336.3 | 335.7 | 331.7 | n/a | n/a | 342.2 | 115.5 | 12770.2 | 68.8 | 5.91x | n/a | 0.82x |
-| 6 | 1 | 25600 | 277.2 | n/a | 279.8 | 277.3 | 387.0 | n/a | n/a | 392.5 | 107.7 | 11854.1 | 881.0 | 1.40x | n/a | 0.31x |
-| 6 | 1 | 256000 | 1011.4 | n/a | 1015.7 | 1011.7 | 1234.0 | n/a | n/a | 1270.9 | 758.4 | 3041.5 | 850.0 | 1.22x | n/a | 1.19x |
-| 7 | 1 | 25600 | 646.9 | n/a | 668.0 | 667.3 | 840.6 | n/a | n/a | 800.6 | 331.6 | 22914.2 | n/a | 1.30x | n/a | n/a |
-| 7 | 1 | 256000 | 2798.7 | n/a | 2807.2 | 2822.0 | 3045.7 | n/a | n/a | 3077.3 | 1970.7 | 31739.5 | n/a | 1.09x | n/a | n/a |
-| 8 | 1 | 25600 | 464.5 | n/a | 778.7 | 779.2 | 516.3 | 525.1 | 539.9 | 557.3 | 267.1 | 889.9 | n/a | 1.11x | n/a | n/a |
-| 8 | 1 | 256000 | 22300.3 | n/a | 24837.3 | 25048.2 | 29624.8 | 29544.2 | 27366.9 | 27209.3 | 15363.0 | 53174.5 | n/a | 1.33x | n/a | n/a |
-| 9 | 1 | 25600 | 756.8 | n/a | 764.8 | 764.9 | 860.7 | n/a | n/a | 801.9 | 237.8 | n/a | n/a | 1.14x | n/a | n/a |
-| 9 | 1 | 256000 | 572.2 | n/a | 572.8 | 568.2 | 664.0 | n/a | n/a | 572.8 | 329.9 | n/a | n/a | 1.16x | n/a | n/a |
-| 10 | 1 | 25600 | 3905.1 | n/a | 4810.8 | 4813.4 | 3178.4 | n/a | n/a | 3729.5 | 1527.1 | 10461.8 | n/a | 0.81x | n/a | n/a |
-| 10 | 1 | 191488 | 93902.3 | n/a | 99340.3 | 99362.3 | 78668.4 | n/a | n/a | 78944.0 | 41813.3 | n/a | n/a | 0.84x | n/a | n/a |
-| 10 | 1 | 256000 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 411364.0 | n/a | n/a | n/a | n/a |
-| 11 | 1 | 25600 | 3.3 | n/a | 20.5 | 20.9 | 60.0 | n/a | n/a | 25.7 | 38.9 | 74.9 | 18.6 | 18.16x | n/a | 0.18x |
-| 11 | 1 | 256000 | 15.1 | n/a | 113.4 | 113.4 | 160.3 | n/a | n/a | 122.9 | 43.1 | 187.0 | 18.8 | 10.61x | n/a | 0.81x |
-| 12 | 1 | 25600 | 98.8 | n/a | 98.9 | 97.9 | 142.6 | n/a | n/a | 137.4 | 47.2 | 2085.8 | 299.2 | 1.44x | n/a | 0.33x |
-| 12 | 1 | 256000 | 340.9 | n/a | 341.1 | 337.1 | 481.6 | n/a | n/a | 491.7 | 256.8 | 560.2 | 299.6 | 1.41x | n/a | 1.14x |
-| 13 | 1 | 25600 | 441.1 | n/a | 523.7 | 523.8 | 598.0 | 620.4 | 612.4 | 593.0 | 123.7 | 7168.2 | 1232.8 | 1.36x | n/a | 0.36x |
-| 13 | 1 | 256000 | 4750.1 | n/a | 5428.2 | 5423.3 | 5024.3 | 5043.8 | 5000.9 | 4881.9 | 3739.5 | 5266.1 | 4679.0 | 1.06x | n/a | 1.02x |
+| 0 | 1 | 1000000 | 29.1 | 29.1 | 77.2 | 77.3 | 45.9 | 118.2 | 112.8 | 78.3 | 45.3 | 5751.0 | 30.7 | 1.58x | 1.00x | 0.95x |
+| 0 | 4 | 10000 | 13.1 | 19.0 | 39.7 | 39.6 | 60.3 | 118.2 | 117.3 | 58.4 | 43.9 | 447.9 | 19.3 | 4.60x | 1.45x | 0.68x |
+| 0 | 4 | 100000 | 13.8 | 21.0 | 43.2 | 43.1 | 50.7 | 115.1 | 100.5 | 61.3 | 48.0 | 929.4 | 19.7 | 3.68x | 1.52x | 0.70x |
+| 0 | 4 | 1000000 | 39.8 | 116.6 | 306.3 | 306.8 | 68.4 | 134.0 | 133.6 | 312.5 | 88.3 | 5746.9 | 39.0 | 1.72x | 2.93x | 1.02x |
+| 0 | 4 | 10000000 | 329.2 | 1132.7 | 3027.0 | 3027.2 | 633.9 | 1219.9 | 1209.6 | 3045.7 | 815.4 | 50253.5 | 327.1 | 1.93x | 3.44x | 1.01x |
+| 0 | 8 | 1000000 | 70.1 | 229.6 | 612.7 | 613.3 | 132.7 | 198.4 | 198.5 | 624.8 | 169.5 | 6457.2 | 70.5 | 1.89x | 3.28x | 0.99x |
+| 1 | 4 | 1000000 | 41.6 | 119.4 | 312.2 | 311.1 | 307.5 | 401.8 | 387.3 | 316.7 | 93.0 | 6462.3 | 43.4 | 7.39x | 2.87x | 0.96x |
+| 2 | 4 | 1000000 | 42.6 | 119.1 | 311.0 | 310.9 | 72.7 | 138.5 | 138.2 | 326.1 | 170.2 | 9056.9 | 68.6 | 1.70x | 2.79x | 0.62x |
+| 3 | 4 | 1000000 | 98.2 | 177.4 | 360.9 | 367.7 | 181.9 | 353.3 | 372.5 | 377.0 | 304.9 | 81750.1 | 125.1 | 1.85x | 1.81x | 0.78x |
+| 4 | 4 | 1000000 | 53.5 | 144.2 | 336.1 | 335.9 | 332.5 | 424.4 | 413.8 | 342.2 | 120.6 | 10871.4 | 69.5 | 6.21x | 2.70x | 0.77x |
+| 5 | 4 | 1000000 | 53.6 | 145.8 | 335.9 | 335.8 | 332.7 | 420.4 | 425.3 | 342.2 | 120.6 | 10814.3 | 69.3 | 6.21x | 2.72x | 0.77x |
+| 6 | 1 | 25600 | 278.8 | 269.1 | 278.3 | 277.8 | 381.9 | 408.7 | 430.4 | 392.4 | 107.5 | 5364.6 | 887.9 | 1.37x | 0.97x | 0.31x |
+| 6 | 1 | 256000 | 1016.6 | 1003.1 | 1017.0 | 1016.3 | 1269.3 | 1263.7 | 1300.8 | 1257.1 | 751.7 | 913.7 | 898.5 | 1.25x | 0.99x | 1.13x |
+| 7 | 1 | 25600 | 648.8 | 788.4 | 669.8 | 669.1 | 828.5 | 887.0 | 914.5 | 795.5 | 324.8 | 11535.5 | n/a | 1.28x | 1.22x | n/a |
+| 7 | 1 | 256000 | 2808.3 | 2935.0 | 2833.9 | 2830.5 | 2997.4 | 3098.8 | 3061.7 | 3083.7 | 1963.5 | 31542.9 | n/a | 1.07x | 1.05x | n/a |
+| 8 | 1 | 25600 | 464.1 | 506.0 | 779.1 | 779.6 | 515.0 | 522.4 | 540.0 | 558.5 | 267.2 | 935.7 | n/a | 1.11x | 1.09x | n/a |
+| 8 | 1 | 256000 | 22344.8 | 22391.4 | 25099.8 | 25146.0 | 29784.9 | 29773.4 | 27687.1 | 27427.8 | 15424.1 | 38530.6 | n/a | 1.33x | 1.00x | n/a |
+| 9 | 1 | 25600 | 755.5 | 749.9 | 762.5 | 764.8 | 876.0 | 861.3 | 871.0 | 803.4 | 244.2 | n/a | n/a | 1.16x | 0.99x | n/a |
+| 9 | 1 | 256000 | 572.6 | 557.0 | 602.5 | 570.5 | 645.1 | 700.5 | 666.1 | 586.4 | 332.0 | n/a | n/a | 1.13x | 0.97x | n/a |
+| 10 | 1 | 25600 | 3927.7 | 4811.2 | 4827.6 | 4818.9 | 3186.4 | 3095.8 | 3158.9 | 3708.4 | 1504.6 | 10446.6 | n/a | 0.81x | 1.22x | n/a |
+| 10 | 1 | 191488 | 93929.0 | 97669.2 | 99355.9 | 99369.6 | 78678.8 | 78707.1 | 76019.3 | 78949.9 | 41818.5 | 136402.5 | n/a | 0.84x | 1.04x | n/a |
+| 11 | 1 | 25600 | 3.6 | 20.1 | 56.8 | 57.1 | 66.8 | 111.6 | 132.8 | 56.9 | 48.5 | 54.8 | 18.5 | 18.46x | 5.55x | 0.20x |
+| 11 | 1 | 256000 | 15.9 | 163.1 | 144.3 | 141.4 | 169.7 | 222.3 | 246.4 | 141.7 | 47.8 | 185.1 | 20.0 | 10.65x | 10.24x | 0.80x |
+| 12 | 1 | 25600 | 98.8 | 90.3 | 98.5 | 98.5 | 147.3 | 165.8 | 177.1 | 136.7 | 43.2 | 1825.1 | 299.0 | 1.49x | 0.91x | 0.33x |
+| 12 | 1 | 256000 | 342.9 | 335.8 | 343.2 | 342.9 | 495.9 | 529.0 | 522.7 | 492.3 | 256.5 | 435.1 | 299.9 | 1.45x | 0.98x | 1.14x |
+| 13 | 1 | 25600 | 437.3 | 441.6 | 557.3 | 526.5 | 614.2 | 612.1 | 645.1 | 584.3 | 123.6 | 2837.3 | 1252.8 | 1.40x | 1.01x | 0.35x |
+| 13 | 1 | 256000 | 4747.0 | 4775.8 | 5428.4 | 5432.2 | 5003.9 | 5037.1 | 5025.1 | 4877.9 | 3702.8 | 5156.9 | 4681.7 | 1.05x | 1.01x | 1.01x |
 
 ## Precision sweep (median steady_us)
 
 | dtype | variant | k | n | fused (ours) | app-level (ours) | eager (ours) | nojit (ours) | torch.compile | compile-ro | compile-mat | torch eager | JAX/XLA | IREE | Triton | speedup vs compile | interp tax | ours/Triton |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| float16 | 8 | 1 | 256000 | 711.9 | n/a | 2054.8 | 2053.9 | 860.0 | n/a | n/a | 1461.9 | 628.8 | 2163.3 | n/a | 1.21x | n/a | n/a |
-| float16 | 13 | 1 | 256000 | 221.4 | n/a | 349.1 | 341.7 | 430.0 | n/a | n/a | 410.7 | 96.4 | 584.1 | 132.0 | 1.94x | n/a | 1.68x |
-| float32 | 8 | 1 | 256000 | 1395.8 | n/a | 3919.6 | 3919.1 | 2017.5 | n/a | n/a | 2652.5 | 1256.4 | 10512.4 | n/a | 1.45x | n/a | n/a |
-| float32 | 13 | 1 | 256000 | 272.5 | n/a | 588.0 | 580.9 | 544.5 | n/a | n/a | 636.8 | 214.8 | 1398.7 | 131.1 | 2.00x | n/a | 2.08x |
+| float16 | 8 | 1 | 256000 | 707.6 | n/a | 2050.3 | 2053.0 | 865.0 | 869.9 | 801.7 | 1470.4 | 633.8 | 1918.9 | n/a | 1.22x | n/a | n/a |
+| float16 | 11 | 1 | 256000 | 22.4 | n/a | 58.4 | 55.6 | 150.4 | 243.6 | 204.6 | 145.8 | 46.4 | 180.3 | 18.7 | 6.71x | n/a | 1.20x |
+| float16 | 13 | 1 | 256000 | 211.5 | n/a | 334.0 | 336.9 | 431.8 | 376.4 | 364.1 | 408.8 | 100.5 | 600.4 | 133.1 | 2.04x | n/a | 1.59x |
+| float32 | 8 | 1 | 256000 | 1393.1 | n/a | 3914.8 | 3913.6 | 2024.0 | 2025.8 | 1515.4 | 2651.1 | 1259.9 | 7313.6 | n/a | 1.45x | n/a | n/a |
+| float32 | 11 | 1 | 256000 | 7.0 | n/a | 43.2 | 39.9 | 154.9 | 220.8 | 206.3 | 146.3 | 45.1 | 80.9 | 19.5 | 22.09x | n/a | 0.36x |
+| float32 | 13 | 1 | 256000 | 265.1 | n/a | 581.2 | 583.2 | 549.3 | 585.6 | 536.2 | 633.5 | 215.7 | 1313.3 | 121.5 | 2.07x | n/a | 2.18x |
 
 ## Guards / graph breaks (launches per iter, torch graph breaks)
 
 | variant | n | launches/iter (fused) | torch graphs | torch breaks |
 |---|---|---|---|---|
 | 1 | 1000000 | 1.1 | 1 | 0 |
-| 2 | 1000000 | 1.1 | 1 | 0 |
+| 2 | 1000000 | 1.1 | 2 | 1 |
 | 3 | 1000000 | 2.0 | 2 | 1 |
-| 4 | 1000000 | 1.0 | 1 | 0 |
+| 4 | 1000000 | 1.1 | 1 | 0 |
 | 5 | 1000000 | 1.1 | 2 | 1 |
 
 ## End-to-end models (median steady_us, ratio to torch.compile)
 
-| model | ours | torch.compile | compile-ro | compile-mat | torch eager | JAX/XLA | IREE | TensorRT | ratio ours/compile | ratio jax/compile | correctness |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| bert-mini | 428.6 | 921.5 | 481.1 | 413.1 | 1804.7 | 242.6 | 3738.2 | 659.5 | 0.47x | 0.26x | 1.90735e-05 |
-| bert-tiny | 240.8 | 489.7 | 295.0 | 262.8 | 1090.2 | 111.1 | 1342.8 | 431.9 | 0.49x | 0.23x | 3.05176e-05 |
-| distilgpt2 | 1278.7 | 1350.6 | 1321.6 | 1286.4 | 2761.1 | 1014.6 | 17358.9 | 3739.8 | 0.95x | 0.75x | 0.000175476 |
-| mixer_b16 | 2672.0 | 3114.9 | 3049.1 | 3124.0 | 2876.9 | 2238.2 | 1436947.2 | 2461.8 | 0.86x | 0.72x | 3.8147e-05 |
-| resnet18-b1 | 708.5 | 960.8 | 916.0 | 1055.7 | 1580.7 | 1121.8 | n/a | 989.7 | 0.74x | 1.17x | 0.00963783 |
-| resnet18-b8 | 2705.3 | 2188.9 | 2123.8 | 2135.2 | 2269.6 | 2273.1 | n/a | 2013.1 | 1.24x | 1.04x | 0.00571394 |
-| smollm2-135m | 3660.7 | 5206.8 | 3778.4 | 3810.4 | 15713.2 | 2651.1 | 19097.1 | 3792.3 | 0.70x | 0.51x | 0.000151277 |
-| tiny-gpt2 | 194.2 | 409.4 | 204.0 | 246.5 | 1630.6 | 80.8 | 190.6 | 1384.8 | 0.47x | 0.20x | 2.6077e-08 |
-| vit-tiny | 974.8 | 2056.3 | 1414.5 | 1348.8 | 3826.2 | 746.0 | 36791.8 | 1034.4 | 0.47x | 0.36x | 1.07288e-05 |
+| model | ours | torch.compile | compile-ro | compile-mat | torch eager | JAX/XLA | IREE | TensorRT | ratio ours/compile | ratio jax/compile | launches/iter (ours) | correctness | tol | pass |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| bert-mini | 432.5 | 871.5 | 493.1 | 414.8 | 1814.6 | 242.8 | 3639.6 | 663.5 | 0.50x | 0.28x | 24.3 | 1.90735e-05 | 0.001 | pass |
+| bert-tiny | 245.3 | 538.8 | 302.1 | 261.7 | 1090.2 | 111.3 | 1354.8 | 439.8 | 0.46x | 0.21x | 14.3 | 3.05176e-05 | 0.001 | pass |
+| distilgpt2 | 1284.6 | 1343.0 | 1267.3 | 1263.9 | 2797.0 | 999.6 | 17163.6 | 4209.7 | 0.96x | 0.74x | 38.2 | 0.000175476 | 0.001 | pass |
+| mixer_b16 | 2714.0 | 3139.4 | 3083.5 | 3152.1 | 3083.6 | 2246.6 | 673442.5 | 2487.4 | 0.86x | 0.72x | 63.4 | 3.8147e-05 | 0.001 | pass |
+| resnet18-b1 | 717.7 | 1109.6 | 920.3 | 1055.2 | 1598.0 | 1098.1 | n/a | 1000.4 | 0.65x | 0.99x | 39.0 | 0.00963783 | 0.02 | pass |
+| resnet18-b8 | 2727.0 | 2182.5 | 2134.3 | 2119.7 | 2256.3 | 2278.7 | n/a | 2030.7 | 1.25x | 1.04x | 39.0 | 0.00571394 | 0.02 | pass |
+| smollm2-135m | 3690.8 | 5344.0 | 3778.2 | 3826.7 | 15793.4 | 2656.4 | 19167.3 | 3761.3 | 0.69x | 0.50x | 212.1 | 0.000151277 | 0.001 | pass |
+| tiny-gpt2 | 201.3 | 421.2 | 209.5 | 257.8 | 1616.5 | 86.6 | 194.2 | 1417.8 | 0.48x | 0.21x | 13.2 | 2.6077e-08 | 0.001 | pass |
+| vit-tiny | 1015.2 | 2103.9 | 1415.9 | 1340.3 | 3821.5 | 742.3 | 25055.9 | 1035.3 | 0.48x | 0.35x | 76.3 | 1.07288e-05 | 0.001 | pass |
 
 ## Ablations (median steady_us)
 
@@ -92,200 +93,246 @@
 
 | workload | system | compile_ms | first_run_ms | steady_us | break-even |
 |---|---|---|---|---|---|
-| bert-mini | torch-compile | n/a | 1302.8 | 921.5 | 1380 |
-| bert-mini | torch-compile-ro | n/a | 1293.6 | 481.1 | 914 |
-| bert-mini | torch-compile-mat | n/a | 1388.0 | 413.1 | 937 |
-| bert-mini | torch-tensorrt | n/a | 4856.2 | 659.5 | 4167 |
-| bert-mini | jax | 7061.4 | 2.7 | 242.6 | 4468 |
-| bert-mini | iree | 1032.2 | 19.4 | 3738.2 | n/a |
-| bert-mini | ours | n/a | 194.6 | 428.6 | 80 |
-| bert-tiny | torch-compile | n/a | 1117.5 | 489.7 | 1700 |
-| bert-tiny | torch-compile-ro | n/a | 1127.6 | 295.0 | 1296 |
-| bert-tiny | torch-compile-mat | n/a | 1245.2 | 262.8 | 1388 |
-| bert-tiny | torch-tensorrt | n/a | 4212.0 | 431.9 | 6251 |
-| bert-tiny | jax | 5870.0 | 1.8 | 111.1 | 5898 |
-| bert-tiny | iree | 862.5 | 13.7 | 1342.8 | n/a |
-| bert-tiny | ours | n/a | 115.7 | 240.8 | 22 |
-| distilgpt2 | torch-compile | n/a | 1557.6 | 1350.6 | 1013 |
-| distilgpt2 | torch-compile-ro | n/a | 1535.0 | 1321.6 | 977 |
-| distilgpt2 | torch-compile-mat | n/a | 1630.3 | 1286.4 | 1018 |
-| distilgpt2 | torch-tensorrt | n/a | 2856.2 | 3739.8 | n/a |
-| distilgpt2 | jax | 6912.1 | 4.6 | 1014.6 | 3887 |
-| distilgpt2 | iree | 906.7 | 76.2 | 17358.9 | n/a |
-| distilgpt2 | ours | n/a | 534.8 | 1278.7 | 274 |
-| micro v0 k1 n1000000 | torch-compile | n/a | 481.8 | 44.2 | 13120 |
-| micro v0 k1 n1000000 | torch-tensorrt | n/a | 37.9 | 80.4 | n/a |
-| micro v0 k1 n1000000 | jax | 200.0 | 0.5 | 44.1 | 4793 |
-| micro v0 k1 n1000000 | iree | 579.5 | 22.9 | 5937.7 | n/a |
-| micro v0 k1 n1000000 | triton | 307.9 | 0.1 | 30.6 | 5699 |
-| micro v0 k4 n10000 | torch-compile | n/a | 469.3 | 42.2 | 26723 |
-| micro v0 k4 n10000 | torch-tensorrt | n/a | 40.2 | 59.0 | n/a |
-| micro v0 k4 n10000 | jax | 197.6 | 0.5 | 43.5 | 10899 |
-| micro v0 k4 n10000 | iree | 584.9 | 10.1 | 732.7 | n/a |
-| micro v0 k4 n10000 | triton | 308.1 | 0.1 | 19.4 | 6996 |
-| micro v0 k4 n100000 | torch-compile | n/a | 486.1 | 40.0 | 21578 |
-| micro v0 k4 n100000 | torch-tensorrt | n/a | 40.6 | 61.1 | n/a |
-| micro v0 k4 n100000 | jax | 188.4 | 0.5 | 44.2 | 9144 |
-| micro v0 k4 n100000 | iree | 586.1 | 11.2 | 1350.2 | n/a |
-| micro v0 k4 n100000 | triton | 307.5 | 0.1 | 19.0 | 6461 |
-| micro v0 k4 n1000000 | torch-compile | n/a | 420.2 | 68.4 | 1578 |
-| micro v0 k4 n1000000 | torch-tensorrt | n/a | 37.7 | 321.4 | n/a |
-| micro v0 k4 n1000000 | jax | 202.8 | 0.6 | 88.1 | 749 |
-| micro v0 k4 n1000000 | iree | 587.4 | 25.3 | 6747.4 | n/a |
-| micro v0 k4 n1000000 | triton | 307.9 | 0.1 | 38.5 | 996 |
-| micro v0 k4 n10000000 | torch-compile | n/a | 449.9 | 645.5 | 173 |
-| micro v0 k4 n10000000 | torch-tensorrt | n/a | 40.0 | 3045.5 | n/a |
-| micro v0 k4 n10000000 | jax | 218.5 | 1.3 | 770.5 | 81 |
-| micro v0 k4 n10000000 | iree | 611.0 | 190.4 | 60619.1 | n/a |
-| micro v0 k4 n10000000 | triton | 277.0 | 0.6 | 327.2 | 89 |
-| micro v0 k8 n1000000 | torch-compile | n/a | 427.3 | 132.7 | 796 |
-| micro v0 k8 n1000000 | torch-tensorrt | n/a | 40.8 | 642.4 | n/a |
-| micro v0 k8 n1000000 | jax | 214.0 | 0.6 | 160.1 | 386 |
-| micro v0 k8 n1000000 | iree | 580.5 | 26.6 | 6635.1 | n/a |
-| micro v0 k8 n1000000 | triton | 308.2 | 0.2 | 66.8 | 489 |
-| micro v1 k4 n1000000 | torch-compile | n/a | 490.5 | 306.9 | 46213 |
-| micro v1 k4 n1000000 | torch-tensorrt | n/a | 37.8 | 325.8 | n/a |
-| micro v1 k4 n1000000 | jax | 202.2 | 0.6 | 92.8 | 736 |
-| micro v1 k4 n1000000 | iree | 602.9 | 27.2 | 9597.1 | n/a |
-| micro v1 k4 n1000000 | triton | 309.3 | 0.1 | 42.9 | 991 |
-| micro v10 k1 n191488 | torch-compile | n/a | 1877.9 | 78668.4 | 5450 |
-| micro v10 k1 n191488 | torch-tensorrt | n/a | 2455.3 | 79037.6 | n/a |
-| micro v10 k1 n191488 | jax | 4927.0 | 71.9 | 41813.3 | 125 |
-| micro v10 k1 n25600 | torch-compile | n/a | 1784.2 | 3178.4 | 2696 |
-| micro v10 k1 n25600 | torch-tensorrt | n/a | 2381.4 | 4112.4 | n/a |
-| micro v10 k1 n25600 | jax | 4229.6 | 6.6 | 1527.1 | 1788 |
-| micro v10 k1 n25600 | iree | 1577.7 | 26.2 | 10461.8 | n/a |
-| micro v10 k1 n256000 | iree | 22024.0 | 533.5 | 411364.0 | n/a |
-| micro v11 k1 n25600 | torch-compile | n/a | 1680.4 | 60.0 | n/a |
-| micro v11 k1 n25600 | torch-tensorrt | n/a | 2034.0 | 58.0 | n/a |
-| micro v11 k1 n25600 | jax | 54.3 | 0.4 | 38.9 | n/a |
-| micro v11 k1 n25600 | iree | 179.9 | 11.4 | 74.9 | n/a |
-| micro v11 k1 n25600 | triton | 307.0 | 0.1 | 18.6 | 18615 |
-| micro v11 k1 n256000 | torch-compile | n/a | 1711.2 | 160.3 | n/a |
-| micro v11 k1 n256000 | torch-tensorrt | n/a | 2022.6 | 151.5 | n/a |
-| micro v11 k1 n256000 | jax | 52.6 | 0.4 | 43.1 | -1859 |
-| micro v11 k1 n256000 | iree | 175.9 | 12.1 | 187.0 | n/a |
-| micro v11 k1 n256000 | triton | 307.0 | 0.1 | 18.8 | 1013 |
-| micro v12 k1 n25600 | torch-compile | n/a | 1754.9 | 142.6 | n/a |
-| micro v12 k1 n25600 | torch-tensorrt | n/a | 2025.7 | 134.5 | 618692 |
-| micro v12 k1 n25600 | jax | 1520.4 | 0.8 | 47.2 | 14495 |
-| micro v12 k1 n25600 | iree | 231.4 | 15.6 | 2085.8 | n/a |
-| micro v12 k1 n25600 | triton | 308.4 | 0.4 | 299.2 | n/a |
-| micro v12 k1 n256000 | torch-compile | n/a | 1767.7 | 481.6 | 152196 |
-| micro v12 k1 n256000 | torch-tensorrt | n/a | 2019.1 | 482.9 | 203850 |
-| micro v12 k1 n256000 | jax | 1569.6 | 0.9 | 256.8 | 5704 |
-| micro v12 k1 n256000 | iree | 240.7 | 10.2 | 560.2 | n/a |
-| micro v12 k1 n256000 | triton | 308.5 | 0.4 | 299.6 | 409 |
-| micro v13 k1 n25600 | torch-compile | n/a | 1802.6 | 598.0 | n/a |
-| micro v13 k1 n25600 | torch-compile-ro | n/a | 1725.5 | 620.4 | n/a |
-| micro v13 k1 n25600 | torch-compile-mat | n/a | 1800.9 | 612.4 | n/a |
-| micro v13 k1 n25600 | torch-tensorrt | n/a | 2147.5 | 580.5 | 151841 |
-| micro v13 k1 n25600 | jax | 1956.8 | 1.0 | 123.7 | 3637 |
-| micro v13 k1 n25600 | iree | 325.1 | 14.8 | 7168.2 | n/a |
-| micro v13 k1 n25600 | triton | 311.5 | 1.3 | 1232.8 | n/a |
-| micro v13 k1 n256000 | torch-compile | n/a | 1826.8 | 5024.3 | n/a |
-| micro v13 k1 n256000 | torch-compile-ro | n/a | 1843.2 | 5043.8 | n/a |
-| micro v13 k1 n256000 | torch-compile-mat | n/a | 1697.5 | 5000.9 | n/a |
-| micro v13 k1 n256000 | torch-tensorrt | n/a | 2070.4 | 4868.6 | 134859 |
-| micro v13 k1 n256000 | jax | 1980.7 | 4.8 | 3739.5 | 1503 |
-| micro v13 k1 n256000 | iree | 636.6 | 19.7 | 5266.1 | n/a |
-| micro v13 k1 n256000 | triton | 315.2 | 4.7 | 4679.0 | 253 |
-| micro v2 k4 n1000000 | torch-compile | n/a | 419.2 | 306.8 | 38874 |
-| micro v2 k4 n1000000 | torch-tensorrt | n/a | 37.6 | 325.8 | n/a |
-| micro v2 k4 n1000000 | jax | 196.7 | 0.5 | 92.8 | 723 |
-| micro v2 k4 n1000000 | iree | 549.7 | 29.5 | 9308.6 | n/a |
-| micro v2 k4 n1000000 | triton | 308.9 | 0.1 | 43.0 | 1000 |
-| micro v3 k4 n1000000 | torch-compile | n/a | 562.7 | 166.9 | 2503 |
-| micro v3 k4 n1000000 | torch-tensorrt | n/a | 38.5 | 384.1 | n/a |
-| micro v3 k4 n1000000 | jax | 204.7 | 0.6 | 272.2 | 1605 |
-| micro v3 k4 n1000000 | iree | 607.3 | 31.5 | 132191.7 | n/a |
-| micro v3 k4 n1000000 | triton | 310.3 | 0.1 | 120.2 | 1063 |
-| micro v4 k4 n1000000 | torch-compile | n/a | 430.7 | 331.6 | 36997 |
-| micro v4 k4 n1000000 | torch-tensorrt | n/a | 37.3 | 351.7 | n/a |
-| micro v4 k4 n1000000 | jax | 197.9 | 0.6 | 120.3 | 725 |
-| micro v4 k4 n1000000 | iree | 611.8 | 25.8 | 12739.1 | n/a |
-| micro v4 k4 n1000000 | triton | 309.2 | 0.1 | 68.6 | 992 |
-| micro v5 k4 n1000000 | torch-compile | n/a | 506.8 | 331.7 | 44932 |
-| micro v5 k4 n1000000 | torch-tensorrt | n/a | 37.8 | 351.4 | n/a |
-| micro v5 k4 n1000000 | jax | 205.5 | 0.6 | 115.5 | 741 |
-| micro v5 k4 n1000000 | iree | 583.6 | 24.6 | 12770.2 | n/a |
-| micro v5 k4 n1000000 | triton | 308.4 | 0.1 | 68.8 | 990 |
-| micro v6 k1 n25600 | torch-compile | n/a | 1795.2 | 387.0 | 287626 |
-| micro v6 k1 n25600 | torch-tensorrt | n/a | 2007.5 | 380.3 | 146864 |
-| micro v6 k1 n25600 | jax | 1579.6 | 1.0 | 107.7 | 4762 |
-| micro v6 k1 n25600 | iree | 224.7 | 23.8 | 11854.1 | n/a |
-| micro v6 k1 n25600 | triton | 308.7 | 0.9 | 881.0 | n/a |
-| micro v6 k1 n256000 | torch-compile | n/a | 1779.3 | 1234.0 | 41564 |
-| micro v6 k1 n256000 | torch-tensorrt | n/a | 2140.6 | 1271.3 | n/a |
-| micro v6 k1 n256000 | jax | 1595.4 | 1.6 | 758.4 | 2634 |
-| micro v6 k1 n256000 | iree | 236.8 | 10.7 | 3041.5 | n/a |
-| micro v6 k1 n256000 | triton | 306.1 | 0.9 | 850.0 | 143 |
-| micro v7 k1 n25600 | torch-compile | n/a | 1807.6 | 840.6 | n/a |
-| micro v7 k1 n25600 | torch-tensorrt | n/a | 2114.5 | 820.7 | n/a |
-| micro v7 k1 n25600 | jax | 2149.9 | 1.6 | 331.6 | 4066 |
-| micro v7 k1 n25600 | iree | 323.2 | 40.3 | 22914.2 | n/a |
-| micro v7 k1 n256000 | torch-compile | n/a | 1741.6 | 3045.7 | 47174 |
-| micro v7 k1 n256000 | torch-tensorrt | n/a | 2199.7 | 3089.2 | n/a |
-| micro v7 k1 n256000 | jax | 2280.0 | 3.8 | 1970.7 | 1834 |
-| micro v7 k1 n256000 | iree | 435.4 | 42.3 | 31739.5 | n/a |
-| micro v8 k1 n25600 | torch-compile | n/a | 1785.2 | 516.3 | 36888 |
-| micro v8 k1 n25600 | torch-compile-ro | n/a | 1804.8 | 525.1 | 47605 |
-| micro v8 k1 n25600 | torch-compile-mat | n/a | 1865.5 | 539.9 | 91442 |
-| micro v8 k1 n25600 | torch-tensorrt | n/a | 2190.8 | 563.5 | n/a |
-| micro v8 k1 n25600 | jax | 1262.8 | 1.3 | 267.1 | 3413 |
-| micro v8 k1 n25600 | iree | 532.9 | 9.9 | 889.9 | n/a |
-| micro v8 k1 n256000 | torch-compile | n/a | 1792.2 | 29624.8 | n/a |
-| micro v8 k1 n256000 | torch-compile-ro | n/a | 1923.8 | 29544.2 | n/a |
-| micro v8 k1 n256000 | torch-compile-mat | n/a | 1885.6 | 27366.9 | n/a |
-| micro v8 k1 n256000 | torch-tensorrt | n/a | 2256.4 | 27305.4 | n/a |
-| micro v8 k1 n256000 | jax | 1530.6 | 16.6 | 15363.0 | 105 |
-| micro v8 k1 n256000 | iree | 20835.2 | 116.0 | 53174.5 | n/a |
-| micro v9 k1 n25600 | torch-compile | n/a | 1789.5 | 860.7 | n/a |
-| micro v9 k1 n25600 | torch-tensorrt | n/a | 2136.3 | 942.9 | n/a |
-| micro v9 k1 n25600 | jax | 363.0 | 0.8 | 237.8 | 199 |
-| micro v9 k1 n256000 | torch-compile | n/a | 1704.2 | 664.0 | n/a |
-| micro v9 k1 n256000 | torch-tensorrt | n/a | 2151.9 | 1549.6 | n/a |
-| micro v9 k1 n256000 | jax | 802.1 | 1.2 | 329.9 | 2219 |
-| mixer_b16 | torch-compile | n/a | 1243.6 | 3114.9 | n/a |
-| mixer_b16 | torch-compile-ro | n/a | 1306.9 | 3049.1 | n/a |
-| mixer_b16 | torch-compile-mat | n/a | 1400.8 | 3124.0 | n/a |
-| mixer_b16 | torch-tensorrt | n/a | 5985.3 | 2461.8 | 14117 |
-| mixer_b16 | jax | 7200.5 | 7.0 | 2238.2 | 11088 |
-| mixer_b16 | iree | 1482.3 | 1660.3 | 1436947.2 | n/a |
-| mixer_b16 | ours | n/a | 181.1 | 2672.0 | 272 |
-| resnet18-b1 | torch-compile | n/a | 1018.4 | 960.8 | 1336 |
-| resnet18-b1 | torch-compile-ro | n/a | 1074.6 | 916.0 | 1330 |
-| resnet18-b1 | torch-compile-mat | n/a | 1730.7 | 1055.7 | 2934 |
-| resnet18-b1 | torch-tensorrt | n/a | 4643.6 | 989.7 | 7535 |
-| resnet18-b1 | jax | 587.8 | 4.0 | 1121.8 | 875 |
-| resnet18-b1 | ours | n/a | 124.6 | 708.5 | -75 |
-| resnet18-b8 | torch-compile | n/a | 1078.6 | 2188.9 | 11048 |
-| resnet18-b8 | torch-compile-ro | n/a | 1080.7 | 2123.8 | 6130 |
-| resnet18-b8 | torch-compile-mat | n/a | 1518.5 | 2135.2 | 9907 |
-| resnet18-b8 | torch-tensorrt | n/a | 4813.8 | 2013.1 | 18038 |
-| resnet18-b8 | jax | 934.8 | 4.4 | 2273.1 | n/a |
-| resnet18-b8 | ours | n/a | 153.3 | 2705.3 | n/a |
-| smollm2-135m | torch-compile | n/a | 3863.3 | 5206.8 | 316 |
-| smollm2-135m | torch-compile-ro | n/a | 4015.2 | 3778.4 | 291 |
-| smollm2-135m | torch-compile-mat | n/a | 4321.8 | 3810.4 | 317 |
-| smollm2-135m | torch-tensorrt | n/a | 21935.5 | 3792.3 | 1794 |
-| smollm2-135m | jax | 10616.3 | 17.7 | 2651.1 | 772 |
-| smollm2-135m | iree | 2050.3 | 172.6 | 19097.1 | n/a |
-| smollm2-135m | ours | n/a | 495.4 | 3660.7 | -4 |
-| tiny-gpt2 | torch-compile | n/a | 1178.7 | 409.4 | 577 |
-| tiny-gpt2 | torch-compile-ro | n/a | 1194.8 | 204.0 | 505 |
-| tiny-gpt2 | torch-compile-mat | n/a | 1217.1 | 246.5 | 537 |
-| tiny-gpt2 | torch-tensorrt | n/a | 1843.5 | 1384.8 | 5571 |
-| tiny-gpt2 | jax | 1142.1 | 1.5 | 80.8 | 432 |
-| tiny-gpt2 | iree | 400.5 | 11.7 | 190.6 | -43 |
-| tiny-gpt2 | ours | n/a | 114.5 | 194.2 | -250 |
-| vit-tiny | torch-compile | n/a | 1778.9 | 2056.3 | 938 |
-| vit-tiny | torch-compile-ro | n/a | 1796.1 | 1414.5 | 695 |
-| vit-tiny | torch-compile-mat | n/a | 1999.8 | 1348.8 | 759 |
-| vit-tiny | torch-tensorrt | n/a | 7641.6 | 1034.4 | 2695 |
-| vit-tiny | jax | 6705.4 | 7.7 | 746.0 | 2141 |
-| vit-tiny | iree | 1697.7 | 71.1 | 36791.8 | n/a |
-| vit-tiny | ours | n/a | 143.5 | 974.8 | 9 |
+| bert-mini | torch-compile | n/a | 1282.6 | 871.5 | 1267 |
+| bert-mini | torch-compile-ro | n/a | 1294.0 | 493.1 | 913 |
+| bert-mini | torch-compile-mat | n/a | 1414.9 | 414.8 | 948 |
+| bert-mini | torch-tensorrt | n/a | 4821.3 | 663.5 | 4112 |
+| bert-mini | jax | 7169.9 | 2.9 | 242.8 | 4507 |
+| bert-mini | iree | 998.6 | 20.5 | 3639.6 | n/a |
+| bert-mini | ours | n/a | 188.9 | 432.5 | 73 |
+| bert-tiny | torch-compile | n/a | 1118.5 | 538.8 | 1849 |
+| bert-tiny | torch-compile-ro | n/a | 1139.6 | 302.1 | 1321 |
+| bert-tiny | torch-compile-mat | n/a | 1234.1 | 261.7 | 1370 |
+| bert-tiny | torch-tensorrt | n/a | 4237.8 | 439.8 | 6364 |
+| bert-tiny | jax | 5771.4 | 1.7 | 111.3 | 5797 |
+| bert-tiny | iree | 838.5 | 14.3 | 1354.8 | n/a |
+| bert-tiny | ours | n/a | 108.2 | 245.3 | 11 |
+| distilgpt2 | torch-compile | n/a | 1536.6 | 1343.0 | 968 |
+| distilgpt2 | torch-compile-ro | n/a | 1528.6 | 1267.3 | 915 |
+| distilgpt2 | torch-compile-mat | n/a | 1616.1 | 1263.9 | 970 |
+| distilgpt2 | torch-tensorrt | n/a | 2966.6 | 4209.7 | n/a |
+| distilgpt2 | jax | 7173.0 | 4.7 | 999.6 | 3922 |
+| distilgpt2 | iree | 872.3 | 76.4 | 17163.6 | n/a |
+| distilgpt2 | ours | n/a | 553.9 | 1284.6 | 281 |
+| micro v0 k1 n1000000 | torch-compile | n/a | 480.5 | 45.9 | 13660 |
+| micro v0 k1 n1000000 | torch-compile-ro | n/a | 486.4 | 118.2 | n/a |
+| micro v0 k1 n1000000 | torch-compile-mat | n/a | 455.1 | 112.8 | n/a |
+| micro v0 k1 n1000000 | torch-tensorrt | n/a | 37.4 | 80.7 | n/a |
+| micro v0 k1 n1000000 | jax | 196.4 | 0.5 | 45.3 | 4806 |
+| micro v0 k1 n1000000 | iree | 563.4 | 23.7 | 5751.0 | n/a |
+| micro v0 k1 n1000000 | triton | 311.8 | 0.1 | 30.7 | 5754 |
+| micro v0 k4 n10000 | torch-compile | n/a | 434.4 | 60.3 | n/a |
+| micro v0 k4 n10000 | torch-compile-ro | n/a | 504.9 | 118.2 | n/a |
+| micro v0 k4 n10000 | torch-compile-mat | n/a | 437.4 | 117.3 | n/a |
+| micro v0 k4 n10000 | torch-tensorrt | n/a | 40.7 | 55.5 | 500 |
+| micro v0 k4 n10000 | jax | 203.5 | 0.5 | 43.9 | 11361 |
+| micro v0 k4 n10000 | iree | 575.6 | 10.3 | 447.9 | n/a |
+| micro v0 k4 n10000 | triton | 280.6 | 0.1 | 19.3 | 6164 |
+| micro v0 k4 n100000 | torch-compile | n/a | 425.9 | 50.7 | 36783 |
+| micro v0 k4 n100000 | torch-compile-ro | n/a | 497.9 | 115.1 | n/a |
+| micro v0 k4 n100000 | torch-compile-mat | n/a | 486.6 | 100.5 | n/a |
+| micro v0 k4 n100000 | torch-tensorrt | n/a | 40.0 | 55.8 | 451 |
+| micro v0 k4 n100000 | jax | 194.4 | 0.5 | 48.0 | 11840 |
+| micro v0 k4 n100000 | iree | 571.0 | 11.7 | 929.4 | n/a |
+| micro v0 k4 n100000 | triton | 304.2 | 0.1 | 19.7 | 6423 |
+| micro v0 k4 n1000000 | torch-compile | n/a | 430.2 | 68.4 | 1614 |
+| micro v0 k4 n1000000 | torch-compile-ro | n/a | 464.4 | 134.0 | 2399 |
+| micro v0 k4 n1000000 | torch-compile-mat | n/a | 470.1 | 133.6 | 2426 |
+| micro v0 k4 n1000000 | torch-tensorrt | n/a | 40.4 | 321.7 | n/a |
+| micro v0 k4 n1000000 | jax | 206.1 | 0.6 | 88.3 | 760 |
+| micro v0 k4 n1000000 | iree | 564.9 | 24.0 | 5746.9 | n/a |
+| micro v0 k4 n1000000 | triton | 309.4 | 0.1 | 39.0 | 999 |
+| micro v0 k4 n10000000 | torch-compile | n/a | 485.7 | 633.9 | 186 |
+| micro v0 k4 n10000000 | torch-compile-ro | n/a | 498.2 | 1219.9 | 252 |
+| micro v0 k4 n10000000 | torch-compile-mat | n/a | 506.8 | 1209.6 | 256 |
+| micro v0 k4 n10000000 | torch-tensorrt | n/a | 39.5 | 3045.9 | n/a |
+| micro v0 k4 n10000000 | jax | 226.6 | 1.3 | 815.4 | 85 |
+| micro v0 k4 n10000000 | iree | 615.5 | 170.8 | 50253.5 | n/a |
+| micro v0 k4 n10000000 | triton | 285.8 | 0.6 | 327.1 | 92 |
+| micro v0 k8 n1000000 | torch-compile | n/a | 429.4 | 132.7 | 799 |
+| micro v0 k8 n1000000 | torch-compile-ro | n/a | 506.0 | 198.4 | 1101 |
+| micro v0 k8 n1000000 | torch-compile-mat | n/a | 441.4 | 198.5 | 950 |
+| micro v0 k8 n1000000 | torch-tensorrt | n/a | 38.7 | 642.3 | n/a |
+| micro v0 k8 n1000000 | jax | 218.4 | 0.7 | 169.5 | 401 |
+| micro v0 k8 n1000000 | iree | 591.0 | 24.9 | 6457.2 | n/a |
+| micro v0 k8 n1000000 | triton | 312.0 | 0.2 | 70.5 | 497 |
+| micro v1 k4 n1000000 | torch-compile | n/a | 423.5 | 307.5 | 42078 |
+| micro v1 k4 n1000000 | torch-compile-ro | n/a | 437.4 | 401.8 | n/a |
+| micro v1 k4 n1000000 | torch-compile-mat | n/a | 447.4 | 387.3 | n/a |
+| micro v1 k4 n1000000 | torch-tensorrt | n/a | 39.0 | 326.0 | n/a |
+| micro v1 k4 n1000000 | jax | 210.4 | 0.6 | 93.0 | 782 |
+| micro v1 k4 n1000000 | iree | 565.3 | 24.1 | 6462.3 | n/a |
+| micro v1 k4 n1000000 | triton | 286.4 | 0.1 | 43.4 | 916 |
+| micro v10 k1 n191488 | torch-compile | n/a | 1939.6 | 78678.8 | 5754 |
+| micro v10 k1 n191488 | torch-compile-ro | n/a | 2049.2 | 78707.1 | 6876 |
+| micro v10 k1 n191488 | torch-compile-mat | n/a | 2009.9 | 76019.3 | 556 |
+| micro v10 k1 n191488 | torch-tensorrt | n/a | 2544.7 | 79070.6 | n/a |
+| micro v10 k1 n191488 | jax | 4928.3 | 69.0 | 41818.5 | 124 |
+| micro v10 k1 n191488 | iree | 3810.8 | 205.2 | 136402.5 | n/a |
+| micro v10 k1 n25600 | torch-compile | n/a | 1911.1 | 3186.4 | 3063 |
+| micro v10 k1 n25600 | torch-compile-ro | n/a | 1928.6 | 3095.8 | 2638 |
+| micro v10 k1 n25600 | torch-compile-mat | n/a | 2039.6 | 3158.9 | 3143 |
+| micro v10 k1 n25600 | torch-tensorrt | n/a | 2465.9 | 4091.4 | n/a |
+| micro v10 k1 n25600 | jax | 4654.7 | 6.7 | 1504.6 | 1973 |
+| micro v10 k1 n25600 | iree | 1533.6 | 26.0 | 10446.6 | n/a |
+| micro v11 k1 n25600 | torch-compile | n/a | 1692.6 | 66.8 | n/a |
+| micro v11 k1 n25600 | torch-compile-ro | n/a | 1771.6 | 111.6 | n/a |
+| micro v11 k1 n25600 | torch-compile-mat | n/a | 1682.4 | 132.8 | n/a |
+| micro v11 k1 n25600 | torch-tensorrt | n/a | 2079.3 | 107.8 | n/a |
+| micro v11 k1 n25600 | jax | 86.3 | 0.5 | 48.5 | -12022 |
+| micro v11 k1 n25600 | iree | 187.0 | 8.7 | 54.8 | 3338 |
+| micro v11 k1 n25600 | triton | 309.9 | 0.1 | 18.5 | 3160 |
+| micro v11 k1 n256000 | torch-compile | n/a | 1644.2 | 169.7 | n/a |
+| micro v11 k1 n256000 | torch-compile-ro | n/a | 1717.5 | 222.3 | n/a |
+| micro v11 k1 n256000 | torch-compile-mat | n/a | 1775.9 | 246.4 | n/a |
+| micro v11 k1 n256000 | torch-tensorrt | n/a | 2123.9 | 196.3 | n/a |
+| micro v11 k1 n256000 | jax | 87.0 | 0.5 | 47.8 | -1203 |
+| micro v11 k1 n256000 | iree | 180.9 | 10.2 | 185.1 | n/a |
+| micro v11 k1 n256000 | triton | 282.1 | 0.1 | 20.0 | 672 |
+| micro v12 k1 n25600 | torch-compile | n/a | 1678.7 | 147.3 | n/a |
+| micro v12 k1 n25600 | torch-compile-ro | n/a | 1752.2 | 165.8 | n/a |
+| micro v12 k1 n25600 | torch-compile-mat | n/a | 1785.8 | 177.1 | n/a |
+| micro v12 k1 n25600 | torch-tensorrt | n/a | 2115.7 | 135.2 | 1226660 |
+| micro v12 k1 n25600 | jax | 1612.2 | 0.7 | 43.2 | 14939 |
+| micro v12 k1 n25600 | iree | 219.5 | 13.7 | 1825.1 | n/a |
+| micro v12 k1 n25600 | triton | 310.6 | 0.4 | 299.0 | n/a |
+| micro v12 k1 n256000 | torch-compile | n/a | 1798.4 | 495.9 | n/a |
+| micro v12 k1 n256000 | torch-compile-ro | n/a | 1757.9 | 529.0 | n/a |
+| micro v12 k1 n256000 | torch-compile-mat | n/a | 1800.2 | 522.7 | n/a |
+| micro v12 k1 n256000 | torch-tensorrt | n/a | 2151.4 | 493.6 | n/a |
+| micro v12 k1 n256000 | jax | 1610.7 | 0.9 | 256.5 | 5850 |
+| micro v12 k1 n256000 | iree | 230.7 | 10.2 | 435.1 | 157 |
+| micro v12 k1 n256000 | triton | 309.4 | 0.4 | 299.9 | 405 |
+| micro v13 k1 n25600 | torch-compile | n/a | 1739.6 | 614.2 | n/a |
+| micro v13 k1 n25600 | torch-compile-ro | n/a | 1720.7 | 612.1 | n/a |
+| micro v13 k1 n25600 | torch-compile-mat | n/a | 1757.1 | 645.1 | n/a |
+| micro v13 k1 n25600 | torch-tensorrt | n/a | 2093.9 | 582.5 | 1039097 |
+| micro v13 k1 n25600 | jax | 2050.2 | 1.0 | 123.6 | 3930 |
+| micro v13 k1 n25600 | iree | 336.4 | 11.8 | 2837.3 | n/a |
+| micro v13 k1 n25600 | triton | 291.3 | 1.4 | 1252.8 | n/a |
+| micro v13 k1 n256000 | torch-compile | n/a | 1743.4 | 5003.9 | n/a |
+| micro v13 k1 n256000 | torch-compile-ro | n/a | 1755.3 | 5037.1 | n/a |
+| micro v13 k1 n256000 | torch-compile-mat | n/a | 1776.4 | 5025.1 | n/a |
+| micro v13 k1 n256000 | torch-tensorrt | n/a | 2186.7 | 4876.1 | 1051142 |
+| micro v13 k1 n256000 | jax | 1971.8 | 4.8 | 3702.8 | 1451 |
+| micro v13 k1 n256000 | iree | 642.1 | 19.2 | 5156.9 | n/a |
+| micro v13 k1 n256000 | triton | 304.9 | 4.7 | 4681.7 | 195 |
+| micro v2 k4 n1000000 | torch-compile | n/a | 498.6 | 72.7 | 1827 |
+| micro v2 k4 n1000000 | torch-compile-ro | n/a | 565.4 | 138.5 | 2823 |
+| micro v2 k4 n1000000 | torch-compile-mat | n/a | 516.8 | 138.2 | 2560 |
+| micro v2 k4 n1000000 | torch-tensorrt | n/a | 492.0 | 326.1 | 5983079 |
+| micro v2 k4 n1000000 | jax | 206.2 | 0.6 | 170.2 | 1098 |
+| micro v2 k4 n1000000 | iree | 566.4 | 24.2 | 9056.9 | n/a |
+| micro v2 k4 n1000000 | triton | 311.0 | 0.1 | 68.6 | 1070 |
+| micro v3 k4 n1000000 | torch-compile | n/a | 558.1 | 181.9 | 2667 |
+| micro v3 k4 n1000000 | torch-compile-ro | n/a | 526.0 | 353.3 | 20542 |
+| micro v3 k4 n1000000 | torch-compile-mat | n/a | 804.2 | 372.5 | 166940 |
+| micro v3 k4 n1000000 | torch-tensorrt | n/a | 41.8 | 384.7 | n/a |
+| micro v3 k4 n1000000 | jax | 206.2 | 0.6 | 304.9 | 2342 |
+| micro v3 k4 n1000000 | iree | 567.7 | 23.7 | 81750.1 | n/a |
+| micro v3 k4 n1000000 | triton | 295.6 | 0.1 | 125.1 | 1023 |
+| micro v4 k4 n1000000 | torch-compile | n/a | 439.5 | 332.5 | 41187 |
+| micro v4 k4 n1000000 | torch-compile-ro | n/a | 500.9 | 424.4 | n/a |
+| micro v4 k4 n1000000 | torch-compile-mat | n/a | 505.9 | 413.8 | n/a |
+| micro v4 k4 n1000000 | torch-tensorrt | n/a | 38.5 | 352.1 | n/a |
+| micro v4 k4 n1000000 | jax | 206.9 | 0.6 | 120.6 | 766 |
+| micro v4 k4 n1000000 | iree | 563.6 | 23.8 | 10871.4 | n/a |
+| micro v4 k4 n1000000 | triton | 286.7 | 0.1 | 69.5 | 913 |
+| micro v5 k4 n1000000 | torch-compile | n/a | 522.1 | 332.7 | 50936 |
+| micro v5 k4 n1000000 | torch-compile-ro | n/a | 584.3 | 420.4 | n/a |
+| micro v5 k4 n1000000 | torch-compile-mat | n/a | 533.2 | 425.3 | n/a |
+| micro v5 k4 n1000000 | torch-tensorrt | n/a | 42.2 | 351.7 | n/a |
+| micro v5 k4 n1000000 | jax | 205.7 | 0.6 | 120.6 | 764 |
+| micro v5 k4 n1000000 | iree | 566.4 | 24.2 | 10814.3 | n/a |
+| micro v5 k4 n1000000 | triton | 310.0 | 0.1 | 69.3 | 1001 |
+| micro v6 k1 n25600 | torch-compile | n/a | 1704.3 | 381.9 | 139763 |
+| micro v6 k1 n25600 | torch-compile-ro | n/a | 2018.3 | 408.7 | n/a |
+| micro v6 k1 n25600 | torch-compile-mat | n/a | 1953.2 | 430.4 | n/a |
+| micro v6 k1 n25600 | torch-tensorrt | n/a | 2083.7 | 381.9 | 174945 |
+| micro v6 k1 n25600 | jax | 1605.8 | 1.0 | 107.5 | 4822 |
+| micro v6 k1 n25600 | iree | 229.4 | 16.9 | 5364.6 | n/a |
+| micro v6 k1 n25600 | triton | 304.4 | 0.9 | 887.9 | n/a |
+| micro v6 k1 n256000 | torch-compile | n/a | 1779.7 | 1269.3 | n/a |
+| micro v6 k1 n256000 | torch-compile-ro | n/a | 1824.3 | 1263.7 | n/a |
+| micro v6 k1 n256000 | torch-compile-mat | n/a | 1938.9 | 1300.8 | n/a |
+| micro v6 k1 n256000 | torch-tensorrt | n/a | 2080.8 | 1263.5 | n/a |
+| micro v6 k1 n256000 | jax | 1602.2 | 1.6 | 751.7 | 2687 |
+| micro v6 k1 n256000 | iree | 240.9 | 9.9 | 913.7 | 15 |
+| micro v6 k1 n256000 | triton | 309.7 | 0.9 | 898.5 | 181 |
+| micro v7 k1 n25600 | torch-compile | n/a | 1727.0 | 828.5 | n/a |
+| micro v7 k1 n25600 | torch-compile-ro | n/a | 1730.9 | 887.0 | n/a |
+| micro v7 k1 n25600 | torch-compile-mat | n/a | 1770.2 | 914.5 | n/a |
+| micro v7 k1 n25600 | torch-tensorrt | n/a | 2130.6 | 826.4 | n/a |
+| micro v7 k1 n25600 | jax | 2231.3 | 1.6 | 324.8 | 4211 |
+| micro v7 k1 n25600 | iree | 327.6 | 27.9 | 11535.5 | n/a |
+| micro v7 k1 n256000 | torch-compile | n/a | 1805.1 | 2997.4 | 17826 |
+| micro v7 k1 n256000 | torch-compile-ro | n/a | 1879.6 | 3098.8 | n/a |
+| micro v7 k1 n256000 | torch-compile-mat | n/a | 1883.4 | 3061.7 | 73264 |
+| micro v7 k1 n256000 | torch-tensorrt | n/a | 2100.4 | 3091.3 | n/a |
+| micro v7 k1 n256000 | jax | 2374.2 | 3.8 | 1963.5 | 1885 |
+| micro v7 k1 n256000 | iree | 435.7 | 43.0 | 31542.9 | n/a |
+| micro v8 k1 n25600 | torch-compile | n/a | 1839.6 | 515.0 | 35873 |
+| micro v8 k1 n25600 | torch-compile-ro | n/a | 1840.7 | 522.4 | 43240 |
+| micro v8 k1 n25600 | torch-compile-mat | n/a | 1815.0 | 540.0 | 82742 |
+| micro v8 k1 n25600 | torch-tensorrt | n/a | 2271.5 | 564.2 | n/a |
+| micro v8 k1 n25600 | jax | 1327.1 | 1.3 | 267.2 | 3609 |
+| micro v8 k1 n25600 | iree | 498.0 | 9.7 | 935.7 | n/a |
+| micro v8 k1 n256000 | torch-compile | n/a | 1851.5 | 29784.9 | n/a |
+| micro v8 k1 n256000 | torch-compile-ro | n/a | 1768.4 | 29773.4 | n/a |
+| micro v8 k1 n256000 | torch-compile-mat | n/a | 1885.5 | 27687.1 | n/a |
+| micro v8 k1 n256000 | torch-tensorrt | n/a | 2267.9 | 27453.4 | n/a |
+| micro v8 k1 n256000 | jax | 1531.5 | 16.7 | 15424.1 | 103 |
+| micro v8 k1 n256000 | iree | 21183.4 | 104.3 | 38530.6 | n/a |
+| micro v9 k1 n25600 | torch-compile | n/a | 1788.9 | 876.0 | n/a |
+| micro v9 k1 n25600 | torch-compile-ro | n/a | 1744.0 | 861.3 | n/a |
+| micro v9 k1 n25600 | torch-compile-mat | n/a | 1707.6 | 871.0 | n/a |
+| micro v9 k1 n25600 | torch-tensorrt | n/a | 2159.2 | 945.2 | n/a |
+| micro v9 k1 n25600 | jax | 370.7 | 0.8 | 244.2 | 211 |
+| micro v9 k1 n256000 | torch-compile | n/a | 1831.2 | 645.1 | n/a |
+| micro v9 k1 n256000 | torch-compile-ro | n/a | 1886.9 | 700.5 | n/a |
+| micro v9 k1 n256000 | torch-compile-mat | n/a | 2164.9 | 666.1 | n/a |
+| micro v9 k1 n256000 | torch-tensorrt | n/a | 2223.4 | 1547.5 | n/a |
+| micro v9 k1 n256000 | jax | 844.5 | 1.0 | 332.0 | 2209 |
+| mixer_b16 | torch-compile | n/a | 1206.1 | 3139.4 | n/a |
+| mixer_b16 | torch-compile-ro | n/a | 1244.1 | 3083.5 | 11100000 |
+| mixer_b16 | torch-compile-mat | n/a | 1319.2 | 3152.1 | n/a |
+| mixer_b16 | torch-tensorrt | n/a | 5864.3 | 2487.4 | 9611 |
+| mixer_b16 | jax | 7444.5 | 7.1 | 2246.6 | 8743 |
+| mixer_b16 | iree | 1566.5 | 752.0 | 673442.5 | n/a |
+| mixer_b16 | ours | n/a | 185.5 | 2714.0 | 139 |
+| resnet18-b1 | torch-compile | n/a | 1049.8 | 1109.6 | 1773 |
+| resnet18-b1 | torch-compile-ro | n/a | 1081.7 | 920.3 | 1325 |
+| resnet18-b1 | torch-compile-mat | n/a | 1609.6 | 1055.2 | 2627 |
+| resnet18-b1 | torch-tensorrt | n/a | 4733.6 | 1000.4 | 7614 |
+| resnet18-b1 | jax | 611.6 | 4.0 | 1098.1 | 864 |
+| resnet18-b1 | ours | n/a | 130.6 | 717.7 | -60 |
+| resnet18-b8 | torch-compile | n/a | 1087.4 | 2182.5 | 12140 |
+| resnet18-b8 | torch-compile-ro | n/a | 1009.9 | 2134.3 | 6708 |
+| resnet18-b8 | torch-compile-mat | n/a | 1516.8 | 2119.7 | 9702 |
+| resnet18-b8 | torch-tensorrt | n/a | 4729.2 | 2030.7 | 20114 |
+| resnet18-b8 | jax | 942.2 | 4.3 | 2278.7 | n/a |
+| resnet18-b8 | ours | n/a | 170.5 | 2727.0 | n/a |
+| smollm2-135m | torch-compile | n/a | 3853.7 | 5344.0 | 317 |
+| smollm2-135m | torch-compile-ro | n/a | 4009.0 | 3778.2 | 289 |
+| smollm2-135m | torch-compile-mat | n/a | 3950.6 | 3826.7 | 285 |
+| smollm2-135m | torch-tensorrt | n/a | 22282.2 | 3761.3 | 1807 |
+| smollm2-135m | jax | 10854.0 | 18.4 | 2656.4 | 787 |
+| smollm2-135m | iree | 2071.4 | 173.6 | 19167.3 | n/a |
+| smollm2-135m | ours | n/a | 492.5 | 3690.8 | -4 |
+| tiny-gpt2 | torch-compile | n/a | 1195.3 | 421.2 | 596 |
+| tiny-gpt2 | torch-compile-ro | n/a | 1193.5 | 209.5 | 505 |
+| tiny-gpt2 | torch-compile-mat | n/a | 1221.6 | 257.8 | 543 |
+| tiny-gpt2 | torch-tensorrt | n/a | 1877.1 | 1417.8 | 7015 |
+| tiny-gpt2 | jax | 1141.0 | 1.6 | 86.6 | 431 |
+| tiny-gpt2 | iree | 385.6 | 11.9 | 194.2 | -60 |
+| tiny-gpt2 | ours | n/a | 109.0 | 201.3 | -264 |
+| vit-tiny | torch-compile | n/a | 1748.4 | 2103.9 | 941 |
+| vit-tiny | torch-compile-ro | n/a | 1710.1 | 1415.9 | 656 |
+| vit-tiny | torch-compile-mat | n/a | 1971.1 | 1340.3 | 741 |
+| vit-tiny | torch-tensorrt | n/a | 7827.5 | 1035.3 | 2762 |
+| vit-tiny | jax | 6407.9 | 7.5 | 742.3 | 2041 |
+| vit-tiny | iree | 1688.9 | 38.5 | 25055.9 | n/a |
+| vit-tiny | ours | n/a | 144.0 | 1015.2 | 4 |
 
 ## Warm-up (median over rounds; steady_at/crossover in iterations, 'none' if never reached within N)
 

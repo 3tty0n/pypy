@@ -121,12 +121,13 @@ class EffectInfo(object):
     OS_TENSOR_OUTPUT            = 144
     OS_TENSOR_NDIM              = 145
     OS_TENSOR_DTYPE             = 146
+    OS_TENSOR_ASSIGN            = 147
 
     # for debugging:
     _OS_CANRAISE = set([
         OS_NONE, OS_STR2UNICODE, OS_LIBFFI_CALL, OS_RAW_MALLOC_VARSIZE_CHAR,
         OS_JIT_FORCE_VIRTUAL, OS_SHRINK_ARRAY, OS_DICT_LOOKUP,
-        OS_NOT_IN_TRACE,
+        OS_NOT_IN_TRACE, OS_TENSOR_ASSIGN,
     ])
 
     _NO_CALL_RELEASE_GIL_TARGET = (llmemory.NULL, 0)

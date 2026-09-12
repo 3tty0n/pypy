@@ -83,7 +83,7 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         cic = optforce.optimizer.metainterp_sd.callinfocollection
         calldescr, func = cic.callinfo_for_oopspec(EffectInfo.OS_TENSOR_LAUNCH)
         args = [ConstInt(func), ConstPtr(gcref)] + leaves
-        while len(args) < 2 + core.MAX_INPUTS:
+        while len(args) < 2 + core.MAX_INPUTS_LIMIT:
             args.append(CONST_NULL)
         newop = ResOperation(rop.CALL_R, args, descr=calldescr)
         optforce.emit_extra(newop)
@@ -222,6 +222,7 @@ class OptTensor(Optimization):
         self.sizes = {}
         self.cols = {}
         self.pending = []
+        self.live = []
 
     def propagate_forward(self, op):
         return dispatch_opt(self, op)
@@ -233,6 +234,7 @@ class OptTensor(Optimization):
             kernels.compile_or_reuse(kernel)
         self.sizes = {}
         self.cols = {}
+        self.live = []
 
     def static_size(self, leaves):
         n = -1
@@ -266,6 +268,13 @@ class OptTensor(Optimization):
     def optimize_CALL_R(self, op):
         effectinfo = op.getdescr().get_extra_info()
         idx = effectinfo.oopspecindex
+        if idx == EffectInfo.OS_TENSOR_ASSIGN:
+            # This writes into a tensor that pending chains may still read
+            # from, and their leaves are plain arguments of this call that
+            # nothing else forces.  Materialize them all first, so that a
+            # deferred read sees the operand as it was when it was built.
+            self.force_live()
+            return self.emit(op)
         if EffectInfo.OS_TENSOR_ADD <= idx <= EffectInfo.OS_TENSOR_EQMASK:
             opcode = idx - EffectInfo.OS_TENSOR_ADD
             nargs = core.ARITY[opcode]
@@ -282,12 +291,18 @@ class OptTensor(Optimization):
                 if sub is not None and sub.launched_kernel:
                     self.optimizer.force_box(box)
             args = [get_box_replacement(box) for box in args]
-            if self._nleaves(args) > core.MAX_INPUTS:
+            if self._too_wide(args):
                 for box in args:
                     self.optimizer.force_box(box)
+                if self._too_wide(args):
+                    # Forcing could not cut it: constants do not force.  Emit
+                    # this node as a residual call, so that its result is a
+                    # single leaf for the rest of the chain.
+                    return self.emit(op)
             info = VTensorInfo(opcode, args, param, self)
             op = self.replace_op_with(op, op.getopnum())
             op.set_forwarded(info)
+            self.live.append(op)
             self.last_emitted_operation = REMOVED
             return
         return self.emit(op)
@@ -327,10 +342,26 @@ class OptTensor(Optimization):
         return self.emit(op)
     optimize_CALL_PURE_I = optimize_CALL_I
 
-    def _nleaves(self, args):
+    def force_live(self):
+        """Materialize every tensor chain that is still deferred."""
+        live = self.live
+        self.live = []
+        for box in live:
+            if vtensor_info(box) is not None:
+                self.optimizer.force_box(box)
+
+    def _too_wide(self, args):
+        """Would fusing this node need more input slots than the launcher has?
+
+        A chain with no tensor leaf at all is recollected by force_box with
+        scalar folding disabled, which turns every folded constant back into
+        a real input, so the cap has to count the constants in that case."""
         leaves, consts = [], []
         _collect_leaves(VTensorInfo(0, args, 0), leaves, consts)
-        return len(leaves)
+        n = len(leaves)
+        if n == 0:
+            n = len(consts)
+        return n > core.max_inputs()
 
     def optimize_GUARD_NO_EXCEPTION(self, op):
         if self.last_emitted_operation is REMOVED:

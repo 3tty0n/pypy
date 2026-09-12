@@ -1,3 +1,5 @@
+import os
+
 from rpython.rlib import jit
 from rpython.rlib.rfloat import INFINITY
 from rpython.rtyper.lltypesystem import lltype
@@ -43,7 +45,40 @@ NAMES = ['add', 'mul', 'relu', 'sum', 'relugrad',
          'sub', 'div', 'exp', 'sqrt', 'maxr', 'eqmask']
 HAS_PARAM = [True, True, False, True, True,
              True, True, False, False, True, True]
-MAX_INPUTS = 6
+# Hard ceiling on a fused kernel's input slots.  It is a compile-time
+# constant because the tensor.launch oopspec has that many tensor arguments;
+# how many of them the fusion pass is actually allowed to use is the runtime
+# knob below, so a MAX_INPUTS sensitivity sweep needs no retranslation.
+MAX_INPUTS_LIMIT = 8
+DEFAULT_MAX_INPUTS = 6
+
+class _Knobs(object):
+    max_inputs = 0
+_knobs = _Knobs()
+
+def max_inputs():
+    """Leaves a fused kernel may take, from RTENSOR_MAX_INPUTS (4..8).
+
+    Default 6, which is what it was before the knob existed.  The value is
+    returned from the local, not re-read from the cache, so the answer is
+    right on the first call as well as on every later one."""
+    n = _knobs.max_inputs
+    if n != 0:
+        return n
+    n = DEFAULT_MAX_INPUTS
+    value = os.environ.get('RTENSOR_MAX_INPUTS')
+    if value is not None and len(value) > 0:
+        try:
+            n = int(value)
+        except ValueError:
+            n = DEFAULT_MAX_INPUTS
+        if n < 4:
+            n = 4
+        elif n > MAX_INPUTS_LIMIT:
+            n = MAX_INPUTS_LIMIT
+    _knobs.max_inputs = n
+    return n
+
 BC_NONE, BC_R_ROW, BC_R_SCALAR, BC_L_ROW, BC_L_SCALAR = 0, 1, 2, 3, 4
 BC_R_COL, BC_L_COL = 5, 6
 NPARAMS = 7
@@ -180,6 +215,7 @@ class Config(object):
     block = 4096
     flat = 4096
     num_warps = 8
+    cc = None
 config = Config()
 GA_IM2COL, GA_COL2CHW, GA_MAXPOOL = 0, 1, 2
 GA_HEADSPLIT, GA_HEADMERGE = 3, 4

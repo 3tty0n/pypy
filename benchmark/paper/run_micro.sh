@@ -25,6 +25,9 @@ if [ "$APPLEVEL" = 1 ]; then
   fi
 fi
 
+# Every driver takes WARMUP as its optional 6th argument and warms up exactly
+# that many iterations, so no two systems are timed after a different warm-up;
+# the count is recorded as `warmup` in results.jsonl.
 HEADER="mode\tvariant\tk\tn\titers\twarm_s\tsteady_us\tkernels\tacc\tcompiled_in_timed\tlaunches_per_iter\tgraphs\tbreaks\tcompile_ms\tfirst_run_ms"
 TSV="$OUT/micro.tsv"
 tsv_init "$TSV" "$HEADER"
@@ -64,17 +67,17 @@ BASELINES=${BASELINES:-"triton tensorrt compile-ro compile-mat jax iree"}
 has_baseline() { case " $BASELINES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 baselines() {
   local variant=$1 k=$2 n=$3
-  has_baseline triton && baseline_run "$TORCH_PYTHON" triton_bench.py triton "$variant" "$k" "$n" "$ITERS"
-  has_baseline tensorrt && baseline_run "$TRT_PYTHON" torch_bench.py tensorrt "$variant" "$k" "$n" "$ITERS"
+  has_baseline triton && baseline_run "$TORCH_PYTHON" triton_bench.py triton "$variant" "$k" "$n" "$ITERS" "$WARMUP"
+  has_baseline tensorrt && baseline_run "$TRT_PYTHON" torch_bench.py tensorrt "$variant" "$k" "$n" "$ITERS" "$WARMUP"
   # Reachable both from the normal torch section below (run_point calls
   # baselines() at the end of every point) and from --baselines-only, which
   # calls only baselines().
-  has_baseline compile-ro && torchrun compile-ro "$variant" "$k" "$n" "$ITERS"
-  has_baseline compile-mat && torchrun compile-mat "$variant" "$k" "$n" "$ITERS"
-  has_baseline jax && baseline_run "$JAX_PYTHON" jax_bench.py jax "$variant" "$k" "$n" "$ITERS"
+  has_baseline compile-ro && torchrun compile-ro "$variant" "$k" "$n" "$ITERS" "$WARMUP"
+  has_baseline compile-mat && torchrun compile-mat "$variant" "$k" "$n" "$ITERS" "$WARMUP"
+  has_baseline jax && baseline_run "$JAX_PYTHON" jax_bench.py jax "$variant" "$k" "$n" "$ITERS" "$WARMUP"
   if has_baseline iree; then
     case "$IREE_VARIANTS" in
-      *" $variant "*) baseline_run "$JAX_PYTHON" jax_bench.py iree "$variant" "$k" "$n" "$ITERS" ;;
+      *" $variant "*) baseline_run "$JAX_PYTHON" jax_bench.py iree "$variant" "$k" "$n" "$ITERS" "$WARMUP" ;;
     esac
   fi
 }
@@ -82,7 +85,7 @@ baselines() {
 app_point() {
   local variant=$1 k=$2 n=$3 line
   if ! line=$("$RUN_PYPY" $JIT_FLAGS "$HERE/../applevel/micro.py" \
-                app "$variant" "$k" "$n" "$ITERS") || [ -z "$line" ]; then
+                app "$variant" "$k" "$n" "$ITERS" "$WARMUP") || [ -z "$line" ]; then
     echo "run_micro.sh: app-level variant $variant k $k n $n failed" >&2
     return 0
   fi
@@ -102,7 +105,7 @@ run_point() {
     return 0
   fi
   for mode in fused eager nojit; do
-    if ! line=$(ours $mode $variant $k $n $ITERS); then
+    if ! line=$(ours $mode $variant $k $n $ITERS $WARMUP); then
       echo "run_micro.sh: standalone variant $variant k $k n $n mode $mode failed" >&2
       return 0
     fi
@@ -114,8 +117,8 @@ run_point() {
   if [ "$eff" != "$n" ]; then
     echo "run_micro: variant $variant n $n -> $eff (fitted to GPU memory)" >&2
   fi
-  torchrun compile $variant $k $eff $ITERS
-  torchrun eager $variant $k $eff $ITERS
+  torchrun compile $variant $k $eff $ITERS $WARMUP
+  torchrun eager $variant $k $eff $ITERS $WARMUP
   baselines $variant $k $eff
 }
 

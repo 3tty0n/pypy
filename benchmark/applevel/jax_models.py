@@ -332,13 +332,25 @@ BUILD = {'gpt2': build_gpt2, 'bert': build_bert, 'vit': build_vit,
 
 # -- driver -------------------------------------------------------------------
 
+def tolerance():
+    """The tolerance for this (workload class, dtype), from config.sh's
+    tolerance_for table via MODEL_TOL - the same value the torch and IREE
+    paths use."""
+    try:
+        return float(os.environ.get('MODEL_TOL', '1e-3'))
+    except ValueError:
+        return 1e-3
+
+
 def compare(outdir, logits):
     ref = os.path.join(outdir, 'logits_pypy.bin')
     if not os.path.exists(ref):
         return ''
     other = np.fromfile(ref, dtype=np.float32).reshape(logits.shape)
     mine = np.asarray(logits, dtype=np.float32)
-    return ' maxabsdiff=%.6g' % np.abs(mine - other).max()
+    d = float(np.abs(mine - other).max())
+    tol = tolerance()
+    return ' maxabsdiff=%.6g tol=%.6g pass=%d' % (d, tol, int(d <= tol))
 
 
 def main():

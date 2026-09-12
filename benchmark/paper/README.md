@@ -182,10 +182,23 @@ restricts which baseline rows `run_micro.sh`/`run_models.sh` add, so
 rows of an existing result set, and `BASELINES="compile-ro compile-mat"
 ./bench.sh models --baselines-only` fills in just the two new
 torch.compile-mode rows. `torch-compile-ro` runs under `mode="reduce-overhead"`
-(CUDA graphs); the harness already reuses the same input tensors across
-iterations that mode needs, and `torch_common.timed` clones the final output
-once, after the timed loop, so the accuracy check that reads it back doesn't
-race the next CUDA graph replay. `torch-compile-mat` runs under
+(CUDA graphs), and the harness already reuses the same input tensors across
+iterations that mode needs. The two benchmark families pay for that mode in
+different places, which is worth stating because they look the same from the
+outside:
+
+- *models* (`torch_common.timed`): nothing extra happens inside the timed
+  loop. One `logits.clone()` runs once, **after** the loop and after the
+  timer has stopped, only so the accuracy check that reads the logits back
+  does not race the next CUDA graph replay. The clone is not in `steady_us`.
+- *micro* (`torch_bench.py`): variants 0-5 and 6-13 are recurrences - each
+  iteration's output is the next iteration's input - so a cudagraph mode
+  needs `cudagraph_mark_step_begin()` before every call and a `clone()` of
+  the output to survive the next replay, both **inside** the timed loop.
+  That is genuine cost of this access pattern under cudagraphs, so it is
+  measured rather than hidden.
+
+`torch-compile-mat` runs under
 `mode="max-autotune"`, which can take minutes to compile per point.
 
 ### Methodology per backend
@@ -242,8 +255,43 @@ Correctness: every new row is checked like the torch rows. Micro lines carry
 the same accumulator as torch (they agree to the printed digits on every
 supported variant; fp16 attention differs in the last digits of a sum that
 cancels to ~1e-4). Model lines carry `maxabsdiff` against the stored
-MetaTensor logits, the same reference and the same tolerance (`check.sh`:
-1e-3) the torch rows use. No tolerance was changed for any backend.
+MetaTensor logits, plus the tolerance they were judged by and the verdict:
+`tol=<t> pass=<0|1>`, recorded as the `tolerance` and `pass` columns of
+`models.tsv` and `results.jsonl` and shown in `summary.md`. The tolerance is
+one table, `tolerance_for` in `config.sh`, keyed by workload class and dtype,
+so no backend can be checked more loosely than the one it is compared to:
+
+| workload class | dtype | tolerance |
+|---|---|---|
+| models | float32 | 1e-3 |
+| conv models under TF32 (`resnet18-*`) | float32 | 2e-2 |
+| any | float16 | 1e-2 |
+| any | float64 | 1e-6 |
+
+`check.sh` reads the same function instead of its old hard-coded 1e-3, and
+micro accumulators keep `close_enough` (a relative 1e-6).
+
+Warm-up: every micro driver takes `WARMUP` as an optional sixth argument
+(default 30) and runs exactly that many iterations before the timed loop -
+the first of them separately, because that is the one that traces and
+compiles. `run_micro.sh` passes `$WARMUP` to all of them, including the
+app-level driver, and records it as `warmup` in `results.jsonl`. Before this
+the torch/jax/triton drivers hard-coded 20 and ours ran an adaptive 30-41, so
+the columns were not comparable.
+
+Dead code: the timed loop observes its result once, so the model rows also
+carry `launches_per_iter`, the kernels a forward actually launches. Ours
+reads `_metatensor.launch_count()` across the timed loop; the torch side
+counts CUDA kernels with `torch.profiler` over a short separate window of
+five iterations **after** the timed loop, so the profiler's overhead is never
+measured as the model's cost. JAX/XLA leaves the field empty - XLA has no
+cheap equivalent counter.
+
+Architecture: the torch GPT-2 definition with random weights computes q, k
+and v as one fused `[d, 3d]` GEMM and splits the result, which is what HF's
+`Conv1D` `c_attn` does and what the tensorpypy side already did. It used to
+issue three separate GEMMs, which made the two systems different
+architectures rather than different runtimes.
 
 Known comparability limits:
 
@@ -442,9 +490,22 @@ tsv files.
 Runtime knobs (see also `benchmark/README.md`): `RTENSOR_FLAT_BLOCK`
 (elements per block for elementwise/gather kernels, default 4096; smaller
 values trade off differently per workload, see the root README),
-`RTENSOR_BUDGET_MB` (device GC byte threshold before a GC pass, default 8) and
+`RTENSOR_BUDGET_MB` (device GC byte threshold before a GC pass, default 8),
 `RTENSOR_NO_CUBLASLT` (set to anything to keep batched matmuls on plain
-`cublasSgemmStridedBatched` instead of the algorithm tuned per shape).
+`cublasSgemmStridedBatched` instead of the algorithm tuned per shape) and
+`RTENSOR_MAX_INPUTS` (leaves one fused kernel may take, 4..8, default 6 -
+the fusion pass cuts a chain when it would need more, so this is the knob for
+a fusion-width sensitivity sweep; the launch oopspec always carries 8 slots,
+so changing it needs no retranslation). `RTENSOR_DEBUG_KNOBS=1` makes
+`metatensor-bench` print the value it resolved, which is the check that the
+knob took effect.
+
+Variant 2 of the microbenchmarks ("force") is variant 1 plus a real
+materialization each iteration, in each system's own currency: `.force()`
+(ours), `torch.cuda.synchronize()` (torch eager, Triton),
+`torch._dynamo.graph_break()` (torch.compile modes and TensorRT),
+`block_until_ready()` / `to_host()` (JAX, IREE). Before this it was a copy of
+variant 1 in every baseline and measured nothing.
 
 ## Cloud / Docker
 

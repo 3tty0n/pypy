@@ -2,6 +2,10 @@ import math, os, sys, time, torch
 import torch.nn.functional as F
 
 mode, variant, k, n, iters = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+# Optional 6th argument: warm-up iterations before the timed run.  Every micro
+# driver (ours, torch, jax, triton) takes it in the same position and defaults
+# to the same 30, so no two systems are measured after a different warm-up.
+WARMUP = int(sys.argv[6]) if len(sys.argv) > 6 else 30
 dev = "cuda"
 DTNAME = os.environ.get("TORCH_DTYPE", "float64")
 DT = {"float64": torch.float64, "float32": torch.float32,
@@ -80,12 +84,43 @@ def cg_persist(x):
     return x.clone() if mode in CUDAGRAPH_MODES else x
 
 
+def force_point():
+    """Variant 2 ("force") = variant 1 plus a real materialization of the
+    chain on every iteration, which is what "force" means for this system:
+
+      - eager: torch.cuda.synchronize(), so the iteration cannot be left
+        queued on the stream and overlapped with the next one;
+      - compile/compile-ro/compile-mat/tensorrt: torch._dynamo.graph_break(),
+        which cuts the traced region in two at this point, so the first half
+        is a separate compiled graph that has to be executed and its result
+        materialized before the second half is entered.
+
+    Variant 1 is the same control flow without the forcing point, so the two
+    rows differ by exactly the cost of materializing."""
+    if mode in ("compile", "compile-ro", "compile-mat", "tensorrt"):
+        import torch._dynamo as dynamo
+        dynamo.graph_break()
+    else:
+        torch.cuda.synchronize()
+
+
 def loop(step, x, iters):
     for _ in range(iters):
         mark_step()
         x = cg_persist(step(x))
     torch.cuda.synchronize()
-    return x.sum().item()
+    return checksum(x)
+
+
+def checksum(x):
+    """The reported accumulator, reduced in float64.
+
+    The reduction is not part of the benchmark, but its dtype decides whether
+    the number can be compared across systems: summing 256k float16 elements
+    of about 3.7 in float16 overflows to inf, so every baseline row used to
+    read `inf` while ours (which accumulates wider) read a finite number.
+    float64 is what MetaTensor's item() hands back anyway."""
+    return x.double().sum().item()
 
 
 def layer_norm(t, g, b):
@@ -260,11 +295,20 @@ def run_cnn(iters):
 
 
 def run_reduction(iters):
+    """Row reduction, broadcast back over the row, elementwise combine.
+
+    The recurrence is bounded on purpose: the old x += rowsum(x*x) doubles
+    every iteration and reaches inf within the timed loop, so the accumulator
+    carried no information and float16 could not agree with float64.  Here
+    h = mean(x*x) per row and 2h/(1+h) is in [0, 2), so |x| stays below 4;
+    the recurrence has a strongly attracting fixed point at 2+sqrt(3), which
+    is what makes every system's and every dtype's accumulator agree instead
+    of amplifying its own rounding."""
     x = make_input(rows_of(RED_COLS), RED_COLS)
 
     def forward(t):
-        h = (t * t).sum(1, keepdim=True)
-        return t + h
+        h = (t * t).sum(1, keepdim=True) / RED_COLS
+        return 0.5 * t + 2.0 * h / (1.0 + h)
     return loop(compiled(forward), x, iters)
 
 
@@ -309,7 +353,7 @@ def report(warm, steady, acc, graphs=-1, breaks=-1):
 def timed(run):
     t0 = time.time(); run(1); torch.cuda.synchronize()
     FIRST_MS[0] = (time.time() - t0) * 1e3
-    t0 = time.time(); run(19); warm = time.time() - t0 + FIRST_MS[0] / 1e3
+    t0 = time.time(); run(max(WARMUP - 1, 0)); warm = time.time() - t0 + FIRST_MS[0] / 1e3
     t0 = time.time(); acc = run(iters); steady = (time.time() - t0) / iters * 1e6
     return warm, steady, acc
 
@@ -332,7 +376,11 @@ sink = open(os.devnull, "w")
 def step(h, b, i):
     for _ in range(k):
         h = torch.relu(h * b + b)
-    if variant in (1, 2):
+    if variant == 1:
+        if i % 7 == 0:
+            h = h + b
+    elif variant == 2:
+        force_point()
         if i % 7 == 0:
             h = h + b
     elif variant == 3:
@@ -366,7 +414,7 @@ def run(iters):
         mark_step()
         h = cg_persist(step(h, b, i))
     torch.cuda.synchronize()
-    return h.sum().item()
+    return checksum(h)
 
 
 warm, steady, acc = timed(run)

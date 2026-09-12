@@ -6,7 +6,7 @@ the standalone binary is a translated RPython program with no bytecode
 dispatch, this one runs the same models as Python through _metatensor, which
 is what torch_bench.py is compared against.
 
-    micro.py MODE VARIANT K N ITERS      (VARIANT: 0..13, float64 only)
+    micro.py MODE VARIANT K N ITERS [WARMUP]   (VARIANT: 0..13, float64 only)
 """
 import sys, os, time
 
@@ -23,7 +23,6 @@ MLP_D = 256
 LR = 1e-06
 RED_COLS = 64
 TF_BLOCKS = 2
-WARMUP_ITERS = 10
 
 VARIANTS = "0..13"
 
@@ -271,6 +270,11 @@ def conv(n):
 
 
 def reduction(n):
+    """x <- 0.5*x + 2h/(1+h) with h = mean(x*x) over the row.
+
+    Bounded on purpose: the earlier x += rowsum(x*x) doubles every iteration
+    and is inf long before the timed loop ends.  Same structure - row
+    reduction, broadcast back over the row, elementwise combine."""
     rows, eff_n = fit_rows(n, RED_COLS, 0, MEM_REDUCE)
     data = [(i % 7) - 3.0 for i in range(rows * RED_COLS)]
     x0 = _metatensor.tensor(data, [rows, RED_COLS])
@@ -278,8 +282,12 @@ def reduction(n):
     def run(iters):
         x = x0
         for i in range(iters):
-            h = (x * x).sum(1).reshape([rows, 1])
-            x = x + h
+            half = _metatensor.scalar(0.5)
+            one = _metatensor.scalar(1.0)
+            two = _metatensor.scalar(2.0)
+            inv = _metatensor.scalar(1.0 / RED_COLS)
+            h = (x * x).sum(1).reshape([rows, 1]) * inv
+            x = x * half + (h / (h + one)) * two
         return x.sum().item()
     return run, eff_n
 
@@ -321,11 +329,18 @@ def build(variant, k, n):
 
 
 def main(argv):
-    if len(argv) != 6:
-        print("usage: micro.py MODE VARIANT K N ITERS  (VARIANT: %s)" % VARIANTS)
+    if len(argv) not in (6, 7):
+        print("usage: micro.py MODE VARIANT K N ITERS [WARMUP]  (VARIANT: %s)"
+              % VARIANTS)
         return 1
     mode, variant, k = argv[1], int(argv[2]), int(argv[3])
     n, iters = int(argv[4]), int(argv[5])
+    # Warm-up iterations, same argv position and default as the other micro
+    # drivers.  The first call is the one that traces and compiles; the rest
+    # are plain iterations, so exactly `warmup` run before the timed loop.
+    warmup = int(argv[6]) if len(argv) == 7 else 30
+    if warmup < 1:
+        warmup = 1
     dtype = os.environ.get('RTENSOR_DTYPE', 'float64')
     if dtype != 'float64':
         print("micro.py: only float64 app-level, got %s" % dtype)
@@ -333,10 +348,10 @@ def main(argv):
 
     _cfg.capped = False
     run, eff_n = build(variant, k, n)
+    run(1)
     t0 = time.time()
-    run(WARMUP_ITERS)
+    run(warmup - 1)
     warm = time.time() - t0
-    run(WARMUP_ITERS)
 
     kernels_before = _metatensor.kernel_count()
     launches_before = _metatensor.launch_count()

@@ -256,7 +256,8 @@ def launch_gpu(kernel, inputs):
     lltype.free(outs, flavor='raw')
     return result
 
-def launch(kernel, a, b, c, d=NULLTENSOR, e=NULLTENSOR, f=NULLTENSOR):
+def launch(kernel, a, b, c, d=NULLTENSOR, e=NULLTENSOR, f=NULLTENSOR,
+           g=NULLTENSOR, h=NULLTENSOR):
     values = [a]
     if kernel.ninputs > 1:
         values.append(b)
@@ -268,6 +269,10 @@ def launch(kernel, a, b, c, d=NULLTENSOR, e=NULLTENSOR, f=NULLTENSOR):
         values.append(e)
     if kernel.ninputs > 5:
         values.append(f)
+    if kernel.ninputs > 6:
+        values.append(g)
+    if kernel.ninputs > 7:
+        values.append(h)
     nmax = 0
     for k in range(len(values)):
         if values[k].size > nmax:

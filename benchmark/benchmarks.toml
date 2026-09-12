@@ -90,6 +90,6 @@ sizes = [25600, 256000]
 # Precision sweep: the same points again at every dtype. Kept separate because
 # it is a second pass over a subset, not part of the float64 grid.
 [precision]
-variants = [8, 13]
+variants = [8, 11, 13]
 sizes = [256000]
 dtypes = ["float64", "float32", "float16"]

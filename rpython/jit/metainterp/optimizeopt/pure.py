@@ -227,6 +227,18 @@ class OptPure(Optimization):
             newop = op
         return self.emit_result(CallPureOptimizationResult(self, newop))
 
+    def optimize_CALL_R(self, op):
+        from rpython.jit.codewriter.effectinfo import EffectInfo
+        if op.getdescr().get_extra_info().oopspecindex == \
+                EffectInfo.OS_TENSOR_ASSIGN:
+            # The tensor operations are elidable in their arguments, but this
+            # one writes into the buffer they read from: their remembered
+            # results (here and in the short preamble) cannot be reused.
+            self.call_pure_positions = []
+            self.extra_call_pure = []
+            self.known_result_call_pure = []
+        return self.optimize_default(op)
+
     def optimize_CALL_PURE_I(self, op):
         return self.optimize_call_pure(op)
     optimize_CALL_PURE_R = optimize_CALL_PURE_I

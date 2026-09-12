@@ -22,6 +22,9 @@ import iree_adapter
 
 mode, variant, k, n, iters = (sys.argv[1], int(sys.argv[2]), int(sys.argv[3]),
                               int(sys.argv[4]), int(sys.argv[5]))
+# Optional 6th argument: warm-up iterations before the timed run, the same
+# position and the same default (30) in every micro driver.
+WARMUP = int(sys.argv[6]) if len(sys.argv) > 6 else 30
 DTNAME = os.environ.get("TORCH_DTYPE", os.environ.get("RTENSOR_DTYPE", "float64"))
 jax.config.update("jax_enable_x64", True)
 # torch eager and cuBLAS do full fp32 GEMMs by default; XLA would use TF32.
@@ -101,12 +104,19 @@ def first(fn, *args):
     return fn(*args)
 
 
+def checksum(x):
+    """Reduced in float64: summing 256k float16 elements of about 3.7 in
+    float16 overflows to inf, which cannot be compared against any other
+    system's accumulator."""
+    return float(np.asarray(sync(x), dtype=np.float64).sum())
+
+
 def runner(step, x0):
     def run(iters):
         x = x0
         for _ in range(iters):
             x = first(step, x)
-        return float(sync(x).sum())
+        return checksum(x)
     return run
 
 
@@ -269,11 +279,18 @@ def run_cnn():
 
 
 def run_reduction():
+    """Row reduction, broadcast back over the row, elementwise combine.
+
+    Bounded on purpose: the old x += rowsum(x*x) doubles every iteration and
+    reaches inf inside the timed loop.  h = mean(x*x) per row and 2h/(1+h)
+    is in [0, 2), so |x| stays below 4; the strongly attracting fixed point
+    at 2+sqrt(3) is what makes the accumulator agree across systems and
+    dtypes instead of amplifying each one's rounding."""
     x = make_input(rows_of(RED_COLS), RED_COLS)
 
     def forward(t):
-        h = (t * t).sum(1, keepdims=True)
-        return t + h
+        h = (t * t).sum(1, keepdims=True) / RED_COLS
+        return 0.5 * t + 2.0 * h / (1.0 + h)
     return runner(compiled(forward, x), x)
 
 
@@ -311,7 +328,7 @@ def report(warm, steady, acc):
 
 
 def timed(run):
-    t0 = time.time(); run(20); warm = time.time() - t0
+    t0 = time.time(); run(WARMUP); warm = time.time() - t0
     t0 = time.time(); acc = run(iters); steady = (time.time() - t0) / iters * 1e6
     report(warm, steady, acc)
 
@@ -342,8 +359,16 @@ total = compiled(lambda h: h.sum(), w)
 
 
 def step(h, b, i):
+    """Variant 2 ("force") = variant 1 plus a real materialization each
+    iteration.  For JAX that is h.block_until_ready() (for IREE, to_host()
+    through sync()): the dispatch is asynchronous, so without it an iteration
+    is only enqueued and the queue hides the per-iteration cost."""
     h = first(chain, h, b)
-    if variant in (1, 2):
+    if variant == 1:
+        if i % 7 == 0:
+            h = add(h, b)
+    elif variant == 2:
+        sync(h)
         if i % 7 == 0:
             h = add(h, b)
     elif variant == 3:
@@ -367,7 +392,7 @@ def run(iters):
     h = w
     for i in range(iters):
         h = step(h, b, i)
-    return float(sync(h).sum())
+    return checksum(h)
 
 
 timed(run)

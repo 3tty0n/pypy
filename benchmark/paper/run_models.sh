@@ -9,7 +9,36 @@ paper_setup_pypy
 trap paper_cleanup_pypy EXIT
 
 TSV="$OUT/models.tsv"
-tsv_init "$TSV" "model\tsystem\tround\tsteady_us\tmaxabsdiff\targmax_match\tcompile_ms\tfirst_run_ms"
+tsv_init "$TSV" "model\tsystem\tround\tsteady_us\tmaxabsdiff\targmax_match\tcompile_ms\tfirst_run_ms\tlaunches_per_iter\ttolerance\tpass\tbinary\treference"
+
+# Per-row provenance: which build produced the row and which reference file it
+# was checked against.  Ours is a binary we build, so it is identified by its
+# hash; the baselines come out of a wheel, so the version string is the thing
+# that identifies them.
+PYPY_SHA=$(sha256sum "$PYPY" 2>/dev/null | cut -c1-12)
+pkg_version() {
+  local python=$1 module=$2 name=$3
+  [ -n "$python" ] && [ -x "$python" ] || { echo unknown; return; }
+  "$python" -c "import $module; print('$name-' + $module.__version__)" 2>/dev/null || echo unknown
+}
+TORCH_VER=$(pkg_version "$TORCH_PYTHON" torch torch)
+JAX_VER=$(pkg_version "$JAX_PYTHON" jax jax)
+TRT_VER=$(pkg_version "$TRT_PYTHON" torch_tensorrt torch_tensorrt)
+binary_of() {
+  case "$1" in
+    ours) echo "${PYPY_SHA:-unknown}" ;;
+    jax|iree) echo "$JAX_VER" ;;
+    torch-tensorrt) echo "$TRT_VER" ;;
+    *) echo "$TORCH_VER" ;;
+  esac
+}
+
+# applevel/common.py's reference_name(): float32 keeps the plain name.
+reference_file() {
+  local dt=${RTENSOR_DTYPE:-float32}
+  if [ "$dt" = float32 ]; then echo logits_pypy.bin
+  else echo "logits_pypy_$dt.bin"; fi
+}
 
 run_ours() {
   local script=$1; shift
@@ -27,10 +56,22 @@ record() {
     if [ "$(cat "$OUT/.last_argmax_ours")" = "$(cat "$OUT/.last_argmax_$system")" ]; then match=1; else match=0; fi
   fi
   local compile_ms=$(field_of "$out" compile_ms) first_ms=$(field_of "$out" first_run_ms)
-  echo -e "$model\t$system\t$round\t${steady:-}\t${diff:-}\t${match}\t${compile_ms:-}\t${first_ms:-}" >> "$TSV"
+  # launches_per_iter is the dead-code guard (kernels the forward actually
+  # launches); tol/pass come from the shared tolerance_for table.
+  local launches=$(field_of "$out" launches_per_iter)
+  local tol=$(field_of "$out" tol) passed=$(field_of "$out" pass)
+  local binary=$(binary_of "$system")
+  # Taken now, not at startup: the ours run rewrites the reference file, and
+  # the hash has to be the one the baselines were actually compared against.
+  local refpath="${MODEL_WEIGHTS:-}/$(reference_file)"
+  local reference=unknown
+  [ -f "$refpath" ] && reference=$(sha256sum "$refpath" | cut -c1-12)
+  echo -e "$model\t$system\t$round\t${steady:-}\t${diff:-}\t${match}\t${compile_ms:-}\t${first_ms:-}\t${launches:-}\t${tol:-}\t${passed:-}\t${binary}\t${reference}" >> "$TSV"
   bench_record models model="$model" system="$system" round="$round" \
     steady_us="${steady:-}" maxabsdiff="${diff:-}" argmax_match="${match}" \
-    compile_ms="${compile_ms:-}" first_run_ms="${first_ms:-}"
+    compile_ms="${compile_ms:-}" first_run_ms="${first_ms:-}" \
+    launches_per_iter="${launches:-}" tolerance="${tol:-}" pass="${passed:-}" \
+    binary="${binary}" reference="${reference}"
 }
 
 # JAX/XLA and IREE rows come from jax_models.py in the optional venv; the
@@ -62,6 +103,10 @@ jax_rows() {
 
 model() {
   local model=$1 pyscript=$2 torchscript=$3 jaxmodel=$4 weights=$5; shift 5
+  # One tolerance per (workload class, dtype), read by every system's script.
+  MODEL_TOL=$(tolerance_for "$model")
+  export MODEL_TOL
+  MODEL_WEIGHTS=$weights
   for round in $(seq "$ROUNDS"); do
     progress_step "$model round $round/$ROUNDS"
     if [ "$BASELINES_ONLY" != 1 ]; then

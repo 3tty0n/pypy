@@ -211,14 +211,23 @@ def main(out_dir):
     models = read_tsv(os.path.join(out_dir, "models.tsv"))
     if models:
         lines.append("## End-to-end models (median steady_us, ratio to torch.compile)\n")
-        lines.append("| model | ours | torch.compile | compile-ro | compile-mat | torch eager | JAX/XLA | IREE | TensorRT | ratio ours/compile | ratio jax/compile | correctness |")
-        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        lines.append("| model | ours | torch.compile | compile-ro | compile-mat | torch eager | JAX/XLA | IREE | TensorRT | ratio ours/compile | ratio jax/compile | launches/iter (ours) | correctness | tol | pass |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         g = collections.defaultdict(lambda: collections.defaultdict(list))
         corr = collections.defaultdict(list)
+        tols = {}
+        verdict = collections.defaultdict(list)
+        launches = collections.defaultdict(list)
         for r in models:
             g[r["model"]][r["system"]].append(float(r["steady_us"]))
             if r.get("maxabsdiff"):
                 corr[r["model"]].append(r["maxabsdiff"])
+            if r.get("tolerance"):
+                tols[r["model"]] = r["tolerance"]
+            if r.get("pass") not in (None, ""):
+                verdict[r["model"]].append(r["pass"])
+            if r["system"] == "ours" and r.get("launches_per_iter"):
+                launches[r["model"]].append(float(r["launches_per_iter"]))
         for model in sorted(g):
             ours = med(g[model].get("ours", []))
             compiled = med(g[model].get("torch-compile", []))
@@ -231,12 +240,19 @@ def main(out_dir):
             jratio = jax_ / compiled if jax_ and compiled else None
             c = corr.get(model, [])
             cstr = c[0] if c else ""
-            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+            v = verdict.get(model, [])
+            # One failing system fails the model: the point of the column is
+            # that nothing slipped through, not that something passed.
+            vstr = "" if not v else ("pass" if all(x == "1" for x in v)
+                                     else "FAIL")
+            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
                 model, fmt(ours), fmt(compiled), fmt(compiled_ro), fmt(compiled_mat),
                 fmt(eager), fmt(jax_),
                 fmt(iree), fmt(med(g[model].get("torch-tensorrt", []))),
                 fmt(ratio, "%.2fx") if ratio else "n/a",
-                fmt(jratio, "%.2fx") if jratio else "n/a", cstr))
+                fmt(jratio, "%.2fx") if jratio else "n/a",
+                fmt(med(launches.get(model, [])), "%.1f"),
+                cstr, tols.get(model, ""), vstr))
         lines.append("")
 
     ablation = read_tsv(os.path.join(out_dir, "ablation.tsv"))

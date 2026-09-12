@@ -106,6 +106,10 @@ def tensor_maxr(a, axis):
 def tensor_eqmask(a, b, bcast):
     return eval_op(EQMASK, a, b, bcast)
 
+@jit.oopspec("tensor.assign(dst, src)")
+def tensor_assign_op(dst, src):
+    return tensor_assign(dst, src)
+
 @jit.oopspec("tensor.ndim(a)")
 def tensor_ndim(a):
     return len(a.shape)
@@ -238,7 +242,7 @@ def assign(dst, src):
     if (tensor_size(dst) != tensor_size(src) or
             tensor_dtype(dst) != tensor_dtype(src)):
         raise ValueError("shape mismatch")
-    return tensor_assign(dst, src)
+    return tensor_assign_op(dst, src)
 
 def item(a):
     return tensor_item(a)

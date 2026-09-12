@@ -16,6 +16,9 @@ Other env vars: `RTENSOR_DTYPE` (`float64|float32|float16`), `RTENSOR_CPU=1`
 `RTENSOR_FLAT_BLOCK` (elements per block of the elementwise and gather
 kernels, default 4096; `256` is 3% faster on distilgpt2 and 2.5% on
 SmolLM2, 19% slower on a 1e6-element chain),
+`RTENSOR_MAX_INPUTS` (leaves one fused kernel may take, 4..8, default 6; the
+fusion pass cuts a chain that would need more, so this is the knob for a
+fusion-width sweep and needs no retranslation),
 `RTENSOR_PROFILE=1`, `CUDA_HOME`, `RTENSOR_CUBLAS` (path to `libcublas.so`; read at
 run time, and if set at translation time it becomes the compiled-in default,
 otherwise `libcublas.so` is looked up through the dynamic loader).
@@ -27,21 +30,36 @@ otherwise `libcublas.so` is looked up through the dynamic loader).
     benchmark/paper/bench.sh all        # full grid -> benchmark/results/<host>-<gpu>/paper-<date>/summary.md
 
 `MODE`: `fused` (ours), `eager` (tensor opt off, one kernel per op), `nojit`.
-`K` is the chain length, `N` the tensor size or row count.
+`K` is the chain length, `N` the tensor size or row count.  `WARMUP` is
+optional and defaults to 30; every micro driver (ours, torch, jax, triton)
+takes it in that position and runs exactly that many iterations before the
+timed loop, so no two systems are compared after a different warm-up.
 
 | variant | what |
 |---|---|
 | 0 | elementwise chain of K ops |
-| 1–5 | the chain with a guard, a forced graph break, an `.item()` branch, `try/except`, a host write |
+| 1–5 | the chain with a guard, a forced materialization, an `.item()` branch, `try/except`, a host write |
 | 6 / 7 | 3-layer MLP forward / training step |
 | 8 / 10 | Transformer block forward / 2-block training step |
 | 9 | small CNN forward |
-| 11 | row reduction, carried: `h = sum(x*x, axis=1); x = x + h` |
+| 11 | row reduction, carried: `h = sum(x*x, axis=1)/COLS; x = 0.5*x + 2h/(1+h)` |
 | 12 | one matmul layer, carried: `x = relu(matmul(x, W) + b)` |
 | 13 | multi-head self-attention only, carried, D=256, 8 heads |
 
 Output columns: `mode variant k n iters warm_s steady_us kernels acc compiled_in_timed launches_per_iter dtype`.
 `launches_per_iter` must be 1.0 for the chain in `fused` mode.
+Variant 2 ("force") is variant 1 plus a real materialization of the chain on
+every iteration, and each system pays it in its own currency: `.force()` for
+ours, `torch.cuda.synchronize()` for torch eager and Triton,
+`torch._dynamo.graph_break()` for the torch.compile/TensorRT modes,
+`block_until_ready()` for JAX.  Variant 1 is the same control flow without the
+forcing point, so the pair isolates what a materialization costs.
+
+Variant 11's recurrence is bounded on purpose: the earlier `x += sum(x*x)`
+doubles every iteration and reaches `inf` inside the timed loop, which left
+the accumulator carrying no information and made float16 disagree with
+float64.  `h >= 0` and `2h/(1+h) < 2` keep `|x|` below 4, and the fixed point at 2+sqrt(3) is strongly attracting, so every system and every dtype lands on the same accumulator.
+
 The variants live in the `benchmark/bench/` package (`chain.py` for 0-5,
 `mlp.py` for 6-7, `transformer.py` for 8/10/13, `cnn.py` for 9, `reduce.py`
 for 11-12, shared setup in `common.py`); `metatensor_bench.py` is the thin

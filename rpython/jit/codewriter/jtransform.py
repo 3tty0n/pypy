@@ -2211,7 +2211,8 @@ class Transformer(object):
         T = args[0].concretetype
         self._register_analyzed_helper(EffectInfo.OS_TENSOR_LAUNCH,
                                        "tensor.launch",
-                                       [core.KERNELPTR, T, T, T, T, T, T],
+                                       [core.KERNELPTR] +
+                                       [T] * core.MAX_INPUTS_LIMIT,
                                        T,
                                        EffectInfo.EF_ELIDABLE_OR_MEMORYERROR)
         self._register_analyzed_helper(EffectInfo.OS_TENSOR_OUTPUT,
@@ -2219,6 +2220,10 @@ class Transformer(object):
                                        [T, lltype.Signed], T,
                                        EffectInfo.EF_ELIDABLE_CANNOT_RAISE)
         os = getattr(EffectInfo, 'OS_' + oopspec_name.replace('.', '_').upper())
+        if os == EffectInfo.OS_TENSOR_ASSIGN:
+            # writes into a tensor the elidable tensor ops read from
+            return self._handle_oopspec_call(op, args, os,
+                                             EffectInfo.EF_CAN_RAISE)
         return self._handle_oopspec_call(op, args, os,
                                          EffectInfo.EF_ELIDABLE_OR_MEMORYERROR)
 

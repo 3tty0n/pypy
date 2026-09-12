@@ -64,6 +64,11 @@ def batch_argv():
 
 
 FIRST_RUN_MS = [None]
+# Dead-code guard: kernel launches the timed loop issued, per iteration.  The
+# loop only observes its result once, so without a counter nothing proves the
+# other iterations executed at all; a launch count that tracks the iteration
+# count does.
+LAUNCHES_PER_ITER = [None]
 
 
 def timed(model, args, iters, warmup):
@@ -98,11 +103,15 @@ def timed(model, args, iters, warmup):
     for i in range(warmup - 1):
         logits = model(*args)
     logits.sum().item()
+    launches0 = _metatensor.launch_count()
     t0 = time.time()
     for i in range(iters):
         logits = model(*args)
     acc = logits.sum().item()
     steady_us = (time.time() - t0) / iters * 1e6
+    # Read after acc: the graph is lazy, so the launches happen when the
+    # result is forced, not when the expression is built.
+    LAUNCHES_PER_ITER[0] = float(_metatensor.launch_count() - launches0) / iters
     return logits, acc, steady_us
 
 
@@ -148,6 +157,8 @@ def dump(outdir, flat):
 
 
 def report(line, order):
+    if LAUNCHES_PER_ITER[0] is not None:
+        line += ' launches_per_iter=%.1f' % LAUNCHES_PER_ITER[0]
     if FIRST_RUN_MS[0] is not None:
         line += ' compile_ms=-1 first_run_ms=%.1f' % FIRST_RUN_MS[0]
     print(line)

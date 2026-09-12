@@ -37,6 +37,26 @@ WEIGHTS=${WEIGHTS:-$HERE/weights}
 ITERS=${ITERS:-200}
 WARMUP=${WARMUP:-30}
 ROUNDS=${ROUNDS:-3}
+# Correctness tolerance per (workload class, dtype).  One table for every
+# consumer: run_models.sh exports it as MODEL_TOL, the model scripts print
+# "tol=<t> pass=<0|1>" next to maxabsdiff, run_models.sh records both columns
+# and check.sh reads the same function instead of a hard-coded 1e-3.
+#   float32 models             1e-3
+#   conv models under TF32     2e-2  (resnet18-*: cuDNN runs its convs in TF32)
+#   float16                    1e-2
+#   float64                    1e-6
+# Micro accumulators are not covered here; they keep check.sh's close_enough.
+tolerance_for() {
+  local model=$1 dt=${RTENSOR_DTYPE:-float32}
+  case "$dt" in
+    float16) echo 1e-2; return ;;
+    float64) echo 1e-6; return ;;
+  esac
+  case "$model" in
+    resnet18-*) echo 2e-2; return ;;
+  esac
+  echo 1e-3
+}
 JIT_FLAGS=${JIT_FLAGS:---jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000}
 # Results are filed under the machine and the accelerator that produced them,
 # because a number here means nothing without both: results/<host>-<gpu>/paper-<date>.
@@ -60,6 +80,28 @@ gpu_slug() {
   fi
   echo "$name" | tr 'A-Z' 'a-z' | sed -e 's/nvidia //' -e 's/geforce //' \
                                      -e 's/[^a-z0-9]//g'
+}
+# The effective fusion input cap, resolved the same way core.max_inputs()
+# resolves it, so machine.txt records what the run actually used.
+max_inputs_effective() {
+  local n=${RTENSOR_MAX_INPUTS:-6}
+  case "$n" in ''|*[!0-9]*) n=6 ;; esac
+  [ "$n" -lt 4 ] && n=4
+  [ "$n" -gt 8 ] && n=8
+  echo "$n"
+}
+# RTENSOR_CC=auto means triton_compile.py asks the GPU; record what it answers,
+# not the word "auto".
+resolved_cc() {
+  local cc=${RTENSOR_CC:-}
+  if [ "$cc" = auto ] && [ -n "${RTENSOR_PYTHON:-}" ] && [ -x "$RTENSOR_PYTHON" ]; then
+    cc=$("$RTENSOR_PYTHON" "$REPO/rpython/metatensor/triton_compile.py" --cc 2>/dev/null | tail -1)
+  fi
+  echo "${cc:-unknown}"
+}
+sha256_of() {
+  [ -f "$1" ] || { echo unknown; return; }
+  sha256sum "$1" | cut -d' ' -f1
 }
 RUN_HOST=${RUN_HOST:-$(hostname)}
 RUN_GPU=${RUN_GPU:-$(gpu_slug)}
@@ -125,6 +167,12 @@ PY
     fi
     echo "iters         ${ITERS}"
     echo "rounds        ${ROUNDS}"
+    echo "warmup_models ${WARMUP}"
+    echo "warmup_micro  ${WARMUP}"
+    echo "max_inputs    $(max_inputs_effective)"
+    echo "compute_cap_r $(resolved_cc)"
+    echo "pypy_c_sha256 $(sha256_of "$PYPY")"
+    echo "bench_sha256  $(sha256_of "$BENCH")"
     echo "budget_mb     ${RTENSOR_BUDGET_MB}"
     echo "jit_flags     ${JIT_FLAGS}"
     echo "commit        $(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -161,19 +209,21 @@ record_micro_line() {
   if [ ${#extra[@]} -ge 5 ]; then
     bench_record micro mode="$mode" variant="$variant" k="$k" n="$n" \
       iters="$iters" warm_s="$warm" steady_us="$steady" kernels="$kernels" \
-      acc="$acc" compiled_in_timed="$compiled" graphs="${extra[0]}" \
+      acc="$acc" compiled_in_timed="$compiled" warmup="$WARMUP" \
+      graphs="${extra[0]}" \
       breaks="${extra[1]}" dtype="${extra[2]}" compile_ms="${extra[3]}" \
       first_run_ms="${extra[4]}"
   elif [ ${#extra[@]} -ge 3 ]; then
     bench_record micro mode="$mode" variant="$variant" k="$k" n="$n" \
       iters="$iters" warm_s="$warm" steady_us="$steady" kernels="$kernels" \
-      acc="$acc" compiled_in_timed="$compiled" graphs="${extra[0]}" \
+      acc="$acc" compiled_in_timed="$compiled" warmup="$WARMUP" \
+      graphs="${extra[0]}" \
       breaks="${extra[1]}" dtype="${extra[2]}"
   else
     bench_record micro mode="$mode" variant="$variant" k="$k" n="$n" \
       iters="$iters" warm_s="$warm" steady_us="$steady" kernels="$kernels" \
-      acc="$acc" compiled_in_timed="$compiled" launches_per_iter="${extra[0]}" \
-      dtype="${extra[1]}"
+      acc="$acc" compiled_in_timed="$compiled" warmup="$WARMUP" \
+      launches_per_iter="${extra[0]}" dtype="${extra[1]}"
   fi
 }
 

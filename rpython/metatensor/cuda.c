@@ -493,7 +493,7 @@ RPY_EXPORTED int rt_cuda_launch(long fn, long *inputs, int ninputs, long n,
     long argn = n, argc = cols;
     int i, k = 0;
     unsigned blocks = (unsigned)((n + elems_per_block - 1) / elems_per_block);
-    if (!rt_init() || ninputs > 7 || nouts > 8 || nextra > 6) return 0;
+    if (!rt_init() || ninputs > 8 || nouts > 8 || nextra > 6) return 0;
     for (i = 0; i < ninputs; i++) params[k++] = &inputs[i];
     for (i = 0; i < nouts; i++) params[k++] = &outs[i];
     params[k++] = &argn;

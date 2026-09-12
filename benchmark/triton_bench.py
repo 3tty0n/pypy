@@ -19,6 +19,9 @@ import triton.language as tl
 
 mode, variant, k, n, iters = (sys.argv[1], int(sys.argv[2]), int(sys.argv[3]),
                               int(sys.argv[4]), int(sys.argv[5]))
+# Optional 6th argument: warm-up iterations before the timed run, the same
+# position and the same default (30) in every micro driver.
+WARMUP = int(sys.argv[6]) if len(sys.argv) > 6 else 30
 dev = "cuda"
 DTNAME = os.environ.get("TORCH_DTYPE", "float64")
 DT = {"float64": torch.float64, "float32": torch.float32,
@@ -83,13 +86,18 @@ def binop_kernel(h_ptr, b_ptr, out_ptr, n, MUL: tl.constexpr,
 @triton.jit
 def rowsq_kernel(x_ptr, out_ptr, rows, COLS: tl.constexpr,
                  BLOCK_R: tl.constexpr):
+    """x <- 0.5*x + 2h/(1+h) with h = mean(x*x) over the row.
+
+    Bounded on purpose: the old x += rowsum(x*x) doubles every iteration and
+    is inf well before the timed loop ends."""
     r = tl.program_id(0) * BLOCK_R + tl.arange(0, BLOCK_R)
     c = tl.arange(0, COLS)
     ptrs = r[:, None] * COLS + c[None, :]
     mask = (r < rows)[:, None]
     x = tl.load(x_ptr + ptrs, mask=mask, other=0.0)
-    h = tl.sum(x * x, axis=1)
-    tl.store(out_ptr + ptrs, x + h[:, None], mask=mask)
+    h = tl.sum(x * x, axis=1) / COLS
+    g = 2.0 * h / (1.0 + h)
+    tl.store(out_ptr + ptrs, 0.5 * x + g[:, None], mask=mask)
 
 
 @triton.jit
@@ -248,13 +256,20 @@ def first(fn, *args):
     return fn(*args)
 
 
+def checksum(x):
+    """Reduced in float64: summing 256k float16 elements of about 3.7 in
+    float16 overflows to inf, which cannot be compared against any other
+    system's accumulator."""
+    return x.double().sum().item()
+
+
 def runner(step, x0):
     def run(iters):
         x = x0
         for _ in range(iters):
             x = first(step, x)
         torch.cuda.synchronize()
-        return x.sum().item()
+        return checksum(x)
     return run
 
 
@@ -307,7 +322,7 @@ def report(warm, steady, acc):
 
 
 def timed(run):
-    t0 = time.time(); run(20); warm = time.time() - t0
+    t0 = time.time(); run(WARMUP); warm = time.time() - t0
     t0 = time.time(); acc = run(iters); steady = (time.time() - t0) / iters * 1e6
     report(warm, steady, acc)
 
@@ -328,8 +343,16 @@ sink = open(os.devnull, "w")
 
 
 def step(h, b, i):
+    """Variant 2 ("force") = variant 1 plus a real materialization each
+    iteration.  For Triton that is torch.cuda.synchronize(): the kernel
+    launches are asynchronous, so without it the iterations pipeline and the
+    per-iteration cost hides behind the queue."""
     h = first(chain, h, b, k)
-    if variant in (1, 2):
+    if variant == 1:
+        if i % 7 == 0:
+            h = binop(h, b, False)
+    elif variant == 2:
+        torch.cuda.synchronize()
         if i % 7 == 0:
             h = binop(h, b, False)
     elif variant == 3:
@@ -354,7 +377,7 @@ def run(iters):
     for i in range(iters):
         h = step(h, b, i)
     torch.cuda.synchronize()
-    return h.sum().item()
+    return checksum(h)
 
 
 timed(run)

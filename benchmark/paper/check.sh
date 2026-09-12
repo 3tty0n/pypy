@@ -152,15 +152,23 @@ group_models() {
   if ! bash "$HERE/run_models.sh" tiny-gpt2 >/dev/null 2>&1; then
     bad "run_models.sh"; return
   fi
-  local ours diff
+  local ours diff tol launches
   ours=$(awk -F'\t' '$2=="ours"{print $4}' "$OUT/models.tsv" | head -1)
   diff=$(awk -F'\t' '$2=="torch-eager"{print $5}' "$OUT/models.tsv" | head -1)
+  launches=$(awk -F'\t' '$2=="ours"{print $9}' "$OUT/models.tsv" | head -1)
+  # Same table every system is judged by, not a second hard-coded number.
+  tol=$(tolerance_for tiny-gpt2)
   if positive "${ours:-0}"; then ok "tiny-gpt2 runs" "steady=${ours}us"
   else bad "tiny-gpt2 runs" "no steady_us in models.tsv"; fi
-  if [ -n "$diff" ] && awk -v d="$diff" 'BEGIN{exit !(d+0 < 1e-3)}'; then
-    ok "tiny-gpt2 matches torch" "maxabsdiff=$diff"
+  if positive "${launches:-0}"; then
+    ok "tiny-gpt2 runs on the GPU" "launches/iter=$launches"
   else
-    bad "tiny-gpt2 matches torch" "maxabsdiff=${diff:-missing}"
+    bad "tiny-gpt2 runs on the GPU" "launches/iter=${launches:-missing}"
+  fi
+  if [ -n "$diff" ] && awk -v d="$diff" -v t="$tol" 'BEGIN{exit !(d+0 <= t+0)}'; then
+    ok "tiny-gpt2 matches torch" "maxabsdiff=$diff tol=$tol"
+  else
+    bad "tiny-gpt2 matches torch" "maxabsdiff=${diff:-missing} tol=$tol"
   fi
 }
 
