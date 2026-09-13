@@ -2,8 +2,10 @@
 
 The paper's ordering claims are checked on two accelerators. Everything
 below runs on the second host; only the last step comes back to the main
-checkout. The branch `mlsys2027` lives on the private `tensorpypy` remote
-(git@github.com:3tty0n/tensorpypy.git), not on the public pypy fork.
+checkout. The working branch is `pypytensor`, pushed to both the public
+fork (github.com/3tty0n/pypy) and the private `tensorpypy` remote
+(git@github.com:3tty0n/tensorpypy.git); `main` on the public fork carries
+none of this work.
 
 ## Requirements on the host
 
@@ -21,10 +23,9 @@ checkout. The branch `mlsys2027` lives on the private `tensorpypy` remote
 
 ## Commands
 
-    git clone git@github.com:3tty0n/tensorpypy.git pypy-tile-ir   # first time
+    git clone -b pypytensor git@github.com:3tty0n/pypy.git pypy-tile-ir   # first time (or tensorpypy.git)
     cd pypy-tile-ir
-    git fetch tensorpypy 2>/dev/null || git fetch origin           # remote name depends on the clone
-    git checkout mlsys2027 && git pull --ff-only
+    git fetch origin && git checkout pypytensor && git pull --ff-only
     ./benchmark/paper/bench.sh setup             # venvs (torch, jax+iree, tensorrt),
                                                  # translation, checkpoint export;
                                                  # writes benchmark/paper/env.sh with
@@ -51,7 +52,7 @@ On the second host, commit the result directory on a branch and push:
 
     git add benchmark/results/stillinlove-rtx5070ti
     git commit -m "record the <date> RTX 5070 Ti run"
-    git push tensorpypy mlsys2027      # the private remote; never the public fork
+    git push origin pypytensor && git push tensorpypy pypytensor   # never main on the public fork
 
 On the main host (luchkylilac), pull, then render the cross-GPU figures
 from the RTX 3090 result set against the new one:
