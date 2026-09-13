@@ -2,7 +2,8 @@
 
 The paper's ordering claims are checked on two accelerators. Everything
 below runs on the second host; only the last step comes back to the main
-checkout. Commit `82d3d119cd` (branch `mlsys2027`) is the reference state.
+checkout. The branch `mlsys2027` lives on the private `tensorpypy` remote
+(git@github.com:3tty0n/tensorpypy.git), not on the public pypy fork.
 
 ## Requirements on the host
 
@@ -20,8 +21,10 @@ checkout. Commit `82d3d119cd` (branch `mlsys2027`) is the reference state.
 
 ## Commands
 
-    cd ~/src/github.com/3tty0n/pypy-tile-ir      # or wherever the clone is
-    git fetch origin && git checkout mlsys2027 && git pull --ff-only
+    git clone git@github.com:3tty0n/tensorpypy.git pypy-tile-ir   # first time
+    cd pypy-tile-ir
+    git fetch tensorpypy 2>/dev/null || git fetch origin           # remote name depends on the clone
+    git checkout mlsys2027 && git pull --ff-only
     ./benchmark/paper/bench.sh setup             # venvs (torch, jax+iree, tensorrt),
                                                  # translation, checkpoint export;
                                                  # writes benchmark/paper/env.sh with
@@ -48,7 +51,7 @@ On the second host, commit the result directory on a branch and push:
 
     git add benchmark/results/stillinlove-rtx5070ti
     git commit -m "record the <date> RTX 5070 Ti run"
-    git push origin mlsys2027
+    git push tensorpypy mlsys2027      # the private remote; never the public fork
 
 On the main host (luchkylilac), pull, then render the cross-GPU figures
 from the RTX 3090 result set against the new one:
