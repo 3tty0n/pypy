@@ -395,6 +395,67 @@ which need a `tl.dot`-capable code generator, since the codegen here has none
 - and one submission per forward instead of one per kernel.
 
 
+## The model inventory
+
+`bench.sh inventory` writes `$OUT/model_inventory.tsv`, and
+`plot.py --only model_inventory` turns it into `figures/model_inventory.tex`.
+It answers the question the models figure cannot: are the two systems running
+the same architecture? The logits comparison answers it from the output, which
+cannot separate "the same computation" from "a different computation that
+happens to agree here". This answers it from the structure - parameters per
+model, multiply-add work per forward (2mnk summed over every GEMM, batched
+GEMM and convolution, a convolution counted as the im2col GEMM it becomes),
+and how many cuBLAS/cuDNN calls carry that work - and then names every
+difference that is left.
+
+Our side is analytic and needs no GPU: the exported checkpoint's `index.json`
+plus the model config fix every GEMM shape in `lib_pypy/tensorpypy/models.py`.
+There is no runtime matmul counter to read - `kernel_count`,
+`kernel_compile_count` and `launch_count` are the only counters `_metatensor`
+exposes, and `launch_count` counts generated kernels, not cuBLAS calls - so the
+call counts come from the model structure and are cross-checked against the
+nsys kernel mix in `gap.tsv`. Torch's side is measured on one eager forward:
+`torch.utils.flop_counter.FlopCounterMode` for the work,
+`torch.profiler` counts of `aten::mm`/`addmm`/`bmm`/`baddbmm`/`convolution`/
+`_scaled_dot_product_*` for the calls, `p.numel()` for the parameters.
+`--no-torch` writes our rows alone.
+
+Counting one SDPA call as the two batched products it stands for, every
+call-count difference across the nine models reduces to three things:
+
+- *packed QKV.* We issue one `[d, 3d]` GEMM per layer where HF's BERT, ViT and
+  Llama issue three projections; that is `2 x layers` calls, and it is the
+  whole difference on bert-tiny (14 vs 18), bert-mini (26 vs 34), vit-tiny
+  (74 vs 98) and smollm2-135m (211 vs 271). HF's GPT-2 packs them the same way
+  in its `Conv1D` `c_attn`, and distilgpt2 and tiny-gpt2 come out equal
+  (37 vs 37, 13 vs 13).
+- *convolution and pooling as GEMMs.* ResNet-18's twenty convolutions are
+  im2col plus one cuBLAS call each where torch calls cuDNN, and global average
+  pooling is a `[B, B*hw]` GEMM rather than a reduction: 22 calls vs 21.
+  Mixer's patch embedding is the same trade, 51 vs 50.
+- *GQA expanded at export.* smollm2-135m's k/v are written out as 9 full heads
+  rather than 3, so our packed QKV GEMM is `[d, 3d]` where torch's k and v are
+  `[d, 192]`. That is 13.3M parameters and 9.7% of the FLOPs we do and torch
+  does not - the one row where the work is genuinely not equal, and it is
+  extra work on our side.
+
+The parameter deltas are of the same kind and are printed per row: BERT's
+position and token-type tables are folded into one `[seq, d]` table at export
+(-115200 on bert-mini), ViT's patch-embedding bias and cls token are folded
+into the embedding table (-384), and our ResNet keeps the batch-norm running
+statistics as tensors where torch holds them as buffers that `p.numel()` skips
+(+9600). Everything else matches exactly, FLOPs included.
+
+The nsys cross-check is in the notes column. `gemm=43` on bert-mini and
+`gemm=99` on vit-tiny in `gap.tsv` are kernel counts, not call counts: 43 = 26
+calls + 17 `cublasLt::splitKreduce_kernel` launches, 99 = 74 + 25, which is
+exactly the analytic count plus cuBLAS internals (see "Where the JAX gap comes
+from"). `gap_analysis.py` now puts those in their own `splitk` bucket, since
+their demangled names contain `cublas` and they used to be counted as GEMMs; a
+trace taken before that folds them into `gemm` and reports `splitk=0`, which is
+why the inventory reports the residual rather than reading the bucket.
+
+
 ## The dynamic sequence-length sweep
 
 `bench.sh dynamic` visits `[32, 48, 64, 96, 128]` in that fixed order, twice:

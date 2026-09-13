@@ -37,6 +37,10 @@ commands:
                          cold+warm kernel caches; N forwards, default 300)
   explain                torch._dynamo.explain graph structure per model,
                          into \$OUT/explain.tsv
+  inventory [NAME...]    what each model computes - parameters, GEMM/bmm/conv
+                         FLOPs and call counts, ours against torch - into
+                         \$OUT/model_inventory.tsv (--no-torch for our rows
+                         only; needs no GPU)
   fusion [MODEL...]      fusion-region statistics per model forward (kernels,
                          nodes per kernel, why each region was cut) into
                          \$OUT/fusion.tsv; no args = all eight paper models
@@ -142,6 +146,10 @@ run_cmd() {
       ;;
     explain)
       bash "$HERE/explain_models.sh" "$@"
+      ;;
+    inventory)
+      source "$HERE/config.sh"
+      WEIGHTS="$WEIGHTS" python3 "$HERE/model_inventory.py" "$OUT" "$@"
       ;;
     fusion)
       source "$HERE/config.sh"

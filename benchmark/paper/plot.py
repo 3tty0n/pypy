@@ -792,6 +792,33 @@ def fig_explain(out, args):
     return fig, "explain"
 
 
+def fig_model_inventory(out, args):
+    """Table only: what each model computes, ours against torch.
+
+    The models figure is a timing comparison, and a reviewer's first question
+    about one is whether the two systems ran the same workload.  The logits
+    check answers that from the output; this answers it from the structure -
+    parameters, multiply-add work, and the cuBLAS/cuDNN calls a forward costs
+    - with every remaining difference named in the notes column."""
+    rows = read_tsv(os.path.join(out, "model_inventory.tsv"))
+    if not rows:
+        return None
+    table = [[r["model"], SYSTEM_LABEL.get(r["system"], r["system"]),
+              si(int(r["params"])), r["gflops"], r["gemm_calls"],
+              r["bmm_calls"], r["conv_calls"], r["sdpa_calls"],
+              r["notes"]] for r in rows]
+    write_table(os.path.join(args.outdir, "model_inventory.tex"),
+                "per forward: parameters, GEMM/bmm/conv FLOPs and the "
+                "cuBLAS/cuDNN calls that carry them, with the remaining "
+                "differences named",
+                ["model", "system", "params", "GFLOP", "GEMM", "bmm", "conv",
+                 "SDPA", "notes"], table,
+                align="ll" + "r" * 6 + "p{0.32\\textwidth}")
+    fig, ax = plt.subplots(figsize=(args.width, 0.3))
+    ax.axis("off")
+    return fig, "model_inventory"
+
+
 DEOPT_PATTERNS = ["never", "alternate", "both-hot", "fresh", "probe-a",
                   "probe-e"]
 DEOPT_LABEL = {
@@ -1217,7 +1244,7 @@ def write_gemm_count(out, args):
     gap.tsv's mix column ("gemm=43 gen=24 copy=6 other=2"), which
     gap_analysis attributes kernel by kernel from the nsys trace."""
     rows, source = gap_rows(out)
-    header = ["model", "system", "gemm", "gen", "other"]
+    header = ["model", "system", "gemm", "split-K", "gen", "other"]
     table = []
     for r in rows:
         mix = {}
@@ -1227,14 +1254,19 @@ def write_gemm_count(out, args):
                 mix[key] = int(value)
         if not mix:
             continue
-        other = sum(v for k, v in mix.items() if k not in ("gemm", "gen"))
+        other = sum(v for k, v in mix.items()
+                    if k not in ("gemm", "gen", "splitk"))
         table.append([r["model"], SYSTEM_LABEL.get(r["system"], r["system"]),
-                      str(mix.get("gemm", 0)), str(mix.get("gen", 0)),
-                      str(other)])
+                      str(mix.get("gemm", 0)), str(mix.get("splitk", 0)),
+                      str(mix.get("gen", 0)), str(other)])
     if not table:
         return
     caption = ("kernel launches per forward, attributed: matrix products, "
-               "generated elementwise/reduction kernels, everything else")
+               "the cuBLAS split-K reduce/epilogue kernels that finish some "
+               "of them (kernels, not calls; a run traced before "
+               "gap\\_analysis separated them reports 0 and folds them into "
+               "gemm), generated elementwise/reduction kernels, everything "
+               "else")
     if source:
         caption += " (from %s: this run has no nsys trace)" % source
     write_table(os.path.join(args.outdir, "gemm_count.tex"), caption,
@@ -1738,6 +1770,7 @@ FIGURES = collections.OrderedDict([
     ("precision", fig_precision),
     ("ablation", fig_ablation),
     ("explain", fig_explain),
+    ("model_inventory", fig_model_inventory),
     ("deopt", fig_deopt),
     ("micro_baselines", fig_micro_baselines),
     ("compile_overhead", fig_compile_overhead),

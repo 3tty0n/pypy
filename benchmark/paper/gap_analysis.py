@@ -154,6 +154,13 @@ def category(name):
     low = name.lower()
     if "memcpy" in low or "memset" in low:
         return "copy"
+    # cuBLAS finishes a split-K GEMM, and a fused epilogue, with a second
+    # kernel of its own.  Those are kernels, not calls: one cublasSgemm can
+    # show up here as two launches, so they are kept apart from the GEMMs
+    # themselves - otherwise a launch count read as "calls the model made"
+    # overcounts by however many tiles cuBLAS chose to split.
+    if "splitkreduce" in low or "epilogue::impl::globalkernel" in low:
+        return "splitk"
     if ("cublas" in low or "cutlass" in low or "gemm" in low
             or "gemv" in low or "dot_kernel" in low):
         return "gemm"
