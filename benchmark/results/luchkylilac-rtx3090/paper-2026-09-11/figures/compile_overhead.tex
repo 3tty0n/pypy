@@ -5,61 +5,61 @@ workload & system & compile (ms) & first run (ms) & steady (us) & break-even (it
 distilgpt2 & torch.compile & n/a & 1536 & 1353 & 981 \\
 distilgpt2 & torch.compile (reduce-overhead) & n/a & 1572 & 1290 & 964 \\
 distilgpt2 & torch.compile (max-autotune) & n/a & 2206 & 1280 & 1381 \\
-distilgpt2 & Torch-TensorRT & n/a & 2950 & 3722 & n/a \\
+distilgpt2 & Torch-TensorRT & n/a & 14457 & 1721 & 13538 \\
 distilgpt2 & JAX/XLA & 6982 & 4 & 1001 & 3851 \\
 distilgpt2 & IREE & 869 & 76 & 17123 & n/a \\
 distilgpt2 & MetaTensor & n/a & 566 & 1284 & 288 \\
 tiny-gpt2 & torch.compile & n/a & 1171 & 421 & 561 \\
 tiny-gpt2 & torch.compile (reduce-overhead) & n/a & 1188 & 210 & 490 \\
 tiny-gpt2 & torch.compile (max-autotune) & n/a & 2422 & 248 & 1393 \\
-tiny-gpt2 & Torch-TensorRT & n/a & 1912 & 1396 & 5956 \\
+tiny-gpt2 & Torch-TensorRT & n/a & 6661 & 530 & 5587 \\
 tiny-gpt2 & JAX/XLA & 1162 & 2 & 88 & 435 \\
 tiny-gpt2 & IREE & 383 & 12 & 192 & -66 \\
 tiny-gpt2 & MetaTensor & n/a & 114 & 189 & -260 \\
 smollm2-135m & torch.compile & n/a & 3826 & 5252 & 346 \\
 smollm2-135m & torch.compile (reduce-overhead) & n/a & 3944 & 3791 & 311 \\
 smollm2-135m & torch.compile (max-autotune) & n/a & 5068 & 3848 & 416 \\
-smollm2-135m & Torch-TensorRT & n/a & 22359 & 3742 & 1985 \\
+smollm2-135m & Torch-TensorRT & n/a & 21710 & 3735 & 1925 \\
 smollm2-135m & JAX/XLA & 11098 & 19 & 2639 & 874 \\
 smollm2-135m & IREE & 2061 & 175 & 19150 & n/a \\
 smollm2-135m & MetaTensor & n/a & 519 & 3660 & -2 \\
 bert-tiny & torch.compile & n/a & 1118 & 539 & 1795 \\
 bert-tiny & torch.compile (reduce-overhead) & n/a & 1139 & 299 & 1286 \\
 bert-tiny & torch.compile (max-autotune) & n/a & 3722 & 270 & 4340 \\
-bert-tiny & Torch-TensorRT & n/a & 4191 & 443 & 6189 \\
+bert-tiny & Torch-TensorRT & n/a & 3646 & 478 & 5662 \\
 bert-tiny & JAX/XLA & 5741 & 2 & 111 & 5684 \\
 bert-tiny & IREE & 831 & 14 & 1322 & n/a \\
 bert-tiny & MetaTensor & n/a & 120 & 253 & 17 \\
 bert-mini & torch.compile & n/a & 1282 & 862 & 1254 \\
 bert-mini & torch.compile (reduce-overhead) & n/a & 1295 & 480 & 905 \\
 bert-mini & torch.compile (max-autotune) & n/a & 4305 & 424 & 3041 \\
-bert-mini & Torch-TensorRT & n/a & 5023 & 656 & 4277 \\
+bert-mini & Torch-TensorRT & n/a & 4238 & 707 & 3761 \\
 bert-mini & JAX/XLA & 7244 & 3 & 243 & 4570 \\
 bert-mini & IREE & 998 & 19 & 3611 & n/a \\
 bert-mini & MetaTensor & n/a & 189 & 429 & 69 \\
 resnet18-b1 & torch.compile & n/a & 1079 & 1037 & 2354 \\
 resnet18-b1 & torch.compile (reduce-overhead) & n/a & 1084 & 918 & 1804 \\
 resnet18-b1 & torch.compile (max-autotune) & n/a & 6952 & 1041 & 18001 \\
-resnet18-b1 & Torch-TensorRT & n/a & 4787 & 995 & 10908 \\
+resnet18-b1 & Torch-TensorRT & n/a & 4076 & 1000 & 9323 \\
 resnet18-b1 & JAX/XLA & 608 & 4 & 1097 & 1337 \\
 resnet18-b1 & MetaTensor & n/a & 154 & 726 & -44 \\
 resnet18-b8 & torch.compile & n/a & 1050 & 2194 & 13678 \\
 resnet18-b8 & torch.compile (reduce-overhead) & n/a & 1051 & 2124 & 6492 \\
 resnet18-b8 & torch.compile (max-autotune) & n/a & 5546 & 2126 & 41005 \\
-resnet18-b8 & Torch-TensorRT & n/a & 4722 & 2025 & 19565 \\
+resnet18-b8 & Torch-TensorRT & n/a & 4109 & 1942 & 12448 \\
 resnet18-b8 & JAX/XLA & 955 & 4 & 2276 & n/a \\
 resnet18-b8 & MetaTensor & n/a & 168 & 2715 & n/a \\
 mixer\_b16 & torch.compile & n/a & 1249 & 3144 & n/a \\
 mixer\_b16 & torch.compile (reduce-overhead) & n/a & 1268 & 3063 & n/a \\
 mixer\_b16 & torch.compile (max-autotune) & n/a & 7539 & 3119 & n/a \\
-mixer\_b16 & Torch-TensorRT & n/a & 5829 & 2486 & 14061 \\
+mixer\_b16 & Torch-TensorRT & n/a & 4788 & 2454 & 10649 \\
 mixer\_b16 & JAX/XLA & 7350 & 7 & 2249 & 11257 \\
 mixer\_b16 & IREE & 1524 & 750 & 673105 & n/a \\
 mixer\_b16 & MetaTensor & n/a & 184 & 2712 & 349 \\
 vit-tiny & torch.compile & n/a & 1800 & 2085 & 1007 \\
 vit-tiny & torch.compile (reduce-overhead) & n/a & 1808 & 1401 & 716 \\
 vit-tiny & torch.compile (max-autotune) & n/a & 4232 & 1310 & 1687 \\
-vit-tiny & Torch-TensorRT & n/a & 7701 & 1038 & 2802 \\
+vit-tiny & Torch-TensorRT & n/a & 7203 & 1087 & 2666 \\
 vit-tiny & JAX/XLA & 6522 & 7 & 737 & 2130 \\
 vit-tiny & IREE & 1688 & 39 & 25037 & n/a \\
 vit-tiny & MetaTensor & n/a & 137 & 979 & 1 \\

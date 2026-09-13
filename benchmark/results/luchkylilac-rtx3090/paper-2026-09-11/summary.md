@@ -57,15 +57,15 @@
 
 | model | ours | torch.compile | compile-ro | compile-mat | torch eager | JAX/XLA | IREE | TensorRT | ratio ours/compile | ratio jax/compile | launches/iter (ours) | correctness | tol | pass |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| bert-mini | 429.2 | 861.6 | 480.5 | 423.7 | 1808.4 | 243.3 | 3611.3 | 655.7 | 0.50x | 0.28x | 24.3 | 1.90735e-05 | 0.001 | pass |
-| bert-tiny | 253.4 | 539.0 | 299.0 | 269.9 | 1103.2 | 111.3 | 1322.3 | 443.1 | 0.47x | 0.21x | 14.3 | 3.05176e-05 | 0.001 | pass |
-| distilgpt2 | 1284.5 | 1352.7 | 1290.0 | 1280.2 | 2779.3 | 1000.6 | 17122.7 | 3722.1 | 0.95x | 0.74x | 38.2 | 0.000190735 | 0.001 | pass |
-| mixer_b16 | 2711.7 | 3143.5 | 3062.6 | 3119.0 | 2892.0 | 2249.2 | 673104.7 | 2486.1 | 0.86x | 0.72x | 63.4 | 3.62396e-05 | 0.001 | pass |
-| resnet18-b1 | 726.3 | 1037.0 | 918.4 | 1041.3 | 1417.3 | 1097.1 | n/a | 995.3 | 0.70x | 1.06x | 39.0 | 0.00963783 | 0.02 | pass |
-| resnet18-b8 | 2715.4 | 2193.9 | 2123.9 | 2126.3 | 2257.0 | 2275.9 | n/a | 2025.2 | 1.24x | 1.04x | 39.0 | 0.00571394 | 0.02 | pass |
-| smollm2-135m | 3659.6 | 5251.7 | 3791.2 | 3848.1 | 14730.0 | 2639.4 | 19150.2 | 3741.5 | 0.70x | 0.50x | 212.1 | 0.000201941 | 0.001 | pass |
-| tiny-gpt2 | 188.7 | 421.0 | 209.5 | 247.5 | 1634.4 | 87.9 | 192.5 | 1395.6 | 0.45x | 0.21x | 13.2 | 2.6077e-08 | 0.001 | pass |
-| vit-tiny | 979.4 | 2085.3 | 1400.8 | 1310.5 | 3739.2 | 737.0 | 25037.3 | 1038.4 | 0.47x | 0.35x | 76.3 | 1.04904e-05 | 0.001 | pass |
+| bert-mini | 429.2 | 861.6 | 480.5 | 423.7 | 1808.4 | 243.3 | 3611.3 | 706.7 | 0.50x | 0.28x | 24.3 | 1.90735e-05 | 0.001 | pass |
+| bert-tiny | 253.4 | 539.0 | 299.0 | 269.9 | 1103.2 | 111.3 | 1322.3 | 477.9 | 0.47x | 0.21x | 14.3 | 3.05176e-05 | 0.001 | pass |
+| distilgpt2 | 1284.5 | 1352.7 | 1290.0 | 1280.2 | 2779.3 | 1000.6 | 17122.7 | 1721.4 | 0.95x | 0.74x | 38.2 | 0.000190735 | 0.001 | pass |
+| mixer_b16 | 2711.7 | 3143.5 | 3062.6 | 3119.0 | 2892.0 | 2249.2 | 673104.7 | 2453.8 | 0.86x | 0.72x | 63.4 | 3.62396e-05 | 0.001 | pass |
+| resnet18-b1 | 726.3 | 1037.0 | 918.4 | 1041.3 | 1417.3 | 1097.1 | n/a | 999.8 | 0.70x | 1.06x | 39.0 | 0.00963783 | 0.02 | pass |
+| resnet18-b8 | 2715.4 | 2193.9 | 2123.9 | 2126.3 | 2257.0 | 2275.9 | n/a | 1941.9 | 1.24x | 1.04x | 39.0 | 0.00571394 | 0.02 | pass |
+| smollm2-135m | 3659.6 | 5251.7 | 3791.2 | 3848.1 | 14730.0 | 2639.4 | 19150.2 | 3735.2 | 0.70x | 0.50x | 212.1 | 0.000201941 | 0.001 | pass |
+| tiny-gpt2 | 188.7 | 421.0 | 209.5 | 247.5 | 1634.4 | 87.9 | 192.5 | 529.8 | 0.45x | 0.21x | 13.2 | 2.6077e-08 | 0.001 | pass |
+| vit-tiny | 979.4 | 2085.3 | 1400.8 | 1310.5 | 3739.2 | 737.0 | 25037.3 | 1087.4 | 0.47x | 0.35x | 76.3 | 1.04904e-05 | 0.001 | pass |
 
 ## Batch-size sweep (median steady_us per forward; per_seq = steady/B)
 
@@ -145,21 +145,21 @@
 | bert-mini | torch-compile | n/a | 1281.5 | 861.6 | 1254 |
 | bert-mini | torch-compile-ro | n/a | 1295.2 | 480.5 | 905 |
 | bert-mini | torch-compile-mat | n/a | 4304.7 | 423.7 | 3041 |
-| bert-mini | torch-tensorrt | n/a | 5023.4 | 655.7 | 4277 |
+| bert-mini | torch-tensorrt | n/a | 4237.7 | 706.7 | 3761 |
 | bert-mini | jax | 7243.9 | 2.8 | 243.3 | 4570 |
 | bert-mini | iree | 998.3 | 19.3 | 3611.3 | n/a |
 | bert-mini | ours | n/a | 189.2 | 429.2 | 69 |
 | bert-tiny | torch-compile | n/a | 1117.9 | 539.0 | 1795 |
 | bert-tiny | torch-compile-ro | n/a | 1139.1 | 299.0 | 1286 |
 | bert-tiny | torch-compile-mat | n/a | 3721.8 | 269.9 | 4340 |
-| bert-tiny | torch-tensorrt | n/a | 4190.7 | 443.1 | 6189 |
+| bert-tiny | torch-tensorrt | n/a | 3645.5 | 477.9 | 5662 |
 | bert-tiny | jax | 5741.4 | 1.8 | 111.3 | 5684 |
 | bert-tiny | iree | 831.1 | 13.9 | 1322.3 | n/a |
 | bert-tiny | ours | n/a | 119.9 | 253.4 | 17 |
 | distilgpt2 | torch-compile | n/a | 1535.6 | 1352.7 | 981 |
 | distilgpt2 | torch-compile-ro | n/a | 1571.8 | 1290.0 | 964 |
 | distilgpt2 | torch-compile-mat | n/a | 2206.0 | 1280.2 | 1381 |
-| distilgpt2 | torch-tensorrt | n/a | 2949.7 | 3722.1 | n/a |
+| distilgpt2 | torch-tensorrt | n/a | 14457.0 | 1721.4 | 13538 |
 | distilgpt2 | jax | 6981.6 | 4.5 | 1000.6 | 3851 |
 | distilgpt2 | iree | 869.0 | 75.8 | 17122.7 | n/a |
 | distilgpt2 | ours | n/a | 566.0 | 1284.5 | 288 |
@@ -318,40 +318,40 @@
 | mixer_b16 | torch-compile | n/a | 1249.1 | 3143.5 | n/a |
 | mixer_b16 | torch-compile-ro | n/a | 1268.4 | 3062.6 | n/a |
 | mixer_b16 | torch-compile-mat | n/a | 7539.2 | 3119.0 | n/a |
-| mixer_b16 | torch-tensorrt | n/a | 5828.9 | 2486.1 | 14061 |
+| mixer_b16 | torch-tensorrt | n/a | 4787.7 | 2453.8 | 10649 |
 | mixer_b16 | jax | 7350.2 | 7.0 | 2249.2 | 11257 |
 | mixer_b16 | iree | 1524.5 | 750.1 | 673104.7 | n/a |
 | mixer_b16 | ours | n/a | 184.3 | 2711.7 | 349 |
 | resnet18-b1 | torch-compile | n/a | 1079.2 | 1037.0 | 2354 |
 | resnet18-b1 | torch-compile-ro | n/a | 1083.6 | 918.4 | 1804 |
 | resnet18-b1 | torch-compile-mat | n/a | 6952.2 | 1041.3 | 18001 |
-| resnet18-b1 | torch-tensorrt | n/a | 4786.8 | 995.3 | 10908 |
+| resnet18-b1 | torch-tensorrt | n/a | 4076.0 | 999.8 | 9323 |
 | resnet18-b1 | jax | 608.0 | 3.9 | 1097.1 | 1337 |
 | resnet18-b1 | ours | n/a | 153.6 | 726.3 | -44 |
 | resnet18-b8 | torch-compile | n/a | 1049.6 | 2193.9 | 13678 |
 | resnet18-b8 | torch-compile-ro | n/a | 1050.6 | 2123.9 | 6492 |
 | resnet18-b8 | torch-compile-mat | n/a | 5545.8 | 2126.3 | 41005 |
-| resnet18-b8 | torch-tensorrt | n/a | 4721.6 | 2025.2 | 19565 |
+| resnet18-b8 | torch-tensorrt | n/a | 4109.0 | 1941.9 | 12448 |
 | resnet18-b8 | jax | 954.6 | 4.3 | 2275.9 | n/a |
 | resnet18-b8 | ours | n/a | 168.4 | 2715.4 | n/a |
 | smollm2-135m | torch-compile | n/a | 3825.6 | 5251.7 | 346 |
 | smollm2-135m | torch-compile-ro | n/a | 3944.5 | 3791.2 | 311 |
 | smollm2-135m | torch-compile-mat | n/a | 5068.1 | 3848.1 | 416 |
-| smollm2-135m | torch-tensorrt | n/a | 22359.3 | 3741.5 | 1985 |
+| smollm2-135m | torch-tensorrt | n/a | 21710.3 | 3735.2 | 1925 |
 | smollm2-135m | jax | 11097.7 | 19.1 | 2639.4 | 874 |
 | smollm2-135m | iree | 2061.3 | 174.8 | 19150.2 | n/a |
 | smollm2-135m | ours | n/a | 518.9 | 3659.6 | -2 |
 | tiny-gpt2 | torch-compile | n/a | 1171.1 | 421.0 | 561 |
 | tiny-gpt2 | torch-compile-ro | n/a | 1188.5 | 209.5 | 490 |
 | tiny-gpt2 | torch-compile-mat | n/a | 2422.2 | 247.5 | 1393 |
-| tiny-gpt2 | torch-tensorrt | n/a | 1912.3 | 1395.6 | 5956 |
+| tiny-gpt2 | torch-tensorrt | n/a | 6661.2 | 529.8 | 5587 |
 | tiny-gpt2 | jax | 1161.5 | 1.6 | 87.9 | 435 |
 | tiny-gpt2 | iree | 382.8 | 11.7 | 192.5 | -66 |
 | tiny-gpt2 | ours | n/a | 114.5 | 188.7 | -260 |
 | vit-tiny | torch-compile | n/a | 1800.4 | 2085.3 | 1007 |
 | vit-tiny | torch-compile-ro | n/a | 1808.1 | 1400.8 | 716 |
 | vit-tiny | torch-compile-mat | n/a | 4231.8 | 1310.5 | 1687 |
-| vit-tiny | torch-tensorrt | n/a | 7700.9 | 1038.4 | 2802 |
+| vit-tiny | torch-tensorrt | n/a | 7202.9 | 1087.4 | 2666 |
 | vit-tiny | jax | 6522.4 | 7.1 | 737.0 | 2130 |
 | vit-tiny | iree | 1687.6 | 38.8 | 25037.3 | n/a |
 | vit-tiny | ours | n/a | 136.7 | 979.4 | 1 |

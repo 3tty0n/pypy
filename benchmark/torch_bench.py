@@ -428,6 +428,11 @@ if mode in ("compile", "compile-ro", "compile-mat"):
     ex = torch._dynamo.explain(step)(w, b, 0)
     graphs, breaks = ex.graph_count, ex.graph_break_count
     step = compiled(step)
+elif mode == "tensorrt":
+    # Without this the variants 0-5 path never wrapped the step at all, so
+    # every "tensorrt" row here was plain eager at any dtype - the same
+    # mislabelling require_trt_dtype() refuses, one branch earlier.
+    step = compiled(step)
 
 
 def run(iters):

@@ -344,6 +344,9 @@ run_measurement() {
   fi
   rm -f "$err"
   [ -n "$row" ] && echo "$row"
+  # A refused or failed baseline is one absent row, not the end of the stage:
+  # returning non-zero here kills the caller under `set -e`.
+  return 0
 }
 
 # The pid keeps one stage's cleanup from deleting the link a concurrently
