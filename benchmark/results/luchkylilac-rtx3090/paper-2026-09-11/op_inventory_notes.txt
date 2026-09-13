@@ -1,0 +1,136 @@
+# aten name -> vocabulary word (the mapping the torch rows use)
+map	mm	matmul
+map	addmm	matmul
+map	bmm	bmm
+map	baddbmm	bmm
+map	convolution	conv
+map	native_layer_norm	layernorm
+map	_fused_rms_norm	rmsnorm
+map	rms_norm	rmsnorm
+map	_softmax	softmax
+map	gelu	gelu
+map	silu	silu
+map	relu	relu
+map	relu_	relu
+map	add	add
+map	add_	add
+map	mul	mul
+map	mul_	mul
+map	embedding	embedding_gather
+map	index_select	embedding_gather
+map	view	reshape_transpose
+map	reshape	reshape_transpose
+map	transpose	reshape_transpose
+map	permute	reshape_transpose
+map	contiguous	reshape_transpose
+map	expand	reshape_transpose
+map	sum	reduce
+map	mean	reduce
+map	amax	reduce
+map	_scaled_dot_product_*	2 bmm + 1 softmax + 1 mul
+alias	linear	dropped: outer dispatch level of a call already counted
+alias	matmul	dropped: outer dispatch level of a call already counted
+alias	conv2d	dropped: outer dispatch level of a call already counted
+alias	_convolution	dropped: outer dispatch level of a call already counted
+alias	cudnn_convolution	dropped: outer dispatch level of a call already counted
+alias	convolution_overrideable	dropped: outer dispatch level of a call already counted
+alias	softmax	dropped: outer dispatch level of a call already counted
+alias	_safe_softmax	dropped: outer dispatch level of a call already counted
+alias	layer_norm	dropped: outer dispatch level of a call already counted
+alias	_unsafe_view	dropped: outer dispatch level of a call already counted
+alias	detach	dropped: outer dispatch level of a call already counted
+alias	to	dropped: outer dispatch level of a call already counted
+alias	_to_copy	dropped: outer dispatch level of a call already counted
+alias	copy_	dropped: outer dispatch level of a call already counted
+alias	empty	dropped: outer dispatch level of a call already counted
+alias	empty_like	dropped: outer dispatch level of a call already counted
+alias	empty_strided	dropped: outer dispatch level of a call already counted
+alias	resolve_conj	dropped: outer dispatch level of a call already counted
+alias	resolve_neg	dropped: outer dispatch level of a call already counted
+alias	t	dropped: outer dispatch level of a call already counted
+alias	flatten	dropped: outer dispatch level of a call already counted
+alias	unsqueeze	dropped: outer dispatch level of a call already counted
+alias	squeeze	dropped: outer dispatch level of a call already counted
+alias	slice	dropped: outer dispatch level of a call already counted
+alias	select	dropped: outer dispatch level of a call already counted
+alias	size	dropped: outer dispatch level of a call already counted
+alias	item	dropped: outer dispatch level of a call already counted
+alias	_has_compatible_shallow_copy_type	dropped: outer dispatch level of a call already counted
+alias	is_same_size	dropped: outer dispatch level of a call already counted
+alias	as_strided	dropped: outer dispatch level of a call already counted
+alias	_reshape_alias	dropped: outer dispatch level of a call already counted
+alias	alias	dropped: outer dispatch level of a call already counted
+alias	clamp_min_	dropped: outer dispatch level of a call already counted
+alias	clamp_min	dropped: outer dispatch level of a call already counted
+alias	max_pool2d_with_indices	dropped: outer dispatch level of a call already counted
+alias	adaptive_avg_pool2d	dropped: outer dispatch level of a call already counted
+alias	_batch_norm_impl_index	dropped: outer dispatch level of a call already counted
+alias	cudnn_batch_norm	dropped: outer dispatch level of a call already counted
+alias	scaled_dot_product_attention	dropped: outer dispatch level of a call already counted
+alias	_efficient_attention_forward	dropped: outer dispatch level of a call already counted
+alias	_flash_attention_forward	dropped: outer dispatch level of a call already counted
+note		gelu counts 1 per call on both sides, but the two forms are not the same size once lowered. Measured on the generated Triton IR: the tanh form (distilgpt2, gpt2) is a 13-node region - 7 addf, 4 mulf, 1 exp, 1 divf; the erf form (bert, vit, mixer) is an 88-node region - 35 addf, 30 mulf, 16 select, 5 divf, 1 exp, 1 subf. Both regions also carry the fused bias add, and the pass does no common-subexpression elimination, so a shared operand is recomputed at every use
+diff	bert-mini matmul: ours 18, torch 26	we pack q/k/v into one GEMM per layer where HF issues three projections
+diff	bert-mini add: ours 19, torch 10	torch folds every linear's bias into aten::addmm where we issue a separate add, and torch's residual adds land here too
+diff	bert-mini residual_add: ours 8, torch 0	we count the block's residual connection as its own word; torch's profiler cannot tell it from a bias add, so torch carries its residuals inside add and residual_add is 0
+diff	bert-mini embedding_gather: ours 1, torch 6	HF looks up token, position and token-type tables with one aten::embedding each; we fold them into one table and one gather, and add the input add separately
+diff	bert-mini reshape_transpose: ours 0, torch 167	torch materialises a view at every layout change (head split and merge, NCHW/NHWC, every qkv split); our kernels index the flat buffer, so only a real data movement (im2col, the ViT patch gather) is counted
+diff	bert-mini other: ours 0, torch 40	aten ops with no word in the vocabulary: dropout in eval, allocation and fill, batch norm, max pool, and the scalar pieces of HF's Python gelu/RMSNorm/rotary
+diff	bert-tiny matmul: ours 10, torch 14	we pack q/k/v into one GEMM per layer where HF issues three projections
+diff	bert-tiny add: ours 11, torch 6	torch folds every linear's bias into aten::addmm where we issue a separate add, and torch's residual adds land here too
+diff	bert-tiny residual_add: ours 4, torch 0	we count the block's residual connection as its own word; torch's profiler cannot tell it from a bias add, so torch carries its residuals inside add and residual_add is 0
+diff	bert-tiny embedding_gather: ours 1, torch 6	HF looks up token, position and token-type tables with one aten::embedding each; we fold them into one table and one gather, and add the input add separately
+diff	bert-tiny reshape_transpose: ours 0, torch 97	torch materialises a view at every layout change (head split and merge, NCHW/NHWC, every qkv split); our kernels index the flat buffer, so only a real data movement (im2col, the ViT patch gather) is counted
+diff	bert-tiny other: ours 0, torch 24	aten ops with no word in the vocabulary: dropout in eval, allocation and fill, batch norm, max pool, and the scalar pieces of HF's Python gelu/RMSNorm/rotary
+diff	distilgpt2 gelu: ours 6, torch 0	HF GPT-2 uses NewGELUActivation, written in Python, so the profiler sees pow/tanh/mul/add and never aten::gelu; ours is one gelu op per MLP
+diff	distilgpt2 add: ours 31, torch 26	torch folds every linear's bias into aten::addmm where we issue a separate add, and torch's residual adds land here too
+diff	distilgpt2 mul: ours 6, torch 24	HF writes gelu, RMSNorm and rotary as Python tensor expressions, so their muls are individual aten::mul calls; ours are inside one gelu/rms_norm/rotary op
+diff	distilgpt2 residual_add: ours 12, torch 0	we count the block's residual connection as its own word; torch's profiler cannot tell it from a bias add, so torch carries its residuals inside add and residual_add is 0
+diff	distilgpt2 embedding_gather: ours 1, torch 4	HF looks up token, position and token-type tables with one aten::embedding each; we fold them into one table and one gather, and add the input add separately
+diff	distilgpt2 reshape_transpose: ours 0, torch 167	torch materialises a view at every layout change (head split and merge, NCHW/NHWC, every qkv split); our kernels index the flat buffer, so only a real data movement (im2col, the ViT patch gather) is counted
+diff	distilgpt2 other: ours 0, torch 134	aten ops with no word in the vocabulary: dropout in eval, allocation and fill, batch norm, max pool, and the scalar pieces of HF's Python gelu/RMSNorm/rotary
+diff	mixer_b16 matmul: ours 51, torch 49	our patch embedding and global average pool are GEMMs; torch's are a cuDNN conv and aten::mean
+diff	mixer_b16 conv: ours 0, torch 1	the patch embedding is a cuDNN conv on torch's side; ours is a gather (ViT) or im2col (Mixer) plus a GEMM, counted as matmul
+diff	mixer_b16 add: ours 50, torch 37	torch folds every linear's bias into aten::addmm where we issue a separate add, and torch's residual adds land here too
+diff	mixer_b16 residual_add: ours 24, torch 0	we count the block's residual connection as its own word; torch's profiler cannot tell it from a bias add, so torch carries its residuals inside add and residual_add is 0
+diff	mixer_b16 reshape_transpose: ours 1, torch 236	torch materialises a view at every layout change (head split and merge, NCHW/NHWC, every qkv split); our kernels index the flat buffer, so only a real data movement (im2col, the ViT patch gather) is counted
+diff	mixer_b16 reduce: ours 0, torch 1	torch's global average pool is aten::mean; ours is a [1,tokens] GEMM, counted as matmul
+diff	mixer_b16 other: ours 0, torch 74	aten ops with no word in the vocabulary: dropout in eval, allocation and fill, batch norm, max pool, and the scalar pieces of HF's Python gelu/RMSNorm/rotary
+diff	resnet18-b1 matmul: ours 2, torch 1	our global average pool is a [B, B*hw] GEMM, torch's is aten::mean
+diff	resnet18-b1 add: ours 21, torch 8	the convolutions carry no bias on either side: our adds are the batch-norm shift (20) plus the fc bias, torch's are only the 8 residual connections, with batch norm inside cudnn_batch_norm
+diff	resnet18-b1 mul: ours 20, torch 0	batch norm is cudnn_batch_norm on torch (counted in other); ours is folded into one mul and one add per conv
+diff	resnet18-b1 residual_add: ours 8, torch 0	we count the block's residual connection as its own word; torch's profiler cannot tell it from a bias add, so torch carries its residuals inside add and residual_add is 0
+diff	resnet18-b1 reshape_transpose: ours 20, torch 22	one im2col per conv on our side; on torch's, the NCHW/NHWC permutes and the flatten before the fc
+diff	resnet18-b1 reduce: ours 0, torch 1	torch's global average pool is aten::mean; ours is a [1,tokens] GEMM, counted as matmul
+diff	resnet18-b1 other: ours 1, torch 21	aten ops with no word in the vocabulary: dropout in eval, allocation and fill, batch norm, max pool, and the scalar pieces of HF's Python gelu/RMSNorm/rotary
+diff	resnet18-b8 matmul: ours 2, torch 1	our global average pool is a [B, B*hw] GEMM, torch's is aten::mean
+diff	resnet18-b8 add: ours 21, torch 8	the convolutions carry no bias on either side: our adds are the batch-norm shift (20) plus the fc bias, torch's are only the 8 residual connections, with batch norm inside cudnn_batch_norm
+diff	resnet18-b8 mul: ours 20, torch 0	batch norm is cudnn_batch_norm on torch (counted in other); ours is folded into one mul and one add per conv
+diff	resnet18-b8 residual_add: ours 8, torch 0	we count the block's residual connection as its own word; torch's profiler cannot tell it from a bias add, so torch carries its residuals inside add and residual_add is 0
+diff	resnet18-b8 reshape_transpose: ours 20, torch 22	one im2col per conv on our side; on torch's, the NCHW/NHWC permutes and the flatten before the fc
+diff	resnet18-b8 reduce: ours 0, torch 1	torch's global average pool is aten::mean; ours is a [1,tokens] GEMM, counted as matmul
+diff	resnet18-b8 other: ours 1, torch 21	aten ops with no word in the vocabulary: dropout in eval, allocation and fill, batch norm, max pool, and the scalar pieces of HF's Python gelu/RMSNorm/rotary
+diff	smollm2-135m matmul: ours 151, torch 211	we pack q/k/v into one GEMM per layer where HF issues three projections
+diff	smollm2-135m rmsnorm: ours 61, torch 0	HF LlamaRMSNorm is Python (pow, mean, rsqrt, mul), so there is no aten::rms_norm to count; ours is one row kernel
+diff	smollm2-135m add: ours 30, torch 182	torch's adds are the residuals, the eps inside HF's Python RMSNorm and the two halves of its Python rotary; ours are the causal mask only, the rest being inside rms_norm and rotary
+diff	smollm2-135m mul: ours 60, torch 274	HF writes gelu, RMSNorm and rotary as Python tensor expressions, so their muls are individual aten::mul calls; ours are inside one gelu/rms_norm/rotary op
+diff	smollm2-135m residual_add: ours 60, torch 0	we count the block's residual connection as its own word; torch's profiler cannot tell it from a bias add, so torch carries its residuals inside add and residual_add is 0
+diff	smollm2-135m embedding_gather: ours 1, torch 2	HF looks up token, position and token-type tables with one aten::embedding each; we fold them into one table and one gather, and add the input add separately
+diff	smollm2-135m rotary: ours 30, torch 0	HF applies rotary as Python mul/add over q and k, which lands in mul and add; ours is one rotary op per layer
+diff	smollm2-135m reshape_transpose: ours 0, torch 1037	torch materialises a view at every layout change (head split and merge, NCHW/NHWC, every qkv split); our kernels index the flat buffer, so only a real data movement (im2col, the ViT patch gather) is counted
+diff	smollm2-135m reduce: ours 0, torch 61	the aten::mean inside HF's Python RMSNorm; our rms_norm does that reduction inside the row kernel
+diff	smollm2-135m other: ours 0, torch 504	aten ops with no word in the vocabulary: dropout in eval, allocation and fill, batch norm, max pool, and the scalar pieces of HF's Python gelu/RMSNorm/rotary
+diff	tiny-gpt2 gelu: ours 2, torch 0	HF GPT-2 uses NewGELUActivation, written in Python, so the profiler sees pow/tanh/mul/add and never aten::gelu; ours is one gelu op per MLP
+diff	tiny-gpt2 add: ours 11, torch 12	torch folds every linear's bias into aten::addmm where we issue a separate add, and torch's residual adds land here too
+diff	tiny-gpt2 mul: ours 2, torch 12	HF writes gelu, RMSNorm and rotary as Python tensor expressions, so their muls are individual aten::mul calls; ours are inside one gelu/rms_norm/rotary op
+diff	tiny-gpt2 residual_add: ours 4, torch 0	we count the block's residual connection as its own word; torch's profiler cannot tell it from a bias add, so torch carries its residuals inside add and residual_add is 0
+diff	tiny-gpt2 embedding_gather: ours 1, torch 4	HF looks up token, position and token-type tables with one aten::embedding each; we fold them into one table and one gather, and add the input add separately
+diff	tiny-gpt2 reshape_transpose: ours 0, torch 85	torch materialises a view at every layout change (head split and merge, NCHW/NHWC, every qkv split); our kernels index the flat buffer, so only a real data movement (im2col, the ViT patch gather) is counted
+diff	tiny-gpt2 other: ours 0, torch 70	aten ops with no word in the vocabulary: dropout in eval, allocation and fill, batch norm, max pool, and the scalar pieces of HF's Python gelu/RMSNorm/rotary
+diff	vit-tiny matmul: ours 50, torch 73	we pack q/k/v into one GEMM per layer where HF issues three projections, and our patch embedding is a GEMM where torch's is a cuDNN conv
+diff	vit-tiny conv: ours 0, torch 1	the patch embedding is a cuDNN conv on torch's side; ours is a gather (ViT) or im2col (Mixer) plus a GEMM, counted as matmul
+diff	vit-tiny add: ours 50, torch 26	torch folds every linear's bias into aten::addmm where we issue a separate add, and torch's residual adds land here too
+diff	vit-tiny residual_add: ours 24, torch 0	we count the block's residual connection as its own word; torch's profiler cannot tell it from a bias add, so torch carries its residuals inside add and residual_add is 0
+diff	vit-tiny embedding_gather: ours 2, torch 0	our patch extraction is a gather over the image and the classifier reads the cls row with a second gather; torch does the first with a conv and the second with a slice
+diff	vit-tiny reshape_transpose: ours 1, torch 428	torch materialises a view at every layout change (head split and merge, NCHW/NHWC, every qkv split); our kernels index the flat buffer, so only a real data movement (im2col, the ViT patch gather) is counted
+diff	vit-tiny other: ours 0, torch 98	aten ops with no word in the vocabulary: dropout in eval, allocation and fill, batch norm, max pool, and the scalar pieces of HF's Python gelu/RMSNorm/rotary

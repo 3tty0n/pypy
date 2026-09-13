@@ -52,6 +52,7 @@ set. `bench.sh all` clears `$OUT/*.tsv` first for a clean run.
     benchmark/paper/bench.sh batch bert-mini         # batch-size sweep
     benchmark/paper/bench.sh summarize
     benchmark/paper/bench.sh gap bert-tiny           # launch/utilisation analysis
+    benchmark/paper/bench.sh correctness bert-tiny  # five derived inputs
     benchmark/paper/bench.sh fusion bert-tiny        # fusion-region statistics
     benchmark/paper/bench.sh plot                    # figures into $OUT/figures
 
@@ -395,10 +396,56 @@ which need a `tl.dot`-capable code generator, since the codegen here has none
 - and one submission per forward instead of one per kernel.
 
 
+## Correctness on more than one input
+
+    benchmark/paper/bench.sh correctness             # all nine models
+    benchmark/paper/bench.sh correctness bert-mini   # one
+    SEEDS="1 2" benchmark/paper/bench.sh correctness # fewer inputs
+
+The `models` sweep checks each system's logits against ours on the one input
+stored in the checkpoint. One input cannot separate "the same computation"
+from "a computation that happens to agree on this vector", so
+`run_correctness.sh` runs the same check on five more inputs per model and
+records the result per input in `$OUT/correctness.tsv`
+(`model system seed maxabsdiff argmax_match tol pass`).
+
+The inputs are derived from the stored one by integer arithmetic, so pypy2,
+torch and jax produce bit-identical inputs without sharing an RNG
+(`benchmark/applevel/inputs.py`, selected by `INPUT_SEED=k` on all three
+sides; `INPUT_SEED=0` is the stored input and is the default, so nothing
+about an existing run moves):
+
+| k | text models | vision models |
+|---|---|---|
+| 0 | the stored token ids | the stored image |
+| 1..5 | `ids[i] = (tokens[(i + k) % seq] + k) % vocab` - the sequence rotated left by k, every id shifted by k | `pixel[i] += 0.05 * (2*u(i, k) - 1)`, u from an integer hash of (flat index, k): additive uniform noise of +-0.05 on the normalized pixels |
+
+The vision noise is keyed by the position in the flat `image` region of
+`weights.bin`, which is the same region on all three sides whatever shape each
+reads it as, so the `[3, s, s]` / `[s, s, 3]` difference does not enter into
+it. Every side adds in double and stores float32, so the three input buffers
+are bit-identical rather than merely close.
+
+Ours runs first for each input and writes `logits_pypy_seed<k>.bin`; torch
+eager, torch.compile and JAX/XLA are then compared against that file and
+judged by the same `tolerance_for` table the `models` sweep uses. Seed 0 is
+never run here, so the stored `logits_pypy.bin` that every other stage
+compares against is never rewritten. `ITERS` is 5: only the outputs matter.
+`argmax_match` is the fraction of token positions whose argmax agrees for a
+text model, and top-1 agreement for a vision model (the `argmax` line there is
+the top-5 ranking).
+
+`summarize.py` and `plot.py --only correctness` report the worst of the five
+per (model, system) - the largest `maxabsdiff` and the smallest
+`argmax_match` - never the average: a system that is right on four inputs out
+of five is wrong.
+
 ## The model inventory
 
-`bench.sh inventory` writes `$OUT/model_inventory.tsv`, and
-`plot.py --only model_inventory` turns it into `figures/model_inventory.tex`.
+`bench.sh inventory` writes `$OUT/model_inventory.tsv`,
+`$OUT/op_inventory.tsv` and `$OUT/op_inventory_notes.txt`, and
+`plot.py --only model_inventory --only op_inventory` turns them into
+`figures/model_inventory.tex` and `figures/op_inventory.tex`.
 It answers the question the models figure cannot: are the two systems running
 the same architecture? The logits comparison answers it from the output, which
 cannot separate "the same computation" from "a different computation that
@@ -419,6 +466,21 @@ nsys kernel mix in `gap.tsv`. Torch's side is measured on one eager forward:
 `torch.profiler` counts of `aten::mm`/`addmm`/`bmm`/`baddbmm`/`convolution`/
 `_scaled_dot_product_*` for the calls, `p.numel()` for the parameters.
 `--no-torch` writes our rows alone.
+
+Parameters are counted under one definition on both sides. `params_only` is
+the learned weights. `params_plus_buffers` adds the registered non-learned
+tensors that are still part of the trained model, which across these nine
+models is ResNet-18's batch-norm running mean and variance (9600 values) and
+nothing else - ours in `index.json` as `<layer>.m`/`<layer>.v`, torch's as
+`running_mean`/`running_var` buffers. Excluded from both columns on both
+sides, because they are inputs or tables rebuilt from the config rather than
+anything training produced: ours `image`, `rope.cos`, `rope.sin`, `rope.p`;
+torch `position_ids`, `token_type_ids`, `inv_freq`, `original_inv_freq`,
+`num_batches_tracked` (a counter, not data), and a module's causal-mask buffer
+where it keeps one. The input token ids live in the config, not in
+`index.json`, so they are outside our count by construction. Under that rule
+ResNet-18 now agrees exactly on both columns; it used to show `+9600` only
+because our side counted the running statistics and `p.numel()` did not.
 
 Counting one SDPA call as the two batched products it stands for, every
 call-count difference across the nine models reduces to three things:
@@ -454,6 +516,59 @@ from"). `gap_analysis.py` now puts those in their own `splitk` bucket, since
 their demangled names contain `cublas` and they used to be counted as GEMMs; a
 trace taken before that folds them into `gemm` and reports `splitk=0`, which is
 why the inventory reports the residual rather than reading the bucket.
+
+
+## The operator inventory
+
+The call-count table above covers the GEMM-shaped work, which is where the
+time goes but not where a difference in *what is executed* would show. The
+operator inventory covers all of it: every operator a forward runs, both
+systems expressed in one vocabulary of seventeen words (`matmul`, `bmm`,
+`conv`, `layernorm`, `rmsnorm`, `softmax`, `gelu`, `silu`, `relu`, `add`,
+`mul`, `residual_add`, `embedding_gather`, `rotary`, `reshape_transpose`,
+`reduce`, `other`).
+
+Torch's rows are one eager forward under `torch.profiler`, with each
+`aten::` name mapped to a word. The mapping is printed in full into
+`op_inventory_notes.txt` and reproduced in the tex note, so the choice is
+checkable rather than asserted. Two things are worth knowing about it:
+
+- *one dispatch level only.* The profiler reports `aten::linear` and the
+  `aten::addmm` it dispatches to, `aten::convolution` and `aten::_convolution`
+  and `aten::cudnn_convolution`, `aten::softmax` and `aten::_softmax`, and so
+  on. Counting both levels would count one call twice, so the outer and inner
+  aliases are listed and dropped, and the raw per-op profile stays in the
+  notes column.
+- *SDPA stands for what it fused.* One `aten::_scaled_dot_product_*` call is
+  counted as 2 bmm + 1 softmax + 1 mul. That is taken as a floor, not a sum:
+  the math backend decomposes SDPA into real `aten::bmm`/`_softmax`/`mul`
+  that are already in the profile (tiny-gpt2), and adding the implied ones on
+  top would double-count.
+- *residuals.* The profiler cannot tell a block's residual connection from a
+  bias add - both are `aten::add` - so torch's `residual_add` column is 0 and
+  its residuals sit inside `add`. Ours counts them apart.
+
+Our rows are analytic, from the same walk of `lib_pypy/tensorpypy/models.py`
+that the FLOP side uses; `--selfcheck` asserts the two walkers agree on the
+calls they share (`matmul`/`bmm`/`conv`). An activation is one row on both
+sides, but the two gelu forms are not the same size once lowered, and the
+notes say so from the generated Triton IR that `fusion_stats.py` parses: the
+tanh form is a 13-node region (7 `addf`, 4 `mulf`, 1 `exp`, 1 `divf`), the erf
+form an 88-node region (35 `addf`, 30 `mulf`, 16 `select`, 5 `divf`, 1 `exp`,
+1 `subf`). Those histograms are per compiled kernel, not per launch - nothing
+in the dump says how often each kernel runs - and they are read from
+`fusion_stats.py`'s dump directory (`--ttir`, default
+`$TMPDIR/fusion-stats`), so they are absent if `bench.sh fusion` has not run.
+
+Every cell where the two rows disagree is named in the notes with the one
+reason it does, grouped by reason. They come down to six things: packed QKV,
+convolution and pooling as GEMMs (both already in the call-count table),
+torch materialising a view at every layout change where our kernels index the
+flat buffer, HF writing gelu, RMSNorm and rotary as Python tensor expressions
+where ours are single ops, batch norm folded into a scale and shift on our
+side against `cudnn_batch_norm` on torch's, and the residual-add convention
+above. No cell is left unexplained; `op_inventory_notes.txt` would say
+`NOT EXPLAINED` if one were.
 
 
 ## The dynamic sequence-length sweep

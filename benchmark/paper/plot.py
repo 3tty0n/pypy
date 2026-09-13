@@ -79,7 +79,7 @@ SINGLE_COL, DOUBLE_COL = 3.25, 6.75   # MLSys column and text widths, inches
 WIDE = {"micro_speedup", "fusion", "models", "ablation", "micro_baselines",
         "deopt",
         "compile_overhead",
-        "gap", "warmup", "batch",
+        "gap", "correctness", "warmup", "batch",
         "compare_speedup", "compare_models"}
 
 SYSTEM_LABEL = {
@@ -792,6 +792,93 @@ def fig_explain(out, args):
     return fig, "explain"
 
 
+def append_notes(path, paragraphs):
+    """Add a notes block under a table written by write_table."""
+    with open(path, "a") as f:
+        f.write("\n%% notes\n\\begin{minipage}{\\linewidth}\\footnotesize\n")
+        for para in paragraphs:
+            f.write("\\par\\smallskip\n" + para + "\n")
+        f.write("\\end{minipage}\n")
+
+
+def fig_op_inventory(out, args):
+    """Table only: every operator a forward runs, both systems in one
+    vocabulary.
+
+    The call-count table next to it only covers the GEMM-shaped work, which is
+    where the time is but not where the difference in *what is executed* is.
+    This one names every operator, so the reader can see that the two sides run
+    the same architecture down to the activation, and read off exactly which
+    cells do not line up and why."""
+    rows = read_tsv(os.path.join(out, "op_inventory.tsv"))
+    if not rows:
+        return None
+    words = [c for c in rows[0] if c not in ("model", "system", "notes")]
+    # Drop a column no model uses, so the table fits the page.
+    words = [w for w in words if any(int(r[w]) for r in rows)]
+    short = {"layernorm": "LN", "rmsnorm": "RMS", "softmax": "smax",
+             "residual_add": "res", "embedding_gather": "gather",
+             "reshape_transpose": "shape", "reduce": "red", "matmul": "mm",
+             "rotary": "rope"}
+    table = [[r["model"], SYSTEM_LABEL.get(r["system"], r["system"])] +
+             [r[w] for w in words] for r in rows]
+    path = os.path.join(args.outdir, "op_inventory.tex")
+    write_table(path,
+                "operators per forward, both systems in one vocabulary",
+                ["model", "system"] + [short.get(w, w) for w in words], table,
+                align="ll" + "r" * len(words))
+    append_notes(path, op_inventory_notes(out))
+    fig, ax = plt.subplots(figsize=(args.width, 0.3))
+    ax.axis("off")
+    return fig, "op_inventory"
+
+
+def op_inventory_notes(out):
+    """The mapping table and the per-model reasons, from the tsv's companion
+    notes file, turned into LaTeX paragraphs."""
+    path = os.path.join(out, "op_inventory_notes.txt")
+    if not os.path.exists(path):
+        return []
+    tex = lambda s: (str(s).replace("\\", "").replace("_", r"\_")
+                     .replace("%", r"\%").replace("&", r"\&")
+                     .replace("#", r"\#"))
+    maps, alias, notes, diffs = [], [], [], []
+    for line in open(path):
+        parts = line.rstrip("\n").split("\t")
+        if parts[0] == "map":
+            maps.append(r"\texttt{%s}$\rightarrow$%s" % (tex(parts[1]),
+                                                         tex(parts[2])))
+        elif parts[0] == "alias":
+            alias.append(r"\texttt{%s}" % tex(parts[1]))
+        elif parts[0] == "note":
+            notes.append(tex(parts[2]))
+        elif parts[0] == "diff":
+            diffs.append((parts[2], parts[1]))
+    paras = []
+    if maps:
+        paras.append(r"\textbf{Mapping.} torch's rows are one eager forward "
+                     r"under \texttt{torch.profiler}, with each aten name "
+                     r"mapped to a vocabulary word: " + ", ".join(maps) + ".")
+    if alias:
+        paras.append(r"\textbf{Not counted.} These are the same call seen at "
+                     r"an outer or inner dispatch level as one already "
+                     r"counted, so counting them too would double-count: " +
+                     ", ".join(alias) + ".")
+    paras += [r"\textbf{Note.} " + n for n in notes]
+    if diffs:
+        # Grouped by reason, not by model: the same cause explains the same
+        # cell in six models, and listing it six times is unreadable.
+        by = collections.OrderedDict()
+        for why, cell in diffs:
+            by.setdefault(why, []).append(cell)
+        paras.append(r"\textbf{Cells that differ.} Every cell where the two "
+                     r"rows disagree, grouped by the one reason it does.")
+        for why, cells in by.items():
+            paras.append(r"\emph{%s} %s." % (tex(why), "; ".join(
+                tex(c) for c in cells)))
+    return paras
+
+
 def fig_model_inventory(out, args):
     """Table only: what each model computes, ours against torch.
 
@@ -804,16 +891,39 @@ def fig_model_inventory(out, args):
     if not rows:
         return None
     table = [[r["model"], SYSTEM_LABEL.get(r["system"], r["system"]),
-              si(int(r["params"])), r["gflops"], r["gemm_calls"],
+              si(int(r["params_only"])),
+              ("+" + si(int(r["params_plus_buffers"]) -
+                        int(r["params_only"])))
+              if int(r["params_plus_buffers"]) > int(r["params_only"])
+              else "--",
+              r["gflops"], r["gemm_calls"],
               r["bmm_calls"], r["conv_calls"], r["sdpa_calls"],
               r["notes"]] for r in rows]
-    write_table(os.path.join(args.outdir, "model_inventory.tex"),
+    path = os.path.join(args.outdir, "model_inventory.tex")
+    write_table(path,
                 "per forward: parameters, GEMM/bmm/conv FLOPs and the "
                 "cuBLAS/cuDNN calls that carry them, with the remaining "
                 "differences named",
-                ["model", "system", "params", "GFLOP", "GEMM", "bmm", "conv",
-                 "SDPA", "notes"], table,
-                align="ll" + "r" * 6 + "p{0.32\\textwidth}")
+                ["model", "system", "params", "buffers", "GFLOP", "GEMM",
+                 "bmm", "conv", "SDPA", "notes"], table,
+                align="ll" + "r" * 7 + "p{0.30\\textwidth}")
+    append_notes(path, [
+        r"\emph{params} counts the learned weights; \emph{buffers} is what "
+        r"the registered non-learned tensors that are still part of the "
+        r"trained model add on top, which in these nine models is the "
+        r"batch-norm running mean and variance of ResNet-18 (9600 values) "
+        r"and nothing else. Both sides are counted the same way and agree "
+        r"exactly on both columns for ResNet-18.",
+        r"Excluded from both columns on both sides, as inputs or as tables "
+        r"rebuilt from the config rather than anything training produced: "
+        r"ours \texttt{image}, \texttt{rope.cos}, \texttt{rope.sin}, "
+        r"\texttt{rope.p}; torch \texttt{position\_ids}, "
+        r"\texttt{token\_type\_ids}, \texttt{inv\_freq}, "
+        r"\texttt{original\_inv\_freq}, \texttt{num\_batches\_tracked} "
+        r"(a counter, not data), and a module's causal-mask buffer where it "
+        r"keeps one. The input token ids live in the config, not in the "
+        r"checkpoint index, so they are outside our count by construction.",
+    ])
     fig, ax = plt.subplots(figsize=(args.width, 0.3))
     ax.axis("off")
     return fig, "model_inventory"
@@ -1195,22 +1305,49 @@ def fig_gap(out, args):
         fig.suptitle("Where the gap comes from")
 
     header = ["model", "system", "us/iter", "launches", "kernels", "GPU us",
-              "GPU util", "mix"]
+              "GPU util", "gemm", "split-K", "bmm", "gen", "copy", "other"]
     table_rows = []
     for m in models:
         for s in systems:
             r = g[m].get(s)
             if not r:
                 continue
+            mix = gap_mix(r)
             table_rows.append([m, SYSTEM_LABEL[s], r["steady_us"],
                                r["launches_per_iter"], r["kernels"],
-                               r["gpu_busy_us"], r["gpu_util"],
-                               r["notes"] or "-"])
+                               r["gpu_busy_us"], r["gpu_util"]] +
+                              [mix[k] for k in ("gemm", "splitk", "bmm", "gen",
+                                                "copy", "other")])
     write_table(os.path.join(args.outdir, "gap.tex"),
                 "per forward: nsys launch counts and GPU busy time against the "
-                "measured wall time; mix is gemm/generated/copy launches",
+                "measured wall time, and the launches attributed kernel by "
+                "kernel - cuBLAS GEMMs, the cuBLASLt split-K reduce/epilogue "
+                "kernels that finish some of them, generated "
+                "(Triton/Inductor/XLA) kernels, copies, everything else; the "
+                "five classes sum to the launch count, and bmm is the batched "
+                "(attention) subset of gemm",
                 header, table_rows)
     return fig, "gap"
+
+
+def gap_mix(r):
+    """A gap.tsv row's launch attribution, as counts.
+
+    Since the trace-based breakdown was added the classes are their own
+    numeric columns; a row written before that carries them only inside the
+    free-text `notes` mix ("gemm=43 gen=24"), which is parsed as the
+    fallback so an older result set still renders.  `bmm` (the batched
+    attention products inside `gemm`) exists only in the new rows."""
+    mix = {}
+    for part in (r.get("notes") or "").split():
+        key, sep, value = part.partition("=")
+        if sep and value.isdigit():
+            mix[key] = int(value)
+    out = {}
+    for key in ("gemm", "splitk", "gen", "copy", "other", "bmm"):
+        v = r.get(key)
+        out[key] = int(round(float(v))) if v not in (None, "") else mix.get(key, 0)
+    return out
 
 
 def gap_rows(out):
@@ -1244,29 +1381,30 @@ def write_gemm_count(out, args):
     gap.tsv's mix column ("gemm=43 gen=24 copy=6 other=2"), which
     gap_analysis attributes kernel by kernel from the nsys trace."""
     rows, source = gap_rows(out)
-    header = ["model", "system", "gemm", "split-K", "gen", "other"]
+    header = ["model", "system", "gemm", "split-K", "bmm", "gen", "copy",
+              "other", "total", "launches"]
     table = []
     for r in rows:
-        mix = {}
-        for part in (r.get("notes") or "").split():
-            key, sep, value = part.partition("=")
-            if sep and value.isdigit():
-                mix[key] = int(value)
-        if not mix:
+        mix = gap_mix(r)
+        if not any(mix.values()):
             continue
-        other = sum(v for k, v in mix.items()
-                    if k not in ("gemm", "gen", "splitk"))
+        total = sum(mix[k] for k in ("gemm", "splitk", "gen", "copy", "other"))
         table.append([r["model"], SYSTEM_LABEL.get(r["system"], r["system"]),
-                      str(mix.get("gemm", 0)), str(mix.get("splitk", 0)),
-                      str(mix.get("gen", 0)), str(other)])
+                      str(mix["gemm"]), str(mix["splitk"]), str(mix["bmm"]),
+                      str(mix["gen"]), str(mix["copy"]), str(mix["other"]),
+                      str(total), r.get("launches_per_iter") or "-"])
     if not table:
         return
-    caption = ("kernel launches per forward, attributed: matrix products, "
-               "the cuBLAS split-K reduce/epilogue kernels that finish some "
-               "of them (kernels, not calls; a run traced before "
-               "gap\\_analysis separated them reports 0 and folds them into "
-               "gemm), generated elementwise/reduction kernels, everything "
-               "else")
+    caption = ("kernel launches per forward, attributed kernel by kernel: "
+               "matrix products, the cuBLAS split-K reduce/epilogue kernels "
+               "that finish some of them (kernels, not calls; a run traced "
+               "before gap\\_analysis separated them reports 0 and folds them "
+               "into gemm), the batched attention products inside gemm "
+               "(bmm - a name-based lower bound, and what Inductor lowers "
+               "scaled\\_dot\\_product\\_attention to), generated "
+               "elementwise/reduction kernels, copies, everything else. "
+               "total is the five classes added up and equals the measured "
+               "launch count; bmm is a subset of gemm and is not added in")
     if source:
         caption += " (from %s: this run has no nsys trace)" % source
     write_table(os.path.join(args.outdir, "gemm_count.tex"), caption,
@@ -1759,6 +1897,87 @@ def fig_batch(out, args):
     return fig, "batch"
 
 
+def fig_correctness(out, args):
+    """Correctness on more than one input: the worst case over the five
+    derived inputs per model (see run_correctness.sh), not the average - a
+    system that is right four times out of five is wrong."""
+    rows = read_tsv(os.path.join(out, "correctness.tsv"))
+    rows = [r for r in rows if r.get("system") != "ours" and r.get("maxabsdiff")]
+    if not rows:
+        return None
+    g = collections.defaultdict(lambda: collections.defaultdict(list))
+    for r in rows:
+        g[r["model"]][r["system"]].append(r)
+    systems = [s for s in ["torch-eager", "torch-compile", "jax"]
+               if any(s in d for d in g.values())]
+    models = sorted(g)
+
+    def worst(model, sys_):
+        rs = g[model].get(sys_) or []
+        if not rs:
+            return None
+        diffs = [float(r["maxabsdiff"]) for r in rs if r["maxabsdiff"]]
+        matches = [float(r["argmax_match"]) for r in rs if r.get("argmax_match")]
+        passes = [r.get("pass") for r in rs if r.get("pass") not in (None, "")]
+        tol = next((r["tol"] for r in rs if r.get("tol")), "")
+        return (max(diffs) if diffs else None,
+                min(matches) if matches else None,
+                tol, sum(1 for x in passes if x == "1"), len(rs))
+
+    fig, ax = plt.subplots(figsize=(args.width, 0.36 * len(models) + 0.9))
+    h = 0.8 / len(systems)
+    y = list(range(len(models)))
+    for si_, s in enumerate(systems):
+        vals = []
+        for m in models:
+            w = worst(m, s)
+            # A zero difference has no place on a log axis and no meaning
+            # here either; floor it at the smallest float32 step.
+            vals.append(max(w[0], 1e-9) if w and w[0] is not None else 0.0)
+        ax.barh([v + (si_ - (len(systems) - 1) / 2) * h for v in y], vals,
+                height=h * 0.88, color=SERIES[si_ % len(SERIES)], linewidth=0,
+                hatch=HATCH[si_ % len(HATCH)] if args.texture else None,
+                label=SYSTEM_LABEL[s])
+    tols = sorted({float(worst(m, s)[2]) for m in models for s in systems
+                   if worst(m, s) and worst(m, s)[2]})
+    for t in tols:
+        ax.axvline(t, color="0.3", linewidth=0.8, linestyle="--")
+    ax.set_xscale("log")
+    ax.set_xlabel("max |diff| vs MetaTensor over 5 inputs (dashed: tolerance)")
+    ax.set_yticks(y, models)
+    ax.xaxis.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    despine(ax, keep=("left",))
+    ax.tick_params(axis="y", length=0)
+    ax.legend(loc="lower right", ncol=1)
+    if args.titles:
+        ax.set_title("Correctness on five derived inputs")
+
+    header = ["model", "system", "max |diff|", "min argmax match", "tol",
+              "pass"]
+    table = []
+    for m in models:
+        for s in systems:
+            w = worst(m, s)
+            if not w:
+                continue
+            diff, match, tol, npass, n = w
+            table.append([m, SYSTEM_LABEL[s],
+                          "%.3g" % diff if diff is not None else "-",
+                          "%.3f" % match if match is not None else "-",
+                          tol or "-", "%d/%d" % (npass, n)])
+    write_table(os.path.join(args.outdir, "correctness.tex"),
+                "each system against MetaTensor on five inputs per model "
+                "derived from the stored one (INPUT\\_SEED=1..5): the worst "
+                "of the five maximum absolute logit differences, the smallest "
+                "argmax agreement over the five (fraction of token positions, "
+                "top-1 for the vision models), the tolerance for that "
+                "(workload class, dtype), and how many of the five inputs "
+                "passed it",
+                header, table)
+    return fig, "correctness"
+
+
 FIGURES = collections.OrderedDict([
     ("micro_speedup", fig_micro_speedup),
     ("integration", fig_integration),
@@ -1771,10 +1990,12 @@ FIGURES = collections.OrderedDict([
     ("ablation", fig_ablation),
     ("explain", fig_explain),
     ("model_inventory", fig_model_inventory),
+    ("op_inventory", fig_op_inventory),
     ("deopt", fig_deopt),
     ("micro_baselines", fig_micro_baselines),
     ("compile_overhead", fig_compile_overhead),
     ("gap", fig_gap),
+    ("correctness", fig_correctness),
     ("warmup", fig_warmup),
 ])
 

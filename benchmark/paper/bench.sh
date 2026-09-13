@@ -37,15 +37,21 @@ commands:
                          cold+warm kernel caches; N forwards, default 300)
   explain                torch._dynamo.explain graph structure per model,
                          into \$OUT/explain.tsv
-  inventory [NAME...]    what each model computes - parameters, GEMM/bmm/conv
-                         FLOPs and call counts, ours against torch - into
-                         \$OUT/model_inventory.tsv (--no-torch for our rows
-                         only; needs no GPU)
+  inventory [NAME...]    what each model computes - parameters (weights only
+                         and weights plus buffers), GEMM/bmm/conv FLOPs and
+                         call counts, plus the per-forward operator counts in
+                         one vocabulary, ours against torch - into
+                         \$OUT/model_inventory.tsv, \$OUT/op_inventory.tsv and
+                         \$OUT/op_inventory_notes.txt (--no-torch for our rows
+                         only, which needs no GPU)
   fusion [MODEL...]      fusion-region statistics per model forward (kernels,
                          nodes per kernel, why each region was cut) into
                          \$OUT/fusion.tsv; no args = all eight paper models
   gap [MODEL...]         launches, kernel granularity and GPU utilisation per
                          system, into \$OUT/gap.tsv (needs nsys)
+  correctness [NAME...]  each system against ours on five derived inputs per
+                         model (INPUT_SEED=1..5), into \$OUT/correctness.tsv;
+                         no args = all nine models (SEEDS overrides the seeds)
   summarize              render \$OUT/summary.md from the tsv files
   size                   render \$OUT/figures/impl_size.tex, print the table
   check [GROUP...]       smallest run that exercises every mode; groups are
@@ -166,6 +172,9 @@ run_cmd() {
       PYPY="$RUN_PYPY" WEIGHTS="$WEIGHTS" ITERS="$ITERS" WARMUP="$WARMUP" \
         ROUNDS="$ROUNDS" JIT_FLAGS="$JIT_FLAGS" \
         "${RTENSOR_PYTHON:-python3}" "$HERE/gap_analysis.py" "$OUT" "$@"
+      ;;
+    correctness)
+      bash "$HERE/run_correctness.sh" "$@"
       ;;
     summarize)
       source "$HERE/config.sh"
