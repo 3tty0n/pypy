@@ -1,0 +1,36 @@
+host          stillinlove
+date          2026-09-15T04:52:09+09:00
+gpu           NVIDIA GeForce RTX 5070 Ti
+gpu_memory    16303 MiB
+compute_cap   120
+driver        595.84
+cuda_home     /usr
+cpu           Intel(R) Xeon(R) w9-3595X
+cpu_threads   120
+kernel        Linux 7.0.0-31-generic
+torch         2.14.0+cu130
+triton        3.8.0
+transformers  5.16.1
+jax           0.11.1
+jaxlib        0.11.1
+iree.compiler 3.11.0
+iree.runtime  3.11.0
+[09/15/2026-04:52:14] [TRT] [W] Functionality provided through tensorrt.plugin module is experimental.
+torch_tensorrt 2.14.0+cu130
+tensorrt      11.1.0.106
+trt_torch     2.14.0+cu130
+iters         200
+rounds        3
+warmup_models 30
+warmup_micro  30
+max_inputs    6
+compute_cap_r 120
+torch_tf32_matmul 0
+torch_tf32_cudnn  1
+jax_matmul_precision highest
+trt_tf32      0
+pypy_c_sha256 bc0b741fada727b911939b66f361a7c14e4e9061771f37f851f25477c32249a4
+bench_sha256  c4768c67516544442dd17040f677ea026db983f1516ee3b4631591756dd34581
+budget_mb     8
+jit_flags     --jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000
+commit        0945d5452a

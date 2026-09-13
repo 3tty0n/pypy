@@ -1,0 +1,8 @@
+torch-tensorrt==2.14.0+cu130
+torch==2.14.0+cu130
+torchvision
+transformers
+timm
+safetensors
+pillow
+numpy

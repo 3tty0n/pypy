@@ -16,11 +16,6 @@ tsv_init "$TSV" "model\tsystem\tround\tsteady_us\tmaxabsdiff\targmax_match\tcomp
 # hash; the baselines come out of a wheel, so the version string is the thing
 # that identifies them.
 PYPY_SHA=$(sha256sum "$PYPY" 2>/dev/null | cut -c1-12)
-pkg_version() {
-  local python=$1 module=$2 name=$3
-  [ -n "$python" ] && [ -x "$python" ] || { echo unknown; return; }
-  "$python" -c "import $module; print('$name-' + $module.__version__)" 2>/dev/null || echo unknown
-}
 TORCH_VER=$(pkg_version "$TORCH_PYTHON" torch torch)
 JAX_VER=$(pkg_version "$JAX_PYTHON" jax jax)
 TRT_VER=$(pkg_version "$TRT_PYTHON" torch_tensorrt torch_tensorrt)
@@ -38,11 +33,6 @@ reference_file() {
   local dt=${RTENSOR_DTYPE:-float32}
   if [ "$dt" = float32 ]; then echo logits_pypy.bin
   else echo "logits_pypy_$dt.bin"; fi
-}
-
-run_ours() {
-  local script=$1; shift
-  "$RUN_PYPY" $JIT_FLAGS "$APP/$script" "$@"
 }
 
 record() {
@@ -74,6 +64,25 @@ record() {
     binary="${binary}" reference="${reference}"
 }
 
+# One row from a system that may not run at all here: IREE's CUDA backend
+# rejects some models and the optional venvs may be absent. Without this
+# `set -e` turns a failing `out=$(...) && record` into a silent exit that takes
+# every remaining model with it, and the redirect hides the reason.
+# record() needs the whole stdout, not just the row, so this cannot use
+# run_measurement; it reports a failure the same way.
+baseline_row() {
+  local model=$1 system=$2 round=$3; shift 3
+  local out err=$(mktemp) rc=0
+  out=$("$@" 2>"$err") || rc=$?
+  if [ "$rc" = 0 ] && echo "$out" | grep -q "steady_us="; then
+    record "$model" "$system" "$round" "$out"
+  else
+    echo "run_models.sh: $system failed for $model:" \
+         "$(grep -m1 -E 'error:|Error:|Exception|refusing' "$err" || tail -1 "$err")" >&2
+  fi
+  rm -f "$err"
+}
+
 # JAX/XLA and IREE rows come from jax_models.py in the optional venv; the
 # model name is its first argument. IREE_MODELS excludes:
 # - resnet18 (b1/b8): IREE's CUDA backend rejects the conv2d lowering
@@ -81,22 +90,19 @@ record() {
 #   64-bit signless int elements") for a StableHLO conv from jax.export, the
 #   same compiler limitation as micro variant 9 (CNN).
 IREE_MODELS=" distilgpt2 tiny-gpt2 bert-tiny bert-mini vit-tiny mixer_b16 smollm2-135m "
-BASELINES=${BASELINES:-"triton tensorrt compile-ro compile-mat jax iree"}
-has_baseline() { case " $BASELINES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 jax_rows() {
   local model=$1 jaxmodel=$2 weights=$3 round=$4; shift 4
   [ -n "${JAX_PYTHON:-}" ] && [ -x "$JAX_PYTHON" ] || return 0
   [ -n "$jaxmodel" ] || return 0
-  local out
   if has_baseline jax; then
-    out=$("$JAX_PYTHON" "$APP/jax_models.py" "$jaxmodel" jax "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null) &&
-      record "$model" jax "$round" "$out"
+    baseline_row "$model" jax "$round" \
+      "$JAX_PYTHON" "$APP/jax_models.py" "$jaxmodel" jax "$weights" "$ITERS" "$WARMUP" "$@"
   fi
   if has_baseline iree; then
     case "$IREE_MODELS" in
       *" $model "*)
-        out=$("$JAX_PYTHON" "$APP/jax_models.py" "$jaxmodel" iree "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null) &&
-          record "$model" iree "$round" "$out" ;;
+        baseline_row "$model" iree "$round" \
+          "$JAX_PYTHON" "$APP/jax_models.py" "$jaxmodel" iree "$weights" "$ITERS" "$WARMUP" "$@" ;;
     esac
   fi
 }
@@ -110,25 +116,25 @@ model() {
   for round in $(seq "$ROUNDS"); do
     progress_step "$model round $round/$ROUNDS"
     if [ "$BASELINES_ONLY" != 1 ]; then
-      out=$(run_ours "$pyscript" "$weights" "$ITERS" "$WARMUP" "$@")
-      record "$model" ours "$round" "$out"
-      out=$("$TORCH_PYTHON" "$APP/$torchscript" eager "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null)
-      record "$model" torch-eager "$round" "$out"
-      out=$("$TORCH_PYTHON" "$APP/$torchscript" compile "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null)
-      record "$model" torch-compile "$round" "$out"
+      baseline_row "$model" ours "$round" \
+        "$RUN_PYPY" $JIT_FLAGS "$APP/$pyscript" "$weights" "$ITERS" "$WARMUP" "$@"
+      baseline_row "$model" torch-eager "$round" \
+        "$TORCH_PYTHON" "$APP/$torchscript" eager "$weights" "$ITERS" "$WARMUP" "$@"
+      baseline_row "$model" torch-compile "$round" \
+        "$TORCH_PYTHON" "$APP/$torchscript" compile "$weights" "$ITERS" "$WARMUP" "$@"
     fi
     if has_baseline compile-ro; then
-      out=$("$TORCH_PYTHON" "$APP/$torchscript" compile-ro "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null) &&
-        record "$model" torch-compile-ro "$round" "$out"
+      baseline_row "$model" torch-compile-ro "$round" \
+        "$TORCH_PYTHON" "$APP/$torchscript" compile-ro "$weights" "$ITERS" "$WARMUP" "$@"
     fi
     if has_baseline compile-mat; then
-      out=$("$TORCH_PYTHON" "$APP/$torchscript" compile-mat "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null) &&
-        record "$model" torch-compile-mat "$round" "$out"
+      baseline_row "$model" torch-compile-mat "$round" \
+        "$TORCH_PYTHON" "$APP/$torchscript" compile-mat "$weights" "$ITERS" "$WARMUP" "$@"
     fi
     jax_rows "$model" "$jaxmodel" "$weights" "$round" "$@"
     if has_baseline tensorrt && [ -n "${TRT_PYTHON:-}" ]; then
-      out=$("$TRT_PYTHON" "$APP/$torchscript" tensorrt "$weights" "$ITERS" "$WARMUP" "$@" 2>/dev/null) &&
-        record "$model" torch-tensorrt "$round" "$out"
+      baseline_row "$model" torch-tensorrt "$round" \
+        "$TRT_PYTHON" "$APP/$torchscript" tensorrt "$weights" "$ITERS" "$WARMUP" "$@"
     fi
   done
 }

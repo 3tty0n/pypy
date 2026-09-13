@@ -68,6 +68,20 @@ def hf_kwargs(a):
     return {'attn_implementation': 'eager'} if a.mode == 'tensorrt' else {}
 
 
+
+# TensorRT has no f64 kernels (its precisions are i8/f16/f32/bf16/f8/f4). When
+# the backend rejects a dtype, torch.compile falls back to eager without
+# raising, and the run still prints a row - so a "tensorrt" number that is
+# really PyTorch eager reaches the results. Refuse the point instead.
+TRT_PRECISIONS = ('float16', 'float32', 'bfloat16', 'int8')
+
+
+def require_trt_dtype(dtype):
+    name = str(dtype).replace('torch.', '')
+    if name not in TRT_PRECISIONS:
+        raise SystemExit('TensorRT has no %s kernels; refusing to report an '
+                         'eager fallback as a tensorrt row' % name)
+
 def compiled(fwd, a):
     """eager: as is; compile: Inductor; compile-ro/compile-mat: Inductor under
     reduce-overhead (CUDA graphs) / max-autotune; tensorrt: Torch-TensorRT
@@ -81,6 +95,7 @@ def compiled(fwd, a):
         return torch.compile(fwd, mode='max-autotune')
     if a.mode == 'tensorrt':
         import torch_tensorrt  # noqa: F401  registers the backend
+        require_trt_dtype(a.dtype)
         return torch.compile(fwd, backend='tensorrt',
                              options={'enabled_precisions': {a.dtype},
                                       'disable_tf32': True,

@@ -1,0 +1,27 @@
+\begin{tabular}{lrrrrrrr}
+\toprule
+system & pass & length & loops & bridges & kernels & cache hits & recompiles \\
+\midrule
+MetaTensor & 1 & 32 & 168 & 167 & 0 & 0 & 0 \\
+MetaTensor & 1 & 48 & 168 & 167 & 0 & 0 & 0 \\
+MetaTensor & 1 & 64 & 168 & 167 & 0 & 0 & 0 \\
+MetaTensor & 1 & 96 & 168 & 167 & 0 & 0 & 0 \\
+MetaTensor & 1 & 128 & 168 & 167 & 0 & 0 & 0 \\
+torch.compile (static) & 1 & 32 & 0 & 0 & 0 & 0 & 4 \\
+torch.compile (static) & 1 & 48 & 0 & 0 & 0 & 0 & 4 \\
+torch.compile (static) & 1 & 64 & 0 & 0 & 0 & 0 & 4 \\
+torch.compile (static) & 1 & 96 & 0 & 0 & 0 & 0 & 4 \\
+torch.compile (static) & 1 & 128 & 0 & 0 & 0 & 0 & 4 \\
+torch.compile (dynamic) & 1 & 32 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & 1 & 48 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & 1 & 64 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & 1 & 96 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & 1 & 128 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & 1 & 32 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & 1 & 48 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & 1 & 64 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & 1 & 96 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & 1 & 128 & 0 & 0 & 0 & 0 & 0 \\
+\bottomrule
+\end{tabular}
+% per-length compile counters: the delta inside that length's window, median over the rounds
