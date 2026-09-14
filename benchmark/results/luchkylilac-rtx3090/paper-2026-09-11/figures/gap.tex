@@ -2,21 +2,21 @@
 \toprule
 model & system & us/iter & launches & kernels & GPU us & GPU util & gemm & split-K & bmm & gen & copy & other \\
 \midrule
-tiny-gpt2 & MetaTensor & 241.9 & 26.6 & 13 & 80.8 & 0.334 & 14 & 0 & 5 & 13 & 0 & 0 \\
-tiny-gpt2 & torch.compile & 385.3 & 31.0 & 16 & 72.0 & 0.187 & 9 & 0 & 2 & 20 & 0 & 2 \\
-tiny-gpt2 & JAX/XLA & 82.6 & 30.0 & 19 & 54.4 & 0.659 & 9 & 0 & 0 & 21 & 0 & 0 \\
-bert-tiny & MetaTensor & 260.4 & 30.0 & 12 & 163.3 & 0.627 & 14 & 2 & 0 & 14 & 0 & 0 \\
-bert-tiny & torch.compile & 492.1 & 36.0 & 12 & 197.1 & 0.400 & 18 & 2 & 0 & 16 & 0 & 0 \\
-bert-tiny & JAX/XLA & 111.2 & 32.0 & 19 & 110.2 & 0.991 & 14 & 0 & 0 & 18 & 0 & 0 \\
-bert-mini & MetaTensor & 460.7 & 67.0 & 14 & 319.9 & 0.694 & 26 & 17 & 0 & 24 & 0 & 0 \\
-bert-mini & torch.compile & 890.1 & 89.0 & 15 & 391.9 & 0.440 & 34 & 25 & 0 & 30 & 0 & 0 \\
-bert-mini & JAX/XLA & 243.5 & 58.0 & 19 & 244.2 & 1.003 & 26 & 0 & 0 & 32 & 0 & 0 \\
-vit-tiny & MetaTensor & 997.7 & 175.0 & 15 & 868.1 & 0.870 & 74 & 25 & 1 & 76 & 0 & 0 \\
-vit-tiny & torch.compile & 2280.5 & 248.0 & 21 & 1328.9 & 0.583 & 98 & 62 & 1 & 87 & 0 & 1 \\
-vit-tiny & JAX/XLA & 742.1 & 171.0 & 17 & 745.4 & 1.005 & 73 & 0 & 0 & 98 & 0 & 0 \\
-distilgpt2 & MetaTensor & 1314.2 & 99.0 & 15 & 1188.6 & 0.904 & 37 & 18 & 0 & 38 & 6 & 0 \\
-distilgpt2 & torch.compile & 1357.5 & 98.0 & 17 & 1201.6 & 0.885 & 31 & 12 & 6 & 37 & 6 & 12 \\
-distilgpt2 & JAX/XLA & 1009.6 & 111.0 & 21 & 1011.7 & 1.002 & 37 & 6 & 0 & 62 & 6 & 0 \\
+tiny-gpt2 & MetaTensor & 241.9 & 26.6 & 13 & 80.8 & 0.334 & 13.6 & 0.0 & 4.6 & 13.0 & 0.0 & 0.0 \\
+tiny-gpt2 & torch.compile & 385.3 & 31.0 & 16 & 72.0 & 0.187 & 9.0 & 0.0 & 2.0 & 20.0 & 0.0 & 2.0 \\
+tiny-gpt2 & JAX/XLA & 82.6 & 30.0 & 19 & 54.4 & 0.659 & 9.0 & 0.0 & 0.0 & 21.0 & 0.0 & 0.0 \\
+bert-tiny & MetaTensor & 260.4 & 30.0 & 12 & 163.3 & 0.627 & 14.0 & 2.0 & 0.0 & 14.0 & 0.0 & 0.0 \\
+bert-tiny & torch.compile & 492.1 & 36.0 & 12 & 197.1 & 0.400 & 18.0 & 2.0 & 4.0 & 16.0 & 0.0 & 0.0 \\
+bert-tiny & JAX/XLA & 111.2 & 32.0 & 19 & 110.2 & 0.991 & 14.0 & 0.0 & 0.0 & 18.0 & 0.0 & 0.0 \\
+bert-mini & MetaTensor & 460.7 & 67.0 & 14 & 319.9 & 0.694 & 26.0 & 17.0 & 8.0 & 24.0 & 0.0 & 0.0 \\
+bert-mini & torch.compile & 890.1 & 89.0 & 15 & 391.9 & 0.440 & 34.0 & 25.0 & 8.0 & 30.0 & 0.0 & 0.0 \\
+bert-mini & JAX/XLA & 243.5 & 58.0 & 19 & 244.2 & 1.003 & 26.0 & 0.0 & 0.0 & 32.0 & 0.0 & 0.0 \\
+vit-tiny & MetaTensor & 997.7 & 175.0 & 15 & 868.1 & 0.870 & 74.0 & 25.0 & 24.0 & 76.0 & 0.0 & 0.0 \\
+vit-tiny & torch.compile & 2280.5 & 248.0 & 21 & 1328.9 & 0.583 & 98.0 & 62.0 & 24.0 & 87.0 & 0.0 & 1.0 \\
+vit-tiny & JAX/XLA & 742.1 & 171.0 & 17 & 745.4 & 1.005 & 73.0 & 0.0 & 0.0 & 98.0 & 0.0 & 0.0 \\
+distilgpt2 & MetaTensor & 1314.2 & 99.0 & 15 & 1188.6 & 0.904 & 37.0 & 18.0 & 0.0 & 38.0 & 6.0 & 0.0 \\
+distilgpt2 & torch.compile & 1357.5 & 98.0 & 17 & 1201.6 & 0.885 & 31.0 & 12.0 & 6.0 & 37.0 & 6.0 & 12.0 \\
+distilgpt2 & JAX/XLA & 1009.6 & 111.0 & 21 & 1011.7 & 1.002 & 37.0 & 6.0 & 0.0 & 62.0 & 6.0 & 0.0 \\
 \bottomrule
 \end{tabular}
-% per forward: nsys launch counts and GPU busy time against the measured wall time, and the launches attributed kernel by kernel - cuBLAS GEMMs, the cuBLASLt split-K reduce/epilogue kernels that finish some of them, generated (Triton/Inductor/XLA) kernels, copies, everything else; the five classes sum to the launch count, and bmm is the batched (attention) subset of gemm
+% per forward: nsys launch counts and GPU busy time against the measured wall time, and the launches attributed kernel by kernel - cuBLAS GEMMs, the cuBLASLt split-K reduce/epilogue kernels that finish some of them, generated (Triton/Inductor/XLA) kernels, copies, everything else; the five classes sum to the launch count (checked before rounding - these are per-forward averages over a differenced trace window and are fractional when cuBLAS does not pick the same kernel every iteration), and bmm is the batched (attention) subset of gemm, attributed by launch multiplicity - two products per layer, so the GEMM kernel launched 2L times on an L-layer model - and name-based where the kernel name says batched or attention

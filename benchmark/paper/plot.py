@@ -1316,16 +1316,23 @@ def fig_gap(out, args):
             table_rows.append([m, SYSTEM_LABEL[s], r["steady_us"],
                                r["launches_per_iter"], r["kernels"],
                                r["gpu_busy_us"], r["gpu_util"]] +
-                              [mix[k] for k in ("gemm", "splitk", "bmm", "gen",
-                                                "copy", "other")])
+                              [gap_num(mix[k])
+                               for k in ("gemm", "splitk", "bmm", "gen",
+                                         "copy", "other")])
     write_table(os.path.join(args.outdir, "gap.tex"),
                 "per forward: nsys launch counts and GPU busy time against the "
                 "measured wall time, and the launches attributed kernel by "
                 "kernel - cuBLAS GEMMs, the cuBLASLt split-K reduce/epilogue "
                 "kernels that finish some of them, generated "
                 "(Triton/Inductor/XLA) kernels, copies, everything else; the "
-                "five classes sum to the launch count, and bmm is the batched "
-                "(attention) subset of gemm",
+                "five classes sum to the launch count (checked before "
+                "rounding - these are per-forward averages over a differenced "
+                "trace window and are fractional when cuBLAS does not pick "
+                "the same kernel every iteration), and bmm is the batched "
+                "(attention) subset of gemm, attributed by launch "
+                "multiplicity - two products per layer, so the GEMM kernel "
+                "launched 2L times on an L-layer model - and name-based where "
+                "the kernel name says batched or attention",
                 header, table_rows)
     return fig, "gap"
 
@@ -1346,8 +1353,16 @@ def gap_mix(r):
     out = {}
     for key in ("gemm", "splitk", "gen", "copy", "other", "bmm"):
         v = r.get(key)
-        out[key] = int(round(float(v))) if v not in (None, "") else mix.get(key, 0)
+        out[key] = float(v) if v not in (None, "") else float(mix.get(key, 0))
     return out
+
+
+def gap_num(v):
+    """A class count as the table prints it.  These are per-forward averages
+    over a differenced trace window, so they are genuinely fractional when
+    cuBLAS picks a different kernel on some iterations; one decimal, and the
+    sum check that backs the caption is done on the unrounded values."""
+    return "%.1f" % v
 
 
 def gap_rows(out):
@@ -1396,9 +1411,10 @@ def write_gemm_count(out, args):
             continue
         total = sum(mix[k] for k in ("gemm", "splitk", "gen", "copy", "other"))
         table.append([r["model"], SYSTEM_LABEL.get(r["system"], r["system"]),
-                      str(mix["gemm"]), str(mix["splitk"]), str(mix["bmm"]),
-                      str(mix["gen"]), str(mix["copy"]), str(mix["other"]),
-                      str(total), r.get("launches_per_iter") or "-"])
+                      gap_num(mix["gemm"]), gap_num(mix["splitk"]),
+                      gap_num(mix["bmm"]), gap_num(mix["gen"]),
+                      gap_num(mix["copy"]), gap_num(mix["other"]),
+                      gap_num(total), r.get("launches_per_iter") or "-"])
     if not table:
         return
     caption = ("kernel launches per forward, attributed kernel by kernel: "
@@ -1406,14 +1422,18 @@ def write_gemm_count(out, args):
                "that finish some of them (kernels, not calls; a run traced "
                "before gap\\_analysis separated them reports 0 and folds them "
                "into gemm), the batched attention products inside gemm "
-               "(bmm - a name-based lower bound, and what Inductor lowers "
-               "scaled\\_dot\\_product\\_attention to), generated "
-               "elementwise/reduction kernels, copies, everything else. "
-               "total is the five classes added up and equals the measured "
-               "launch count; bmm is a subset of gemm and is not added in - a "
-               "lower bound, since cuBLAS gives a batched product the same "
-               "kernel name as an unbatched one, and gap\\_kernels.tsv is "
-               "where a forward's launches are attributed kernel by kernel")
+               "(bmm), generated elementwise/reduction kernels, copies, "
+               "everything else. total is the five classes added up and "
+               "equals the measured launch count, checked before rounding: "
+               "the counts are per-forward averages over a differenced trace "
+               "window and are fractional where cuBLAS does not pick the same "
+               "kernel every iteration. bmm is a subset of gemm and is not "
+               "added in; attention products are attributed by launch "
+               "multiplicity, two per layer, so the GEMM kernel launched 2L "
+               "times per forward on an L-layer model is the attention pair "
+               "whatever cuBLAS named it, and name-based where the kernel "
+               "name says batched or attention. gap\\_kernels.tsv is where a "
+               "forward's launches are attributed kernel by kernel")
     if source:
         caption += " (from %s: this run has no nsys trace)" % source
     write_table(os.path.join(args.outdir, "gemm_count.tex"), caption,

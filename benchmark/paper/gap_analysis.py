@@ -171,13 +171,60 @@ def category(name):
 
 
 # Inside the gemm bucket: the batched products an attention layer issues.
-# Inductor lowers scaled_dot_product_attention to batched matmuls, and the
-# question "how many of torch's GEMM launches are the SDPA ones" is answered
-# by the kernel name where cuBLAS/cutlass says so - the batched entry points
-# and the fused-attention kernels carry it.  A name that does not say is
-# counted as a plain GEMM rather than guessed at, so this column is a lower
-# bound, never an inflated one.
-BMM_NAME = re.compile(r"batch|bmm|fmha|flash|attention|sdpa|mha", re.I)
+# Two names for two different things.  ATTN_NAME is a kernel that says it is
+# attention - a fused multi-head kernel, or an explicit bmm entry point; when
+# one of those runs, it *is* the attention product and nothing else needs
+# guessing at.  BATCH_NAME only says the arguments are strided-batched
+# tensors, which cuBLAS stamps on plain gemv template parameters too, so it is
+# the last resort.
+ATTN_NAME = re.compile(r"fmha|flash|sdpa|\bmha|\bbmm|attention", re.I)
+BATCH_NAME = re.compile(r"batch", re.I)
+
+
+def n_layer(wdir):
+    """The model's transformer depth, from the exported checkpoint."""
+    import json
+    path = os.path.join(os.environ.get("WEIGHTS", os.path.join(HERE, "weights")),
+                        wdir, "index.json")
+    try:
+        f = open(path)
+        try:
+            return int(json.load(f).get("n_layer") or 0)
+        finally:
+            f.close()
+    except (IOError, OSError, ValueError):
+        return 0
+
+
+def bmm_count(per_kernel, layers):
+    """The batched attention products among a forward's GEMM launches.
+
+    cuBLAS reuses one kernel name for a batched and an unbatched product
+    (torch's SDPA products on this GPU are ampere_sgemm_128x128_nn, exactly
+    what a plain linear can also pick), so a name pattern alone is a lower
+    bound that reads 0 where the text says 8.  Launch multiplicity answers it
+    instead: a transformer issues two batched products per layer - Q.K and
+    the value product - so the GEMM kernel launched 2L times per forward on an
+    L-layer model is that pair, whatever cuBLAS called it.  Three rules, first
+    one that fires:
+
+      1. a kernel whose name says attention (fused MHA, an explicit bmm);
+      2. GEMM kernels launched exactly 2L times per forward;
+      3. GEMM kernels whose name says strided-batched - the old lower bound.
+
+    Rule 1 comes first because a fused attention kernel runs once per layer,
+    not twice, and rule 2 would then pick up an unrelated 2L linear instead.
+    """
+    gemms = [(count, name) for cat, count, _us, name in per_kernel
+             if cat == "gemm"]
+    named = sum(c for c, n in gemms if ATTN_NAME.search(n))
+    if named:
+        return named
+    if layers:
+        by_count = sum(c for c, _n in gemms if abs(c - 2 * layers) <= 0.05)
+        if by_count:
+            return by_count
+    return sum(c for c, n in gemms if BATCH_NAME.search(n))
 
 
 def per_forward(lo, hi):
@@ -185,7 +232,7 @@ def per_forward(lo, hi):
     the two traced runs: everything that does not scale with the iteration
     count - upload, compilation, warm-up - cancels."""
     n = float(TRACE_HI - TRACE_LO)
-    launches, ns, mix, kernels, bmm = 0.0, 0.0, {}, 0, 0.0
+    launches, ns, mix, kernels = 0.0, 0.0, {}, 0
     per_kernel = []
     for name, (count, total) in hi.items():
         d = count - lo.get(name, (0, 0))[0]
@@ -197,11 +244,9 @@ def per_forward(lo, hi):
         ns += (total - lo.get(name, (0, 0))[1]) / n
         cat = category(name)
         mix[cat] = mix.get(cat, 0.0) + d / n
-        if cat == "gemm" and BMM_NAME.search(name):
-            bmm += d / n
         per_kernel.append((cat, d / n, us, name))
     per_kernel.sort(key=lambda r: -r[1])
-    return launches, ns / 1e3, kernels, mix, bmm, per_kernel
+    return launches, ns / 1e3, kernels, mix, per_kernel
 
 
 # --- driver -----------------------------------------------------------------
@@ -249,13 +294,10 @@ def measure(system, model, rounds, tmp):
     if not lo or not hi:
         row["notes"] = "nsys unavailable"
         return row
-    launches, busy_us, kernels, mix, bmm, per_kernel = per_forward(lo, hi)
-    # The evidence behind the class columns, one line per distinct kernel.
-    # cuBLAS reuses the same kernel name for a batched and an unbatched
-    # product on this GPU (torch's SDPA attention products are
-    # ampere_sgemm_128x128_nn, exactly what a plain GEMM can also pick), so
-    # "how many of these GEMMs are the attention ones" is answered by the
-    # per-kernel counts here and not by any name pattern.
+    launches, busy_us, kernels, mix, per_kernel = per_forward(lo, hi)
+    bmm = bmm_count(per_kernel, n_layer(model[4]))
+    # The evidence behind the class columns, one line per distinct kernel -
+    # and what bmm_count reads to attribute the attention products.
     for cat, count, us, kname in per_kernel:
         KERNEL_ROWS.append([name, system, cat, "%.2f" % count, "%.1f" % us,
                             kname.replace("\t", " ")])
@@ -275,7 +317,31 @@ def measure(system, model, rounds, tmp):
     return row
 
 
+def selftest():
+    """The three bmm rules, on the shapes that actually occur in the traces."""
+    # A fused attention kernel runs once per layer; the 2L linear must not win.
+    distil = [("gemm", 12.0, 0, "ampere_sgemm_128x32_nn"),
+              ("gemm", 6.0, 0, "fmha_cutlassF_f32_aligned_64x64_rf_sm80"),
+              ("gen", 6.0, 0, "triton_poi_fused_x")]
+    assert bmm_count(distil, 6) == 6.0
+    # No attention name: the 2L GEMM is the Q.K / value pair.
+    vit = [("gemm", 60.0, 0, "ampere_sgemm_64x32_sliced1x4_tn"),
+           ("gemm", 24.0, 0, "ampere_sgemm_128x128_nn"),
+           ("gemm", 1.0, 0, "gemvx::kernel<cublasGemvTensorStridedBatched>")]
+    assert bmm_count(vit, 12) == 24.0
+    # Neither: fall back to the name, the old lower bound.
+    gpt2 = [("gemm", 8.0, 0, "ampere_sgemm_128x32_nn"),
+            ("gemm", 2.62, 0, "magma_sgemmEx_kernel<BatchedTensor>")]
+    assert abs(bmm_count(gpt2, 2) - 2.62) < 1e-9
+    # Nothing says batched and no kernel is 2L: honestly zero.
+    assert bmm_count([("gemm", 11.0, 0, "ampere_sgemm_32x32_sliced1x4_nn")], 2) == 0
+    print("ok")
+
+
 def main(argv):
+    if argv[1:2] == ["--selftest"]:
+        selftest()
+        return 0
     if argv[1:2] == ["--worker-ours"]:
         worker_ours(argv[2], argv[3], int(argv[4]), int(argv[5]))
         return 0
@@ -327,11 +393,22 @@ def main(argv):
             f.write("\t".join(row[c] for c in COLUMNS) + "\n")
     print("wrote " + path)
 
+    # gap.tsv is append-only and read last-row-wins; gap_kernels.tsv has no
+    # such key, so appending a re-measured pair there would leave the two
+    # files describing different traces - which is exactly how a tiny-gpt2 row
+    # once summed to 14.2 GEMM launches in one file and 13.6 in the other.
+    # The pairs measured now replace their old rows instead.
     kpath = os.path.join(out, "gap_kernels.tsv")
-    kfresh = not os.path.exists(kpath)
-    with open(kpath, "a") as f:
-        if kfresh:
-            f.write("\t".join(KERNEL_COLUMNS) + "\n")
+    kept = []
+    measured = set((r[0], r[1]) for r in KERNEL_ROWS)
+    if os.path.exists(kpath):
+        for line in open(kpath).readlines()[1:]:
+            cells = line.rstrip("\n").split("\t")
+            if len(cells) >= 2 and (cells[0], cells[1]) not in measured:
+                kept.append(line)
+    with open(kpath, "w") as f:
+        f.write("\t".join(KERNEL_COLUMNS) + "\n")
+        f.writelines(kept)
         for row in KERNEL_ROWS:
             f.write("\t".join(row) + "\n")
     print("wrote " + kpath)
