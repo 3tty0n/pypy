@@ -1,0 +1,33 @@
+\begin{tabular}{lrrrrr}
+\toprule
+experiment & model & setting & us & range & launches/iter \\
+\midrule
+budget mb & distilgpt2 & 8 & 1148 & 1146-1148 &  \\
+budget mb & distilgpt2 & 64 & 1146 & 1144-1146 &  \\
+flat block & distilgpt2 & 256 & 1118 & 1118-1119 &  \\
+flat block & distilgpt2 & 4096 & 1147 & 1146-1147 &  \\
+flat block & resnet18 & 256 & 488 & 488-503 &  \\
+flat block & resnet18 & 4096 & 542 & 541-543 &  \\
+fusion & distilgpt2 & off & 1611 & 1608-1618 &  \\
+fusion & distilgpt2 & on & 1146 & 1145-1147 &  \\
+max inputs & bert-mini & mi4 & 419 & 418-420 & 34.3 \\
+max inputs & bert-mini & mi6 & 400 & 399-402 & 24.3 \\
+max inputs & bert-mini & mi8 & 400 & 399-401 & 24.3 \\
+max inputs & distilgpt2 & mi4 & 1166 & 1166-1167 & 45.2 \\
+max inputs & distilgpt2 & mi6 & 1146 & 1144-1147 & 38.2 \\
+max inputs & distilgpt2 & mi8 & 1146 & 1146-1147 & 38.2 \\
+max inputs & mixer\_b16 & mi4 & 2275 & 2259-2282 & 76.4 \\
+max inputs & mixer\_b16 & mi6 & 2246 & 2233-2251 & 63.4 \\
+max inputs & mixer\_b16 & mi8 & 2250 & 2240-2250 & 63.4 \\
+precision & distilgpt2 & float16 & 1204 & 1196-1217 &  \\
+precision & distilgpt2 & float32 & 1146 & 1144-1146 &  \\
+precision & smollm2-135m & float16 & 2266 & 2244-2293 &  \\
+precision & smollm2-135m & float32 & 3037 & 3015-3074 &  \\
+tf32 & resnet18-b1 & fp32 & 690 & 689-690 &  \\
+tf32 & resnet18-b1 & tf32 & 541 & 541-542 &  \\
+tf32 & resnet18-b8 & fp32 & 2933 & 2927-2933 &  \\
+tf32 & resnet18-b8 & tf32 & 2246 & 2246-2270 &  \\
+tf32 & resnet18-b8 & torch-fp32 & 3864 & 3859-3879 &  \\
+\bottomrule
+\end{tabular}
+% median us per iteration over the rounds, with the observed range, and launches/iter where the experiment records it

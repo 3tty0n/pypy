@@ -1,0 +1,79 @@
+experiment	variant	model	round	steady_us	maxabsdiff	note	binary	launches_per_iter
+fusion	on	distilgpt2	1	1145.0			bc0b741fada7	
+fusion	off	distilgpt2	1	1607.6		enable_opts minus tensor	bc0b741fada7	
+fusion	on	distilgpt2	2	1147.0			bc0b741fada7	
+fusion	off	distilgpt2	2	1611.3		enable_opts minus tensor	bc0b741fada7	
+fusion	on	distilgpt2	3	1146.5			bc0b741fada7	
+fusion	off	distilgpt2	3	1618.4		enable_opts minus tensor	bc0b741fada7	
+flat_block	256	distilgpt2	1	1118.6			bc0b741fada7	
+flat_block	256	resnet18	1	503.0			bc0b741fada7	
+flat_block	256	distilgpt2	2	1117.9			bc0b741fada7	
+flat_block	256	resnet18	2	487.6			bc0b741fada7	
+flat_block	256	distilgpt2	3	1117.9			bc0b741fada7	
+flat_block	256	resnet18	3	488.2			bc0b741fada7	
+flat_block	4096	distilgpt2	1	1146.5			bc0b741fada7	
+flat_block	4096	resnet18	1	540.8			bc0b741fada7	
+flat_block	4096	distilgpt2	2	1146.6			bc0b741fada7	
+flat_block	4096	resnet18	2	541.8			bc0b741fada7	
+flat_block	4096	distilgpt2	3	1147.0			bc0b741fada7	
+flat_block	4096	resnet18	3	542.6			bc0b741fada7	
+budget_mb	8	distilgpt2	1	1147.6			bc0b741fada7	
+budget_mb	8	distilgpt2	2	1146.2			bc0b741fada7	
+budget_mb	8	distilgpt2	3	1147.7			bc0b741fada7	
+budget_mb	64	distilgpt2	1	1144.5			bc0b741fada7	
+budget_mb	64	distilgpt2	2	1146.5			bc0b741fada7	
+budget_mb	64	distilgpt2	3	1146.3			bc0b741fada7	
+precision	float32	distilgpt2	1	1146.4	0.000259399		bc0b741fada7	
+precision	float32	smollm2-135m	1	3015.3	0.000130653		bc0b741fada7	
+precision	float32	distilgpt2	2	1146.5	0.000259399		bc0b741fada7	
+precision	float32	smollm2-135m	2	3074.0	0.000130653		bc0b741fada7	
+precision	float32	distilgpt2	3	1143.8	0.000259399		bc0b741fada7	
+precision	float32	smollm2-135m	3	3037.3	0.000130653		bc0b741fada7	
+precision	float16	distilgpt2	1	1204.3	1.25		bc0b741fada7	
+precision	float16	smollm2-135m	1	2266.3	0.539062		bc0b741fada7	
+precision	float16	distilgpt2	2	1216.8	1.25		bc0b741fada7	
+precision	float16	smollm2-135m	2	2292.6	0.539062		bc0b741fada7	
+precision	float16	distilgpt2	3	1196.1	1.25		bc0b741fada7	
+precision	float16	smollm2-135m	3	2244.5	0.539062		bc0b741fada7	
+tf32	tf32	resnet18-b8	1	2270.5	0.00618362		bc0b741fada7	
+tf32	tf32	resnet18-b8	2	2245.7	0.00618362		bc0b741fada7	
+tf32	tf32	resnet18-b8	3	2246.4	0.00618362		bc0b741fada7	
+tf32	fp32	resnet18-b8	1	2927.3	2.47955e-05		bc0b741fada7	
+tf32	fp32	resnet18-b8	2	2933.2	2.47955e-05		bc0b741fada7	
+tf32	fp32	resnet18-b8	3	2932.6	2.47955e-05		bc0b741fada7	
+tf32	tf32	resnet18-b1	1	541.4	0.00607491		bc0b741fada7	
+tf32	tf32	resnet18-b1	2	541.4	0.00607491		bc0b741fada7	
+tf32	tf32	resnet18-b1	3	542.4	0.00607491		bc0b741fada7	
+tf32	fp32	resnet18-b1	1	689.6	2.38419e-05		bc0b741fada7	
+tf32	fp32	resnet18-b1	2	688.8	2.38419e-05		bc0b741fada7	
+tf32	fp32	resnet18-b1	3	689.8	2.38419e-05		bc0b741fada7	
+tf32	torch-fp32	resnet18-b8	1	3879.4	9.53674e-06		bc0b741fada7	
+tf32	torch-fp32	resnet18-b8	2	3864.0	9.53674e-06		bc0b741fada7	
+tf32	torch-fp32	resnet18-b8	3	3859.0	9.53674e-06		bc0b741fada7	
+max_inputs	mi4	distilgpt2	1	1166.1	0.000228882		bc0b741fada7	45.2
+max_inputs	mi4	mixer_b16	1	2282.5	0.00258923		bc0b741fada7	76.4
+max_inputs	mi4	bert-mini	1	419.2	2.09808e-05		bc0b741fada7	34.3
+max_inputs	mi4	distilgpt2	2	1167.0	0.000228882		bc0b741fada7	45.2
+max_inputs	mi4	mixer_b16	2	2274.8	0.00258923		bc0b741fada7	76.4
+max_inputs	mi4	bert-mini	2	420.4	2.09808e-05		bc0b741fada7	34.3
+max_inputs	mi4	distilgpt2	3	1166.4	0.000228882		bc0b741fada7	45.2
+max_inputs	mi4	mixer_b16	3	2258.8	0.00258923		bc0b741fada7	76.4
+max_inputs	mi4	bert-mini	3	417.7	2.09808e-05		bc0b741fada7	34.3
+max_inputs	mi6	distilgpt2	1	1146.5	0.000259399		bc0b741fada7	38.2
+max_inputs	mi6	mixer_b16	1	2250.7	0.00258255		bc0b741fada7	63.4
+max_inputs	mi6	bert-mini	1	402.2	1.81198e-05		bc0b741fada7	24.3
+max_inputs	mi6	distilgpt2	2	1143.7	0.000259399		bc0b741fada7	38.2
+max_inputs	mi6	mixer_b16	2	2232.7	0.00258255		bc0b741fada7	63.4
+max_inputs	mi6	bert-mini	2	398.6	1.81198e-05		bc0b741fada7	24.3
+max_inputs	mi6	distilgpt2	3	1146.6	0.000259399		bc0b741fada7	38.2
+max_inputs	mi6	mixer_b16	3	2246.3	0.00258255		bc0b741fada7	63.4
+max_inputs	mi6	bert-mini	3	400.0	1.81198e-05		bc0b741fada7	24.3
+max_inputs	mi8	distilgpt2	1	1147.2	0.000259399		bc0b741fada7	38.2
+max_inputs	mi8	mixer_b16	1	2249.7	0.00258255		bc0b741fada7	63.4
+max_inputs	mi8	bert-mini	1	400.2	1.81198e-05		bc0b741fada7	24.3
+max_inputs	mi8	distilgpt2	2	1146.4	0.000259399		bc0b741fada7	38.2
+max_inputs	mi8	mixer_b16	2	2239.9	0.00258255		bc0b741fada7	63.4
+max_inputs	mi8	bert-mini	2	401.4	1.81198e-05		bc0b741fada7	24.3
+max_inputs	mi8	distilgpt2	3	1146.3	0.000259399		bc0b741fada7	38.2
+max_inputs	mi8	mixer_b16	3	2250.5	0.00258255		bc0b741fada7	63.4
+max_inputs	mi8	bert-mini	3	399.1	1.81198e-05		bc0b741fada7	24.3

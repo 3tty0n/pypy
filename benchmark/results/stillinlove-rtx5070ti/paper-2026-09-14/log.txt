@@ -1,0 +1,456 @@
+== export (1/7) ==
+skip distilgpt2 (already exported)
+skip tiny-gpt2 (already exported)
+skip smollm2-135m (already exported)
+skip bert-tiny (already exported)
+skip bert-mini (already exported)
+skip resnet18 (already exported)
+skip mixer_b16 (already exported)
+skip vit-tiny (already exported)
+== micro (2/7) ==
+[micro 1/102] variant 0 k 1 n 1000000  elapsed 0:00:00  eta --:--:--
+[micro 2/102] variant 0 k 4 n 1000000  elapsed 0:00:30  eta 0:50:30
+[micro 3/102] variant 0 k 8 n 1000000  elapsed 0:01:00  eta 0:50:00
+[micro 4/102] variant 0 k 4 n 10000  elapsed 0:01:30  eta 0:49:30
+[micro 5/102] variant 0 k 4 n 100000  elapsed 0:01:58  eta 0:48:11
+[micro 6/102] variant 0 k 4 n 1000000  elapsed 0:02:27  eta 0:47:31
+[micro 7/102] variant 0 k 4 n 10000000  elapsed 0:02:56  eta 0:46:56
+[micro 8/102] variant 1 k 4 n 1000000  elapsed 0:03:35  eta 0:48:37
+[micro 9/102] variant 2 k 4 n 1000000  elapsed 0:04:05  eta 0:47:58
+[micro 10/102] variant 3 k 4 n 1000000  elapsed 0:04:36  eta 0:47:32
+[micro 11/102] variant 4 k 4 n 1000000  elapsed 0:05:07  eta 0:47:04
+[micro 12/102] variant 5 k 4 n 1000000  elapsed 0:05:38  eta 0:46:36
+[micro 13/102] variant 11 k 1 n 25600  elapsed 0:06:07  eta 0:45:52
+[micro 14/102] variant 11 k 1 n 256000  elapsed 0:06:35  eta 0:45:04
+[micro 15/102] variant 12 k 1 n 25600  elapsed 0:07:03  eta 0:44:18
+[micro 16/102] variant 12 k 1 n 256000  elapsed 0:07:35  eta 0:43:59
+[micro 17/102] variant 13 k 1 n 25600  elapsed 0:08:06  eta 0:43:32
+[micro 18/102] variant 13 k 1 n 256000  elapsed 0:08:40  eta 0:43:20
+[micro 19/102] variant 6 k 1 n 25600  elapsed 0:09:22  eta 0:43:42
+[micro 20/102] variant 6 k 1 n 256000  elapsed 0:09:55  eta 0:43:19
+[micro 21/102] variant 7 k 1 n 25600  elapsed 0:10:27  eta 0:42:50
+[micro 22/102] variant 7 k 1 n 256000  elapsed 0:11:05  eta 0:42:45
+[micro 23/102] variant 8 k 1 n 25600  elapsed 0:11:44  eta 0:42:40
+[micro 24/102] variant 8 k 1 n 256000  elapsed 0:12:15  eta 0:42:04
+[micro 25/102] variant 9 k 1 n 25600  elapsed 0:13:34  eta 0:44:05
+[micro 26/102] variant 9 k 1 n 256000  elapsed 0:14:08  eta 0:43:31
+[micro 27/102] variant 10 k 1 n 25600  elapsed 0:14:39  eta 0:42:49
+[micro 28/102] variant 10 k 1 n 256000  elapsed 0:15:52  eta 0:44:04
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+run_micro: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+[micro 29/102] variant 0 k 1 n 1000000  elapsed 0:18:25  eta 0:48:40
+[micro 30/102] variant 0 k 4 n 1000000  elapsed 0:18:54  eta 0:47:34
+[micro 31/102] variant 0 k 8 n 1000000  elapsed 0:19:23  eta 0:46:31
+[micro 32/102] variant 0 k 4 n 10000  elapsed 0:19:52  eta 0:45:30
+[micro 33/102] variant 0 k 4 n 100000  elapsed 0:20:20  eta 0:44:28
+[micro 34/102] variant 0 k 4 n 1000000  elapsed 0:20:49  eta 0:43:31
+[micro 35/102] variant 0 k 4 n 10000000  elapsed 0:21:18  eta 0:42:36
+[micro 36/102] variant 1 k 4 n 1000000  elapsed 0:21:56  eta 0:41:59
+[micro 37/102] variant 2 k 4 n 1000000  elapsed 0:22:25  eta 0:41:05
+[micro 38/102] variant 3 k 4 n 1000000  elapsed 0:22:55  eta 0:40:15
+[micro 39/102] variant 4 k 4 n 1000000  elapsed 0:23:24  eta 0:39:24
+[micro 40/102] variant 5 k 4 n 1000000  elapsed 0:23:53  eta 0:38:34
+[micro 41/102] variant 11 k 1 n 25600  elapsed 0:24:23  eta 0:37:47
+[micro 42/102] variant 11 k 1 n 256000  elapsed 0:24:50  eta 0:36:56
+[micro 43/102] variant 12 k 1 n 25600  elapsed 0:25:18  eta 0:36:08
+[micro 44/102] variant 12 k 1 n 256000  elapsed 0:25:48  eta 0:35:24
+[micro 45/102] variant 13 k 1 n 25600  elapsed 0:26:19  eta 0:34:41
+[micro 46/102] variant 13 k 1 n 256000  elapsed 0:26:51  eta 0:34:00
+[micro 47/102] variant 6 k 1 n 25600  elapsed 0:27:28  eta 0:33:26
+[micro 48/102] variant 6 k 1 n 256000  elapsed 0:27:59  eta 0:32:44
+[micro 49/102] variant 7 k 1 n 25600  elapsed 0:28:31  eta 0:32:04
+[micro 50/102] variant 7 k 1 n 256000  elapsed 0:29:02  eta 0:31:24
+[micro 51/102] variant 8 k 1 n 25600  elapsed 0:29:36  eta 0:30:47
+[micro 52/102] variant 8 k 1 n 256000  elapsed 0:30:08  eta 0:30:08
+[micro 53/102] variant 9 k 1 n 25600  elapsed 0:31:09  eta 0:29:57
+[micro 54/102] variant 9 k 1 n 256000  elapsed 0:31:37  eta 0:29:13
+[micro 55/102] variant 10 k 1 n 25600  elapsed 0:32:06  eta 0:28:32
+[micro 56/102] variant 10 k 1 n 256000  elapsed 0:32:44  eta 0:27:58
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+run_micro: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+[micro 57/102] variant 0 k 1 n 1000000  elapsed 0:34:32  eta 0:28:22
+[micro 58/102] variant 0 k 4 n 1000000  elapsed 0:35:01  eta 0:27:38
+[micro 59/102] variant 0 k 8 n 1000000  elapsed 0:35:30  eta 0:26:55
+[micro 60/102] variant 0 k 4 n 10000  elapsed 0:35:59  eta 0:26:13
+[micro 61/102] variant 0 k 4 n 100000  elapsed 0:36:27  eta 0:25:30
+[micro 62/102] variant 0 k 4 n 1000000  elapsed 0:36:56  eta 0:24:49
+[micro 63/102] variant 0 k 4 n 10000000  elapsed 0:37:25  eta 0:24:08
+[micro 64/102] variant 1 k 4 n 1000000  elapsed 0:38:03  eta 0:23:33
+[micro 65/102] variant 2 k 4 n 1000000  elapsed 0:38:32  eta 0:22:52
+[micro 66/102] variant 3 k 4 n 1000000  elapsed 0:39:02  eta 0:22:13
+[micro 67/102] variant 4 k 4 n 1000000  elapsed 0:39:31  eta 0:21:33
+[micro 68/102] variant 5 k 4 n 1000000  elapsed 0:40:01  eta 0:20:54
+[micro 69/102] variant 11 k 1 n 25600  elapsed 0:40:30  eta 0:20:15
+[micro 70/102] variant 11 k 1 n 256000  elapsed 0:40:58  eta 0:19:35
+[micro 71/102] variant 12 k 1 n 25600  elapsed 0:41:26  eta 0:18:56
+[micro 72/102] variant 12 k 1 n 256000  elapsed 0:41:55  eta 0:18:18
+[micro 73/102] variant 13 k 1 n 25600  elapsed 0:42:27  eta 0:17:41
+[micro 74/102] variant 13 k 1 n 256000  elapsed 0:42:58  eta 0:17:04
+[micro 75/102] variant 6 k 1 n 25600  elapsed 0:43:36  eta 0:16:29
+[micro 76/102] variant 6 k 1 n 256000  elapsed 0:44:07  eta 0:15:52
+[micro 77/102] variant 7 k 1 n 25600  elapsed 0:44:39  eta 0:15:16
+[micro 78/102] variant 7 k 1 n 256000  elapsed 0:45:10  eta 0:14:39
+[micro 79/102] variant 8 k 1 n 25600  elapsed 0:45:44  eta 0:14:04
+[micro 80/102] variant 8 k 1 n 256000  elapsed 0:46:15  eta 0:13:27
+[micro 81/102] variant 9 k 1 n 25600  elapsed 0:47:17  eta 0:13:00
+[micro 82/102] variant 9 k 1 n 256000  elapsed 0:47:45  eta 0:12:22
+[micro 83/102] variant 10 k 1 n 25600  elapsed 0:48:14  eta 0:11:45
+[micro 84/102] variant 10 k 1 n 256000  elapsed 0:48:53  eta 0:11:11
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+metatensor-bench: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+run_micro: variant 10 n 256000 -> 155008 (fitted to GPU memory)
+[micro 85/102] variant 8 k 1 n 256000 dtype float32  elapsed 0:50:40  eta 0:10:51
+[micro 86/102] variant 8 k 1 n 256000 dtype float16  elapsed 0:51:33  eta 0:10:18
+[micro 87/102] variant 11 k 1 n 256000 dtype float32  elapsed 0:52:19  eta 0:09:44
+[micro 88/102] variant 11 k 1 n 256000 dtype float16  elapsed 0:52:47  eta 0:09:06
+[micro 89/102] variant 13 k 1 n 256000 dtype float32  elapsed 0:53:15  eta 0:08:28
+[micro 90/102] variant 13 k 1 n 256000 dtype float16  elapsed 0:54:07  eta 0:07:54
+[micro 91/102] variant 8 k 1 n 256000 dtype float32  elapsed 0:54:46  eta 0:07:18
+[micro 92/102] variant 8 k 1 n 256000 dtype float16  elapsed 0:55:21  eta 0:06:41
+[micro 93/102] variant 11 k 1 n 256000 dtype float32  elapsed 0:55:52  eta 0:06:04
+[micro 94/102] variant 11 k 1 n 256000 dtype float16  elapsed 0:56:20  eta 0:05:27
+[micro 95/102] variant 13 k 1 n 256000 dtype float32  elapsed 0:56:48  eta 0:04:50
+[micro 96/102] variant 13 k 1 n 256000 dtype float16  elapsed 0:57:21  eta 0:04:13
+[micro 97/102] variant 8 k 1 n 256000 dtype float32  elapsed 0:57:52  eta 0:03:37
+[micro 98/102] variant 8 k 1 n 256000 dtype float16  elapsed 0:58:27  eta 0:03:00
+[micro 99/102] variant 11 k 1 n 256000 dtype float32  elapsed 0:58:58  eta 0:02:24
+[micro 100/102] variant 11 k 1 n 256000 dtype float16  elapsed 0:59:26  eta 0:01:48
+[micro 101/102] variant 13 k 1 n 256000 dtype float32  elapsed 0:59:54  eta 0:01:11
+[micro 102/102] variant 13 k 1 n 256000 dtype float16  elapsed 1:00:27  eta 0:00:35
+micro: 102/102 done in 1:00:58
+wrote /home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14/micro.tsv
+== models (3/7) ==
+[models 1/27] distilgpt2 round 1/3  elapsed 0:00:00  eta --:--:--
+run_models.sh: iree failed for distilgpt2: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 2/27] distilgpt2 round 2/3  elapsed 0:02:01  eta 0:52:26
+run_models.sh: iree failed for distilgpt2: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 3/27] distilgpt2 round 3/3  elapsed 0:02:55  eta 0:36:27
+run_models.sh: iree failed for distilgpt2: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 4/27] tiny-gpt2 round 1/3  elapsed 0:03:49  eta 0:30:32
+run_models.sh: iree failed for tiny-gpt2: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 5/27] tiny-gpt2 round 2/3  elapsed 0:04:33  eta 0:26:09
+run_models.sh: iree failed for tiny-gpt2: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 6/27] tiny-gpt2 round 3/3  elapsed 0:05:17  eta 0:23:14
+run_models.sh: iree failed for tiny-gpt2: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 7/27] smollm2-135m round 1/3  elapsed 0:06:00  eta 0:21:00
+run_models.sh: iree failed for smollm2-135m: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 8/27] smollm2-135m round 2/3  elapsed 0:09:27  eta 0:27:00
+run_models.sh: iree failed for smollm2-135m: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 9/27] smollm2-135m round 3/3  elapsed 0:10:38  eta 0:25:15
+run_models.sh: iree failed for smollm2-135m: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 10/27] bert-tiny round 1/3  elapsed 0:11:50  eta 0:23:40
+run_models.sh: iree failed for bert-tiny: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 11/27] bert-tiny round 2/3  elapsed 0:13:14  eta 0:22:29
+run_models.sh: iree failed for bert-tiny: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 12/27] bert-tiny round 3/3  elapsed 0:14:01  eta 0:20:23
+run_models.sh: iree failed for bert-tiny: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 13/27] bert-mini round 1/3  elapsed 0:14:48  eta 0:18:30
+run_models.sh: iree failed for bert-mini: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 14/27] bert-mini round 2/3  elapsed 0:16:49  eta 0:18:06
+run_models.sh: iree failed for bert-mini: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 15/27] bert-mini round 3/3  elapsed 0:17:37  eta 0:16:21
+run_models.sh: iree failed for bert-mini: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 16/27] resnet18-b1 round 1/3  elapsed 0:18:25  eta 0:14:44
+[models 17/27] resnet18-b1 round 2/3  elapsed 0:35:53  eta 0:24:40
+[models 18/27] resnet18-b1 round 3/3  elapsed 0:36:27  eta 0:21:26
+[models 19/27] resnet18-b8 round 1/3  elapsed 0:37:00  eta 0:18:30
+[models 20/27] resnet18-b8 round 2/3  elapsed 0:57:32  eta 0:24:13
+[models 21/27] resnet18-b8 round 3/3  elapsed 0:58:07  eta 0:20:20
+[models 22/27] mixer_b16 round 1/3  elapsed 0:58:42  eta 0:16:46
+run_models.sh: iree failed for mixer_b16: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 23/27] mixer_b16 round 2/3  elapsed 1:02:04  eta 0:14:06
+run_models.sh: iree failed for mixer_b16: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 24/27] mixer_b16 round 3/3  elapsed 1:02:53  eta 0:10:56
+run_models.sh: iree failed for mixer_b16: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 25/27] vit-tiny round 1/3  elapsed 1:03:43  eta 0:07:57
+run_models.sh: iree failed for vit-tiny: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 26/27] vit-tiny round 2/3  elapsed 1:07:11  eta 0:05:22
+run_models.sh: iree failed for vit-tiny: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+[models 27/27] vit-tiny round 3/3  elapsed 1:08:00  eta 0:02:36
+run_models.sh: iree failed for vit-tiny: iree.compiler.tools.binaries.CompilerToolError: Error invoking IREE compiler tool iree-compile
+models: 27/27 done in 1:08:49
+wrote /home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14/models.tsv
+== ablation (4/7) ==
+[ablation 1/6] fusion  elapsed 0:00:00  eta --:--:--
+[ablation 2/6] flat_block  elapsed 0:00:40  eta 0:03:20
+[ablation 3/6] budget_mb  elapsed 0:02:36  eta 0:05:12
+[ablation 4/6] precision  elapsed 0:03:16  eta 0:03:16
+[ablation 5/6] tf32  elapsed 0:06:33  eta 0:03:16
+[ablation 6/6] max_inputs  elapsed 0:08:12  eta 0:01:38
+ablation: 6/6 done in 0:12:47
+wrote /home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-15/ablation.tsv
+== dynamic (5/7) ==
+[dynamic 1/3] round 1/3  elapsed 0:00:00  eta --:--:--
+[dynamic 2/3] round 2/3  elapsed 0:01:08  eta 0:02:16
+[dynamic 3/3] round 3/3  elapsed 0:02:15  eta 0:01:07
+dynamic: 3/3 done in 0:03:23
+wrote /home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-15/dynamic_series.tsv and /home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-15/dynamic_summary.tsv
+== summarize (6/7) ==
+# Paper benchmark summary
+
+## Microbenchmarks (median steady_us over rounds)
+
+| variant | k | n | fused (ours) | app-level (ours) | eager (ours) | nojit (ours) | torch.compile | compile-ro | compile-mat | torch eager | JAX/XLA | IREE | Triton | speedup vs compile | interp tax | ours/Triton |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | 1 | 1000000 | 12.0 | n/a | 28.1 | 30.1 | 35.0 | 92.8 | 93.8 | 24.5 | 37.8 | n/a | 19.3 | 2.91x | n/a | 0.62x |
+| 0 | 4 | 10000 | 9.3 | n/a | 28.4 | 27.1 | 33.8 | 95.1 | 91.4 | 69.8 | 30.6 | n/a | 18.9 | 3.65x | n/a | 0.49x |
+| 0 | 4 | 100000 | 9.3 | n/a | 31.4 | 28.6 | 34.9 | 93.8 | 90.5 | 71.5 | 31.6 | n/a | 19.4 | 3.75x | n/a | 0.48x |
+| 0 | 4 | 1000000 | 33.2 | n/a | 109.8 | 120.8 | 56.2 | 94.4 | 94.2 | 97.3 | 81.0 | n/a | 29.5 | 1.69x | n/a | 1.13x |
+| 0 | 4 | 10000000 | 339.2 | n/a | 3289.0 | 3289.3 | 548.6 | 1167.8 | 1169.9 | 3277.4 | 848.5 | n/a | 309.5 | 1.62x | n/a | 1.10x |
+| 0 | 8 | 1000000 | 64.8 | n/a | 241.9 | 241.6 | 110.9 | 138.1 | 139.1 | 194.4 | 153.3 | n/a | 58.2 | 1.71x | n/a | 1.11x |
+| 1 | 4 | 1000000 | 33.8 | n/a | 122.4 | 121.2 | 97.4 | 185.1 | 185.5 | 98.5 | 82.9 | n/a | 30.8 | 2.89x | n/a | 1.10x |
+| 2 | 4 | 1000000 | 34.3 | n/a | 122.4 | 121.3 | 57.4 | 106.0 | 105.3 | 107.9 | 135.0 | n/a | 53.0 | 1.67x | n/a | 0.65x |
+| 3 | 4 | 1000000 | 65.1 | n/a | 147.5 | 147.5 | 127.8 | 311.7 | 311.0 | 131.7 | 245.2 | n/a | 85.0 | 1.96x | n/a | 0.77x |
+| 4 | 4 | 1000000 | 37.2 | n/a | 119.1 | 131.0 | 104.4 | 192.2 | 192.3 | 105.7 | 91.5 | n/a | 38.0 | 2.81x | n/a | 0.98x |
+| 5 | 4 | 1000000 | 37.2 | n/a | 127.9 | 130.2 | 104.6 | 193.3 | 193.3 | 105.7 | 91.3 | n/a | 38.0 | 2.82x | n/a | 0.98x |
+| 6 | 1 | 25600 | 207.2 | n/a | 206.3 | 206.4 | 351.3 | 371.3 | 370.6 | 349.0 | 77.5 | n/a | 684.0 | 1.70x | n/a | 0.30x |
+| 6 | 1 | 256000 | 763.5 | n/a | 763.4 | 763.4 | 1050.7 | 1082.2 | 1082.0 | 1044.7 | 627.1 | n/a | 687.4 | 1.38x | n/a | 1.11x |
+| 7 | 1 | 25600 | 492.1 | n/a | 500.3 | 499.2 | 716.3 | 773.3 | 766.0 | 643.4 | 221.2 | n/a | n/a | 1.46x | n/a | n/a |
+| 7 | 1 | 256000 | 2029.7 | n/a | 2056.9 | 2039.7 | 2407.0 | 2494.5 | 2477.3 | 2415.8 | 1734.1 | n/a | n/a | 1.19x | n/a | n/a |
+| 8 | 1 | 25600 | 365.8 | n/a | 629.2 | 629.5 | 407.2 | 416.4 | 410.7 | 419.6 | 224.3 | n/a | n/a | 1.11x | n/a | n/a |
+| 8 | 1 | 256000 | 16168.7 | n/a | 19111.4 | 19107.0 | 21462.6 | 21490.1 | 21485.0 | 20804.4 | 12052.2 | n/a | n/a | 1.33x | n/a | n/a |
+| 9 | 1 | 25600 | 573.9 | n/a | 573.7 | 573.0 | 719.5 | 733.6 | 733.8 | 657.6 | 182.0 | n/a | n/a | 1.25x | n/a | n/a |
+| 9 | 1 | 256000 | 415.2 | n/a | 450.3 | 434.0 | 1344.5 | 1383.7 | 1382.2 | 1275.5 | 255.9 | n/a | n/a | 3.24x | n/a | n/a |
+| 10 | 1 | 25600 | 3151.7 | n/a | 3787.3 | 3545.4 | 2488.7 | 2487.0 | 2463.0 | 3001.3 | 1063.1 | n/a | n/a | 0.79x | n/a | n/a |
+| 10 | 1 | 155008 | 49301.9 | n/a | 51693.2 | 51689.1 | 38470.0 | 38437.9 | 37587.5 | 40364.6 | 21882.8 | n/a | n/a | 0.78x | n/a | n/a |
+| 11 | 1 | 25600 | 3.1 | n/a | 41.6 | 41.7 | 54.0 | 113.0 | 113.6 | 67.4 | 33.1 | n/a | 18.5 | 17.29x | n/a | 0.17x |
+| 11 | 1 | 256000 | 13.8 | n/a | 109.9 | 113.2 | 193.6 | 261.2 | 263.3 | 208.0 | 35.9 | n/a | 18.7 | 13.99x | n/a | 0.74x |
+| 12 | 1 | 25600 | 69.8 | n/a | 69.4 | 69.2 | 130.3 | 167.7 | 168.1 | 125.9 | 32.1 | n/a | 228.6 | 1.87x | n/a | 0.31x |
+| 12 | 1 | 256000 | 256.0 | n/a | 258.8 | 258.8 | 458.6 | 489.3 | 489.6 | 447.2 | 214.6 | n/a | 229.8 | 1.79x | n/a | 1.11x |
+| 13 | 1 | 25600 | 312.4 | n/a | 406.3 | 406.0 | 527.5 | 551.4 | 546.5 | 522.4 | 103.6 | n/a | 1002.3 | 1.69x | n/a | 0.31x |
+| 13 | 1 | 256000 | 3639.6 | n/a | 4133.3 | 4143.8 | 4011.7 | 4061.5 | 4046.6 | 3984.7 | 2904.5 | n/a | 3513.3 | 1.10x | n/a | 1.04x |
+
+## Precision sweep (median steady_us)
+
+| dtype | variant | k | n | fused (ours) | app-level (ours) | eager (ours) | nojit (ours) | torch.compile | compile-ro | compile-mat | torch eager | JAX/XLA | IREE | Triton | speedup vs compile | interp tax | ours/Triton |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| float16 | 8 | 1 | 256000 | 798.1 | n/a | 2166.4 | 2169.5 | 923.7 | 941.3 | 839.8 | 1478.1 | 690.9 | n/a | n/a | 1.16x | n/a | n/a |
+| float16 | 11 | 1 | 256000 | 24.2 | n/a | 49.6 | 46.8 | 193.4 | 257.8 | 261.9 | 205.8 | 33.2 | n/a | 18.6 | 8.00x | n/a | 1.30x |
+| float16 | 13 | 1 | 256000 | 100.1 | n/a | 330.2 | 332.4 | 468.6 | 460.7 | 464.3 | 452.0 | 57.9 | n/a | 129.4 | 4.68x | n/a | 0.77x |
+| float32 | 8 | 1 | 256000 | 1709.7 | n/a | 4339.8 | 4345.5 | 1880.1 | 1916.8 | 1514.6 | 2596.2 | 1365.8 | n/a | n/a | 1.10x | n/a | n/a |
+| float32 | 11 | 1 | 256000 | 6.9 | n/a | 28.7 | 31.9 | 196.3 | 257.8 | 259.6 | 205.9 | 33.6 | n/a | 18.6 | 28.33x | n/a | 0.37x |
+| float32 | 13 | 1 | 256000 | 224.1 | n/a | 401.8 | 403.0 | 556.4 | 582.1 | 514.6 | 604.6 | 155.9 | n/a | 131.8 | 2.48x | n/a | 1.70x |
+
+## Guards / graph breaks (launches per iter, torch graph breaks)
+
+| variant | n | launches/iter (fused) | torch graphs | torch breaks |
+|---|---|---|---|---|
+| 1 | 1000000 | 1.1 | 1 | 0 |
+| 2 | 1000000 | 1.1 | 2 | 1 |
+| 3 | 1000000 | 2.0 | 2 | 1 |
+| 4 | 1000000 | 1.1 | 1 | 0 |
+| 5 | 1000000 | 1.1 | 2 | 1 |
+
+## End-to-end models (median steady_us, ratio to torch.compile)
+
+| model | ours | torch.compile | compile-ro | compile-mat | torch eager | JAX/XLA | IREE | TensorRT | ratio ours/compile | ratio jax/compile | launches/iter (ours) | correctness | tol | pass |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| bert-mini | 403.3 | 868.6 | 434.6 | 400.9 | 1563.9 | 191.8 | n/a | n/a | 0.46x | 0.22x | 24.3 | 1.81198e-05 | 0.001 | pass |
+| bert-tiny | 270.6 | 576.5 | 292.8 | 292.2 | 1039.1 | 92.9 | n/a | n/a | 0.47x | 0.16x | 14.3 | 2.67029e-05 | 0.001 | pass |
+| distilgpt2 | 1146.4 | 1253.8 | 1248.7 | 1137.0 | 2529.8 | 775.8 | n/a | n/a | 0.91x | 0.62x | 38.2 | 0.000259399 | 0.001 | pass |
+| mixer_b16 | 2232.3 | 3143.9 | 3106.4 | 3075.0 | 3640.6 | 1733.3 | n/a | n/a | 0.71x | 0.55x | 63.4 | 0.00258255 | 0.001 | FAIL |
+| resnet18-b1 | 542.4 | 957.3 | 960.5 | 956.3 | 1325.9 | 1655.9 | n/a | n/a | 0.57x | 1.73x | 39.0 | 0.00607491 | 0.02 | pass |
+| resnet18-b8 | 2258.2 | 1504.7 | 1537.2 | 1531.6 | 1788.5 | 3435.6 | n/a | n/a | 1.50x | 2.28x | 39.0 | 0.00618362 | 0.02 | pass |
+| smollm2-135m | 3052.4 | 5548.5 | 3724.8 | 3730.5 | 13549.0 | 2097.5 | n/a | n/a | 0.55x | 0.38x | 212.1 | 0.000130653 | 0.001 | pass |
+| tiny-gpt2 | 276.8 | 425.6 | 229.4 | 295.0 | 2281.9 | 81.4 | n/a | n/a | 0.65x | 0.19x | 13.2 | 2.23517e-08 | 0.001 | pass |
+| vit-tiny | 924.0 | 2281.5 | 1127.3 | 1024.0 | 3061.8 | 513.8 | n/a | n/a | 0.40x | 0.23x | 76.3 | 0.00240195 | 0.001 | FAIL |
+
+## Compilation overhead (median; break-even vs torch eager, iterations)
+
+| workload | system | compile_ms | first_run_ms | steady_us | break-even |
+|---|---|---|---|---|---|
+| bert-mini | torch-compile | n/a | 1671.3 | 868.6 | 2193 |
+| bert-mini | torch-compile-ro | n/a | 1678.6 | 434.6 | 1357 |
+| bert-mini | torch-compile-mat | n/a | 1857.1 | 400.9 | 1471 |
+| bert-mini | jax | 5747.6 | 3.2 | 191.8 | 4084 |
+| bert-mini | ours | n/a | 243.5 | 403.3 | 84 |
+| bert-tiny | torch-compile | n/a | 1502.8 | 576.5 | 2907 |
+| bert-tiny | torch-compile-ro | n/a | 1508.9 | 292.8 | 1810 |
+| bert-tiny | torch-compile-mat | n/a | 1685.2 | 292.2 | 2045 |
+| bert-tiny | jax | 5745.4 | 2.3 | 92.9 | 5907 |
+| bert-tiny | ours | n/a | 175.1 | 270.6 | 22 |
+| distilgpt2 | torch-compile | n/a | 1878.9 | 1253.8 | 1320 |
+| distilgpt2 | torch-compile-ro | n/a | 1882.7 | 1248.7 | 1318 |
+| distilgpt2 | torch-compile-mat | n/a | 2035.7 | 1137.0 | 1322 |
+| distilgpt2 | jax | 6085.0 | 5.3 | 775.8 | 3362 |
+| distilgpt2 | ours | n/a | 646.5 | 1146.4 | 327 |
+| micro v0 k1 n1000000 | torch-compile | n/a | 642.4 | 35.0 | n/a |
+| micro v0 k1 n1000000 | torch-compile-ro | n/a | 649.0 | 92.8 | n/a |
+| micro v0 k1 n1000000 | torch-compile-mat | n/a | 649.1 | 93.8 | n/a |
+| micro v0 k1 n1000000 | jax | 279.4 | 1.0 | 37.8 | n/a |
+| micro v0 k1 n1000000 | triton | 490.0 | 0.1 | 19.3 | 84363 |
+| micro v0 k4 n10000 | torch-compile | n/a | 641.8 | 33.8 | 16451 |
+| micro v0 k4 n10000 | torch-compile-ro | n/a | 645.8 | 95.1 | n/a |
+| micro v0 k4 n10000 | torch-compile-mat | n/a | 650.3 | 91.4 | n/a |
+| micro v0 k4 n10000 | jax | 271.8 | 1.5 | 30.6 | 5705 |
+| micro v0 k4 n10000 | triton | 491.7 | 0.1 | 18.9 | 8683 |
+| micro v0 k4 n100000 | torch-compile | n/a | 642.2 | 34.9 | 16165 |
+| micro v0 k4 n100000 | torch-compile-ro | n/a | 654.2 | 93.8 | n/a |
+| micro v0 k4 n100000 | torch-compile-mat | n/a | 663.9 | 90.5 | n/a |
+| micro v0 k4 n100000 | jax | 266.6 | 1.2 | 31.6 | 5434 |
+| micro v0 k4 n100000 | triton | 487.6 | 0.1 | 19.4 | 8388 |
+| micro v0 k4 n1000000 | torch-compile | n/a | 643.9 | 56.2 | 14449 |
+| micro v0 k4 n1000000 | torch-compile-ro | n/a | 651.9 | 94.4 | 206112 |
+| micro v0 k4 n1000000 | torch-compile-mat | n/a | 661.1 | 94.2 | 198316 |
+| micro v0 k4 n1000000 | jax | 291.1 | 1.4 | 81.0 | 14896 |
+| micro v0 k4 n1000000 | triton | 487.9 | 0.1 | 29.5 | 6465 |
+| micro v0 k4 n10000000 | torch-compile | n/a | 647.1 | 548.6 | 219 |
+| micro v0 k4 n10000000 | torch-compile-ro | n/a | 652.8 | 1167.8 | 285 |
+| micro v0 k4 n10000000 | torch-compile-mat | n/a | 653.1 | 1169.9 | 286 |
+| micro v0 k4 n10000000 | jax | 305.2 | 1.6 | 848.5 | 105 |
+| micro v0 k4 n10000000 | triton | 486.9 | 0.6 | 309.5 | 147 |
+| micro v0 k8 n1000000 | torch-compile | n/a | 649.2 | 110.9 | 7184 |
+| micro v0 k8 n1000000 | torch-compile-ro | n/a | 660.7 | 138.1 | 10870 |
+| micro v0 k8 n1000000 | torch-compile-mat | n/a | 668.1 | 139.1 | 11188 |
+| micro v0 k8 n1000000 | jax | 301.6 | 1.3 | 153.3 | 6174 |
+| micro v0 k8 n1000000 | triton | 493.1 | 0.2 | 58.2 | 3261 |
+| micro v1 k4 n1000000 | torch-compile | n/a | 643.3 | 97.4 | 540012 |
+| micro v1 k4 n1000000 | torch-compile-ro | n/a | 650.4 | 185.1 | n/a |
+| micro v1 k4 n1000000 | torch-compile-mat | n/a | 661.2 | 185.5 | n/a |
+| micro v1 k4 n1000000 | jax | 292.0 | 1.6 | 82.9 | 15671 |
+| micro v1 k4 n1000000 | triton | 490.4 | 0.1 | 30.8 | 6516 |
+| micro v10 k1 n155008 | torch-compile | n/a | 2841.5 | 38470.0 | 1269 |
+| micro v10 k1 n155008 | torch-compile-ro | n/a | 2882.0 | 38437.9 | 1269 |
+| micro v10 k1 n155008 | torch-compile-mat | n/a | 2992.2 | 37587.5 | 920 |
+| micro v10 k1 n155008 | jax | 6309.2 | 41.4 | 21882.8 | 320 |
+| micro v10 k1 n25600 | torch-compile | n/a | 2821.0 | 2488.7 | 4725 |
+| micro v10 k1 n25600 | torch-compile-ro | n/a | 2887.4 | 2487.0 | 4839 |
+| micro v10 k1 n25600 | torch-compile-mat | n/a | 2928.2 | 2463.0 | 4699 |
+| micro v10 k1 n25600 | jax | 5185.7 | 7.0 | 1063.1 | 2473 |
+| micro v11 k1 n25600 | torch-compile | n/a | 2481.9 | 54.0 | 171254 |
+| micro v11 k1 n25600 | torch-compile-ro | n/a | 2532.0 | 113.0 | n/a |
+| micro v11 k1 n25600 | torch-compile-mat | n/a | 2539.6 | 113.6 | n/a |
+| micro v11 k1 n25600 | jax | 118.8 | 1.1 | 33.1 | -2280 |
+| micro v11 k1 n25600 | triton | 489.0 | 0.1 | 18.5 | 5960 |
+| micro v11 k1 n256000 | torch-compile | n/a | 2516.0 | 193.6 | 160267 |
+| micro v11 k1 n256000 | torch-compile-ro | n/a | 2518.2 | 261.2 | n/a |
+| micro v11 k1 n256000 | torch-compile-mat | n/a | 2516.0 | 263.3 | n/a |
+| micro v11 k1 n256000 | jax | 147.7 | 0.6 | 35.9 | -372 |
+| micro v11 k1 n256000 | triton | 485.0 | 0.1 | 18.7 | 1442 |
+| micro v12 k1 n25600 | torch-compile | n/a | 2591.5 | 130.3 | n/a |
+| micro v12 k1 n25600 | torch-compile-ro | n/a | 2628.6 | 167.7 | n/a |
+| micro v12 k1 n25600 | torch-compile-mat | n/a | 2675.3 | 168.1 | n/a |
+| micro v12 k1 n25600 | jax | 1204.3 | 1.3 | 32.1 | 10005 |
+| micro v12 k1 n25600 | triton | 492.5 | 0.3 | 228.6 | n/a |
+| micro v12 k1 n256000 | torch-compile | n/a | 2616.2 | 458.6 | n/a |
+| micro v12 k1 n256000 | torch-compile-ro | n/a | 2618.8 | 489.3 | n/a |
+| micro v12 k1 n256000 | torch-compile-mat | n/a | 2629.8 | 489.6 | n/a |
+| micro v12 k1 n256000 | jax | 2482.5 | 1.3 | 214.6 | 9362 |
+| micro v12 k1 n256000 | triton | 495.7 | 0.4 | 229.8 | 875 |
+| micro v13 k1 n25600 | torch-compile | n/a | 2668.3 | 527.5 | n/a |
+| micro v13 k1 n25600 | torch-compile-ro | n/a | 2682.5 | 551.4 | n/a |
+| micro v13 k1 n25600 | torch-compile-mat | n/a | 2728.6 | 546.5 | n/a |
+| micro v13 k1 n25600 | jax | 1781.6 | 1.4 | 103.6 | 3504 |
+| micro v13 k1 n25600 | triton | 490.4 | 1.1 | 1002.3 | n/a |
+| micro v13 k1 n256000 | torch-compile | n/a | 2693.2 | 4011.7 | n/a |
+| micro v13 k1 n256000 | torch-compile-ro | n/a | 2719.9 | 4061.5 | n/a |
+| micro v13 k1 n256000 | torch-compile-mat | n/a | 2738.9 | 4046.6 | n/a |
+| micro v13 k1 n256000 | jax | 3140.6 | 4.4 | 2904.5 | 2582 |
+| micro v13 k1 n256000 | triton | 497.3 | 3.7 | 3513.3 | 308 |
+| micro v2 k4 n1000000 | torch-compile | n/a | 720.8 | 57.4 | 13288 |
+| micro v2 k4 n1000000 | torch-compile-ro | n/a | 734.8 | 106.0 | 354557 |
+| micro v2 k4 n1000000 | torch-compile-mat | n/a | 746.7 | 105.3 | 261186 |
+| micro v2 k4 n1000000 | jax | 294.2 | 1.3 | 135.0 | n/a |
+| micro v2 k4 n1000000 | triton | 489.1 | 0.1 | 53.0 | 8010 |
+| micro v3 k4 n1000000 | torch-compile | n/a | 691.2 | 127.8 | 167230 |
+| micro v3 k4 n1000000 | torch-compile-ro | n/a | 698.2 | 311.7 | n/a |
+| micro v3 k4 n1000000 | torch-compile-mat | n/a | 806.2 | 311.0 | n/a |
+| micro v3 k4 n1000000 | jax | 294.8 | 1.0 | 245.2 | n/a |
+| micro v3 k4 n1000000 | triton | 490.4 | 0.1 | 85.0 | 9451 |
+| micro v4 k4 n1000000 | torch-compile | n/a | 640.3 | 104.4 | 438457 |
+| micro v4 k4 n1000000 | torch-compile-ro | n/a | 652.9 | 192.2 | n/a |
+| micro v4 k4 n1000000 | torch-compile-mat | n/a | 654.5 | 192.3 | n/a |
+| micro v4 k4 n1000000 | jax | 293.6 | 1.6 | 91.5 | 17343 |
+| micro v4 k4 n1000000 | triton | 496.1 | 0.1 | 38.0 | 6600 |
+| micro v5 k4 n1000000 | torch-compile | n/a | 695.4 | 104.6 | 613601 |
+| micro v5 k4 n1000000 | torch-compile-ro | n/a | 707.7 | 193.3 | n/a |
+| micro v5 k4 n1000000 | torch-compile-mat | n/a | 718.6 | 193.3 | n/a |
+| micro v5 k4 n1000000 | jax | 290.7 | 1.1 | 91.3 | 16942 |
+| micro v5 k4 n1000000 | triton | 490.7 | 0.1 | 38.0 | 6529 |
+| micro v6 k1 n25600 | torch-compile | n/a | 2634.7 | 351.3 | n/a |
+| micro v6 k1 n25600 | torch-compile-ro | n/a | 2616.6 | 371.3 | n/a |
+| micro v6 k1 n25600 | torch-compile-mat | n/a | 3037.8 | 370.6 | n/a |
+| micro v6 k1 n25600 | jax | 1205.0 | 1.0 | 77.5 | 3140 |
+| micro v6 k1 n25600 | triton | 492.2 | 0.7 | 684.0 | n/a |
+| micro v6 k1 n256000 | torch-compile | n/a | 2646.5 | 1050.7 | n/a |
+| micro v6 k1 n256000 | torch-compile-ro | n/a | 2645.0 | 1082.2 | n/a |
+| micro v6 k1 n256000 | torch-compile-mat | n/a | 2955.1 | 1082.0 | n/a |
+| micro v6 k1 n256000 | jax | 2518.8 | 1.6 | 627.1 | 5251 |
+| micro v6 k1 n256000 | triton | 487.6 | 0.7 | 687.4 | 450 |
+| micro v7 k1 n25600 | torch-compile | n/a | 2643.7 | 716.3 | n/a |
+| micro v7 k1 n25600 | torch-compile-ro | n/a | 2713.7 | 773.3 | n/a |
+| micro v7 k1 n25600 | torch-compile-mat | n/a | 2669.3 | 766.0 | n/a |
+| micro v7 k1 n25600 | jax | 2767.7 | 2.0 | 221.2 | 5829 |
+| micro v7 k1 n256000 | torch-compile | n/a | 2671.4 | 2407.0 | 265092 |
+| micro v7 k1 n256000 | torch-compile-ro | n/a | 2741.8 | 2494.5 | n/a |
+| micro v7 k1 n256000 | torch-compile-mat | n/a | 2712.4 | 2477.3 | n/a |
+| micro v7 k1 n256000 | jax | 3457.3 | 4.1 | 1734.1 | 4577 |
+| micro v8 k1 n25600 | torch-compile | n/a | 2662.4 | 407.2 | 186033 |
+| micro v8 k1 n25600 | torch-compile-ro | n/a | 2739.3 | 416.4 | 765006 |
+| micro v8 k1 n25600 | torch-compile-mat | n/a | 2763.2 | 410.7 | 271612 |
+| micro v8 k1 n25600 | jax | 2139.9 | 1.6 | 224.3 | 9157 |
+| micro v8 k1 n256000 | torch-compile | n/a | 2710.9 | 21462.6 | n/a |
+| micro v8 k1 n256000 | torch-compile-ro | n/a | 2775.0 | 21490.1 | n/a |
+| micro v8 k1 n256000 | torch-compile-mat | n/a | 2756.1 | 21485.0 | n/a |
+| micro v8 k1 n256000 | jax | 3088.9 | 15.5 | 12052.2 | 310 |
+| micro v9 k1 n25600 | torch-compile | n/a | 2667.4 | 719.5 | n/a |
+| micro v9 k1 n25600 | torch-compile-ro | n/a | 2751.5 | 733.6 | n/a |
+| micro v9 k1 n25600 | torch-compile-mat | n/a | 2763.9 | 733.8 | n/a |
+| micro v9 k1 n25600 | jax | 842.6 | 1.7 | 182.0 | 1074 |
+| micro v9 k1 n256000 | torch-compile | n/a | 2709.1 | 1344.5 | n/a |
+| micro v9 k1 n256000 | torch-compile-ro | n/a | 2808.9 | 1383.7 | n/a |
+| micro v9 k1 n256000 | torch-compile-mat | n/a | 3063.0 | 1382.2 | n/a |
+| micro v9 k1 n256000 | jax | 921.3 | 1.3 | 255.9 | 516 |
+| mixer_b16 | torch-compile | n/a | 1776.6 | 3143.9 | 3114 |
+| mixer_b16 | torch-compile-ro | n/a | 1780.9 | 3106.4 | 2904 |
+| mixer_b16 | torch-compile-mat | n/a | 2063.4 | 3075.0 | 3242 |
+| mixer_b16 | jax | 7008.9 | 8.5 | 1733.3 | 3559 |
+| mixer_b16 | ours | n/a | 261.1 | 2232.3 | 22 |
+| resnet18-b1 | torch-compile | n/a | 1561.8 | 957.3 | 3562 |
+| resnet18-b1 | torch-compile-ro | n/a | 1572.2 | 960.5 | 3622 |
+| resnet18-b1 | torch-compile-mat | n/a | 2244.7 | 956.3 | 5400 |
+| resnet18-b1 | jax | 630.4 | 4.4 | 1655.9 | n/a |
+| resnet18-b1 | ours | n/a | 182.6 | 542.4 | -85 |
+| resnet18-b8 | torch-compile | n/a | 1532.7 | 1504.7 | 4572 |
+| resnet18-b8 | torch-compile-ro | n/a | 1558.3 | 1537.2 | 5265 |
+| resnet18-b8 | torch-compile-mat | n/a | 2821.2 | 1531.6 | 10066 |
+| resnet18-b8 | jax | 1214.7 | 6.2 | 3435.6 | n/a |
+| resnet18-b8 | ours | n/a | 195.6 | 2258.2 | n/a |
+| smollm2-135m | torch-compile | n/a | 4525.0 | 5548.5 | 469 |
+| smollm2-135m | torch-compile-ro | n/a | 4532.4 | 3724.8 | 382 |
+| smollm2-135m | torch-compile-mat | n/a | 4708.5 | 3730.5 | 400 |
+| smollm2-135m | jax | 7828.7 | 19.3 | 2097.5 | 617 |
+| smollm2-135m | ours | n/a | 636.1 | 3052.4 | -13 |
+| tiny-gpt2 | torch-compile | n/a | 1506.6 | 425.6 | 396 |
+| tiny-gpt2 | torch-compile-ro | n/a | 1520.7 | 229.4 | 365 |
+| tiny-gpt2 | torch-compile-mat | n/a | 1536.3 | 295.0 | 385 |
+| tiny-gpt2 | jax | 905.9 | 2.1 | 81.4 | 62 |
+| tiny-gpt2 | ours | n/a | 168.8 | 276.8 | -300 |
+| vit-tiny | torch-compile | n/a | 2287.6 | 2281.5 | 2637 |
+| vit-tiny | torch-compile-ro | n/a | 2293.1 | 1127.3 | 1066 |
+| vit-tiny | torch-compile-mat | n/a | 2593.0 | 1024.0 | 1160 |
+| vit-tiny | jax | 6514.6 | 7.9 | 513.8 | 2470 |
+| vit-tiny | ours | n/a | 193.1 | 924.0 | -17 |
+
+
+== plot (7/7) ==
+skip fusion_stats (no rows in /home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14)
+skip dynamic (no rows in /home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14)
+skip batch (no rows in /home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14)
+skip ablation (no rows in /home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14)
+skip explain (no rows in /home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14)
+skip deopt (no rows in /home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14)
+skip gap (no rows in /home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14)
+skip warmup (no rows in /home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14)
+/home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14/figures/micro_speedup.pdf
+/home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14/figures/integration.pdf
+/home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14/figures/fusion.pdf
+/home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14/figures/models.pdf
+/home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14/figures/precision.pdf
+/home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14/figures/micro_baselines.pdf
+/home/yusuke/src/tensorpypy/benchmark/paper/../results/stillinlove-rtx5070ti/paper-2026-09-14/figures/compile_overhead.pdf
