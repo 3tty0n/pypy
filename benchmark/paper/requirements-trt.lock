@@ -1,60 +1,194 @@
+# Torch-TensorRT venv. Pinned at 2.14.0+cu130, the same torch the main venv
+# measures everything else with, so the TensorRT column is not the only one
+# produced by a different torch. Separate venv because torch-tensorrt drags in
+# its own tensorrt-cu13 stack; transformers/timm are here because the model
+# scripts import them in whichever venv runs them.
+# The 2.9.0+cu130 wheels this file used to name were withdrawn from the index,
+# which is what made the venv stop installing; the --extra-index-url below was
+# missing too, so nothing here resolved at all.
+# Regenerate with:
+#     uv pip compile --python-version 3.13 --emit-index-url \
+#         --extra-index-url https://download.pytorch.org/whl/cu130 \
+#         --index-strategy unsafe-best-match \
+#         benchmark/paper/requirements-trt.in -o benchmark/paper/requirements-trt.lock
+--index-url https://pypi.org/simple
+--extra-index-url https://download.pytorch.org/whl/cu130
+
 annotated-doc==0.0.5
+    # via typer
 anyio==4.15.1
+    # via httpx
 certifi==2026.7.22
+    # via
+    #   httpcore
+    #   httpx
 click==8.5.0
-cuda-toolkit==13.0.0
+    # via huggingface-hub
+cuda-bindings==13.4.1
+    # via torch
+cuda-pathfinder==1.8.1
+    # via cuda-bindings
+cuda-toolkit==13.0.3.0
+    # via torch
 dllist==2.0.0
+    # via torch-tensorrt
 filelock==3.32.6
+    # via
+    #   huggingface-hub
+    #   torch
+    #   torch-tensorrt
 fsspec==2026.7.0
+    # via
+    #   huggingface-hub
+    #   torch
 h11==0.16.0
+    # via httpcore
 hf-xet==1.6.0
+    # via huggingface-hub
 httpcore==1.0.9
+    # via httpx
 httpx==0.28.1
+    # via huggingface-hub
 huggingface-hub==1.31.0
+    # via
+    #   timm
+    #   tokenizers
+    #   transformers
 idna==3.19
+    # via
+    #   anyio
+    #   httpx
 jinja2==3.1.6
+    # via torch
 markdown-it-py==4.2.0
+    # via rich
 markupsafe==3.0.3
+    # via jinja2
 mdurl==0.1.2
+    # via markdown-it-py
 mpmath==1.3.0
+    # via sympy
 networkx==3.6.1
+    # via torch
 numpy==2.5.3
-nvidia-cublas==13.0.0.19
-nvidia-cuda-cupti==13.0.48
-nvidia-cuda-nvrtc==13.0.48
-nvidia-cuda-runtime==13.0.48
-nvidia-cudnn-cu13==9.13.0.50
-nvidia-cufft==12.0.0.15
-nvidia-cufile==1.15.0.42
+    # via
+    #   -r benchmark/paper/requirements-trt.in
+    #   torch-tensorrt
+    #   torchvision
+    #   transformers
+nvidia-cublas==13.1.1.3
+    # via
+    #   cuda-toolkit
+    #   nvidia-cudnn-cu13
+    #   nvidia-cusolver
+nvidia-cuda-cupti==13.0.85
+    # via cuda-toolkit
+nvidia-cuda-nvrtc==13.0.88
+    # via
+    #   cuda-toolkit
+    #   nvidia-cublas
+nvidia-cuda-runtime==13.0.96
+    # via cuda-toolkit
+nvidia-cudnn-cu13==9.24.0.43
+    # via torch
+nvidia-cufft==12.0.0.61
+    # via cuda-toolkit
+nvidia-cufile==1.15.1.6
+    # via cuda-toolkit
 nvidia-curand==10.4.0.35
-nvidia-cusolver==12.0.3.29
-nvidia-cusparse==12.6.2.49
-nvidia-cusparselt-cu13==0.8.0
-nvidia-nccl-cu13==2.27.7
-nvidia-nvjitlink==13.0.39
-nvidia-nvshmem-cu13==3.3.24
-nvidia-nvtx==13.0.39
+    # via cuda-toolkit
+nvidia-cusolver==12.0.4.66
+    # via cuda-toolkit
+nvidia-cusparse==12.6.3.3
+    # via
+    #   cuda-toolkit
+    #   nvidia-cusolver
+nvidia-cusparselt-cu13==0.8.1
+    # via torch
+nvidia-nccl-cu13==2.30.7
+    # via torch
+nvidia-nvjitlink==13.4.52
+    # via
+    #   cuda-toolkit
+    #   nvidia-cufft
+    #   nvidia-cusolver
+    #   nvidia-cusparse
+nvidia-nvshmem-cu13==3.4.5
+    # via torch
+nvidia-nvtx==13.0.85
+    # via cuda-toolkit
 packaging==26.3
+    # via
+    #   huggingface-hub
+    #   torch-tensorrt
+    #   transformers
 pillow==12.3.0
+    # via
+    #   -r benchmark/paper/requirements-trt.in
+    #   torchvision
+psutil==7.2.2
+    # via torch-tensorrt
 pygments==2.21.0
+    # via rich
 pyyaml==6.0.3
+    # via
+    #   huggingface-hub
+    #   timm
+    #   transformers
 regex==2026.9.10
+    # via transformers
 rich==15.0.0
+    # via typer
 safetensors==0.8.0
+    # via
+    #   -r benchmark/paper/requirements-trt.in
+    #   timm
+    #   transformers
 setuptools==84.0.0
+    # via torch
 shellingham==1.5.4
+    # via typer
 sympy==1.14.0
-tensorrt==10.13.3.9.post1
-tensorrt-cu13==10.13.3.9.post1
-tensorrt-cu13-bindings==10.13.3.9.post1
-tensorrt-cu13-libs==10.13.3.9.post1
+    # via torch
+tensorrt-cu13==11.1.0.106
+    # via torch-tensorrt
+tensorrt-cu13-bindings==11.1.0.106
+    # via
+    #   tensorrt-cu13
+    #   torch-tensorrt
+tensorrt-cu13-libs==11.1.0.106
+    # via
+    #   tensorrt-cu13
+    #   torch-tensorrt
 timm==1.0.29
+    # via -r benchmark/paper/requirements-trt.in
 tokenizers==0.23.2
-torch==2.9.0+cu130
-torch-tensorrt==2.9.0+cu130
-torchvision==0.24.0+cu130
+    # via transformers
+torch==2.14.0+cu130
+    # via
+    #   -r benchmark/paper/requirements-trt.in
+    #   timm
+    #   torch-tensorrt
+    #   torchvision
+torch-tensorrt==2.14.0+cu130
+    # via -r benchmark/paper/requirements-trt.in
+torchvision==0.29.0+cu130
+    # via
+    #   -r benchmark/paper/requirements-trt.in
+    #   timm
 tqdm==4.70.1
+    # via
+    #   huggingface-hub
+    #   transformers
 transformers==5.17.0
-triton==3.5.0
+    # via -r benchmark/paper/requirements-trt.in
+triton==3.8.0
+    # via torch
 typer==0.27.2
+    # via transformers
 typing-extensions==4.16.0
+    # via
+    #   anyio
+    #   huggingface-hub
+    #   torch
+    #   torch-tensorrt

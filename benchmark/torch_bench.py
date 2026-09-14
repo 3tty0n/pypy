@@ -52,6 +52,20 @@ def make_input(rows, cols):
                         dtype=DT, device=dev).reshape(rows, cols)
 
 
+
+# TensorRT has no f64 kernels (its precisions are i8/f16/f32/bf16/f8/f4). When
+# the backend rejects a dtype, torch.compile falls back to eager without
+# raising, and the run still prints a row - so a "tensorrt" number that is
+# really PyTorch eager reaches the results. Refuse the point instead.
+TRT_PRECISIONS = ('float16', 'float32', 'bfloat16', 'int8')
+
+
+def require_trt_dtype(dtype):
+    name = str(dtype).replace('torch.', '')
+    if name not in TRT_PRECISIONS:
+        raise SystemExit('TensorRT has no %s kernels; refusing to report an '
+                         'eager fallback as a tensorrt row' % name)
+
 def compiled(fn):
     if mode == "compile":
         return torch.compile(fn, dynamic=False)
@@ -61,6 +75,7 @@ def compiled(fn):
         return torch.compile(fn, dynamic=False, mode="max-autotune")
     if mode == "tensorrt":
         import torch_tensorrt  # noqa: F401
+        require_trt_dtype(DT)
         return torch.compile(fn, dynamic=False, backend="tensorrt",
                              options={"enabled_precisions": {DT},
                                       "disable_tf32": True,

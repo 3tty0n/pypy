@@ -105,7 +105,11 @@ sha256_of() {
 }
 RUN_HOST=${RUN_HOST:-$(hostname)}
 RUN_GPU=${RUN_GPU:-$(gpu_slug)}
+# Exported so every stage of one run shares the directory the first stage
+# picked. Without it each script re-evaluates the date and a run that
+# crosses midnight scatters its tsv files over two of them.
 OUT=${OUT:-$HERE/../results/$RUN_HOST-$RUN_GPU/paper-$(date +%F)}
+export OUT
 export RTENSOR_BUDGET_MB=${RTENSOR_BUDGET_MB:-8}
 
 mkdir -p "$OUT" "$WEIGHTS"
@@ -114,6 +118,12 @@ mkdir -p "$OUT" "$WEIGHTS"
 # a reader needs to place the numbers - driver, toolkit, wheels, CPU.
 write_machine_txt() {
   local f="$OUT/machine.txt"
+  # Never overwrite another machine's provenance: summarize/plot/compare are
+  # routinely pointed at a result directory measured elsewhere, and sourcing
+  # this file would otherwise stamp the local host over the one that measured.
+  if [ -f "$f" ] && ! grep -qx "host          $RUN_HOST" "$f"; then
+    return
+  fi
   {
     echo "host          $RUN_HOST"
     echo "date          $(date -Iseconds)"
@@ -297,7 +307,48 @@ steady_of() { echo "$1" | grep -o 'steady_us=[0-9.]*' | head -1 | cut -d= -f2; }
 field_of() { echo "$1" | grep -o "$2=[0-9.eE+-]*" | head -1 | cut -d= -f2; }
 diff_of() { echo "$1" | grep -o 'maxabsdiff=[0-9.eE+-]*' | head -1 | cut -d= -f2; }
 
-PAPER_PYPY_LINK="$REPO/pypy-c-paper"
+# --- running one measurement command -----------------------------------------
+# These live here rather than in each run_*.sh because every duplicate of them
+# grew its own bug: the stdout-tail row picker turned TensorRT warnings into 48
+# rows of garbage in micro.tsv, and the copy of pkg_version in run_models.sh put
+# one of those warnings in the binary column, splitting 27 model rows in half.
+
+# The measurement row out of a command's stdout. Not `tail -1`: the backends
+# print warnings there too. A row starts with the mode and has numeric
+# variant/k fields.
+bench_row() { awk 'NF>=12 && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/' | tail -1; }
+
+# "<name>-<version>" for a module in some venv, or "unknown".
+pkg_version() {
+  local python=$1 module=$2 name=$3
+  [ -n "$python" ] && [ -x "$python" ] || { echo unknown; return; }
+  # tail -1: importing torch_tensorrt prints a plugin warning on stdout.
+  "$python" -c "import $module; print('$name-' + $module.__version__)" 2>/dev/null |
+    tail -1 | grep . || echo unknown
+}
+
+# Which optional baselines to measure; a caller narrows it, e.g. BASELINES=tensorrt.
+BASELINES=${BASELINES:-"triton tensorrt compile-ro compile-mat jax iree"}
+has_baseline() { case " $BASELINES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+# Run one measurement and echo its row, or echo nothing and say on stderr why.
+# A baseline that cannot run here must not be silently absent from the results,
+# and must never be reported as a system it fell back to.
+run_measurement() {
+  local what=$1; shift
+  local err row
+  err=$(mktemp)
+  row=$("$@" 2>"$err" | bench_row)
+  if [ -z "$row" ]; then
+    echo "$what: no row: $(grep -m1 -E 'Error|error:|Exception|refusing' "$err" || tail -1 "$err")" >&2
+  fi
+  rm -f "$err"
+  [ -n "$row" ] && echo "$row"
+}
+
+# The pid keeps one stage's cleanup from deleting the link a concurrently
+# running stage is still executing.
+PAPER_PYPY_LINK="$REPO/pypy-c-paper.$$"
 paper_setup_pypy() {
   if [ -n "$PYPY" ] && [ "$(dirname "$PYPY")" != "$REPO" ]; then
     ln -sf "$PYPY" "$PAPER_PYPY_LINK"

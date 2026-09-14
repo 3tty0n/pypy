@@ -59,7 +59,7 @@ group_micro() {
   local acc0="" line mode
   for mode in fused eager nojit; do
     if ! line=$("$BENCH" "$mode" 8 1 25600 "$ITERS" 2>&1); then
-      bad "$mode runs" "$(echo "$line" | tail -1)"; continue
+      bad "$mode runs" "$(echo "$line" | bench_row)"; continue
     fi
     local steady launches acc
     steady=$(field "$line" 7); launches=$(field "$line" 11); acc=$(field "$line" 9)
@@ -82,7 +82,7 @@ group_dtypes() {
   local dt line launches
   for dt in float64 float32 float16; do
     if ! line=$(RTENSOR_DTYPE=$dt "$BENCH" fused 11 1 25600 "$ITERS" 2>&1); then
-      bad "$dt runs" "$(echo "$line" | tail -1)"; continue
+      bad "$dt runs" "$(echo "$line" | bench_row)"; continue
     fi
     if echo "$line" | grep -q "Parse MLIR file failed"; then
       bad "$dt emits valid TTIR" "triton refused the generated kernel"; continue
@@ -97,7 +97,7 @@ group_torch() {
   echo "== torch baselines =="
   local mode line
   for mode in compile compile-ro compile-mat eager; do
-    line=$("$TORCH_PYTHON" "$HERE/../torch_bench.py" "$mode" 8 1 25600 "$ITERS" 2>/dev/null | tail -1)
+    line=$("$TORCH_PYTHON" "$HERE/../torch_bench.py" "$mode" 8 1 25600 "$ITERS" 2>/dev/null | bench_row)
     if [ -z "$line" ]; then bad "torch-$mode runs"; continue; fi
     local steady acc
     steady=$(field "$line" 7); acc=$(field "$line" 9)
@@ -113,27 +113,40 @@ group_torch() {
 group_baselines() {
   echo "== jax / iree / triton baselines =="
   local line steady acc
-  line=$("$TORCH_PYTHON" "$HERE/../triton_bench.py" triton 12 1 25600 "$ITERS" 2>/dev/null | tail -1)
+  line=$("$TORCH_PYTHON" "$HERE/../triton_bench.py" triton 12 1 25600 "$ITERS" 2>/dev/null | bench_row)
   if [ -z "$line" ]; then bad "triton runs"; else
     steady=$(field "$line" 7); acc=$(field "$line" 9)
     if positive "$steady"; then ok "triton" "steady=${steady}us"; else bad "triton steady_us" "got $steady"; fi
-    ref=$("$TORCH_PYTHON" "$HERE/../torch_bench.py" eager 12 1 25600 "$ITERS" 2>/dev/null | tail -1)
+    ref=$("$TORCH_PYTHON" "$HERE/../torch_bench.py" eager 12 1 25600 "$ITERS" 2>/dev/null | bench_row)
     if close_enough "$acc" "$(field "$ref" 9)"; then ok "triton agrees with torch" "acc=$acc"
     else bad "triton agrees with torch" "acc=$acc vs $(field "$ref" 9)"; fi
   fi
   if [ -n "${TRT_PYTHON:-}" ]; then
-    line=$("$TRT_PYTHON" "$HERE/../torch_bench.py" tensorrt 12 1 25600 "$ITERS" 2>/dev/null | tail -1)
+    # float32: TensorRT has no f64 kernels, so the default dtype would only
+    # ever exercise the refusal, not the backend.
+    local trtref
+    line=$(RTENSOR_DTYPE=float32 TORCH_DTYPE=float32 \
+             "$TRT_PYTHON" "$HERE/../torch_bench.py" tensorrt 12 1 25600 "$ITERS" 2>/dev/null | bench_row)
+    trtref=$(RTENSOR_DTYPE=float32 TORCH_DTYPE=float32 \
+               "$TORCH_PYTHON" "$HERE/../torch_bench.py" eager 12 1 25600 "$ITERS" 2>/dev/null | bench_row)
     if [ -z "$line" ]; then bad "tensorrt runs"; else
       steady=$(field "$line" 7); acc=$(field "$line" 9)
       if positive "$steady"; then ok "tensorrt" "steady=${steady}us"; else bad "tensorrt steady_us" "got $steady"; fi
-      if [ -n "${ref:-}" ] && close_enough "$acc" "$(field "$ref" 9)"; then ok "tensorrt agrees with torch" "acc=$acc"
-      else bad "tensorrt agrees with torch" "acc=$acc vs $(field "$ref" 9)"; fi
+      if [ -n "$trtref" ] && close_enough "$acc" "$(field "$trtref" 9)"; then ok "tensorrt agrees with torch" "acc=$acc"
+      else bad "tensorrt agrees with torch" "acc=$acc vs $(field "$trtref" 9)"; fi
+    fi
+    # A float64 point must produce no row at all rather than an eager fallback.
+    if RTENSOR_DTYPE=float64 TORCH_DTYPE=float64 \
+         "$TRT_PYTHON" "$HERE/../torch_bench.py" tensorrt 12 1 25600 "$ITERS" 2>/dev/null | bench_row | grep -q .; then
+      bad "tensorrt refuses float64" "got a row; it would be an eager fallback"
+    else
+      ok "tensorrt refuses float64"
     fi
   else skip "tensorrt" "TRT_PYTHON unset (setup.sh with WITH_TRT=1)"; fi
   if [ -z "${JAX_PYTHON:-}" ]; then skip "jax" "JAX_PYTHON unset (setup.sh with WITH_JAX=1)"; return; fi
   local mode
   for mode in jax iree; do
-    line=$("$JAX_PYTHON" "$HERE/../jax_bench.py" "$mode" 12 1 25600 "$ITERS" 2>/dev/null | tail -1)
+    line=$("$JAX_PYTHON" "$HERE/../jax_bench.py" "$mode" 12 1 25600 "$ITERS" 2>/dev/null | bench_row)
     if [ -z "$line" ]; then bad "$mode runs"; continue; fi
     steady=$(field "$line" 7); acc=$(field "$line" 9)
     if positive "$steady"; then ok "$mode" "steady=${steady}us"; else bad "$mode steady_us" "got $steady"; fi
