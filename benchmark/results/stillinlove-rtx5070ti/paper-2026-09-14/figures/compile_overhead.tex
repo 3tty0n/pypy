@@ -168,21 +168,21 @@ resnet18-b1 & MetaTensor & n/a & 183 & 542 & -85 \\
 resnet18-b8 & torch.compile & n/a & 1533 & 1505 & 4572 \\
 resnet18-b8 & torch.compile (reduce-overhead) & n/a & 1558 & 1537 & 5265 \\
 resnet18-b8 & torch.compile (max-autotune) & n/a & 2821 & 1532 & 10066 \\
-resnet18-b8 & Torch-TensorRT & n/a & 5720 & 1782 & 870571 \\
+resnet18-b8 & Torch-TensorRT & n/a & 5726 & 1781 & 752164 \\
 resnet18-b8 & JAX/XLA & 1215 & 6 & 3436 & n/a \\
 resnet18-b8 & MetaTensor & n/a & 196 & 2258 & n/a \\
-mixer\_b16 & torch.compile & n/a & 1777 & 3144 & 3114 \\
-mixer\_b16 & torch.compile (reduce-overhead) & n/a & 1781 & 3106 & 2904 \\
-mixer\_b16 & torch.compile (max-autotune) & n/a & 2063 & 3075 & 3242 \\
-mixer\_b16 & Torch-TensorRT & n/a & 8700 & 1990 & 5132 \\
-mixer\_b16 & JAX/XLA & 7009 & 8 & 1733 & 3559 \\
-mixer\_b16 & MetaTensor & n/a & 261 & 2232 & 22 \\
-vit-tiny & torch.compile & n/a & 2288 & 2282 & 2637 \\
-vit-tiny & torch.compile (reduce-overhead) & n/a & 2293 & 1127 & 1066 \\
-vit-tiny & torch.compile (max-autotune) & n/a & 2593 & 1024 & 1160 \\
-vit-tiny & Torch-TensorRT & n/a & 12607 & 1669 & 8884 \\
-vit-tiny & JAX/XLA & 6515 & 8 & 514 & 2470 \\
-vit-tiny & MetaTensor & n/a & 193 & 924 & -17 \\
+mixer\_b16 & torch.compile & n/a & 1790 & 3146 & 2953 \\
+mixer\_b16 & torch.compile (reduce-overhead) & n/a & 1791 & 3122 & 2827 \\
+mixer\_b16 & torch.compile (max-autotune) & n/a & 2055 & 3094 & 3149 \\
+mixer\_b16 & Torch-TensorRT & n/a & 8700 & 1990 & 5036 \\
+mixer\_b16 & JAX/XLA & 7009 & 8 & 1733 & 3499 \\
+mixer\_b16 & MetaTensor & n/a & 261 & 2232 & 12 \\
+vit-tiny & torch.compile & n/a & 2293 & 2230 & 2277 \\
+vit-tiny & torch.compile (reduce-overhead) & n/a & 2307 & 1123 & 1028 \\
+vit-tiny & torch.compile (max-autotune) & n/a & 2586 & 1021 & 1111 \\
+vit-tiny & Torch-TensorRT & n/a & 12607 & 1669 & 8454 \\
+vit-tiny & JAX/XLA & 6515 & 8 & 514 & 2400 \\
+vit-tiny & MetaTensor & n/a & 193 & 924 & -22 \\
 \bottomrule
 \end{tabular}
 % median compile / first-run cost and break-even iteration count against torch eager

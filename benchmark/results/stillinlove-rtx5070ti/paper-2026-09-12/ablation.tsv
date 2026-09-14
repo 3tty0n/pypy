@@ -1,0 +1,52 @@
+experiment	variant	model	round	steady_us	maxabsdiff	note
+fusion	on	distilgpt2	1	1139.1		
+fusion	off	distilgpt2	1	1589.7		enable_opts minus tensor
+fusion	on	distilgpt2	2	1140.1		
+fusion	off	distilgpt2	2	1587.2		enable_opts minus tensor
+fusion	on	distilgpt2	3	1140.6		
+fusion	off	distilgpt2	3	1587.9		enable_opts minus tensor
+flat_block	256	distilgpt2	1	1111.9		
+flat_block	256	resnet18	1	481.4		
+flat_block	256	distilgpt2	2	1112.2		
+flat_block	256	resnet18	2	483.4		
+flat_block	256	distilgpt2	3	1111.8		
+flat_block	256	resnet18	3	484.9		
+flat_block	4096	distilgpt2	1	1137.2		
+flat_block	4096	resnet18	1	537.4		
+flat_block	4096	distilgpt2	2	1141.0		
+flat_block	4096	resnet18	2	536.3		
+flat_block	4096	distilgpt2	3	1141.4		
+flat_block	4096	resnet18	3	535.6		
+budget_mb	8	distilgpt2	1	1140.6		
+budget_mb	8	distilgpt2	2	1140.6		
+budget_mb	8	distilgpt2	3	1141.0		
+budget_mb	64	distilgpt2	1	1139.5		
+budget_mb	64	distilgpt2	2	1141.0		
+budget_mb	64	distilgpt2	3	1140.4		
+precision	float32	distilgpt2	1	1140.9	0.000205994	
+precision	float32	smollm2-135m	1	3070.1	0.000150681	
+precision	float32	distilgpt2	2	1140.9	0.000205994	
+precision	float32	smollm2-135m	2	3013.9	0.000150681	
+precision	float32	distilgpt2	3	1139.7	0.000205994	
+precision	float32	smollm2-135m	3	3032.2	0.000150681	
+precision	float16	distilgpt2	1	1141.4	1.25	
+precision	float16	smollm2-135m	1	2283.9	0.425781	
+precision	float16	distilgpt2	2	1133.8	1.25	
+precision	float16	smollm2-135m	2	2251.3	0.425781	
+precision	float16	distilgpt2	3	1134.8	1.25	
+precision	float16	smollm2-135m	3	2250.8	0.425781	
+tf32	tf32	resnet18-b8	1	2257.5	0.00618362	
+tf32	tf32	resnet18-b8	2	2243.9	0.00618362	
+tf32	tf32	resnet18-b8	3	2254.2	0.00618362	
+tf32	fp32	resnet18-b8	1	2917.3	2.47955e-05	
+tf32	fp32	resnet18-b8	2	2930.9	2.47955e-05	
+tf32	fp32	resnet18-b8	3	2934.9	2.47955e-05	
+tf32	tf32	resnet18-b1	1	536.7	0.00607491	
+tf32	tf32	resnet18-b1	2	539.2	0.00607491	
+tf32	tf32	resnet18-b1	3	537.1	0.00607491	
+tf32	fp32	resnet18-b1	1	684.1	2.38419e-05	
+tf32	fp32	resnet18-b1	2	684.6	2.38419e-05	
+tf32	fp32	resnet18-b1	3	684.8	2.38419e-05	
+tf32	torch-fp32	resnet18-b8	1	3826.6	9.53674e-06	
+tf32	torch-fp32	resnet18-b8	2	3835.7	9.53674e-06	
+tf32	torch-fp32	resnet18-b8	3	3901.8	9.53674e-06	

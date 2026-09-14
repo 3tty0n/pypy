@@ -1,0 +1,24 @@
+\begin{tabular}{lrrrr}
+\toprule
+experiment & model & setting & us & range \\
+\midrule
+budget mb & distilgpt2 & 8 & 1141 & 1141-1141 \\
+budget mb & distilgpt2 & 64 & 1140 & 1140-1141 \\
+flat block & distilgpt2 & 256 & 1112 & 1112-1112 \\
+flat block & distilgpt2 & 4096 & 1141 & 1137-1141 \\
+flat block & resnet18 & 256 & 483 & 481-485 \\
+flat block & resnet18 & 4096 & 536 & 536-537 \\
+fusion & distilgpt2 & off & 1588 & 1587-1590 \\
+fusion & distilgpt2 & on & 1140 & 1139-1141 \\
+precision & distilgpt2 & float16 & 1135 & 1134-1141 \\
+precision & distilgpt2 & float32 & 1141 & 1140-1141 \\
+precision & smollm2-135m & float16 & 2251 & 2251-2284 \\
+precision & smollm2-135m & float32 & 3032 & 3014-3070 \\
+tf32 & resnet18-b1 & fp32 & 685 & 684-685 \\
+tf32 & resnet18-b1 & tf32 & 537 & 537-539 \\
+tf32 & resnet18-b8 & fp32 & 2931 & 2917-2935 \\
+tf32 & resnet18-b8 & tf32 & 2254 & 2244-2258 \\
+tf32 & resnet18-b8 & torch-fp32 & 3836 & 3827-3902 \\
+\bottomrule
+\end{tabular}
+% median us per iteration over the rounds, with the observed range

@@ -46,15 +46,33 @@ this host is `benchmark/results/stillinlove-rtx5070ti/paper-<date>/`
 (`machine.txt` there records driver, wheels, compute capability, warm-up
 counts and binary hashes).
 
-## Known caveat: cuDNN TF32 on Blackwell
+## IREE on sm_120
 
-On the RTX 5070 Ti, torch's `mixer_b16` and `vit-tiny` rows miss the 1e-3
-tolerance (maxabsdiff about 2.5e-3) while JAX on the same GPU agrees to 4e-5.
-`TORCH_CUDNN_TF32=0` brings them back to 3.9e-5 and 1.2e-5, so cuDNN is picking
-a TF32 kernel for the patch-embedding convolution. The RTX 3090 records the
-same `torch_tf32_cudnn 1` and does not do this. Those two torch columns are
-therefore effectively TF32 on Blackwell - faster and less accurate than the
-float32 they are compared against.
+IREE 3.11.0 cannot target sm_120. `iree-compile` is invoked with
+`--iree-cuda-target=sm_120` (from RTENSOR_CC) and answers `missing GPU target
+in #hal.executable.target`, then `failed to configure executables`, for every
+model and micro variant; `iree-stderr.txt` is the full output for distilgpt2.
+
+It is the target name, not the host: `IREE_CUDA_TARGET=sm_86` compiles and runs
+on this GPU (distilgpt2 at 17.6 ms). Those numbers would come from a kernel
+tuned for Ampere and reaching Blackwell through PTX JIT, so they are not an
+IREE-on-5070-Ti result and the column is left empty instead.
+
+## cuDNN TF32 on Blackwell: mixer_b16 and vit-tiny
+
+At the default settings on the RTX 5070 Ti, torch's `mixer_b16` and `vit-tiny`
+rows missed the 1e-3 tolerance (maxabsdiff about 2.5e-3) while JAX on the same
+GPU agreed to 4e-5: cuDNN picks a TF32 kernel for the patch-embedding
+convolution there, and the RTX 3090 records the same `torch_tf32_cudnn 1`
+without doing it. Comparing a TF32 torch against our float32 is not like for
+like, so those two models' torch rows are measured with the flag off:
+
+    OUT=... TORCH_CUDNN_TF32=0 BASELINES="eager compile compile-ro compile-mat" \
+      ./benchmark/paper/bench.sh models mixer_b16 vit-tiny
+
+which brings them to 3.9e-5 (mixer_b16) and 1.2e-5 (vit-tiny). Re-run this
+after any fresh `bench.sh all` on a Blackwell host, deleting the default-TF32
+rows for those two models first, or their accuracy column will fail.
 
 ## Re-measuring the TensorRT column
 

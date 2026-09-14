@@ -60,12 +60,12 @@
 | bert-mini | 403.3 | 868.6 | 434.6 | 400.9 | 1563.9 | 191.8 | n/a | 1030.7 | 0.46x | 0.22x | 24.3 | 1.81198e-05 | 0.001 | pass |
 | bert-tiny | 270.6 | 576.5 | 292.8 | 292.2 | 1039.1 | 92.9 | n/a | 634.6 | 0.47x | 0.16x | 14.3 | 2.67029e-05 | 0.001 | pass |
 | distilgpt2 | 1146.4 | 1253.8 | 1248.7 | 1137.0 | 2529.8 | 775.8 | n/a | 1627.4 | 0.91x | 0.62x | 38.2 | 0.000259399 | 0.001 | pass |
-| mixer_b16 | 2232.3 | 3143.9 | 3106.4 | 3075.0 | 3640.6 | 1733.3 | n/a | 1990.1 | 0.71x | 0.55x | 63.4 | 0.00258255 | 0.001 | FAIL |
+| mixer_b16 | 2232.3 | 3145.6 | 3122.0 | 3094.1 | 3669.3 | 1733.3 | n/a | 1990.1 | 0.71x | 0.55x | 63.4 | 4.29153e-05 | 0.001 | pass |
 | resnet18-b1 | 542.4 | 957.3 | 960.5 | 956.3 | 1325.9 | 1655.9 | n/a | 828.8 | 0.57x | 1.73x | 39.0 | 0.00607491 | 0.02 | pass |
-| resnet18-b8 | 2258.2 | 1504.7 | 1537.2 | 1531.6 | 1788.5 | 3435.6 | n/a | 1782.2 | 1.50x | 2.28x | 39.0 | 0.00618362 | 0.02 | pass |
+| resnet18-b8 | 2258.2 | 1504.7 | 1537.2 | 1531.6 | 1788.5 | 3435.6 | n/a | 1781.2 | 1.50x | 2.28x | 39.0 | 0.00618362 | 0.02 | pass |
 | smollm2-135m | 3052.4 | 5548.5 | 3724.8 | 3730.5 | 13549.0 | 2097.5 | n/a | 3351.2 | 0.55x | 0.38x | 212.1 | 0.000130653 | 0.001 | pass |
 | tiny-gpt2 | 276.8 | 425.6 | 229.4 | 295.0 | 2281.9 | 81.4 | n/a | 660.5 | 0.65x | 0.19x | 13.2 | 2.23517e-08 | 0.001 | pass |
-| vit-tiny | 924.0 | 2281.5 | 1127.3 | 1024.0 | 3061.8 | 513.8 | n/a | 1668.6 | 0.40x | 0.23x | 76.3 | 0.00240195 | 0.001 | FAIL |
+| vit-tiny | 924.0 | 2230.5 | 1122.8 | 1020.7 | 3131.3 | 513.8 | n/a | 1668.6 | 0.41x | 0.23x | 76.3 | 1.34706e-05 | 0.001 | pass |
 
 ## Batch-size sweep (median steady_us per forward; per_seq = steady/B)
 
@@ -287,12 +287,12 @@
 | micro v9 k1 n256000 | torch-compile-ro | n/a | 2808.9 | 1383.7 | n/a |
 | micro v9 k1 n256000 | torch-compile-mat | n/a | 3063.0 | 1382.2 | n/a |
 | micro v9 k1 n256000 | jax | 921.3 | 1.3 | 255.9 | 516 |
-| mixer_b16 | torch-compile | n/a | 1776.6 | 3143.9 | 3114 |
-| mixer_b16 | torch-compile-ro | n/a | 1780.9 | 3106.4 | 2904 |
-| mixer_b16 | torch-compile-mat | n/a | 2063.4 | 3075.0 | 3242 |
-| mixer_b16 | torch-tensorrt | n/a | 8700.4 | 1990.1 | 5132 |
-| mixer_b16 | jax | 7008.9 | 8.5 | 1733.3 | 3559 |
-| mixer_b16 | ours | n/a | 261.1 | 2232.3 | 22 |
+| mixer_b16 | torch-compile | n/a | 1790.5 | 3145.6 | 2953 |
+| mixer_b16 | torch-compile-ro | n/a | 1791.2 | 3122.0 | 2827 |
+| mixer_b16 | torch-compile-mat | n/a | 2055.3 | 3094.1 | 3149 |
+| mixer_b16 | torch-tensorrt | n/a | 8700.4 | 1990.1 | 5036 |
+| mixer_b16 | jax | 7008.9 | 8.5 | 1733.3 | 3499 |
+| mixer_b16 | ours | n/a | 261.1 | 2232.3 | 12 |
 | resnet18-b1 | torch-compile | n/a | 1561.8 | 957.3 | 3562 |
 | resnet18-b1 | torch-compile-ro | n/a | 1572.2 | 960.5 | 3622 |
 | resnet18-b1 | torch-compile-mat | n/a | 2244.7 | 956.3 | 5400 |
@@ -302,7 +302,7 @@
 | resnet18-b8 | torch-compile | n/a | 1532.7 | 1504.7 | 4572 |
 | resnet18-b8 | torch-compile-ro | n/a | 1558.3 | 1537.2 | 5265 |
 | resnet18-b8 | torch-compile-mat | n/a | 2821.2 | 1531.6 | 10066 |
-| resnet18-b8 | torch-tensorrt | n/a | 5719.8 | 1782.2 | 870571 |
+| resnet18-b8 | torch-tensorrt | n/a | 5726.0 | 1781.2 | 752164 |
 | resnet18-b8 | jax | 1214.7 | 6.2 | 3435.6 | n/a |
 | resnet18-b8 | ours | n/a | 195.6 | 2258.2 | n/a |
 | smollm2-135m | torch-compile | n/a | 4525.0 | 5548.5 | 469 |
@@ -317,12 +317,12 @@
 | tiny-gpt2 | torch-tensorrt | n/a | 11623.6 | 660.5 | 6693 |
 | tiny-gpt2 | jax | 905.9 | 2.1 | 81.4 | 62 |
 | tiny-gpt2 | ours | n/a | 168.8 | 276.8 | -300 |
-| vit-tiny | torch-compile | n/a | 2287.6 | 2281.5 | 2637 |
-| vit-tiny | torch-compile-ro | n/a | 2293.1 | 1127.3 | 1066 |
-| vit-tiny | torch-compile-mat | n/a | 2593.0 | 1024.0 | 1160 |
-| vit-tiny | torch-tensorrt | n/a | 12606.6 | 1668.6 | 8884 |
-| vit-tiny | jax | 6514.6 | 7.9 | 513.8 | 2470 |
-| vit-tiny | ours | n/a | 193.1 | 924.0 | -17 |
+| vit-tiny | torch-compile | n/a | 2292.6 | 2230.5 | 2277 |
+| vit-tiny | torch-compile-ro | n/a | 2306.7 | 1122.8 | 1028 |
+| vit-tiny | torch-compile-mat | n/a | 2585.8 | 1020.7 | 1111 |
+| vit-tiny | torch-tensorrt | n/a | 12606.6 | 1668.6 | 8454 |
+| vit-tiny | jax | 6514.6 | 7.9 | 513.8 | 2400 |
+| vit-tiny | ours | n/a | 193.1 | 924.0 | -22 |
 
 ## Warm-up (median over rounds; steady_at/crossover in iterations, 'none' if never reached within N)
 

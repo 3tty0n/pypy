@@ -1,0 +1,12 @@
+\begin{tabular}{lrrrrrrrr}
+\toprule
+model & MetaTensor & range & torch.compile & range & eager & JAX/XLA & ratio & jax/compile \\
+\midrule
+tiny-gpt2 & 249 & 246-266 & 419 & 418-422 & 2305 & 81 & 0.59 & 0.19 \\
+bert-tiny & 253 & 253-255 & 575 & 571-578 & 1066 & 92 & 0.44 & 0.16 \\
+bert-mini & 398 & 398-398 & 869 & 869-869 & 1586 & 195 & 0.46 & 0.22 \\
+distilgpt2 & 1141 & 1140-1141 & 1253 & 1251-1253 & 2482 & 776 & 0.91 & 0.62 \\
+smollm2-135m & 3002 & 3002-3063 & 5536 & 5517-5586 & 13434 & 2068 & 0.54 & 0.37 \\
+\bottomrule
+\end{tabular}
+% median us per iteration over the rounds, with the observed range
