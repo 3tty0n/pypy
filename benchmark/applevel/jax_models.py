@@ -21,6 +21,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import iree_adapter
+import inputs
 import warmup_common
 
 jax.config.update("jax_enable_x64", True)
@@ -49,7 +50,21 @@ def load(outdir):
     buf.fromfile(open(path, 'rb'), os.path.getsize(path) // 4)
     if sys.byteorder != 'little':
         buf.byteswap()
-    return cfg, np.frombuffer(buf.tobytes(), dtype=np.float32)
+    flat = np.frombuffer(buf.tobytes(), dtype=np.float32)
+    # INPUT_SEED=k>0 asks for a derived input (see inputs.py): the same
+    # integer recipe the pypy and torch sides use, on the same flat region.
+    k = inputs.seed()
+    if k:
+        inputs.perturb_cfg(cfg, k)
+        span = inputs.image_span(cfg)
+        if span:
+            off, n = span
+            flat = flat.copy()
+            # Added in double and stored float32, as on the other two sides.
+            noise = np.array([inputs.noise(i, k) for i in range(n)])
+            flat[off:off + n] = (flat[off:off + n].astype(np.float64) +
+                                 noise).astype(np.float32)
+    return cfg, flat
 
 
 class Weights(object):
@@ -368,7 +383,8 @@ def batch_identical(logits, batch):
 
 
 def compare(outdir, logits):
-    ref = os.path.join(outdir, 'logits_pypy.bin')
+    ref = os.path.join(outdir, inputs.reference_name(
+        os.environ.get('RTENSOR_DTYPE', 'float32'), inputs.seed()))
     if not os.path.exists(ref):
         return ''
     other = np.fromfile(ref, dtype=np.float32).reshape(logits.shape)

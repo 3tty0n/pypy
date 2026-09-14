@@ -2,6 +2,7 @@ import array, json, os, sys, time
 
 import torch
 
+import inputs
 import warmup_common
 
 # Documented policy: matmul TF32 off, cudnn TF32 on, unless TORCH_CUDNN_TF32
@@ -36,6 +37,11 @@ def argv():
     a.dtype = getattr(torch, a.dtname)
     a.dev = 'cuda' if torch.cuda.is_available() else 'cpu'
     a.cfg = json.load(open(os.path.join(a.outdir, 'index.json')))
+    # INPUT_SEED=k>0 asks for a derived input (see inputs.py): the token ids
+    # here, the image in image() below, both the same integer recipe the pypy
+    # and jax sides use.
+    a.seed = inputs.seed()
+    inputs.perturb_cfg(a.cfg, a.seed)
     return a
 
 
@@ -58,7 +64,13 @@ def image(a):
     buf = array.array('f')
     path = os.path.join(a.outdir, 'weights.bin')
     buf.fromfile(open(path, 'rb'), os.path.getsize(path) // 4)
-    return torch.tensor(buf[off:off + n]).view(1, *shape)
+    px = buf[off:off + n]
+    k = inputs.seed()
+    if k:
+        # In double, then float32 on the way into the tensor, exactly as the
+        # pypy side stores it back into its array('f').
+        px = array.array('f', [px[i] + inputs.noise(i, k) for i in range(n)])
+    return torch.tensor(px).view(1, *shape)
 
 
 def hf_kwargs(a):
@@ -199,7 +211,7 @@ def batch_identical(logits):
 
 def reference_name():
     dtype = os.environ.get('RTENSOR_DTYPE', 'float32')
-    return 'logits_pypy.bin' if dtype == 'float32' else 'logits_pypy_%s.bin' % dtype
+    return inputs.reference_name(dtype, inputs.seed())
 
 
 def tolerance():

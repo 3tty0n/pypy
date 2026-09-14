@@ -329,23 +329,32 @@ required, or the kernels XLA and Inductor launch from inside a CUDA graph are
 invisible. On a 3090, after the batched attention products moved to a tuned
 cuBLASLt algorithm:
 
-    model       system         us/iter  launches  kernels  GPU us  util   mix
-    tiny-gpt2   MetaTensor       226.5      27.2       13    88.1  0.39   gemm=14 gen=13
-    tiny-gpt2   torch.compile    404.4      31.0       16    71.9  0.18   gemm=9 gen=20 other=2
-    tiny-gpt2   JAX/XLA           89.3      30.0       19    54.3  0.61   gemm=9 gen=21
-    bert-mini   MetaTensor       442.1      67.0       14   320.8  0.73   gemm=43 gen=24
-    bert-mini   torch.compile    870.9      89.0       15   395.4  0.45   gemm=59 gen=30
-    bert-mini   JAX/XLA          243.0      58.0       19   244.1  1.00   gemm=26 gen=32
-    vit-tiny    MetaTensor      1027.9     175.0       15   868.3  0.85   gemm=99 gen=76
-    vit-tiny    torch.compile   2398.5     248.0       21  1318.9  0.55   gemm=160 gen=87 other=1
-    vit-tiny    JAX/XLA          738.4     171.0       17   748.9  1.01   gemm=73 gen=98
+Since the trace-based breakdown, the launch classes are their own numeric
+columns of `gap.tsv` - `gemm` (cuBLAS GEMM kernels proper), `splitk` (the
+cuBLASLt `splitKreduce`/epilogue kernels that finish some of them), `gen`
+(generated Triton/Inductor/XLA kernels), `copy`, `other` - measured per
+forward rather than parsed out of the free-text `mix`. The five sum to
+`launches_per_iter` by construction, and a row that breaks that says
+`CLASS-SUM-MISMATCH` in its notes rather than reporting a total nobody
+checked. On a 3090, after the batched attention products moved to a tuned
+cuBLASLt algorithm:
 
-(JAX/XLA rows above are carried over from the previous run: this run's `bench.sh
-gap` hit a host NVML/driver library mismatch — `nvidia-smi` and the JAX venv
-both report "No visible GPU devices" / "Driver/library version mismatch" even
-though torch and MetaTensor still see the GPU fine — so the jax gap subprocess
-failed on every model and `gap.tsv` carries `notes=run failed` for those rows.
-MetaTensor and torch.compile rows above are this run's numbers.)
+    model       system         us/iter  launches  kernels  GPU us  util   gemm splitk  gen copy other
+    tiny-gpt2   MetaTensor       241.9      26.6       13    80.8  0.33   13.6      0   13    0     0
+    tiny-gpt2   torch.compile    385.3      31.0       16    72.0  0.19      9      0   20    0     2
+    tiny-gpt2   JAX/XLA           82.6      30.0       19    54.4  0.66      9      0   21    0     0
+    bert-tiny   MetaTensor       260.4      30.0       12   163.3  0.63     14      2   14    0     0
+    bert-tiny   torch.compile    492.1      36.0       12   197.1  0.40     18      2   16    0     0
+    bert-tiny   JAX/XLA          111.2      32.0       19   110.2  0.99     14      0   18    0     0
+    bert-mini   MetaTensor       460.7      67.0       14   319.9  0.69     26     17   24    0     0
+    bert-mini   torch.compile    890.1      89.0       15   391.9  0.44     34     25   30    0     0
+    bert-mini   JAX/XLA          243.5      58.0       19   244.2  1.00     26      0   32    0     0
+    distilgpt2  MetaTensor      1314.2      99.0       15  1188.6  0.90     37     18   38    6     0
+    distilgpt2  torch.compile   1357.5      98.0       17  1201.6  0.89     31     12   37    6    12
+    distilgpt2  JAX/XLA         1009.6     111.0       21  1011.7  1.00     37      6   62    6     0
+    vit-tiny    MetaTensor       997.7     175.0       15   868.1  0.87     74     25   76    0     0
+    vit-tiny    torch.compile   2280.5     248.0       21  1328.9  0.58     98     62   87    0     1
+    vit-tiny    JAX/XLA          742.1     171.0       17   745.4  1.00     73      0   98    0     0
 
 `launches` is per forward and counts everything nsys sees, so it is larger than
 `_metatensor.launch_count()`, which counts our own kernels but not the cuBLAS
@@ -356,15 +365,32 @@ comes from the gap harness, which runs the three systems back to back on one
 GPU; a model run on its own is 1-20% faster (bert-mini 429, vit-tiny 1018,
 tiny-gpt2 180) and `models.tsv` is the number to quote.
 
-`gemm=43` on bert-mini is not 43 matrix products. Attributing the trace kernel
-by kernel gives 26 GEMM calls - the same 26 XLA issues, and exactly what the
-model asks for: four layers of (qkv, attention scores, attention context,
-output projection, mlp fc, mlp projection) plus the mlm dense and the vocab
-projection - and 17 `cublasLt::splitKreduce_kernel` launches, the second half
-of the split-K algorithms cuBLAS picks for the skinny 64-row shapes. Those are
-cuBLAS internals, not a fusion boundary we chose, and forcing them off (by
-handing cuBLAS a zero-size workspace) makes the GEMMs themselves slower, so
-they stay. The same holds for vit-tiny: 99 = 74 calls + 25 reductions.
+The 43 GEMM-ish launches bert-mini used to report were not 43 matrix products,
+and the split is now measured rather than argued: 26 GEMM calls - the same 26
+XLA issues, and exactly what the model asks for: four layers of (qkv,
+attention scores, attention context, output projection, mlp fc, mlp
+projection) plus the mlm dense and the vocab projection - and 17
+`cublasLt::splitKreduce_kernel` launches, the second half of the split-K
+algorithms cuBLAS picks for the skinny 64-row shapes. Those are cuBLAS
+internals, not a fusion boundary we chose, and forcing them off (by handing
+cuBLAS a zero-size workspace) makes the GEMMs themselves slower, so they stay.
+The same holds for vit-tiny: 99 = 74 calls + 25 reductions.
+
+`gap_kernels.tsv`, written by the same run, is the evidence: one row per
+distinct kernel per (model, system), with its launches and GPU microseconds
+per forward. It is where a question about *which* products those are gets
+answered, because a kernel name cannot answer it - cuBLAS gives a batched
+product the same kernel name as an unbatched one. What Inductor lowers
+`scaled_dot_product_attention` to is plainly visible there as a count:
+`ampere_sgemm_128x128_nn` runs 24.0 times per vit-tiny forward (two per layer
+for twelve layers, 456 of its 1329 GPU us) and 8.0 times per bert-mini forward
+(two per layer for four layers, 92 us), so 24 of torch.compile's 98 vit-tiny
+GEMM launches and 8 of its 34 bert-mini GEMM launches are the SDPA products.
+Ours issues the same 24 and 8 - `ampere_sgemm_64x32_sliced1x4_nn` and
+`cutlass_80_simt_sgemm_128x32_8x5_nn` - for 166 and 49 us, which is the tuned
+cuBLASLt algorithm choice below. `gap.tsv`'s `bmm` column counts only the
+launches whose name says outright that they are batched, so it is a lower
+bound and not the number to quote; the per-kernel file is.
 
 What is left is not the GEMM count either. Fusing the epilogue into the GEMM
 closed the kernel-splitting half of the old gap, and MetaTensor now launches

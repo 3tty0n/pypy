@@ -170,27 +170,55 @@ def category(name):
     return "other"
 
 
+# Inside the gemm bucket: the batched products an attention layer issues.
+# Inductor lowers scaled_dot_product_attention to batched matmuls, and the
+# question "how many of torch's GEMM launches are the SDPA ones" is answered
+# by the kernel name where cuBLAS/cutlass says so - the batched entry points
+# and the fused-attention kernels carry it.  A name that does not say is
+# counted as a plain GEMM rather than guessed at, so this column is a lower
+# bound, never an inflated one.
+BMM_NAME = re.compile(r"batch|bmm|fmha|flash|attention|sdpa|mha", re.I)
+
+
 def per_forward(lo, hi):
     """Per-forward launches, GPU time and kernel mix, as the difference between
     the two traced runs: everything that does not scale with the iteration
     count - upload, compilation, warm-up - cancels."""
     n = float(TRACE_HI - TRACE_LO)
-    launches, ns, mix, kernels = 0.0, 0.0, {}, 0
+    launches, ns, mix, kernels, bmm = 0.0, 0.0, {}, 0, 0.0
+    per_kernel = []
     for name, (count, total) in hi.items():
         d = count - lo.get(name, (0, 0))[0]
         if d <= 0:
             continue
         kernels += 1
         launches += d / n
+        us = (total - lo.get(name, (0, 0))[1]) / n / 1e3
         ns += (total - lo.get(name, (0, 0))[1]) / n
-        mix[category(name)] = mix.get(category(name), 0.0) + d / n
-    return launches, ns / 1e3, kernels, mix
+        cat = category(name)
+        mix[cat] = mix.get(cat, 0.0) + d / n
+        if cat == "gemm" and BMM_NAME.search(name):
+            bmm += d / n
+        per_kernel.append((cat, d / n, us, name))
+    per_kernel.sort(key=lambda r: -r[1])
+    return launches, ns / 1e3, kernels, mix, bmm, per_kernel
 
 
 # --- driver -----------------------------------------------------------------
 
-COLUMNS = ["model", "system", "steady_us", "launches_per_iter", "kernels",
-           "gpu_busy_us", "gpu_util", "notes"]
+# The five class columns are the free-text `notes` mix as numbers, one column
+# each, so a consumer does not have to parse a string; they sum to
+# launches_per_iter by construction and `measure` says so if they ever do not.
+# `bmm` is a sub-count of `gemm`, not a sixth class.
+CLASSES = ["gemm", "splitk", "gen", "copy", "other"]
+# Per-kernel rows for gap_kernels.tsv, filled by measure().
+KERNEL_ROWS = []
+KERNEL_COLUMNS = ["model", "system", "class", "launches_per_iter", "us_per_iter",
+                  "kernel"]
+# Appended after `notes` on purpose: an older gap.tsv's header is then a
+# prefix of this one and can be upgraded in place, the way tsv_init does it.
+COLUMNS = (["model", "system", "steady_us", "launches_per_iter", "kernels",
+            "gpu_busy_us", "gpu_util", "notes"] + CLASSES + ["bmm"])
 
 
 def measure(system, model, rounds, tmp):
@@ -198,7 +226,9 @@ def measure(system, model, rounds, tmp):
     cmd = command(system, model, int(os.environ.get("ITERS", 200)),
                   int(os.environ.get("WARMUP", 30)))
     row = dict(model=name, system=system, steady_us="", launches_per_iter="",
-               kernels="", gpu_busy_us="", gpu_util="", notes="")
+               kernels="", gpu_busy_us="", gpu_util="", notes="", bmm="")
+    for c in CLASSES:
+        row[c] = ""
     if cmd is None:
         row["notes"] = "not configured"
         return row
@@ -219,12 +249,29 @@ def measure(system, model, rounds, tmp):
     if not lo or not hi:
         row["notes"] = "nsys unavailable"
         return row
-    launches, busy_us, kernels, mix = per_forward(lo, hi)
+    launches, busy_us, kernels, mix, bmm, per_kernel = per_forward(lo, hi)
+    # The evidence behind the class columns, one line per distinct kernel.
+    # cuBLAS reuses the same kernel name for a batched and an unbatched
+    # product on this GPU (torch's SDPA attention products are
+    # ampere_sgemm_128x128_nn, exactly what a plain GEMM can also pick), so
+    # "how many of these GEMMs are the attention ones" is answered by the
+    # per-kernel counts here and not by any name pattern.
+    for cat, count, us, kname in per_kernel:
+        KERNEL_ROWS.append([name, system, cat, "%.2f" % count, "%.1f" % us,
+                            kname.replace("\t", " ")])
     row["launches_per_iter"] = "%.1f" % launches
     row["kernels"] = str(kernels)
     row["gpu_busy_us"] = "%.1f" % busy_us
     row["gpu_util"] = "%.3f" % (busy_us / steady) if steady else ""
     row["notes"] = " ".join("%s=%.0f" % (k, mix[k]) for k in sorted(mix))
+    for c in CLASSES:
+        row[c] = "%.1f" % mix.get(c, 0.0)
+    row["bmm"] = "%.1f" % bmm
+    # The five classes partition the launches; if they ever stop doing so a
+    # category() change has dropped kernels on the floor, and the row says so
+    # rather than quietly reporting a total nobody checked.
+    if abs(sum(mix.values()) - launches) > 0.05:
+        row["notes"] += " CLASS-SUM-MISMATCH"
     return row
 
 
@@ -260,13 +307,34 @@ def main(argv):
     # without losing the rest; the figure keys on (model, system) and keeps
     # the last row for a pair.
     path = os.path.join(out, "gap.tsv")
+    header = "\t".join(COLUMNS)
     fresh = not os.path.exists(path)
+    if not fresh:
+        # A result set started before the per-class columns existed keeps its
+        # rows readable by name: the old header is a prefix of this one, so
+        # bringing the header line up to date is enough (the old rows simply
+        # have the new fields empty).
+        have = open(path).readline().rstrip("\n")
+        if have != header and header.startswith(have):
+            rest = open(path).readlines()[1:]
+            with open(path, "w") as f:
+                f.write(header + "\n")
+                f.writelines(rest)
     with open(path, "a") as f:
         if fresh:
-            f.write("\t".join(COLUMNS) + "\n")
+            f.write(header + "\n")
         for row in rows:
             f.write("\t".join(row[c] for c in COLUMNS) + "\n")
     print("wrote " + path)
+
+    kpath = os.path.join(out, "gap_kernels.tsv")
+    kfresh = not os.path.exists(kpath)
+    with open(kpath, "a") as f:
+        if kfresh:
+            f.write("\t".join(KERNEL_COLUMNS) + "\n")
+        for row in KERNEL_ROWS:
+            f.write("\t".join(row) + "\n")
+    print("wrote " + kpath)
     return 0
 
 

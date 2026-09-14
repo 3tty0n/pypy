@@ -255,6 +255,34 @@ def main(out_dir):
                 cstr, tols.get(model, ""), vstr))
         lines.append("")
 
+    correctness = read_tsv(os.path.join(out_dir, "correctness.tsv"))
+    if correctness:
+        # The worst of the five derived inputs, never the average: a system
+        # that is right on four of them is wrong.
+        lines.append("## Correctness on five derived inputs "
+                     "(worst case per model; ours is the reference)\n")
+        lines.append("| model | system | max maxabsdiff | min argmax match "
+                     "| tol | passed |")
+        lines.append("|---|---|---|---|---|---|")
+        c = collections.defaultdict(list)
+        for r in correctness:
+            if r.get("system") == "ours" or not r.get("maxabsdiff"):
+                continue
+            c[(r["model"], r["system"])].append(r)
+        for key in sorted(c):
+            rs = c[key]
+            diffs = [float(r["maxabsdiff"]) for r in rs if r["maxabsdiff"]]
+            match = [float(r["argmax_match"]) for r in rs
+                     if r.get("argmax_match")]
+            passes = [r.get("pass") for r in rs if r.get("pass") not in (None, "")]
+            tol = next((r["tol"] for r in rs if r.get("tol")), "")
+            lines.append("| %s | %s | %s | %s | %s | %d/%d |" % (
+                key[0], key[1],
+                fmt(max(diffs) if diffs else None, "%.3g"),
+                fmt(min(match) if match else None, "%.3f"), tol,
+                sum(1 for x in passes if x == "1"), len(rs)))
+        lines.append("")
+
     batch = read_tsv(os.path.join(out_dir, "batch.tsv"))
     if batch:
         # steady_us is per forward (the whole batch); per_seq_us is steady/B,

@@ -1381,10 +1381,16 @@ def write_gemm_count(out, args):
     gap.tsv's mix column ("gemm=43 gen=24 copy=6 other=2"), which
     gap_analysis attributes kernel by kernel from the nsys trace."""
     rows, source = gap_rows(out)
+    # gap.tsv is appended to, so one model can be re-measured without losing
+    # the rest; the last row for a (model, system) is the current one, which
+    # is how fig_gap reads it too.
+    latest = collections.OrderedDict()
+    for r in rows:
+        latest[(r["model"], r["system"])] = r
     header = ["model", "system", "gemm", "split-K", "bmm", "gen", "copy",
               "other", "total", "launches"]
     table = []
-    for r in rows:
+    for r in latest.values():
         mix = gap_mix(r)
         if not any(mix.values()):
             continue
@@ -1404,7 +1410,10 @@ def write_gemm_count(out, args):
                "scaled\\_dot\\_product\\_attention to), generated "
                "elementwise/reduction kernels, copies, everything else. "
                "total is the five classes added up and equals the measured "
-               "launch count; bmm is a subset of gemm and is not added in")
+               "launch count; bmm is a subset of gemm and is not added in - a "
+               "lower bound, since cuBLAS gives a batched product the same "
+               "kernel name as an unbatched one, and gap\\_kernels.tsv is "
+               "where a forward's launches are attributed kernel by kernel")
     if source:
         caption += " (from %s: this run has no nsys trace)" % source
     write_table(os.path.join(args.outdir, "gemm_count.tex"), caption,

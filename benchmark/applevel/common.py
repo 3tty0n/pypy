@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 '..', '..', 'lib_pypy'))
 
 import _metatensor
+import inputs
 import warmup_common
 
 
@@ -14,6 +15,17 @@ def load(outdir):
     buf.fromfile(open(path, 'rb'), os.path.getsize(path) // 4)
     if sys.byteorder != 'little':
         buf.byteswap()
+    # INPUT_SEED=k>0 asks for a derived input (see inputs.py); the model code
+    # below reads the tokens and the image from these two places, so this is
+    # the only place any of it has to know.
+    k = inputs.seed()
+    if k:
+        inputs.perturb_cfg(cfg, k)
+        span = inputs.image_span(cfg)
+        if span:
+            off, n = span
+            for i in range(n):
+                buf[off + i] = buf[off + i] + inputs.noise(i, k)
     return cfg, buf
 
 
@@ -179,11 +191,9 @@ def top5(flat):
 def reference_name(dtype=None):
     """logits_pypy.bin is the float32 reference every system is checked
     against; other dtypes get their own file so a float16 ablation run
-    cannot overwrite it."""
+    cannot overwrite it, and so does every INPUT_SEED>0 input."""
     dtype = dtype or os.environ.get('RTENSOR_DTYPE', 'float32')
-    if dtype == 'float32':
-        return 'logits_pypy.bin'
-    return 'logits_pypy_%s.bin' % dtype
+    return inputs.reference_name(dtype, inputs.seed())
 
 
 def dump(outdir, flat):

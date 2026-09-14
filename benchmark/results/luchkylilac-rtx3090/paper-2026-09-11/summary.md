@@ -67,6 +67,38 @@
 | tiny-gpt2 | 188.7 | 421.0 | 209.5 | 247.5 | 1634.4 | 87.9 | 192.5 | 529.8 | 0.45x | 0.21x | 13.2 | 2.6077e-08 | 0.001 | pass |
 | vit-tiny | 979.4 | 2085.3 | 1400.8 | 1310.5 | 3739.2 | 737.0 | 25037.3 | 1087.4 | 0.47x | 0.35x | 76.3 | 1.04904e-05 | 0.001 | pass |
 
+## Correctness on five derived inputs (worst case per model; ours is the reference)
+
+| model | system | max maxabsdiff | min argmax match | tol | passed |
+|---|---|---|---|---|---|
+| bert-mini | jax | 2.48e-05 | 1.000 | 0.001 | 5/5 |
+| bert-mini | torch-compile | 2.29e-05 | 1.000 | 0.001 | 5/5 |
+| bert-mini | torch-eager | 2.67e-05 | 1.000 | 0.001 | 5/5 |
+| bert-tiny | jax | 4.53e-05 | 1.000 | 0.001 | 5/5 |
+| bert-tiny | torch-compile | 4.1e-05 | 1.000 | 0.001 | 5/5 |
+| bert-tiny | torch-eager | 3.77e-05 | 1.000 | 0.001 | 5/5 |
+| distilgpt2 | jax | 0.000183 | 1.000 | 0.001 | 5/5 |
+| distilgpt2 | torch-compile | 0.000282 | 1.000 | 0.001 | 5/5 |
+| distilgpt2 | torch-eager | 0.000282 | 1.000 | 0.001 | 5/5 |
+| mixer_b16 | jax | 7.06e-05 | 1.000 | 0.001 | 5/5 |
+| mixer_b16 | torch-compile | 5.91e-05 | 1.000 | 0.001 | 5/5 |
+| mixer_b16 | torch-eager | 5.15e-05 | 1.000 | 0.001 | 5/5 |
+| resnet18-b1 | jax | 0.0167 | 1.000 | 0.02 | 5/5 |
+| resnet18-b1 | torch-compile | 0.00942 | 1.000 | 0.02 | 5/5 |
+| resnet18-b1 | torch-eager | 0.0158 | 1.000 | 0.02 | 5/5 |
+| resnet18-b8 | jax | 0.0123 | 1.000 | 0.02 | 5/5 |
+| resnet18-b8 | torch-compile | 0.0122 | 1.000 | 0.02 | 5/5 |
+| resnet18-b8 | torch-eager | 0.00725 | 1.000 | 0.02 | 5/5 |
+| smollm2-135m | jax | 0.000321 | 1.000 | 0.001 | 5/5 |
+| smollm2-135m | torch-compile | 0.000168 | 1.000 | 0.001 | 5/5 |
+| smollm2-135m | torch-eager | 0.000147 | 1.000 | 0.001 | 5/5 |
+| tiny-gpt2 | jax | 3.17e-08 | 1.000 | 0.001 | 5/5 |
+| tiny-gpt2 | torch-compile | 3.73e-08 | 1.000 | 0.001 | 5/5 |
+| tiny-gpt2 | torch-eager | 3.73e-08 | 1.000 | 0.001 | 5/5 |
+| vit-tiny | jax | 8.58e-06 | 1.000 | 0.001 | 5/5 |
+| vit-tiny | torch-compile | 9.54e-06 | 1.000 | 0.001 | 5/5 |
+| vit-tiny | torch-eager | 1.19e-05 | 1.000 | 0.001 | 5/5 |
+
 ## Batch-size sweep (median steady_us per forward; per_seq = steady/B)
 
 | model | batch | ours | torch.compile | compile-ro | torch eager | JAX/XLA | ratio ours/compile | ratio ours/jax | per_seq ours | per_seq compile | per_seq jax | rows identical | failed |

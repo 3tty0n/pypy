@@ -1,16 +1,16 @@
-model	system	steady_us	launches_per_iter	kernels	gpu_busy_us	gpu_util	notes
-bert-tiny	ours	267.2	30.0	12	163.1	0.610	gemm=16 gen=14
-bert-tiny	torch-compile	547.1	36.0	12	197.1	0.360	gemm=20 gen=16
-bert-tiny	jax	111.9	32.0	19	111.0	0.992	gemm=14 gen=18
-bert-mini	ours	434.4	67.0	14	320.5	0.738	gemm=43 gen=24
-bert-mini	torch-compile	873.2	89.0	15	391.9	0.449	gemm=59 gen=30
-bert-mini	jax	242.7	58.0	19	244.4	1.007	gemm=26 gen=32
-tiny-gpt2	ours	235.1	26.0	13	79.8	0.339	gemm=13 gen=13
-tiny-gpt2	torch-compile	414.7	31.0	16	72.0	0.174	gemm=9 gen=20 other=2
-tiny-gpt2	jax	90.7	30.0	19	54.5	0.601	gemm=9 gen=21
-distilgpt2	ours	1280.3	99.0	15	1190.0	0.929	copy=6 gemm=55 gen=38
-distilgpt2	torch-compile	1362.5	98.0	17	1198.0	0.879	copy=6 gemm=43 gen=37 other=12
-distilgpt2	jax	1009.5	111.0	22	1009.9	1.000	copy=6 gemm=43 gen=62
-vit-tiny	ours	986.8	175.0	15	868.2	0.880	gemm=99 gen=76
-vit-tiny	torch-compile	2425.5	248.0	21	1333.7	0.550	gemm=160 gen=87 other=1
-vit-tiny	jax	733.3	171.0	17	750.0	1.023	gemm=73 gen=98
+model	system	steady_us	launches_per_iter	kernels	gpu_busy_us	gpu_util	notes	gemm	splitk	gen	copy	other	bmm
+bert-tiny	ours	260.4	30.0	12	163.3	0.627	gemm=14 gen=14 splitk=2	14.0	2.0	14.0	0.0	0.0	0.0
+bert-tiny	torch-compile	492.1	36.0	12	197.1	0.400	gemm=18 gen=16 splitk=2	18.0	2.0	16.0	0.0	0.0	0.0
+bert-tiny	jax	111.2	32.0	19	110.2	0.991	gemm=14 gen=18	14.0	0.0	18.0	0.0	0.0	0.0
+bert-mini	ours	460.7	67.0	14	319.9	0.694	gemm=26 gen=24 splitk=17	26.0	17.0	24.0	0.0	0.0	0.0
+bert-mini	torch-compile	890.1	89.0	15	391.9	0.440	gemm=34 gen=30 splitk=25	34.0	25.0	30.0	0.0	0.0	0.0
+bert-mini	jax	243.5	58.0	19	244.2	1.003	gemm=26 gen=32	26.0	0.0	32.0	0.0	0.0	0.0
+tiny-gpt2	ours	241.9	26.6	13	80.8	0.334	gemm=14 gen=13	13.6	0.0	13.0	0.0	0.0	4.6
+tiny-gpt2	torch-compile	385.3	31.0	16	72.0	0.187	gemm=9 gen=20 other=2	9.0	0.0	20.0	0.0	2.0	2.0
+tiny-gpt2	jax	82.6	30.0	19	54.4	0.659	gemm=9 gen=21	9.0	0.0	21.0	0.0	0.0	0.0
+distilgpt2	ours	1314.2	99.0	15	1188.6	0.904	copy=6 gemm=37 gen=38 splitk=18	37.0	18.0	38.0	6.0	0.0	0.0
+distilgpt2	torch-compile	1357.5	98.0	17	1201.6	0.885	copy=6 gemm=31 gen=37 other=12 splitk=12	31.0	12.0	37.0	6.0	12.0	6.0
+distilgpt2	jax	1009.6	111.0	21	1011.7	1.002	copy=6 gemm=37 gen=62 splitk=6	37.0	6.0	62.0	6.0	0.0	0.0
+vit-tiny	ours	997.7	175.0	15	868.1	0.870	gemm=74 gen=76 splitk=25	74.0	25.0	76.0	0.0	0.0	1.0
+vit-tiny	torch-compile	2280.5	248.0	21	1328.9	0.583	gemm=98 gen=87 other=1 splitk=62	98.0	62.0	87.0	0.0	1.0	1.0
+vit-tiny	jax	742.1	171.0	17	745.4	1.005	gemm=73 gen=98	73.0	0.0	98.0	0.0	0.0	0.0

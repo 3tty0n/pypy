@@ -1,22 +1,22 @@
-\begin{tabular}{lrrrrr}
+\begin{tabular}{lrrrrrrrrr}
 \toprule
-model & system & gemm & split-K & gen & other \\
+model & system & gemm & split-K & bmm & gen & copy & other & total & launches \\
 \midrule
-bert-tiny & MetaTensor & 16 & 0 & 14 & 0 \\
-bert-tiny & torch.compile & 20 & 0 & 16 & 0 \\
-bert-tiny & JAX/XLA & 14 & 0 & 18 & 0 \\
-bert-mini & MetaTensor & 43 & 0 & 24 & 0 \\
-bert-mini & torch.compile & 59 & 0 & 30 & 0 \\
-bert-mini & JAX/XLA & 26 & 0 & 32 & 0 \\
-tiny-gpt2 & MetaTensor & 13 & 0 & 13 & 0 \\
-tiny-gpt2 & torch.compile & 9 & 0 & 20 & 2 \\
-tiny-gpt2 & JAX/XLA & 9 & 0 & 21 & 0 \\
-distilgpt2 & MetaTensor & 55 & 0 & 38 & 6 \\
-distilgpt2 & torch.compile & 43 & 0 & 37 & 18 \\
-distilgpt2 & JAX/XLA & 43 & 0 & 62 & 6 \\
-vit-tiny & MetaTensor & 99 & 0 & 76 & 0 \\
-vit-tiny & torch.compile & 160 & 0 & 87 & 1 \\
-vit-tiny & JAX/XLA & 73 & 0 & 98 & 0 \\
+bert-tiny & MetaTensor & 14 & 2 & 0 & 14 & 0 & 0 & 30 & 30.0 \\
+bert-tiny & torch.compile & 18 & 2 & 0 & 16 & 0 & 0 & 36 & 36.0 \\
+bert-tiny & JAX/XLA & 14 & 0 & 0 & 18 & 0 & 0 & 32 & 32.0 \\
+bert-mini & MetaTensor & 26 & 17 & 0 & 24 & 0 & 0 & 67 & 67.0 \\
+bert-mini & torch.compile & 34 & 25 & 0 & 30 & 0 & 0 & 89 & 89.0 \\
+bert-mini & JAX/XLA & 26 & 0 & 0 & 32 & 0 & 0 & 58 & 58.0 \\
+tiny-gpt2 & MetaTensor & 14 & 0 & 5 & 13 & 0 & 0 & 27 & 26.6 \\
+tiny-gpt2 & torch.compile & 9 & 0 & 2 & 20 & 0 & 2 & 31 & 31.0 \\
+tiny-gpt2 & JAX/XLA & 9 & 0 & 0 & 21 & 0 & 0 & 30 & 30.0 \\
+distilgpt2 & MetaTensor & 37 & 18 & 0 & 38 & 6 & 0 & 99 & 99.0 \\
+distilgpt2 & torch.compile & 31 & 12 & 6 & 37 & 6 & 12 & 98 & 98.0 \\
+distilgpt2 & JAX/XLA & 37 & 6 & 0 & 62 & 6 & 0 & 111 & 111.0 \\
+vit-tiny & MetaTensor & 74 & 25 & 1 & 76 & 0 & 0 & 175 & 175.0 \\
+vit-tiny & torch.compile & 98 & 62 & 1 & 87 & 0 & 1 & 248 & 248.0 \\
+vit-tiny & JAX/XLA & 73 & 0 & 0 & 98 & 0 & 0 & 171 & 171.0 \\
 \bottomrule
 \end{tabular}
-% kernel launches per forward, attributed: matrix products, the cuBLAS split-K reduce/epilogue kernels that finish some of them (kernels, not calls; a run traced before gap\_analysis separated them reports 0 and folds them into gemm), generated elementwise/reduction kernels, everything else
+% kernel launches per forward, attributed kernel by kernel: matrix products, the cuBLAS split-K reduce/epilogue kernels that finish some of them (kernels, not calls; a run traced before gap\_analysis separated them reports 0 and folds them into gemm), the batched attention products inside gemm (bmm - a name-based lower bound, and what Inductor lowers scaled\_dot\_product\_attention to), generated elementwise/reduction kernels, copies, everything else. total is the five classes added up and equals the measured launch count; bmm is a subset of gemm and is not added in - a lower bound, since cuBLAS gives a batched product the same kernel name as an unbatched one, and gap\_kernels.tsv is where a forward's launches are attributed kernel by kernel
