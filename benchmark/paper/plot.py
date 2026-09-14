@@ -448,7 +448,7 @@ def fig_fusion_stats(out, args):
                 label=label)
         left = [a + b for a, b in zip(left, vals)]
     ax.set_yticks(y, [r["model"] for r in rows])
-    ax.set_xlabel("fusion regions in the compiled traces, by what forced them")
+    ax.set_xlabel("fusion regions by forcing cause")
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
@@ -509,8 +509,16 @@ def fig_models(out, args):
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
     ax.tick_params(axis="y", length=0)
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=3,
-              frameon=False, columnspacing=1.2, handlelength=1.4)
+    if args.width >= DOUBLE_COL:
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=3,
+                  frameon=False, columnspacing=1.2, handlelength=1.4)
+    else:
+        # Too narrow for 3 columns of these labels without clipping past the
+        # axes; let constrained_layout reserve the room instead.
+        handles, labels = ax.get_legend_handles_labels()
+        fig.legend(handles, labels, loc="outside lower center", ncol=2,
+                   frameon=False, columnspacing=1.2, handlelength=1.4,
+                   fontsize=6)
     if args.titles:
         ax.set_title("End-to-end inference")
 
@@ -1788,8 +1796,10 @@ def fig_warmup(out, args):
         ax.set_title(model, fontsize=7.5)
         despine(ax)
     axes[0].set_ylabel("cumulative time (ms)")
-    axes[0].legend(loc="upper left", fontsize=6, labelspacing=0.25,
-                   handlelength=1.8)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="outside lower center", ncol=3,
+               fontsize=6, labelspacing=0.25, handlelength=1.8,
+               frameon=False, columnspacing=1.2)
     if args.titles:
         fig.suptitle("Warm-up: cumulative time from a fresh process")
 
@@ -2102,6 +2112,23 @@ def main(argv=None):
             fig.savefig(path)
             written.append(path)
         plt.close(fig)
+        # models and micro_speedup also get a single-column variant, always,
+        # regardless of --column: a teammate laying out the paper needs both
+        # widths and re-running with --column single would otherwise clobber
+        # the double-column default.
+        if name in ("models", "micro_speedup"):
+            saved_width = args.width
+            args.width = SINGLE_COL
+            made_col = table[name](args.out, args)
+            args.width = saved_width
+            if made_col is not None:
+                fig_col, stem_col = made_col
+                for ext in args.format.split(","):
+                    path = os.path.join(args.outdir,
+                                         "%s_col.%s" % (stem_col, ext.strip()))
+                    fig_col.savefig(path)
+                    written.append(path)
+                plt.close(fig_col)
     for path in written:
         print(path)
     return 0
