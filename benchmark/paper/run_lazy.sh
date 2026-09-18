@@ -186,12 +186,19 @@ do_micro() {
 do_recovery() {
   progress_step "recovery probe"
   local out
-  if out=$(METATENSOR_LAZY=1 "$RUN_PYPY" --jit "$JIT_INNER,$NOFUSE" "$APP/recovery_probe.py" 2>&1); then
-    echo "$out" > "$OUT/lazy_recovery.txt"
-    echo "recovery probe (deferred): $(echo "$out" | grep -c -i 'ok\|match') ok lines, see lazy_recovery.txt"
-  else
-    echo "$out" > "$OUT/lazy_recovery.txt"
-    echo "run_lazy.sh: recovery probe failed under deferred execution" >&2
+  {
+    echo "== deferred (METATENSOR_LAZY=1, pass off) =="
+    METATENSOR_LAZY=1 "$RUN_PYPY" --jit "$JIT_INNER,$NOFUSE" "$APP/recovery_probe.py" 2>&1 \
+      || echo "run_lazy.sh: the probe reported a failure under deferred execution" >&2
+    echo
+    echo "== virtual (the pass) =="
+    "$RUN_PYPY" $JIT_FLAGS "$APP/recovery_probe.py" 2>&1 \
+      || echo "run_lazy.sh: the probe reported a failure under the pass" >&2
+  } > "$OUT/lazy_recovery.txt"
+  grep -c "all cases match" "$OUT/lazy_recovery.txt" \
+    | sed 's/^/recovery probe: arms passing = /'
+  if [ "$(grep -c 'all cases match' "$OUT/lazy_recovery.txt")" != 2 ]; then
+    echo "run_lazy.sh: recovery probe did not pass on both arms, see lazy_recovery.txt" >&2
   fi
 }
 

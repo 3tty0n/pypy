@@ -428,6 +428,69 @@ def main(out_dir):
                 d(rows, "cache_hits"), d(rows, "recompiles")))
         lines.append("")
 
+    lazy = read_tsv(os.path.join(out_dir, "lazy.tsv"))
+    if lazy:
+        # Equal kernel and compile counts on the virtual and deferred arms are
+        # the check that both ran the same kernels; only the host side differs.
+        lines.append("## Where the operation DAG lives (median over rounds)\n")
+        lines.append("| model | DAG in | steady_us | launches/iter | kernels | "
+                     "compiles | bytes/iter | nodes deferred | same argmax |")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
+        g = collections.defaultdict(list)
+        for r in lazy:
+            g[(r["model"], r["system"])].append(r)
+        order = {"virtual": 0, "deferred": 1, "eager": 2}
+        for key in sorted(g, key=lambda k: (k[0], order.get(k[1], 9))):
+            rows = g[key]
+            col = lambda c, spec="%.1f": fmt(med([x[c] for x in rows
+                                                  if x.get(c) not in (None, "")]), spec)
+            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+                key[0], key[1], col("steady_us"), col("launches_per_iter"),
+                col("kernels", "%.0f"), col("compiles", "%.0f"),
+                col("gc_bytes_per_iter", "%.0f"), col("lazy_nodes", "%.0f"),
+                rows[0].get("argmax_match", "")))
+        lines.append("")
+
+    lazy_micro = read_tsv(os.path.join(out_dir, "lazy_micro.tsv"))
+    if lazy_micro:
+        lines.append("## Where the DAG lives, micro grid (median over rounds)\n")
+        lines.append("| variant | k | n | DAG in | steady_us | launches/iter |")
+        lines.append("|---|---|---|---|---|---|")
+        g = collections.defaultdict(list)
+        for r in lazy_micro:
+            g[(int(r["variant"]), int(r["k"]), int(r["n"]), r["system"])].append(r)
+        order = {"virtual": 0, "deferred": 1, "eager": 2}
+        for key in sorted(g, key=lambda k: (k[0], k[1], k[2], order.get(k[3], 9))):
+            rows = g[key]
+            lines.append("| %d | %d | %d | %s | %s | %s |" % (
+                key[0], key[1], key[2], key[3],
+                fmt(med([x["steady_us"] for x in rows])),
+                fmt(med([x["launches_per_iter"] for x in rows]), "%.2f")))
+        lines.append("")
+
+    control = read_tsv(os.path.join(out_dir, "control.tsv"))
+    if control:
+        # total_ms covers the whole phase, compilation included; the exit
+        # sequence has to be the same on every system or the row is not
+        # comparable with the others.
+        lines.append("## Host-dependent early exit (median over rounds)\n")
+        lines.append("| regime | system | total_ms | p50_us | p95_us | max_us | "
+                     "bridges | recompiles | exit layers | pass |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
+        g = collections.defaultdict(list)
+        for r in control:
+            g[(r["regime"], r["system"])].append(r)
+        for key in sorted(g):
+            rows = g[key]
+            col = lambda c, spec="%.1f": fmt(med([x[c] for x in rows
+                                                  if x.get(c) not in (None, "")]), spec)
+            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+                key[0], key[1], col("total_ms", "%.0f"), col("p50_us"),
+                col("p95_us"), col("max_us", "%.0f"), col("bridges", "%.0f"),
+                col("recompiles", "%.0f"), rows[0].get("exit_seq", ""),
+                rows[0].get("pass", "")))
+        lines.append("")
+
     text = "\n".join(lines) + "\n"
     out_path = os.path.join(out_dir, "summary.md")
     with open(out_path, "w") as f:
