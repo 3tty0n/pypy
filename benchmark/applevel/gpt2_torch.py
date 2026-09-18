@@ -59,26 +59,36 @@ class Model(torch.nn.Module):
                                            self.mask) for i in idx])
 
 
-def blocks_forward(model, x, mask):
+def block(model, x, mask, layer):
+    """One transformer block.  Split out of blocks_forward so a driver that
+    stops part way through the stack (earlyexit_torch.py) runs the same code
+    the whole-stack models run."""
     t, d = x.shape
     h = model.h
     dh = d // h
-    for (g1, b1, wqkv, bqkv, wo, bo, g2, b2, wf, bf, wp,
-         bp) in model.layers:
-        n = model.ln(x, g1, b1)
-        qkv = n @ wqkv + bqkv
-        q, k, v = [qkv[:, i * d:(i + 1) * d].reshape(t, h, dh).transpose(0, 1)
-                   for i in range(3)]
-        s = q @ k.transpose(-1, -2) / math.sqrt(dh) + mask
-        c = (s.softmax(-1) @ v).transpose(0, 1).reshape(t, d)
-        x = x + (c @ wo + bo)
-        n = model.ln(x, g2, b2)
-        u = n @ wf + bf
-        u = 0.5 * u * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) *
-                                        (u + 0.044715 * u * u * u)))
-        x = x + (u @ wp + bp)
-    x = model.ln(x, *model.ln_f)
-    return x @ model.wte.t()
+    (g1, b1, wqkv, bqkv, wo, bo, g2, b2, wf, bf, wp, bp) = layer
+    n = model.ln(x, g1, b1)
+    qkv = n @ wqkv + bqkv
+    q, k, v = [qkv[:, i * d:(i + 1) * d].reshape(t, h, dh).transpose(0, 1)
+               for i in range(3)]
+    s = q @ k.transpose(-1, -2) / math.sqrt(dh) + mask
+    c = (s.softmax(-1) @ v).transpose(0, 1).reshape(t, d)
+    x = x + (c @ wo + bo)
+    n = model.ln(x, g2, b2)
+    u = n @ wf + bf
+    u = 0.5 * u * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) *
+                                    (u + 0.044715 * u * u * u)))
+    return x + (u @ wp + bp)
+
+
+def lm_head(model, x):
+    return model.ln(x, *model.ln_f) @ model.wte.t()
+
+
+def blocks_forward(model, x, mask):
+    for layer in model.layers:
+        x = block(model, x, mask, layer)
+    return lm_head(model, x)
 
 
 def main():

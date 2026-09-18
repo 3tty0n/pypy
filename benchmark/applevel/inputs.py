@@ -79,6 +79,66 @@ def reference_name(dtype, k):
     return '%s%s.bin' % (base, '_seed%d' % k if k else '')
 
 
+# --- early-exit control-flow experiment (bench.sh control) -------------------
+# One schedule for all three systems, so the exit-layer sequence is a property
+# of the experiment and not of the runtime that happens to be running it.
+#
+# The confidence a driver reads back per layer is mean(x*x) over the hidden
+# state; on distilgpt2 it grows monotonically with depth and is well separated
+# between layers - measured over input rotations k=0..4, float32:
+#
+#   layer     1       2       3       4       5       6
+#   conf    3.9-4.5 59-62   65-70   75-80   93-99   173-190
+#
+# Each threshold below sits in the middle of a gap, so the exit layer it picks
+# has a >=3% margin on every input - four orders of magnitude more than the
+# float32 disagreement between the three systems.  A driver that lands inside
+# 2% of its threshold must fail rather than report a different amount of work
+# as if it were the same.
+#
+# (k, threshold) per iteration, rotating:
+#   stable   one input, one threshold - every iteration exits at layer 4
+#   varying  a rotating request mix: exits at layers 2, 3, 5, 6
+CONTROL = {
+    'stable':  [(0, 72.5)],
+    'varying': [(0, 30.0), (1, 63.5), (2, 86.0), (3, 1e9)],
+}
+# What the schedule above must produce, in order.  1e9 is never reached, so
+# that slot runs all six layers.
+CONTROL_EXITS = {'stable': [4], 'varying': [2, 3, 5, 6]}
+CONTROL_MARGIN = 0.02
+
+
+def control_slot(regime, i):
+    """(input rotation k, confidence threshold) for iteration i."""
+    s = CONTROL[regime]
+    return s[i % len(s)]
+
+
+def control_check(conf, tau):
+    """A confidence this close to its threshold means the exit layer is no
+    longer reproducible across systems; the run is void, so say so."""
+    if abs(conf - tau) < CONTROL_MARGIN * abs(tau):
+        raise AssertionError(
+            'confidence %.6g is within %g%% of threshold %.6g: the exit layer '
+            'is not reproducible across systems' %
+            (conf, CONTROL_MARGIN * 100, tau))
+
+
+def pctl(xs, q):
+    """Nearest-rank percentile, defined once so the three drivers agree."""
+    s = sorted(xs)
+    return s[min(len(s) - 1, int(q * (len(s) - 1) + 0.5))]
+
+
+def exit_hash(seq):
+    """FNV-1a over the exit-layer sequence, as a decimal the tsv can hold."""
+    h = 2166136261
+    for v in seq:
+        h = ((h ^ (v & 0xff)) * 16777619) & 0xffffffff
+    return h
+
+
 def _demo():
     assert seed() >= 0
     t = [1, 2, 3, 4]
@@ -95,6 +155,22 @@ def _demo():
     assert reference_name('float32', 0) == 'logits_pypy.bin'
     assert reference_name('float32', 3) == 'logits_pypy_seed3.bin'
     assert reference_name('float16', 3) == 'logits_pypy_float16_seed3.bin'
+    for regime, exits in CONTROL_EXITS.items():
+        assert len(exits) == len(CONTROL[regime])
+        assert [control_slot(regime, i)[0] for i in range(len(exits))] == \
+            list(range(len(exits))) or regime == 'stable'
+    assert control_slot('varying', 5) == control_slot('varying', 1)
+    assert pctl([1, 2, 3, 4], 0.0) == 1 and pctl([1, 2, 3, 4], 1.0) == 4
+    assert pctl([1, 2, 3, 4, 5], 0.5) == 3
+    assert exit_hash([2, 3]) != exit_hash([3, 2])
+    assert exit_hash([4]) == exit_hash([4])
+    control_check(100.0, 72.5)
+    try:
+        control_check(72.6, 72.5)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError('control_check missed a threshold straddle')
     print('inputs.py ok')
 
 
