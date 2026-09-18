@@ -66,21 +66,26 @@ from matplotlib.ticker import FuncFormatter
 # Aqua (2.82:1) and yellow (2.17:1) sit below 3:1 against white, which the
 # contrast check flags as "relief required": the .tex table beside each figure
 # is that relief.
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#8a5cd6", "#6b6b6b",
+SERIES = ["#1a4fa0", "#eb6834", "#1baf7a", "#eda100", "#8a5cd6", "#6b6b6b",
           "#c04a8a", "#4fa8e0", "#a0522d"]
-POS, NEG = "#2a78d6", "#e34948"      # diverging poles, neutral midpoint is the rule line
+POS, NEG = "#1a4fa0", "#e34948"      # diverging poles, neutral midpoint is the rule line
 INK, INK_2, GRID = "#0b0b0b", "#52514e", "#d9d8d4"
 # Opt-in only: texture is for print and full CVD, never decoration.
 HATCH = ["", "///", "...", "xxx", "\\\\", "++", "oo", "--", "||"]
 
 SINGLE_COL, DOUBLE_COL = 3.25, 6.75   # MLSys column and text widths, inches
-# Figures whose row labels are long enough that a single column would leave no
-# room for the plot itself.  --column overrides this.
-WIDE = {"micro_speedup", "fusion", "models", "ablation", "micro_baselines",
-        "deopt",
-        "compile_overhead",
-        "gap", "correctness", "warmup", "batch",
-        "compare_speedup", "compare_models"}
+# Figures the paper does not include at column width; they are drawn at the
+# full text width.  --column overrides this.
+WIDE = {"micro_speedup", "models", "ablation", "micro_baselines",
+        "compile_overhead", "integration"}
+# The width the paper actually draws the figure at, so nothing is rescaled on
+# the page and 7pt in the pdf is 7pt in print.  \columnwidth is 3.25in; the
+# entries are the \includegraphics fractions in sections/*.tex.
+PAGE_WIDTH = {
+    "batch": 0.82 * SINGLE_COL,
+    "models_col": 0.85 * SINGLE_COL,
+    "micro_speedup_col": 0.90 * SINGLE_COL,
+}
 
 SYSTEM_LABEL = {
     "ours": "MetaTensor",
@@ -205,23 +210,65 @@ def err(values, lows, highs):
             [hi - v for v, hi in zip(values, highs)]]
 
 
-ERRBAR = dict(ecolor=INK_2, elinewidth=0.7, capsize=1.4, capthick=0.7)
+ERRBAR = dict(ecolor=INK_2, elinewidth=0.7, capsize=2.2, capthick=0.7)
 
 
 def spread_str(lo, hi, fmt="%.1f"):
     return (fmt + "-" + fmt) % (lo, hi) if lo is not None else "n/a"
 
 
-# One colour, hatch and marker per system, whatever subset a figure shows.
-SYSTEM_STYLE = {s: i for i, s in enumerate(
-    ["ours", "torch-compile", "torch-compile-ro", "torch-compile-mat",
-     "torch-eager", "jax", "iree", "torch-tensorrt", "triton"])}
+# --- system identity -------------------------------------------------------
+# One colour, one hatch and one marker per system, fixed here and used by every
+# figure, so a reader who has learnt the encoding once keeps it.  MetaTensor is
+# the darkest hue and is always the first slot of a bar group.  The hatches and
+# markers carry the identity in greyscale and under full CVD.
+SYSTEM_IDENTITY = collections.OrderedDict([
+    #  system                  colour     hatch  marker
+    ("ours",                  ("#1a4fa0", "",    "o")),
+    ("torch-compile",         ("#eb6834", "///", "s")),
+    ("torch-compile-static",  ("#eb6834", "///", "s")),
+    ("torch-compile-ro",      ("#1baf7a", "...", "D")),
+    ("torch-compile-dynamic", ("#1baf7a", "...", "D")),
+    ("torch-compile-mat",     ("#eda100", "xxx", "^")),
+    ("torch-eager",           ("#8a5cd6", "\\\\", "v")),
+    ("jax",                   ("#6b6b6b", "++",  "P")),
+    ("iree",                  ("#c04a8a", "oo",  "*")),
+    ("torch-tensorrt",        ("#4fa8e0", "--",  "X")),
+    ("triton",                ("#a0522d", "||",  "h")),
+    # not a baseline: the same code with the JIT off, the "before" end of the
+    # fusion dumbbell.
+    ("nojit",                 ("#9a9994", "",    "o")),
+])
 MARKERS = "osD^vP*Xh"
+# Machines are not systems; the compare_* figures colour by machine.
+MACHINE_COLORS = ["#1a4fa0", "#eb6834", "#1baf7a"]
+MACHINE_HATCH = ["", "///", "..."]
 
 
 def style_of(system):
-    i = SYSTEM_STYLE.get(system, 0)
-    return SERIES[i % len(SERIES)], HATCH[i % len(HATCH)], MARKERS[i % len(MARKERS)]
+    return SYSTEM_IDENTITY.get(system, ("#6b6b6b", "", "o"))
+
+
+def legend_below(fig, ax=None, ncol=2, handles=None, labels=None, fontsize=7):
+    """One legend per figure, outside the axes, under the plot.  A legend
+    inside the axes always ends up on top of a bar sooner or later."""
+    if handles is None:
+        handles, labels = ax.get_legend_handles_labels()
+    if not handles:
+        return
+    # Fewer columns rather than a legend wider than the page: the label
+    # lengths differ per figure, so the fit is measured, not guessed.
+    for n in range(max(1, ncol), 0, -1):
+        leg = fig.legend(handles, labels, loc="outside lower center", ncol=n,
+                         frameon=False, columnspacing=1.1, handlelength=1.4,
+                         handletextpad=0.5, fontsize=fontsize,
+                         borderaxespad=0.2)
+        if n == 1:
+            return leg
+        fig.canvas.draw()
+        if leg.get_window_extent().width / fig.dpi <= fig.get_size_inches()[0]:
+            return leg
+        leg.remove()
 
 
 def drawn(systems, args):
@@ -290,7 +337,7 @@ def fig_micro_speedup(out, args):
                 app_y.append(i)
                 app_x.append(am)
 
-    fig, ax = plt.subplots(figsize=(args.width, 0.16 * len(pts) + 0.75))
+    fig, ax = plt.subplots(figsize=(args.width, 0.155 * len(pts) + 1.15))
     colors = [POS if v >= 1 else NEG for v in vals]
     # Bars grow from the 1.0 rule, which is the neutral midpoint of the scale.
     ax.barh(list(y), [v - 1 for v in vals], left=1, height=0.55,
@@ -303,16 +350,16 @@ def fig_micro_speedup(out, args):
         # table.
         # A white face is what makes the marker read on top of a saturated bar;
         # an unfilled one disappears into it.
-        ax.scatter(app_x, app_y, s=30, facecolors="white", edgecolors=INK,
-                   linewidth=1.1, zorder=6)
+        ax.scatter(app_x, app_y, s=18, facecolors="white", edgecolors=INK,
+                   linewidth=0.9, zorder=6)
     ax.axvline(1, color=INK_2, linewidth=0.8, zorder=3)
     ax.set_xscale("log", base=2)
     ax.set_xticks([0.5, 1, 2, 4, 8, 16])
     ax.xaxis.set_major_formatter(FuncFormatter(
         lambda v, _: ("%g" % v).rstrip("0").rstrip(".") + "\u00d7"))
     ax.set_yticks(list(y), labels)
-    ax.set_xlim(min(lows) / 1.5, max(highs) * 1.45)
-    ax.set_xlabel("speedup over torch.compile")
+    ax.set_xlim(min(lows) / 1.5, max(highs) * 2.4)
+    ax.set_xlabel("speedup over torch.compile\nlog2 scale; higher is better")
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
@@ -320,22 +367,22 @@ def fig_micro_speedup(out, args):
     # Direct-label the extremes only; the rest are in the table.
     for i in (0, len(pts) - 1):
         v = vals[i]
-        # Anchored past the whisker, not at the bar end, so the label never
-        # sits on top of the error bar.
-        at = highs[i] if v >= 1 else lows[i]
-        ax.annotate("%.2f\u00d7" % v, (at, i), xytext=(5 if v >= 1 else -5, 0),
+        # Always to the right of the row, past the whisker: a label placed to
+        # the left of a sub-1x bar runs into the benchmark names.
+        at = max(highs[i], 1.0)
+        ax.annotate("%.2f\u00d7" % v, (at, i), xytext=(4, 0),
                     textcoords="offset points", va="center",
-                    ha="left" if v >= 1 else "right", fontsize=7, color=INK_2)
+                    ha="left", fontsize=7, color=INK_2)
     legend_handles = [
         Line2D([], [], color=POS, lw=4, label="MetaTensor faster"),
         Line2D([], [], color=NEG, lw=4, label="torch.compile faster")]
     if app_x:
         legend_handles.append(Line2D(
-            [], [], marker="o", linestyle="none", markerfacecolor="none",
-            markeredgecolor=INK_2, markersize=5,
-            label="same run, app-level through PyPy"))
-    ax.legend(handles=legend_handles, loc="lower right",
-              bbox_to_anchor=(1.0, 0.0))
+            [], [], marker="o", linestyle="none", markerfacecolor="white",
+            markeredgecolor=INK, markersize=5,
+            label="app-level through PyPy"))
+    legend_below(fig, handles=legend_handles,
+                 labels=[h.get_label() for h in legend_handles], ncol=2)
     if args.titles:
         ax.set_title("Microbenchmark speedup, float64")
     rows = []
@@ -384,7 +431,7 @@ def fig_fusion(out, args):
     pts.sort()
     y = range(len(pts))
 
-    fig, ax = plt.subplots(figsize=(args.width, 0.16 * len(pts) + 0.75))
+    fig, ax = plt.subplots(figsize=(args.width, 0.155 * len(pts) + 1.05))
     for i, (_, slow, fast, _lab, _f, _s) in enumerate(pts):
         ax.plot([fast, slow], [i, i], color=GRID, linewidth=1.2, zorder=1,
                 solid_capstyle="round")
@@ -396,22 +443,25 @@ def fig_fusion(out, args):
     ax.errorbar(fast, list(y), xerr=err(fast, [p[4][0] for p in pts],
                                         [p[4][1] for p in pts]),
                 fmt="none", zorder=2, **ERRBAR)
-    ax.scatter(slow, list(y), s=14, color=SERIES[1],
-               zorder=3, linewidth=0, label="interpreted (nojit)")
-    ax.scatter(fast, list(y), s=14, color=SERIES[0],
-               zorder=3, linewidth=0, label="fused (ours)")
+    ax.scatter(slow, list(y), s=14, color=style_of("nojit")[0], marker="o",
+               zorder=3, linewidth=0, label="interpreted (no JIT)")
+    ax.scatter(fast, list(y), s=14, color=style_of("ours")[0], marker="o",
+               zorder=3, linewidth=0, label="MetaTensor (fused)")
     ax.set_xscale("log")
     ax.set_yticks(list(y), [p[3] for p in pts])
-    ax.set_xlabel("steady-state time per iteration (\u00b5s, log)")
+    ax.set_xlabel("steady-state time per iteration (\u00b5s, log scale)\n"
+                  "lower is better")
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
     ax.tick_params(axis="y", length=0)
     best = pts[-1]
-    ax.annotate("%.1f\u00d7" % best[0], (best[2], len(pts) - 1),
-                xytext=(-4, 0), textcoords="offset points",
-                ha="right", va="center", fontsize=7, color=INK_2)
-    ax.legend(loc="lower right")
+    # To the right of the slow end: to the left of the fast end it lands on
+    # the benchmark name.
+    ax.annotate("%.1f\u00d7" % best[0], (best[1], len(pts) - 1),
+                xytext=(4, 0), textcoords="offset points",
+                ha="left", va="center", fontsize=7, color=INK_2)
+    legend_below(fig, ax, ncol=2)
     if args.titles:
         ax.set_title("Effect of kernel fusion")
     write_table(os.path.join(args.outdir, "fusion.tex"),
@@ -435,7 +485,7 @@ def fig_fusion_stats(out, args):
                ("forced_leafcap", "leaf cap"), ("forced_assign", "assign"),
                ("forced_other", "other")]
     num = lambda r, k: float(r.get(k) or 0)
-    fig, ax = plt.subplots(figsize=(args.width, 0.3 * len(rows) + 0.9))
+    fig, ax = plt.subplots(figsize=(args.width, 0.3 * len(rows) + 1.2))
     y = list(range(len(rows)))
     left = [0.0] * len(rows)
     for i, (key, label) in enumerate(reasons):
@@ -448,12 +498,12 @@ def fig_fusion_stats(out, args):
                 label=label)
         left = [a + b for a, b in zip(left, vals)]
     ax.set_yticks(y, [r["model"] for r in rows])
-    ax.set_xlabel("fusion regions by forcing cause")
+    ax.set_xlabel("fusion regions per forward,\nby what ended the region")
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
     ax.tick_params(axis="y", length=0)
-    ax.legend(loc="lower right", fontsize=6)
+    legend_below(fig, ax, ncol=3)
     if args.titles:
         ax.set_title("Why each fusion region ends")
     write_table(os.path.join(args.outdir, "fusion_stats.tex"),
@@ -488,10 +538,11 @@ def fig_models(out, args):
     shown = drawn(systems, args)
     # 3 systems keeps the original 0.26 half-height; more systems shrink to fit.
     h = 0.8 / len(shown)
-    fig, ax = plt.subplots(figsize=(args.width, 0.42 * len(models) + 1.3))
+    fig, ax = plt.subplots(figsize=(args.width, 0.42 * len(models) + 1.6))
     y = [i for i in range(len(models))]
     for si_, s in enumerate(shown):
-        off = (si_ - (len(shown) - 1) / 2) * h
+        # MetaTensor first means topmost in every horizontal bar group.
+        off = ((len(shown) - 1) / 2 - si_) * h
         color, hatch, _ = style_of(s)
         ax.barh([v + off for v in y], vals[s], height=h * 0.88,
                 color=color, linewidth=0,
@@ -504,21 +555,13 @@ def fig_models(out, args):
     ax.set_yticks(y, models)
     ax.set_xscale("log")
     ax.set_xlim(left=50)
-    ax.set_xlabel("steady-state time per iteration (\u00b5s), log scale")
+    ax.set_xlabel("steady-state time per iteration (\u00b5s, log scale)\n"
+                  "lower is better")
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
     ax.tick_params(axis="y", length=0)
-    if args.width >= DOUBLE_COL:
-        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=3,
-                  frameon=False, columnspacing=1.2, handlelength=1.4)
-    else:
-        # Too narrow for 3 columns of these labels without clipping past the
-        # axes; let constrained_layout reserve the room instead.
-        handles, labels = ax.get_legend_handles_labels()
-        fig.legend(handles, labels, loc="outside lower center", ncol=2,
-                   frameon=False, columnspacing=1.2, handlelength=1.4,
-                   fontsize=6)
+    legend_below(fig, ax, ncol=3 if args.width >= DOUBLE_COL else 2)
     if args.titles:
         ax.set_title("End-to-end inference")
 
@@ -586,32 +629,28 @@ def fig_dynamic(out, args):
                if any(k[0] == s for k in g)]
     lengths = sorted({k[1] for k in g})
 
-    fig, ax = plt.subplots(figsize=(args.width, args.width * 0.62))
-    markers = ["o", "s", "^", "D"]
+    fig, ax = plt.subplots(figsize=(args.width, args.width * 0.72))
     top = 0.0
     for i, s in enumerate(systems):
         bands = [band(g[(s, L)]) for L in lengths]
         ys = [b[0] for b in bands]
         top = max(top, max(b[2] for b in bands))
+        color, _, marker = style_of(s)
         ax.errorbar(lengths, ys,
                     yerr=err(ys, [b[1] for b in bands], [b[2] for b in bands]),
                     fmt="none", zorder=2, **ERRBAR)
-        ax.plot(lengths, ys, color=SERIES[i], linewidth=1.4, marker=markers[i],
+        ax.plot(lengths, ys, color=color, linewidth=1.4, marker=marker,
                 markersize=3.4, markeredgewidth=0, label=SYSTEM_LABEL[s],
                 clip_on=False, zorder=3)
     ax.set_xticks(lengths)
     ax.set_xlim(lengths[0] - 3, lengths[-1] + 3)
     ax.set_xlabel("sequence length (tokens)")
-    ax.set_ylabel("median time per step (\u00b5s)")
-    # Headroom so the legend has somewhere to go: the systems separate by an
-    # order of magnitude, and every corner is occupied at the natural ceiling.
-    ax.set_ylim(0, top * 1.2)
+    ax.set_ylabel("median time per step (\u00b5s)\nlower is better")
+    ax.set_ylim(0, top * 1.08)
     ax.yaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax)
-    # Which corner is free depends on where the recompile climb lands, which
-    # depends on the data - let matplotlib measure it rather than guessing.
-    ax.legend(loc="best", labelspacing=0.3, borderaxespad=0.3)
+    legend_below(fig, ax, ncol=2)
     if args.titles:
         ax.set_title("Changing sequence length")
 
@@ -667,7 +706,7 @@ def fig_precision(out, args):
     variants = sorted({k[1] for k in g if k[0] != "float64"})
     if not variants:
         return None
-    fig, ax = plt.subplots(figsize=(args.width, args.width * 0.62))
+    fig, ax = plt.subplots(figsize=(args.width, args.width * 0.85))
     x = range(len(dtypes))
     w = 0.8 / max(len(variants), 1)
     table = []
@@ -696,13 +735,14 @@ def fig_precision(out, args):
                           spread_str(lo, hi, "%.2f") if r else "n/a"])
     ax.axhline(1, color=INK_2, linewidth=0.8, zorder=3)
     ax.set_xticks(list(x), ["float64", "float32", "float16"])
-    ax.set_ylabel("speedup over torch.compile")
+    ax.set_xlabel("element type")
+    ax.set_ylabel("speedup over torch.compile (×)\nhigher is better")
     ax.yaxis.set_major_formatter(FuncFormatter(
         lambda v, _: ("%g" % v) + "\u00d7"))
     ax.yaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax)
-    ax.legend(loc="upper left")
+    legend_below(fig, ax, ncol=3)
     if args.titles:
         ax.set_title("Precision sweep")
     write_table(os.path.join(args.outdir, "precision.tex"),
@@ -765,8 +805,8 @@ def fig_ablation(out, args):
         ax.annotate(t, (xv, yv), xytext=(3, 0), textcoords="offset points",
                     va="center", fontsize=6.5, color=INK_2)
     ax.set_yticks(range(len(keys)), ticks)
-    ax.set_xlabel("steady-state time per iteration (\u00b5s)")
-    ax.set_xlim(0, max(highs) * 1.18)
+    ax.set_xlabel("steady-state time per iteration (\u00b5s)\nlower is better")
+    ax.set_xlim(0, max(highs) * 1.22)
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
@@ -973,9 +1013,16 @@ def fig_deopt(out, args):
     if not patterns:
         return None
 
-    fig, (ax, ax2) = plt.subplots(
-        1, 2, figsize=(args.width, 0.58 * len(patterns) + 0.9),
-        gridspec_kw={"width_ratios": [1.25, 1]})
+    if args.width >= DOUBLE_COL:
+        fig, (ax, ax2) = plt.subplots(
+            1, 2, figsize=(args.width, 0.58 * len(patterns) + 1.2),
+            gridspec_kw={"width_ratios": [1.25, 1]})
+    else:
+        # One column is too narrow for two panels side by side once the
+        # pattern names are on the left, so they stack.
+        fig, (ax, ax2) = plt.subplots(
+            2, 1, figsize=(args.width, 0.66 * len(patterns) + 1.5),
+            sharey=True)
     height = 0.8 / len(systems)
     for si, system in enumerate(systems):
         colour, hatch, marker = style_of(system)
@@ -1005,21 +1052,25 @@ def fig_deopt(out, args):
                  markersize=4, markeredgewidth=0)
     ticks = [DEOPT_LABEL.get(p, p) for p in patterns]
     ax.set_yticks(range(len(patterns)), ticks)
-    ax.set_xlabel("steady-state per iteration (\u00b5s)")
+    ax.set_xlabel("steady-state per iteration (\u00b5s), lower is better")
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     ax.set_ylim(-0.6, len(patterns) - 0.4)
     despine(ax, keep=("left",))
     ax.tick_params(axis="y", length=0)
     ax2.set_xscale("log")
-    ax2.set_yticks(range(len(patterns)), ["" for _ in patterns])
-    ax2.set_xlabel("most expensive iteration (\u00b5s)")
+    if args.width >= DOUBLE_COL:
+        ax2.set_yticks(range(len(patterns)), ["" for _ in patterns])
+    else:
+        ax2.set_yticks(range(len(patterns)), ticks)
+    ax2.set_xlabel("most expensive iteration (\u00b5s, log scale)\n"
+                   "lower is better")
     ax2.xaxis.grid(True, zorder=0)
     ax2.set_axisbelow(True)
     ax2.set_ylim(-0.6, len(patterns) - 0.4)
     despine(ax2, keep=("left",))
     ax2.tick_params(axis="y", length=0)
-    ax.legend(loc="upper right", ncol=1)
+    legend_below(fig, ax, ncol=2)
     if args.titles:
         ax.set_title("Cost of a guard failure")
 
@@ -1075,7 +1126,7 @@ def fig_micro_baselines(out, args):
     # app-level markers in fig_micro_speedup: 28 points x up to 6 systems as
     # grouped bars made the figure absurdly tall, and the ratio is the number
     # that matters here, not the absolute width of a bar.
-    fig, ax = plt.subplots(figsize=(args.width, 0.16 * len(pts) + 0.9))
+    fig, ax = plt.subplots(figsize=(args.width, 0.16 * len(pts) + 1.25))
     y = list(range(len(pts)))
     for si_, s in enumerate(drawn(used, args)):
         ys, xs = [], []
@@ -1097,12 +1148,13 @@ def fig_micro_baselines(out, args):
         lambda v, _: ("%g" % v).rstrip("0").rstrip(".") + "×"))
     ax.set_yticks(y, labels)
     ax.set_ylim(-0.6, len(pts) - 0.4)
-    ax.set_xlabel("time relative to MetaTensor (fused), log scale")
+    ax.set_xlabel("time relative to MetaTensor\n"
+                  "log2 scale; right of 1x is slower")
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
     ax.tick_params(axis="y", length=0)
-    ax.legend(loc="lower right")
+    legend_below(fig, ax, ncol=3)
     if args.titles:
         ax.set_title("Baselines relative to MetaTensor")
 
@@ -1238,7 +1290,7 @@ def fig_compile_overhead(out, args):
     fig, ax = plt.subplots(figsize=(args.width, 0.42 * len(keys_order) + 1.3))
     y = list(range(len(keys_order)))
     for si_, s in enumerate(systems_used):
-        off = (si_ - (len(systems_used) - 1) / 2) * h
+        off = ((len(systems_used) - 1) / 2 - si_) * h
         ys, xs = [], []
         for i, key in enumerate(keys_order):
             match = [f for k, ss, f in plot_rows if k == key and ss == s]
@@ -1248,17 +1300,17 @@ def fig_compile_overhead(out, args):
         if not xs:
             continue
         ax.barh(ys, xs, height=h * 0.86, color=style_of(s)[0],
-                linewidth=0, hatch=HATCH[si_ % len(HATCH)] if args.texture else None,
+                linewidth=0,
+                hatch=style_of(s)[1] if args.texture else None,
                 label=SYSTEM_LABEL.get(s, s))
     ax.set_xscale("log")
     ax.set_yticks(y, [workload_label(k) for k in keys_order])
-    ax.set_xlabel("first-run latency (ms), log scale")
+    ax.set_xlabel("first-run latency (ms, log scale)\nlower is better")
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
     ax.tick_params(axis="y", length=0)
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=3,
-              frameon=False, columnspacing=1.2, handlelength=1.4)
+    legend_below(fig, ax, ncol=3)
     if args.titles:
         ax.set_title("Compile / first-run overhead")
     return fig, "compile_overhead"
@@ -1287,19 +1339,28 @@ def fig_gap(out, args):
         v = g[model].get(sys_, {}).get(key)
         return float(v) if v else default
 
-    fig, axes = plt.subplots(1, 2, figsize=(args.width, 0.42 * len(models) + 0.9),
-                             sharey=True)
+    wide = args.width >= DOUBLE_COL
+    if wide:
+        fig, axes = plt.subplots(1, 2, sharey=True,
+                                 figsize=(args.width,
+                                          0.42 * len(models) + 1.2))
+    else:
+        fig, axes = plt.subplots(2, 1, sharey=True,
+                                 figsize=(args.width,
+                                          0.60 * len(models) + 1.3))
     h = 0.8 / len(systems)
     y = list(range(len(models)))
-    panels = [(axes[0], "launches_per_iter", "kernel launches per forward"),
-              (axes[1], "gpu_util", "GPU busy / wall time")]
+    panels = [(axes[0], "launches_per_iter",
+               "kernel launches per forward, lower is better"),
+              (axes[1], "gpu_util", "GPU busy / wall time, higher is better")]
     for ax, key, xlabel in panels:
         for si_, s in enumerate(systems):
-            off = (si_ - (len(systems) - 1) / 2) * h
+            off = ((len(systems) - 1) / 2 - si_) * h
+            colour, hatch, _ = style_of(s)
             ax.barh([v + off for v in y], [col(s, m, key) for m in models],
-                    height=h * 0.88, color=SERIES[si_ % len(SERIES)],
+                    height=h * 0.88, color=colour,
                     linewidth=0,
-                    hatch=HATCH[si_ % len(HATCH)] if args.texture else None,
+                    hatch=hatch if args.texture else None,
                     label=SYSTEM_LABEL[s])
         ax.set_xlabel(xlabel)
         ax.xaxis.grid(True, zorder=0)
@@ -1308,7 +1369,9 @@ def fig_gap(out, args):
         ax.tick_params(axis="y", length=0)
     axes[1].set_xlim(0, 1)
     axes[0].set_yticks(y, models)
-    axes[0].legend(loc="lower right", ncol=1)
+    if not wide:
+        axes[1].set_yticks(y, models)
+    legend_below(fig, axes[0], ncol=3)
     if args.titles:
         fig.suptitle("Where the gap comes from")
 
@@ -1519,8 +1582,9 @@ def _grouped_ratio_bars(ax, keys, per_machine, labels, args, xlabel, bands=None)
         vals = [per_machine[mi][k] for k in keys]
         off = ((len(labels) - 1) / 2 - mi) * h
         ax.barh([i + off for i in y], [v - 1 for v in vals], left=1,
-                height=h * 0.86, color=SERIES[mi], linewidth=0,
-                hatch=HATCH[mi] if args.texture else None, label=label)
+                height=h * 0.86, color=MACHINE_COLORS[mi], linewidth=0,
+                hatch=MACHINE_HATCH[mi] if args.texture else None,
+                label=label)
         if bands:
             ax.errorbar(vals, [i + off for i in y],
                         xerr=err(vals, [bands[mi][k][0] for k in keys],
@@ -1553,11 +1617,12 @@ def fig_compare_speedup(out, args):
     per = [{k: r[k][1] for k in keys} for r in rows]
     bands = [{k: (r[k][2], r[k][3]) for k in keys} for r in rows]
 
-    fig, ax = plt.subplots(figsize=(args.width, 0.22 * len(keys) + 0.9))
+    fig, ax = plt.subplots(figsize=(args.width, 0.20 * len(keys) + 1.2))
     _grouped_ratio_bars(ax, keys, per, labels, args,
-                        "speedup over torch.compile", bands)
+                        "speedup over torch.compile\n"
+                        "log2 scale; higher is better", bands)
     ax.set_yticks(list(range(len(keys))), [rows[0][k][0] for k in keys])
-    ax.legend(loc="lower right")
+    legend_below(fig, ax, ncol=2)
     if args.titles:
         ax.set_title("Microbenchmark speedup across machines")
     if dropped:
@@ -1596,11 +1661,12 @@ def fig_compare_models(out, args):
         return None
     keys = sorted(common, key=lambda m: per[0][m])
 
-    fig, ax = plt.subplots(figsize=(args.width, 0.30 * len(keys) + 0.9))
+    fig, ax = plt.subplots(figsize=(args.width, 0.30 * len(keys) + 1.25))
     _grouped_ratio_bars(ax, keys, per, labels, args,
-                        "speedup over torch.compile", bands)
+                        "speedup over torch.compile\n"
+                        "log2 scale; higher is better", bands)
     ax.set_yticks(list(range(len(keys))), keys)
-    ax.legend(loc="lower right")
+    legend_below(fig, ax, ncol=2)
     if args.titles:
         ax.set_title("End-to-end speedup across machines")
     write_table(os.path.join(args.outdir, "compare_models.tex"),
@@ -1630,7 +1696,7 @@ def fig_compare_dynamic(out, args):
     if not lengths:
         return None
 
-    fig, ax = plt.subplots(figsize=(args.width, args.width * 0.62))
+    fig, ax = plt.subplots(figsize=(args.width, args.width * 0.72))
     markers = ["o", "s", "^", "D"]
     for mi, (g, label) in enumerate(zip(series, labels)):
         ys = []
@@ -1638,20 +1704,20 @@ def fig_compare_dynamic(out, args):
             ours = med(g.get(("ours", L), []))
             comp = med(g.get(("torch-compile-dynamic", L), []))
             ys.append(comp / ours if ours and comp else float("nan"))
-        ax.plot(lengths, ys, color=SERIES[mi], linewidth=1.4,
+        ax.plot(lengths, ys, color=MACHINE_COLORS[mi], linewidth=1.4,
                 marker=markers[mi], markersize=3.4, markeredgewidth=0,
                 label=label, clip_on=False)
     ax.axhline(1, color=INK_2, linewidth=0.8, zorder=3)
     ax.set_xticks(lengths)
     ax.set_xlim(lengths[0] - 3, lengths[-1] + 3)
     ax.set_xlabel("sequence length (tokens)")
-    ax.set_ylabel("speedup over torch.compile")
+    ax.set_ylabel("speedup over torch.compile (\u00d7)\nhigher is better")
     ax.yaxis.set_major_formatter(FuncFormatter(
         lambda v, _: ("%g" % v) + "\u00d7"))
     ax.yaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax)
-    ax.legend(loc="best")
+    legend_below(fig, ax, ncol=2)
     if args.titles:
         ax.set_title("Dynamic sequence length across machines")
     write_table(os.path.join(args.outdir, "compare_dynamic.tex"),
@@ -1718,22 +1784,23 @@ def fig_integration(out, args):
     systems = [s for s in ["ours", "torch-compile", "torch-eager", "jax"]
                if any(b[1].get(s) for b in bars)]
     h = 0.8 / len(systems)
-    fig, ax = plt.subplots(figsize=(args.width, 0.42 * len(bars) + 0.8))
+    fig, ax = plt.subplots(figsize=(args.width, 0.42 * len(bars) + 1.2))
     y = list(range(len(bars)))
     for si_, s in enumerate(systems):
-        off = (si_ - (len(systems) - 1) / 2) * h
+        off = ((len(systems) - 1) / 2 - si_) * h
         vals = [b[1].get(s) or 0 for b in bars]
+        color, hatch, _ = style_of(s)
         ax.barh([yv + off for yv in y], vals, height=h * 0.88,
-                color=SERIES[si_ % len(SERIES)], linewidth=0,
-                hatch=HATCH[si_ % len(HATCH)] if args.texture else None,
+                color=color, linewidth=0,
+                hatch=hatch if args.texture else None,
                 label=SYSTEM_LABEL.get(s, s))
     ax.set_yticks(y, [b[0] for b in bars])
-    ax.set_xlabel("steady-state time per iteration (µs)")
+    ax.set_xlabel("steady-state time per iteration (µs)\nlower is better")
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
     ax.tick_params(axis="y", length=0)
-    ax.legend(loc="lower right")
+    legend_below(fig, ax, ncol=2)
     if args.titles:
         ax.set_title("Language integration cost")
 
@@ -1764,11 +1831,13 @@ def fig_warmup(out, args):
                            "torch-compile-ro", "jax"]
                if any(k[1] == s for k in series)]
 
-    fig, axes = plt.subplots(1, len(models),
-                             figsize=(args.width, args.width * 0.5), squeeze=False)
+    fig, axes = plt.subplots(1, len(models), sharey=True,
+                             figsize=(args.width, args.width * 0.78),
+                             squeeze=False)
     axes = axes[0]
     for ax, model in zip(axes, models):
         for si_, s in enumerate(systems):
+            colour, _, _ = style_of(s)
             for cache, ls in (("warm", "-"), ("cold", "--")):
                 keys = [k for k in series
                         if k[0] == model and k[1] == s and k[2] == cache]
@@ -1786,20 +1855,24 @@ def fig_warmup(out, args):
                 n = min(len(c) for c in curves)
                 med_curve = [statistics.median(c[i] for c in curves)
                             for i in range(n)]
-                ax.plot(range(1, n + 1), med_curve, color=SERIES[si_ % len(SERIES)],
-                        linestyle=ls, linewidth=1.2,
-                        label=("%s, %s cache" % (SYSTEM_LABEL.get(s, s), cache))
-                        if ax is axes[0] else None)
+                ax.plot(range(1, n + 1), med_curve, color=colour,
+                        linestyle=ls, linewidth=1.2)
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_xlabel("forward index")
-        ax.set_title(model, fontsize=7.5)
+        ax.set_xlabel("forward index (log scale)")
+        ax.set_title(model, fontsize=8)
         despine(ax)
-    axes[0].set_ylabel("cumulative time (ms)")
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="outside lower center", ncol=3,
-               fontsize=6, labelspacing=0.25, handlelength=1.8,
-               frameon=False, columnspacing=1.2)
+    axes[0].set_ylabel("cumulative ms (log)\nlower is better")
+    # Colour is the system, dash is the kernel cache: ten curves need seven
+    # legend entries, not ten.
+    handles = [Line2D([], [], color=style_of(s)[0], lw=1.6,
+                      label=SYSTEM_LABEL.get(s, s)) for s in systems]
+    handles += [Line2D([], [], color=INK_2, lw=1.2, linestyle="-",
+                       label="warm kernel cache"),
+                Line2D([], [], color=INK_2, lw=1.2, linestyle="--",
+                       label="cold kernel cache")]
+    legend_below(fig, handles=handles,
+                 labels=[h.get_label() for h in handles], ncol=3)
     if args.titles:
         fig.suptitle("Warm-up: cumulative time from a fresh process")
 
@@ -1871,10 +1944,18 @@ def fig_batch(out, args):
                if any(k[1] == s for k in per_seq)]
     batches = sorted({k[2] for k in per_seq} | {k[2] for k in failed})
 
-    fig, axes = plt.subplots(1, len(models), squeeze=False, sharey=True,
-                             figsize=(args.width, args.width * 0.42 + 0.5))
+    if args.width >= DOUBLE_COL:
+        fig, axes = plt.subplots(1, len(models), squeeze=False, sharey=True,
+                                 figsize=(args.width, args.width * 0.42 + 0.5))
+        axes = axes[0]
+    else:
+        # At one column two panels side by side leave 1.2in each; they stack.
+        fig, axes = plt.subplots(len(models), 1, squeeze=False, sharex=True,
+                                 figsize=(args.width,
+                                          1.35 * len(models) + 0.95))
+        axes = [a[0] for a in axes]
     for mi, model in enumerate(models):
-        ax = axes[0][mi]
+        ax = axes[mi]
         for s in drawn(systems, args):
             pts = [(b, band(per_seq[(model, s, b)])) for b in batches
                    if (model, s, b) in per_seq]
@@ -1893,15 +1974,15 @@ def fig_batch(out, args):
         ax.set_yscale("log")
         ax.set_xticks(batches)
         ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: "%d" % v))
-        ax.set_xlabel("batch size (sequences per forward)")
-        ax.set_title(model)
+        if ax is axes[-1] or args.width >= DOUBLE_COL:
+            ax.set_xlabel("batch size (sequences per forward)")
+        ax.set_title(model, fontsize=8)
         ax.yaxis.grid(True, zorder=0)
         ax.set_axisbelow(True)
         despine(ax)
-    axes[0][0].set_ylabel("time per sequence (\u00b5s), log scale")
-    handles, labels = axes[0][0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="outside lower center", ncol=3,
-               frameon=False, columnspacing=1.2, handlelength=1.4)
+    for ax in (axes if args.width < DOUBLE_COL else axes[:1]):
+        ax.set_ylabel("\u00b5s per sequence\n(log, lower is better)")
+    legend_below(fig, axes[0], ncol=2)
 
     def cell(key, table, spec="%.0f"):
         v = med(table.get(key, []))
@@ -1963,7 +2044,7 @@ def fig_correctness(out, args):
                 min(matches) if matches else None,
                 tol, sum(1 for x in passes if x == "1"), len(rs))
 
-    fig, ax = plt.subplots(figsize=(args.width, 0.36 * len(models) + 0.9))
+    fig, ax = plt.subplots(figsize=(args.width, 0.36 * len(models) + 1.3))
     h = 0.8 / len(systems)
     y = list(range(len(models)))
     for si_, s in enumerate(systems):
@@ -1973,22 +2054,24 @@ def fig_correctness(out, args):
             # A zero difference has no place on a log axis and no meaning
             # here either; floor it at the smallest float32 step.
             vals.append(max(w[0], 1e-9) if w and w[0] is not None else 0.0)
-        ax.barh([v + (si_ - (len(systems) - 1) / 2) * h for v in y], vals,
-                height=h * 0.88, color=SERIES[si_ % len(SERIES)], linewidth=0,
-                hatch=HATCH[si_ % len(HATCH)] if args.texture else None,
+        colour, hatch, _ = style_of(s)
+        ax.barh([v + ((len(systems) - 1) / 2 - si_) * h for v in y], vals,
+                height=h * 0.88, color=colour, linewidth=0,
+                hatch=hatch if args.texture else None,
                 label=SYSTEM_LABEL[s])
     tols = sorted({float(worst(m, s)[2]) for m in models for s in systems
                    if worst(m, s) and worst(m, s)[2]})
     for t in tols:
         ax.axvline(t, color="0.3", linewidth=0.8, linestyle="--")
     ax.set_xscale("log")
-    ax.set_xlabel("max |diff| vs MetaTensor over 5 inputs (dashed: tolerance)")
+    ax.set_xlabel("max |diff| vs MetaTensor over 5 inputs (log scale)\n"
+                  "dashed: tolerance; lower is better")
     ax.set_yticks(y, models)
     ax.xaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax, keep=("left",))
     ax.tick_params(axis="y", length=0)
-    ax.legend(loc="lower right", ncol=1)
+    legend_below(fig, ax, ncol=3)
     if args.titles:
         ax.set_title("Correctness on five derived inputs")
 
@@ -2099,7 +2182,8 @@ def main(argv=None):
         if explicit_width:
             args.width = SINGLE_COL if args.column == "single" else DOUBLE_COL
         else:
-            args.width = DOUBLE_COL if name in WIDE else SINGLE_COL
+            args.width = PAGE_WIDTH.get(
+                name, DOUBLE_COL if name in WIDE else SINGLE_COL)
         made = table[name](args.out, args)
         if made is None:
             print("skip %s (no rows in %s)" % (name, args.out), file=sys.stderr)
@@ -2118,7 +2202,7 @@ def main(argv=None):
         # the double-column default.
         if name in ("models", "micro_speedup"):
             saved_width = args.width
-            args.width = SINGLE_COL
+            args.width = PAGE_WIDTH.get(name + "_col", SINGLE_COL)
             made_col = table[name](args.out, args)
             args.width = saved_width
             if made_col is not None:
