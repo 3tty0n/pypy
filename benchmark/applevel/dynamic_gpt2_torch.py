@@ -18,8 +18,9 @@ recompilation.  compile_ms is -1: torch.compile does not expose the compile
 time separately from the first iteration that triggers it, so the cost is
 inside that iteration's step_us instead.
 
-The sweep order is explicit and is the same for every system: ORDER once per
-pass, twice, so pass 2 shows what a revisit of an already-seen length costs.
+The sweep visits three phases, in the "pass" column - identical to
+dynamic_gpt2.py, see its docstring for what each phase means and why the
+warm-up runs at WARMUP_LEN instead of ORDER[0].
 """
 
 import json, os, sys, time
@@ -31,7 +32,9 @@ import gpt2_torch
 import torch_common
 
 ORDER = [32, 48, 64, 96, 128]
-PASSES = 2
+NEW_ORDER = [160, 192, 224, 256, 288]
+WARMUP_LEN = 16
+PHASES = [('first', ORDER), ('revisit', ORDER), ('new', NEW_ORDER)]
 
 
 class Model(gpt2_torch.Model):
@@ -87,14 +90,14 @@ def main():
 
     with torch.no_grad():
         for _ in range(5):
-            fwd(*build(ORDER[0])).sum().item()
+            fwd(*build(WARMUP_LEN)).sum().item()
 
-        per_pass = max(1, iters // PASSES)
+        per_phase = max(1, iters // len(PHASES))
         print('pass\tlength\tstep_us\tbuild_us\tloops\tbridges\tkernels'
               '\tlaunches\tgraphs\trecompiles\tcompile_ms')
-        for p in range(1, PASSES + 1):
-            for i in range(per_pass):
-                t = ORDER[i % len(ORDER)]
+        for phase, lengths in PHASES:
+            for i in range(per_phase):
+                t = lengths[i % len(lengths)]
                 g0 = graphs_of(mode)
                 b0 = time.time()
                 idx, pos, mask = build(t)
@@ -103,8 +106,8 @@ def main():
                 out.sum().item()
                 s1 = time.time()
                 g1 = graphs_of(mode)
-                print('%d\t%d\t%.1f\t%.1f\t0\t0\t0\t0\t%d\t%d\t-1' % (
-                    p, t, (s1 - b1) * 1e6, (b1 - b0) * 1e6, g1, g1 - g0))
+                print('%s\t%d\t%.1f\t%.1f\t0\t0\t0\t0\t%d\t%d\t-1' % (
+                    phase, t, (s1 - b1) * 1e6, (b1 - b0) * 1e6, g1, g1 - g0))
 
 
 if __name__ == '__main__':

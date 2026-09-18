@@ -20,9 +20,11 @@ TORCH_VER=$([ -n "$TORCH_PYTHON" ] && [ -x "$TORCH_PYTHON" ] && \
 binary_of() { case "$1" in ours) echo "${PYPY_SHA:-unknown}" ;; *) echo "$TORCH_VER" ;; esac; }
 
 # Both drivers print the same per-iteration table; this folds it into one row
-# per (pass, length) window: median of the times, sum of the counter deltas.
+# per (phase, length) window: median of the times, sum of the counter deltas.
 # cache_hits is launches minus newly compiled kernels, because the kernel cache
 # has no hit counter of its own and adding one would mean retranslating pypy-c.
+# The "pass" column holds the phase name (first/revisit/new; see the drivers'
+# docstrings), a string, not a pass number, so it groups but is never int()'d.
 agg() {
   "${RTENSOR_PYTHON:-python3}" -c "
 import sys, statistics, collections
@@ -31,7 +33,7 @@ for line in sys.stdin:
     f = line.split('\t')
     if len(f) != 11 or f[0] == 'pass':
         continue
-    g.setdefault((int(f[0]), int(f[1])), []).append([float(x) for x in f[2:]])
+    g.setdefault((f[0], int(f[1])), []).append([float(x) for x in f[2:]])
 for (p, L), rows in g.items():
     step = [r[0] for r in rows]
     tot = [r[0] + r[1] for r in rows]
@@ -42,7 +44,7 @@ for (p, L), rows in g.items():
     # triggers it); summing that would turn it into a count of iterations.
     if min(r[8] for r in rows) < 0:
         cms = -1.0
-    print('%d\t%d\t%.1f\t%.1f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.3f' % (
+    print('%s\t%d\t%.1f\t%.1f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.3f' % (
         p, L, statistics.median(step), statistics.median(tot),
         loops, bridges, kernels, launches, launches - kernels,
         graphs, recomp, cms))

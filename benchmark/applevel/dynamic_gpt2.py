@@ -22,8 +22,14 @@ Per length window the driver also reports the delta of the PyPy JIT counters
 MetaTensor counters (kernels compiled, kernel launches).  Cache hits are
 launches minus newly compiled kernels.
 
-The sweep order is explicit and is the same for every system: ORDER once per
-pass, twice, so pass 2 shows what a revisit of an already-seen length costs.
+The sweep visits three phases, in the "pass" column: `first` walks ORDER once
+(cold for every one of those lengths), `revisit` walks ORDER again in the same
+order (warm - the kernel cache should absorb it), `new` walks NEW_ORDER, a
+disjoint, longer set of lengths that have not been seen before (cold again,
+but distinguishing "never seen this shape" from "never seen any shape"). The
+five-iteration warm-up before the phases runs at WARMUP_LEN, a length outside
+both ORDER and NEW_ORDER, so it primes the interpreter/JIT without pre-warming
+any length the phases measure.
 """
 
 import os, sys, time
@@ -35,7 +41,9 @@ import common
 import gpt2
 
 ORDER = [32, 48, 64, 96, 128]
-PASSES = 2
+NEW_ORDER = [160, 192, 224, 256, 288]
+WARMUP_LEN = 16
+PHASES = [('first', ORDER), ('revisit', ORDER), ('new', NEW_ORDER)]
 
 
 def jit_counters():
@@ -71,15 +79,15 @@ def main():
     masks = {}
 
     for _ in range(5):
-        idx, pos = build(cfg, buf, model, masks, ORDER[0], dtype)
+        idx, pos = build(cfg, buf, model, masks, WARMUP_LEN, dtype)
         model(idx, pos).sum().item()
 
-    per_pass = max(1, iters // PASSES)
+    per_phase = max(1, iters // len(PHASES))
     print('pass\tlength\tstep_us\tbuild_us\tloops\tbridges\tkernels'
           '\tlaunches\tgraphs\trecompiles\tcompile_ms')
-    for p in range(1, PASSES + 1):
-        for i in range(per_pass):
-            t = ORDER[i % len(ORDER)]
+    for phase, lengths in PHASES:
+        for i in range(per_phase):
+            t = lengths[i % len(lengths)]
             loops0, bridges0, ct0 = jit_counters()
             k0 = _metatensor.kernel_count()
             l0 = _metatensor.launch_count()
@@ -90,8 +98,8 @@ def main():
             out.sum().item()
             s1 = time.time()
             loops1, bridges1, ct1 = jit_counters()
-            print('%d\t%d\t%.1f\t%.1f\t%d\t%d\t%d\t%d\t0\t0\t%.3f' % (
-                p, t, (s1 - b1) * 1e6, (b1 - b0) * 1e6,
+            print('%s\t%d\t%.1f\t%.1f\t%d\t%d\t%d\t%d\t0\t0\t%.3f' % (
+                phase, t, (s1 - b1) * 1e6, (b1 - b0) * 1e6,
                 loops1 - loops0, bridges1 - bridges0,
                 _metatensor.kernel_count() - k0,
                 _metatensor.launch_count() - l0,
