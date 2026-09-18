@@ -1,4 +1,5 @@
-from rpython.metatensor import core, device, kernels, nn, ops, runtime
+from rpython.metatensor import core, device, kernels, lazy, nn, ops, runtime
+from rpython.metatensor.nn import _ready
 from rpython.rlib import jit
 from pypy.interpreter.baseobjspace import W_Root
 from pypy.interpreter.typedef import TypeDef, GetSetProperty
@@ -251,7 +252,7 @@ class W_Tensor(W_Root):
             1 if transpose_b else 0))
 
     def descr_tolist(self, space):
-        t = self.tensor.t
+        t = ops.tensor_force(self.tensor.t)
         h = device.host(t)
         n = ops.tensor_size(t)
         return space.newlist([space.newfloat(h[i]) for i in range(n)])
@@ -259,6 +260,8 @@ class W_Tensor(W_Root):
     def descr_take(self, space, w_idx):
         t = self.tensor.t
         idx = self._other(space, w_idx).t
+        _ready(t)
+        _ready(idx)
         trows, cols = self._rows_cols(space)
         if ops.tensor_dtype(idx) != ops.tensor_dtype(t):
             raise _mismatch(space)
@@ -268,12 +271,14 @@ class W_Tensor(W_Root):
     @unwrap_spec(c=int, h=int, w=int, k=int, pad=int, stride=int)
     def descr_im2col(self, space, c, h, w, k=3, pad=1, stride=1):
         t = self.tensor.t
+        _ready(t)
         self._conv_check(space, c, h, w, k, pad, stride)
         return _wrap(runtime.im2col(t, c, h, w, k, pad, stride))
 
     @unwrap_spec(c=int, h=int, w=int, k=int, pad=int, stride=int)
     def descr_im2col_nhwc(self, space, c, h, w, k=3, pad=1, stride=1):
         t = self.tensor.t
+        _ready(t)
         self._conv_check(space, c, h, w, k, pad, stride)
         return _wrap(runtime.im2col_nhwc(t, c, h, w, k, pad, stride))
 
@@ -287,12 +292,14 @@ class W_Tensor(W_Root):
     @unwrap_spec(c=int, h=int, w=int, k=int, stride=int, pad=int)
     def descr_maxpool2(self, space, c, h, w, k=2, stride=2, pad=0):
         t = self.tensor.t
+        _ready(t)
         self._conv_check(space, c, h, w, k, pad, stride)
         return _wrap(runtime.maxpool2(t, c, h, w, k, stride, pad))
 
     @unwrap_spec(c=int, h=int, w=int, k=int, stride=int, pad=int)
     def descr_maxpool2_nhwc(self, space, c, h, w, k=2, stride=2, pad=0):
         t = self.tensor.t
+        _ready(t)
         self._conv_check(space, c, h, w, k, pad, stride)
         return _wrap(runtime.maxpool2_nhwc(t, c, h, w, k, stride,
                                            pad))
@@ -302,6 +309,8 @@ class W_Tensor(W_Root):
                      stride=1, pad=1):
         weight = self._other(space, w_weight).t
         t = self.tensor.t
+        _ready(t)
+        _ready(weight)
         self._conv_check(space, c, h, w, k, pad, stride)
         if (ops.tensor_ndim(weight) != 2 or
                 ops.tensor_shape(weight, 0) != c * k * k):
@@ -313,7 +322,7 @@ class W_Tensor(W_Root):
         y = runtime.tensor_matmul(runtime.im2col(t, c, h, w, k, pad, stride),
                                   weight, rows * ohw, o, c * k * k, 0, 0, 1)
         if w_bias is not None and not space.is_none(w_bias):
-            y = ops.tensor_add(y, self._other(space, w_bias).t,
+            y = ops.add_p(y, self._other(space, w_bias).t,
                                    core.BC_R_ROW)
         return _wrap(runtime.col2chw(y, rows, ohw, o))
 
@@ -500,6 +509,21 @@ def kernel_compile_count(space):
 
 def launch_count(space):
     return space.newint(device.launch_count())
+
+
+def lazy_enabled(space):
+    return space.newbool(lazy.enabled())
+
+
+def lazy_stats(space):
+    """Deferred-execution counters: chains forced, nodes deferred, in-place
+    barriers, live-set entries walked looking for interior outputs, and forces
+    that fell back to node-by-node evaluation.  All zero unless
+    METATENSOR_LAZY is set."""
+    s = lazy.stats
+    return space.newtuple([space.newint(s.forces), space.newint(s.nodes),
+                           space.newint(s.barriers), space.newint(s.scans),
+                           space.newint(s.fallbacks)])
 
 
 def mem_total(space):

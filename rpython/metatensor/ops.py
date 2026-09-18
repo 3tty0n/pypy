@@ -1,10 +1,14 @@
 from rpython.rlib import jit
 from rpython.rtyper.lltypesystem import lltype
+from rpython.rtyper.rclass import OBJECTPTR
 from rpython.metatensor.core import (ADD, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_NONE, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, MAXR, MUL, NDTYPES, NULLTENSOR, RELU, RELUGRAD, SHAPEARRAY, SQRT, SUB, SUM, TENSOR, TENSORARRAY, _shape2, cols, new_tensor, note_cols, note_dtype, note_size, policy)
 from rpython.metatensor.device import (host)
+from rpython.metatensor import lazy
 from rpython.metatensor.runtime import (_make_ones, eval_op, ones, tensor_assign, tensor_matmul)
 
 def astype(t, dtype):
+    if lazy.enabled():
+        lazy.force(t)
     if t.dtype == dtype:
         return t
     note_dtype(dtype)
@@ -27,6 +31,8 @@ def reshape(a, shape_list):
     return view(a, shape)
 
 def view(a, shape):
+    if lazy.enabled():
+        lazy.force(a)
     r = lltype.malloc(TENSOR)
     r.size = a.size
     r.shape = shape
@@ -35,6 +41,7 @@ def view(a, shape):
     r.extra = lltype.nullptr(TENSORARRAY)
     r.dtype = a.dtype
     r.buf = a.buf
+    r.lazy = lltype.nullptr(OBJECTPTR.TO)
     return r
 
 
@@ -175,11 +182,72 @@ def bcast(a, b):
         return bcast_of(a, b, nb)
     return flip_bcast(bcast_of(b, a, na))
 
+# The deferred arm branches here, in plain wrappers, and never inside the
+# oopspec primitives themselves: their declared effect is asserted, and
+# building a chain reaches the kernel compiler, the device allocator and the
+# collector.  With the pass on lazy.enabled() is a quasi-immutable constant,
+# so the branch folds away and the trace is the one it always was.
+
+def add_p(a, b, p):
+    if lazy.enabled():
+        return lazy.lazy_op(ADD, a, b, p)
+    return tensor_add(a, b, p)
+
+def mul_p(a, b, p):
+    if lazy.enabled():
+        return lazy.lazy_op(MUL, a, b, p)
+    return tensor_mul(a, b, p)
+
+def sub_p(a, b, p):
+    if lazy.enabled():
+        return lazy.lazy_op(SUB, a, b, p)
+    return tensor_sub(a, b, p)
+
+def div_p(a, b, p):
+    if lazy.enabled():
+        return lazy.lazy_op(DIV, a, b, p)
+    return tensor_div(a, b, p)
+
+def relugrad_p(y, g, p):
+    if lazy.enabled():
+        return lazy.lazy_op(RELUGRAD, y, g, p)
+    return tensor_relugrad(y, g, p)
+
+def eqmask(a, b, p):
+    if lazy.enabled():
+        return lazy.lazy_op(EQMASK, a, b, p)
+    return tensor_eqmask(a, b, p)
+
+def relu_p(a):
+    if lazy.enabled():
+        return lazy.lazy_op(RELU, a, NULLTENSOR, 0)
+    return tensor_relu(a)
+
+def exp_p(a):
+    if lazy.enabled():
+        return lazy.lazy_op(EXP, a, NULLTENSOR, 0)
+    return tensor_exp(a)
+
+def sqrt_p(a):
+    if lazy.enabled():
+        return lazy.lazy_op(SQRT, a, NULLTENSOR, 0)
+    return tensor_sqrt(a)
+
+def sum_p(a, axis):
+    if lazy.enabled():
+        return lazy.lazy_op(SUM, a, NULLTENSOR, axis)
+    return tensor_sum(a, axis)
+
+def maxr_p(a, axis):
+    if lazy.enabled():
+        return lazy.lazy_op(MAXR, a, NULLTENSOR, axis)
+    return tensor_maxr(a, axis)
+
 def add(a, b):
-    return tensor_add(a, b, bcast(a, b))
+    return add_p(a, b, bcast(a, b))
 
 def mul(a, b):
-    return tensor_mul(a, b, bcast(a, b))
+    return mul_p(a, b, bcast(a, b))
 
 def add_(a, b):
     return assign(a, add(a, b))
@@ -188,32 +256,32 @@ def mul_(a, b):
     return assign(a, mul(a, b))
 
 def relu(a):
-    return tensor_relu(a)
+    return relu_p(a)
 
 def relugrad(y, g):
-    return tensor_relugrad(y, g, bcast(y, g))
+    return relugrad_p(y, g, bcast(y, g))
 
 def sum(a, axis=AXIS_ALL):
     if axis == 1 and tensor_ndim(a) > 1:
         cols_of(a)
-    return tensor_sum(a, axis)
+    return sum_p(a, axis)
 
 def sub(a, b):
-    return tensor_sub(a, b, bcast(a, b))
+    return sub_p(a, b, bcast(a, b))
 
 def div(a, b):
-    return tensor_div(a, b, bcast(a, b))
+    return div_p(a, b, bcast(a, b))
 
 def exp(a):
-    return tensor_exp(a)
+    return exp_p(a)
 
 def sqrt(a):
-    return tensor_sqrt(a)
+    return sqrt_p(a)
 
 def max(a, axis=AXIS_ALL):
     if axis == 1 and tensor_ndim(a) > 1:
         cols_of(a)
-    return tensor_maxr(a, axis)
+    return maxr_p(a, axis)
 
 def matmul_shape(a, b):
     if tensor_ndim(a) != 2 or tensor_ndim(b) != 2:
@@ -224,6 +292,9 @@ def matmul_shape(a, b):
     return tensor_shape(a, 0), tensor_shape(b, 1), inner
 
 def matmul(a, b, transpose_b=False):
+    if lazy.enabled():
+        lazy.force(a)
+        lazy.force(b)
     if transpose_b:
         rows, cols, inner = matmul_shape_t(a, b)
         return tensor_matmul(a, b, rows, cols, inner, 0, 1)
@@ -239,12 +310,21 @@ def matmul_shape_t(a, b):
     return tensor_shape(a, 0), tensor_shape(b, 0), inner
 
 def assign(dst, src):
+    if lazy.enabled():
+        # The write is about to happen; anything still deferred has to read
+        # its operands first.  This sits here and not in the oopspec below
+        # because forcing reaches the collector and the allocator, and the
+        # oopspec's effect is asserted.
+        lazy.force(src)
+        lazy.barrier()
     if (tensor_size(dst) != tensor_size(src) or
             tensor_dtype(dst) != tensor_dtype(src)):
         raise ValueError("shape mismatch")
     return tensor_assign_op(dst, src)
 
 def item(a):
+    if lazy.enabled():
+        lazy.force(a)
     return tensor_item(a)
 
 def tensor_output(t, k):
@@ -252,6 +332,8 @@ def tensor_output(t, k):
 
 @jit.dont_look_inside
 def tensor_force(a):
+    if lazy.enabled():
+        lazy.force(a)
     return a
 
 @jit.elidable

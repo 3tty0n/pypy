@@ -16,7 +16,8 @@ TENSOR.become(lltype.GcStruct('TENSOR', ('size', lltype.Signed),
                               ('host', lltype.Ptr(HOSTARRAY)),
                               ('extra', lltype.Ptr(TENSORARRAY)),
                               ('dtype', lltype.Signed),
-                              ('buf', OBJECTPTR)))
+                              ('buf', OBJECTPTR),
+                              ('lazy', OBJECTPTR)))
 NULLTENSOR = lltype.nullptr(TENSOR)
 
 F64, F32, F16 = 0, 1, 2
@@ -55,6 +56,20 @@ DEFAULT_MAX_INPUTS = 6
 class _Knobs(object):
     max_inputs = 0
 _knobs = _Knobs()
+
+class _LazyKnob(object):
+    # Quasi-immutable: every fusible operation asks whether execution is
+    # deferred, and with the pass on the answer is a compile-time constant,
+    # so the question costs one guard_not_invalidated per trace and nothing
+    # per operation.
+    _immutable_fields_ = ['on?']
+    on = False
+lazy_knob = _LazyKnob()
+
+def init_lazy():
+    """Read METATENSOR_LAZY once, at device init."""
+    value = os.environ.get('METATENSOR_LAZY')
+    lazy_knob.on = value is not None and value != '' and value != '0'
 
 def max_inputs():
     """Leaves a fused kernel may take, from RTENSOR_MAX_INPUTS (4..8).
@@ -127,6 +142,7 @@ def new_tensor(n, shape=lltype.nullptr(SHAPEARRAY), dtype=F64):
     t.extra = lltype.nullptr(TENSORARRAY)
     t.dtype = dtype
     t.buf = lltype.nullptr(OBJECTPTR.TO)
+    t.lazy = lltype.nullptr(OBJECTPTR.TO)
     return t
 
 def zeros(shape_list, dtype=F64):

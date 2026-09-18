@@ -1,6 +1,7 @@
 from rpython.rlib import rgc
 from rpython.rlib.rarithmetic import intmask
 from rpython.rtyper.annlowlevel import cast_instance_to_base_ptr
+from rpython.rtyper.rclass import OBJECTPTR
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 from rpython.translator.tool.cbuild import ExternalCompilationInfo
@@ -16,6 +17,18 @@ class DeviceBuffer(object):
     def __del__(self):
         rt_cuda_free(self.dptr, self.n)
 
+def _no_lazy_force(t):
+    pass
+
+# rpython.metatensor.lazy rebinds this to its force() when it is imported.
+# It lives here, as a plain global holding a plain function, so that devops
+# and ops can reach the deferred layer without importing it: a plain global
+# is constant folded into a direct call, and the module that defines force()
+# imports both of them.  It is deliberately NOT called from host() or dev():
+# those run underneath the launcher, whose oopspec may only raise
+# MemoryError, and forcing compiles a kernel.
+lazy_force = _no_lazy_force
+
 def attach_buffer(t, dptr, nb):
     t.dptr = dptr
     t.buf = cast_instance_to_base_ptr(DeviceBuffer(dptr, nb))
@@ -27,6 +40,7 @@ def device_tensor(n, dptr, shape=lltype.nullptr(SHAPEARRAY), dtype=F64):
     t.host = lltype.nullptr(HOSTARRAY)
     t.extra = lltype.nullptr(TENSORARRAY)
     t.dtype = dtype
+    t.lazy = lltype.nullptr(OBJECTPTR.TO)
     attach_buffer(t, dptr, nbytes(n, dtype))
     return t
 
