@@ -626,57 +626,65 @@ def fig_models(out, args):
     return fig, "models"
 
 
-def fig_dynamic(out, args):
-    """A measure across a length axis: lines, one per system.
+PHASE_ORDER = {"first": 0, "revisit": 1, "new": 2, "1": 0, "2": 1}
+PHASE_LABEL = {"first": "first visit", "revisit": "revisit",
+               "new": "new length distribution", "1": "first visit",
+               "2": "revisit"}
 
-    The line is the steady-state median per length; the compile events that
-    the sweep exists to expose are counters, not time, and live in the tables
-    beside it (dynamic.tex, dynamic_deltas.tex).
-    """
+
+def fig_dynamic(out, args):
+    """One panel per phase, because pooling them would put a cold visit and a
+    warm one on the same line.  The line is the steady-state median per
+    length; the compile events the sweep exists to expose are counters, not
+    time, and live in the tables beside it."""
     rows = read_tsv(os.path.join(out, "dynamic_summary.tsv"))
     if not rows:
         return None
-    g = collections.defaultdict(list)
-    for r in rows:
-        g[(r["system"], int(r["length"]))].append(float(r["median_us"]))
     systems = [s for s in ["ours", "torch-compile-static",
                            "torch-compile-dynamic", "torch-eager"]
-               if any(k[0] == s for k in g)]
-    lengths = sorted({k[1] for k in g})
-
-    fig, ax = plt.subplots(figsize=(args.width, args.width * 0.72))
-    top = 0.0
-    for i, s in enumerate(systems):
-        bands = [band(g[(s, L)]) for L in lengths]
-        ys = [b[0] for b in bands]
-        top = max(top, max(b[2] for b in bands))
-        color, _, marker = style_of(s)
-        ax.errorbar(lengths, ys,
-                    yerr=err(ys, [b[1] for b in bands], [b[2] for b in bands]),
-                    fmt="none", zorder=2, **ERRBAR)
-        ax.plot(lengths, ys, color=color, linewidth=1.4, marker=marker,
-                markersize=3.4, markeredgewidth=0, label=SYSTEM_LABEL[s],
-                clip_on=False, zorder=3)
-    ax.set_xticks(lengths)
-    ax.set_xlim(lengths[0] - 3, lengths[-1] + 3)
-    ax.set_xlabel("sequence length (tokens)")
-    ax.set_ylabel("median time per step (\u00b5s)\nlower is better")
-    ax.set_ylim(0, top * 1.08)
-    ax.yaxis.grid(True, zorder=0)
-    ax.set_axisbelow(True)
-    despine(ax)
-    legend_below(fig, ax, ncol=2)
-    if args.titles:
-        ax.set_title("Changing sequence length")
-
-    # pass 1 is the first visit of each length, pass 2 the revisit; the deltas
-    # are per (pass, length) windows, so they are summed within a pass and
-    # taken as the median over the rounds.
-    DELTAS = ["loops", "bridges", "kernels", "cache_hits", "recompiles"]
-    passes = sorted({r.get("pass", "1") for r in rows})
+               if any(r["system"] == s for r in rows)]
+    phases = sorted({r.get("pass", "1") for r in rows},
+                    key=lambda p: PHASE_ORDER.get(p, 9))
     per = collections.defaultdict(list)
     for r in rows:
         per[(r["system"], r.get("pass", "1"), int(r["length"]))].append(r)
+    lengths = sorted({int(r["length"]) for r in rows})
+    per_phase_lengths = {p: sorted({int(r["length"]) for r in rows
+                                    if r.get("pass", "1") == p})
+                         for p in phases}
+
+    fig, axes = plt.subplots(1, len(phases), squeeze=False, sharey=True,
+                             figsize=(args.width, args.width * 0.46))
+    top = 0.0
+    for ax, phase in zip(axes[0], phases):
+        xs = per_phase_lengths[phase]
+        for s in systems:
+            bands = [band([float(r["median_us"]) for r in per.get((s, phase, L), [])])
+                     for L in xs]
+            if not any(b[0] for b in bands):
+                continue
+            ys = [b[0] or 0.0 for b in bands]
+            top = max(top, max(b[2] or 0.0 for b in bands))
+            color, _, marker = style_of(s)
+            ax.errorbar(xs, ys, yerr=err(ys, [b[1] or 0.0 for b in bands],
+                                         [b[2] or 0.0 for b in bands]),
+                        fmt="none", zorder=2, **ERRBAR)
+            ax.plot(xs, ys, color=color, linewidth=1.3, marker=marker,
+                    markersize=3.0, markeredgewidth=0,
+                    label=SYSTEM_LABEL[s], zorder=3)
+        ax.set_xticks(xs)
+        ax.set_xlabel("sequence length (tokens)")
+        ax.set_title(PHASE_LABEL.get(phase, phase), fontsize=7)
+        ax.yaxis.grid(True, zorder=0)
+        ax.set_axisbelow(True)
+        despine(ax)
+    axes[0][0].set_ylabel("median time per step (\u00b5s)\nlower is better")
+    axes[0][0].set_ylim(0, top * 1.08)
+    legend_below(fig, axes[0][0], ncol=2)
+    if args.titles:
+        fig.suptitle("Changing sequence length")
+
+    DELTAS = ["loops", "bridges", "kernels", "cache_hits", "recompiles"]
 
     def delta(key, col):
         vs = [float(r.get(col) or 0) for r in per.get(key, [])]
@@ -684,31 +692,34 @@ def fig_dynamic(out, args):
 
     time_rows = []
     for s in systems:
-        for p in passes:
-            row = [SYSTEM_LABEL[s], p]
+        for phase in phases:
+            row = [SYSTEM_LABEL[s], PHASE_LABEL.get(phase, phase)]
             for L in lengths:
-                vs = [float(r["median_us"]) for r in per.get((s, p, L), [])]
+                vs = [float(r["median_us"]) for r in per.get((s, phase, L), [])]
                 row.append("%.0f [%s]" % (band(vs)[0],
                                           spread_str(*band(vs)[1:], fmt="%.0f"))
-                           if vs else "n/a")
-            row += ["%.0f" % sum(delta((s, p, L), c) for L in lengths)
+                           if vs else "-")
+            row += ["%.0f" % sum(delta((s, phase, L), c) for L in lengths)
                     for c in DELTAS]
             time_rows.append(row)
     write_table(os.path.join(args.outdir, "dynamic.tex"),
                 "median us per step over the rounds (range in brackets), and "
-                "the compile counters summed over the pass; pass 1 is the "
-                "first visit of each length, pass 2 the revisit",
-                ["system", "pass"] + [str(L) for L in lengths]
+                "the compile counters summed over the phase. first visit is "
+                "the first time each length is seen, revisit is the same "
+                "lengths again, and the last phase is five lengths the run "
+                "has not seen",
+                ["system", "phase"] + [str(L) for L in lengths]
                 + ["loops", "bridges", "kernels", "hits", "recompiles"],
                 time_rows)
     write_table(os.path.join(args.outdir, "dynamic_deltas.tex"),
                 "per-length compile counters: the delta inside that length's "
                 "window, median over the rounds",
-                ["system", "pass", "length", "loops", "bridges", "kernels",
+                ["system", "phase", "length", "loops", "bridges", "kernels",
                  "cache hits", "recompiles"],
-                [[SYSTEM_LABEL[s], p, str(L)]
+                [[SYSTEM_LABEL[s], PHASE_LABEL.get(p, p), str(L)]
                  + ["%.0f" % delta((s, p, L), c) for c in DELTAS]
-                 for s in systems for p in passes for L in lengths])
+                 for s in systems for p in phases
+                 for L in per_phase_lengths[p]])
     return fig, "dynamic"
 
 
