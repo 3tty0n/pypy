@@ -128,7 +128,10 @@ def test_in_place_write_does_not_change_a_pending_read():
         assert values(pending) == [1.0, 4.0, 9.0, 16.0]
 
 
-def test_interior_node_read_later_is_an_extra_output():
+def test_interior_node_read_later_is_recomputed():
+    """The pass would make this an extra output of the kernel it already
+    emitted.  A runtime library learns too late, so it recomputes from the
+    leaves; the value has to be the same and the read has to cost a launch."""
     x = from_list([1.0, -2.0, 3.0, -4.0])
     w = from_list([0.5, 0.5, 0.5, 0.5])
     b = from_list([1.0, 1.0, 1.0, 1.0])
@@ -136,7 +139,7 @@ def test_interior_node_read_later_is_an_extra_output():
         inner = ops.add(ops.mul(x, w), b)
         outer = ops.relu(inner)
         assert values(outer) == [1.5, 0.0, 2.5, 0.0]
-        assert not inner.lazy, 'the interior node should be an extra output'
+        assert inner.lazy
         assert values(inner) == [1.5, 0.0, 2.5, -1.0]
 
 

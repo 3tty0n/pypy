@@ -517,12 +517,12 @@ def lazy_enabled(space):
 
 def lazy_stats(space):
     """Deferred-execution counters: chains forced, nodes deferred, in-place
-    barriers, live-set entries walked looking for interior outputs, and forces
+    barriers, live-set entries swept once the program dropped them, and forces
     that fell back to node-by-node evaluation.  All zero unless
     METATENSOR_LAZY is set."""
     s = lazy.stats
     return space.newtuple([space.newint(s.forces), space.newint(s.nodes),
-                           space.newint(s.barriers), space.newint(s.scans),
+                           space.newint(s.barriers), space.newint(s.pruned),
                            space.newint(s.fallbacks)])
 
 

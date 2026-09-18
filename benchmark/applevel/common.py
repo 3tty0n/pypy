@@ -231,7 +231,7 @@ def report(line, order):
         if hasattr(_metatensor, 'lazy_stats'):
             f, n, b, sc, fb = _metatensor.lazy_stats()
             line += (' deferred=%d lazy_forces=%d lazy_nodes=%d'
-                     ' lazy_barriers=%d lazy_scans=%d lazy_fallbacks=%d'
+                     ' lazy_barriers=%d lazy_pruned=%d lazy_fallbacks=%d'
                      % (1 if _metatensor.lazy_enabled() else 0, f, n, b, sc, fb))
         if hasattr(_metatensor, 'kernel_compile_count'):
             line += ' kernels=%d compiles=%d' % (

@@ -14,10 +14,15 @@ optimization pass disabled (--jit enable_opts=... without 'tensor'), because
 with the pass on the primitives in ops.py are absorbed and never execute.
 
 One asymmetry is not an implementation accident and is the point of the
-comparison: the fusion pass may turn an interior node into an extra kernel
-output at any later point in the trace, because the trace has not run yet.
-A runtime library has to decide before it launches, so _materialize scans the
-live set for interior nodes first, and that scan is host work per force.
+comparison.  The fusion pass can turn an interior node into an extra output
+of a kernel it has already emitted, because the trace has not run yet.  A
+runtime library cannot: by the time it learns that an interior value is
+wanted, the launch has happened.  Here that interior value is recomputed from
+its leaves instead, which is sound because an in-place write materializes
+every deferred tensor first, and costs one extra launch where the pass costs
+nothing.  Deciding before the launch instead is not open to it either: what
+the program still holds is only known to the collector, so it would have to
+make an output of every interior node.
 """
 
 import os
@@ -46,8 +51,24 @@ class Stats(object):
     forces = 0
     nodes = 0
     barriers = 0
-    scans = 0
+    pruned = 0
 stats = Stats()
+
+# How long the live set may get before it is swept for entries whose tensor
+# the program has dropped.  A lazy library has to keep this set, because an
+# in-place write has to materialize whatever still reads the destination.
+LIVE_SWEEP = 256
+
+
+def _prune():
+    kept = []
+    refs = live.refs
+    for i in range(len(refs)):
+        other = refs[i]()
+        if other is not None and other.out.lazy:
+            kept.append(refs[i])
+    stats.pruned += len(refs) - len(kept)
+    live.refs = kept
 
 
 class Lazy(object):
@@ -61,9 +82,6 @@ class Lazy(object):
 
     opcode = 0
     param = 0
-    # Mirrors VTensorInfo.node_index, and for the same reason the pass has it:
-    # the index of this node in the kernel it became part of, -1 until then.
-    node_index = -1
     a = NULLTENSOR
     b = NULLTENSOR
     out = NULLTENSOR
@@ -190,6 +208,8 @@ def lazy_op(opcode, a, b, param):
     lz = Lazy(opcode, a, b, param, leaves, consts)
     lz.out = t
     t.lazy = cast_instance_to_base_ptr(lz)
+    if len(live.refs) > LIVE_SWEEP:
+        _prune()
     live.refs.append(rweakref.ref(lz))
     stats.nodes += 1
     return t
@@ -281,37 +301,6 @@ def _launch(kernel, leaves):
     return result
 
 
-def _interior_outputs(kernel, lz, infos, base):
-    """Every still deferred tensor that is an interior node of this DAG has to
-    become an extra output before the launch.  Pruning the live set is folded
-    into the same walk."""
-    extras = []
-    kept = []
-    refs = live.refs
-    for i in range(len(refs)):
-        other = refs[i]()
-        if other is None or not other.out.lazy:
-            continue
-        kept.append(refs[i])
-        if other is lz or len(infos) < 2:
-            continue
-        stats.scans += 1
-        j = _index_of_info(infos, other)
-        if j < 0 or is_reduction(other.opcode) or j == len(infos) - 1:
-            continue
-        other.node_index = base + j
-        extras.append((other, kernels.add_output(kernel, other.node_index)))
-    live.refs = kept
-    return extras
-
-
-def _index_of_info(infos, lz):
-    for i in range(len(infos)):
-        if infos[i] is lz:
-            return i
-    return -1
-
-
 def _materialize(lz, t):
     stats.forces += 1
     leaves, consts = [], []
@@ -341,13 +330,7 @@ def _materialize(lz, t):
     kernel.n = big.size if core.policy.static else 0
     kernel.cols = cols(big) if core.policy.static_cols else 0
     kernels.compile_or_reuse(kernel)
-    extras = _interior_outputs(kernel, lz, infos, len(leaves) + len(consts))
-    result = _launch(kernel, leaves)
-    for i in range(len(extras)):
-        other, k = extras[i]
-        if result.extra and k < len(result.extra):
-            _adopt(other.out, result.extra[k])
-    _adopt(t, result)
+    _adopt(t, _launch(kernel, leaves))
 
 
 def _eval_tree(lz):
@@ -361,15 +344,15 @@ def _eval_tree(lz):
 
 
 def force(t):
-    """Materialize t, and never raise anything but MemoryError.
+    """Materialize t.
 
-    Forcing compiles a kernel, which can fail on I/O, and the raise
-    analyzer is purely syntactic: any operation that can raise anywhere in
-    the call graph counts, try/except or not.  So the deferred layer is kept
-    out of host() and dev(), which run underneath the launcher's
-    elidable-or-memoryerror oopspec, and a failed force falls back to
-    evaluating the chain node by node, the way the runtime already does when
-    a launch is refused."""
+    A failed force falls back to evaluating the chain node by node, the way
+    the runtime already does when a launch is refused.  Note where this is
+    called from: not host() and dev(), which run underneath the launcher's
+    elidable-or-memoryerror oopspec.  The raise and write analyzers are
+    syntactic, so a kernel compile reachable from there would break that
+    oopspec's declared effect and make the library ops random-effecting,
+    which would stop the pass fusing across them."""
     lz = _lazy_of(t)
     if lz is None:
         return t
