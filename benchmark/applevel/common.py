@@ -100,6 +100,22 @@ KERNEL_WINDOW = [None, None]
 GC_BYTES_PER_ITER = [None]
 
 
+JIT_COUNTERS = [None, None]
+
+
+def _jit_counters():
+    """Compiled loops and bridges so far.  The deferred arm runs with the
+    tensor pass off, so its guards are the interpreter's own; counting them
+    on both arms is what says whether the difference is guard work or host
+    work."""
+    try:
+        import pypyjit
+        c = pypyjit.get_stats_snapshot().counters
+        return c['TOTAL_COMPILED_LOOPS'], c['TOTAL_COMPILED_BRIDGES']
+    except (ImportError, KeyError, AttributeError):
+        return 0, 0
+
+
 def _gc_allocated():
     try:
         import gc
@@ -143,6 +159,7 @@ def timed(model, args, iters, warmup):
     logits.sum().item()
     launches0 = _metatensor.launch_count()
     gc0 = _gc_allocated() if os.environ.get('RTENSOR_LAZY_STATS') else 0
+    jit0 = _jit_counters() if os.environ.get('RTENSOR_LAZY_STATS') else (0, 0)
     t0 = time.time()
     for i in range(iters):
         logits = model(*args)
@@ -150,6 +167,9 @@ def timed(model, args, iters, warmup):
     steady_us = (time.time() - t0) / iters * 1e6
     if os.environ.get('RTENSOR_LAZY_STATS'):
         GC_BYTES_PER_ITER[0] = (_gc_allocated() - gc0) / float(iters)
+        jit1 = _jit_counters()
+        JIT_COUNTERS[0] = jit1[0] - jit0[0]
+        JIT_COUNTERS[1] = jit1[1] - jit0[1]
     # Read after acc: the graph is lazy, so the launches happen when the
     # result is forced, not when the expression is built.
     LAUNCHES_PER_ITER[0] = float(_metatensor.launch_count() - launches0) / iters
@@ -233,6 +253,8 @@ def report(line, order):
             line += (' deferred=%d lazy_forces=%d lazy_nodes=%d'
                      ' lazy_barriers=%d lazy_pruned=%d lazy_fallbacks=%d'
                      % (1 if _metatensor.lazy_enabled() else 0, f, n, b, sc, fb))
+        if JIT_COUNTERS[0] is not None:
+            line += ' loops=%d bridges=%d' % (JIT_COUNTERS[0], JIT_COUNTERS[1])
         if hasattr(_metatensor, 'kernel_compile_count'):
             line += ' kernels=%d compiles=%d' % (
                 _metatensor.kernel_count(), _metatensor.kernel_compile_count())

@@ -2205,6 +2205,8 @@ def fig_lazy(out, args):
                           "%d" % (med([r["compiles"] for r in rs]) or 0),
                           si(int(med([r["gc_bytes_per_iter"] for r in rs]) or 0)),
                           "%d" % (med([r["lazy_nodes"] for r in rs]) or 0),
+                          "%d" % (med([r.get("loops") for r in rs]) or 0),
+                          "%d" % (med([r.get("bridges") for r in rs]) or 0),
                           rs[0].get("argmax_match", "")])
     write_table(os.path.join(args.outdir, "lazy.tex"),
                 "one binary, three places to keep the operation DAG. "
@@ -2213,7 +2215,7 @@ def fig_lazy(out, args):
                 "that both arms ran the same kernels",
                 ["model", "DAG lives in", "us/iter", "range", "launches/iter",
                  "kernels", "compiles", "bytes/iter", "nodes deferred",
-                 "same argmax"], table)
+                 "loops", "bridges", "same argmax"], table)
     return fig, "lazy"
 
 
