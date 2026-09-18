@@ -23,8 +23,16 @@ commands:
                          end-to-end models; no args = all
                          names: $ALL_MODELS
   ablation [EXP...]      ablations; no args = all
+  lazy [PHASE|MODEL...]  where the DAG lives: the fusion pass against a
+                         deferred library on the same runtime and the same
+                         kernels; phases models warmup recovery
                          names: $ALL_EXPERIMENTS
   dynamic                dynamic sequence-length experiment
+  control [REGIME...]    host-dependent control flow in a real model:
+                         data-dependent early exit (DeeBERT/CALM style) on
+                         distilgpt2, ours/torch-eager/torch-compile(-ro/-mat)/
+                         jax-perlayer/jax-while, into \$OUT/control.tsv and
+                         \$OUT/control_series.tsv (regimes: stable varying)
   batch [MODEL...]       batch-size sweep (1 2 4 8 16 32) for bert-mini and
                          distilgpt2 across ours/torch-eager/torch-compile/
                          torch-compile-ro/jax, into \$OUT/batch.tsv
@@ -138,6 +146,19 @@ run_cmd() {
       ;;
     dynamic)
       bash "$HERE/run_dynamic.sh" "$@"
+      ;;
+    lazy)
+      bash "$HERE/run_lazy.sh" "$@"
+      ;;
+    control)
+      for r in "$@"; do
+        case " stable varying " in
+          *" $r "*) ;;
+          *) echo "bench.sh: unknown regime '$r', valid: stable varying" >&2; exit 1 ;;
+        esac
+      done
+      if [ $# -gt 0 ]; then REGIMES="$*"; export REGIMES; fi
+      bash "$HERE/run_control.sh"
       ;;
     batch)
       bash "$HERE/run_batch.sh" "$@"

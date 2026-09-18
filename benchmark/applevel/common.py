@@ -93,6 +93,19 @@ LAUNCHES_PER_ITER = [None]
 # caller can tell which rtensor_k<n>.ttir files this model's fusion regions
 # produced (everything below the first value is the start-up single-op set).
 KERNEL_WINDOW = [None, None]
+# RTENSOR_LAZY_STATS=1: bytes the GC handed out during the timed loop, per
+# iteration, and the deferred-execution counters.  Where the operation DAG is
+# built shows up here: the fusion pass builds it once when a trace is
+# optimized, a deferred library builds it again on every iteration.
+GC_BYTES_PER_ITER = [None]
+
+
+def _gc_allocated():
+    try:
+        import gc
+        return gc.get_stats().total_allocated_memory
+    except (ImportError, AttributeError):
+        return 0
 
 
 def timed(model, args, iters, warmup):
@@ -129,11 +142,14 @@ def timed(model, args, iters, warmup):
         logits = model(*args)
     logits.sum().item()
     launches0 = _metatensor.launch_count()
+    gc0 = _gc_allocated() if os.environ.get('RTENSOR_LAZY_STATS') else 0
     t0 = time.time()
     for i in range(iters):
         logits = model(*args)
     acc = logits.sum().item()
     steady_us = (time.time() - t0) / iters * 1e6
+    if os.environ.get('RTENSOR_LAZY_STATS'):
+        GC_BYTES_PER_ITER[0] = (_gc_allocated() - gc0) / float(iters)
     # Read after acc: the graph is lazy, so the launches happen when the
     # result is forced, not when the expression is built.
     LAUNCHES_PER_ITER[0] = float(_metatensor.launch_count() - launches0) / iters
@@ -209,6 +225,17 @@ def report(line, order):
     if os.environ.get('RTENSOR_STATS') and KERNEL_WINDOW[1] is not None:
         line += ' kernel_count_begin=%d kernel_count_end=%d' % (
             KERNEL_WINDOW[0], KERNEL_WINDOW[1])
+    if os.environ.get('RTENSOR_LAZY_STATS'):
+        if GC_BYTES_PER_ITER[0] is not None:
+            line += ' gc_bytes_per_iter=%.0f' % GC_BYTES_PER_ITER[0]
+        if hasattr(_metatensor, 'lazy_stats'):
+            f, n, b, sc, fb = _metatensor.lazy_stats()
+            line += (' deferred=%d lazy_forces=%d lazy_nodes=%d'
+                     ' lazy_barriers=%d lazy_scans=%d lazy_fallbacks=%d'
+                     % (1 if _metatensor.lazy_enabled() else 0, f, n, b, sc, fb))
+        if hasattr(_metatensor, 'kernel_compile_count'):
+            line += ' kernels=%d compiles=%d' % (
+                _metatensor.kernel_count(), _metatensor.kernel_compile_count())
     if FIRST_RUN_MS[0] is not None:
         line += ' compile_ms=-1 first_run_ms=%.1f' % FIRST_RUN_MS[0]
     print(line)
