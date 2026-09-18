@@ -59,8 +59,8 @@ run_arm() {
   local system=$1 model=$2 script=$3 weights=$4 extra=$5
   case $system in
     virtual)  RTENSOR_LAZY_STATS=1 "$RUN_PYPY" $JIT_FLAGS "$APP/$script" "$weights" "$ITERS" "$WARMUP" $extra;;
-    deferred) RTENSOR_LAZY_STATS=1 METATENSOR_LAZY=1 "$RUN_PYPY" -S --jit "$JIT_INNER,$NOFUSE" "$APP/$script" "$weights" "$ITERS" "$WARMUP" $extra;;
-    eager)    RTENSOR_LAZY_STATS=1 "$RUN_PYPY" -S --jit "$JIT_INNER,$NOFUSE" "$APP/$script" "$weights" "$ITERS" "$WARMUP" $extra;;
+    deferred) RTENSOR_LAZY_STATS=1 METATENSOR_LAZY=1 "$RUN_PYPY" --jit "$JIT_INNER,$NOFUSE" "$APP/$script" "$weights" "$ITERS" "$WARMUP" $extra;;
+    eager)    RTENSOR_LAZY_STATS=1 "$RUN_PYPY" --jit "$JIT_INNER,$NOFUSE" "$APP/$script" "$weights" "$ITERS" "$WARMUP" $extra;;
   esac
 }
 
@@ -158,8 +158,8 @@ do_micro() {
         local line
         case $system in
           virtual)  line=$("$RUN_PYPY" $JIT_FLAGS "$APP/micro.py" app "$v" "$k" "$n" "$ITERS" "$WARMUP" 2>/dev/null | tail -1);;
-          deferred) line=$(METATENSOR_LAZY=1 "$RUN_PYPY" -S --jit "$JIT_INNER,$NOFUSE" "$APP/micro.py" app "$v" "$k" "$n" "$ITERS" "$WARMUP" 2>/dev/null | tail -1);;
-          eager)    line=$("$RUN_PYPY" -S --jit "$JIT_INNER,$NOFUSE" "$APP/micro.py" app "$v" "$k" "$n" "$ITERS" "$WARMUP" 2>/dev/null | tail -1);;
+          deferred) line=$(METATENSOR_LAZY=1 "$RUN_PYPY" --jit "$JIT_INNER,$NOFUSE" "$APP/micro.py" app "$v" "$k" "$n" "$ITERS" "$WARMUP" 2>/dev/null | tail -1);;
+          eager)    line=$("$RUN_PYPY" --jit "$JIT_INNER,$NOFUSE" "$APP/micro.py" app "$v" "$k" "$n" "$ITERS" "$WARMUP" 2>/dev/null | tail -1);;
         esac
         if [ -z "$line" ]; then
           echo "run_lazy.sh: micro v$v/$system failed" >&2
@@ -186,7 +186,7 @@ do_micro() {
 do_recovery() {
   progress_step "recovery probe"
   local out
-  if out=$(METATENSOR_LAZY=1 "$RUN_PYPY" -S --jit "$JIT_INNER,$NOFUSE" "$APP/recovery_probe.py" 2>&1); then
+  if out=$(METATENSOR_LAZY=1 "$RUN_PYPY" --jit "$JIT_INNER,$NOFUSE" "$APP/recovery_probe.py" 2>&1); then
     echo "$out" > "$OUT/lazy_recovery.txt"
     echo "recovery probe (deferred): $(echo "$out" | grep -c -i 'ok\|match') ok lines, see lazy_recovery.txt"
   else

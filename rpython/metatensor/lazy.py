@@ -61,6 +61,9 @@ class Lazy(object):
 
     opcode = 0
     param = 0
+    # Mirrors VTensorInfo.node_index, and for the same reason the pass has it:
+    # the index of this node in the kernel it became part of, -1 until then.
+    node_index = -1
     a = NULLTENSOR
     b = NULLTENSOR
     out = NULLTENSOR
@@ -296,7 +299,8 @@ def _interior_outputs(kernel, lz, infos, base):
         j = _index_of_info(infos, other)
         if j < 0 or is_reduction(other.opcode) or j == len(infos) - 1:
             continue
-        extras.append((other, kernels.add_output(kernel, base + j)))
+        other.node_index = base + j
+        extras.append((other, kernels.add_output(kernel, other.node_index)))
     live.refs = kept
     return extras
 

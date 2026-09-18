@@ -77,7 +77,7 @@ SINGLE_COL, DOUBLE_COL = 3.25, 6.75   # MLSys column and text widths, inches
 # Figures the paper does not include at column width; they are drawn at the
 # full text width.  --column overrides this.
 WIDE = {"micro_speedup", "models", "ablation", "micro_baselines",
-        "compile_overhead", "integration"}
+        "compile_overhead", "integration", "lazy", "lazy_micro", "control"}
 # The width the paper actually draws the figure at, so nothing is rescaled on
 # the page and 7pt in the pdf is 7pt in print.  \columnwidth is 3.25in; the
 # entries are the \includegraphics fractions in sections/*.tex.
@@ -99,6 +99,13 @@ SYSTEM_LABEL = {
     "iree": "IREE",
     "torch-tensorrt": "Torch-TensorRT",
     "triton": "Triton (handwritten)",
+    # where the DAG lives (bench.sh lazy)
+    "virtual": "MetaTensor (DAG in the JIT)",
+    "deferred": "deferred library (DAG at run time)",
+    "eager": "eager (no DAG)",
+    # early exit (bench.sh control)
+    "jax-perlayer": "JAX/XLA (per-layer jit, host sync)",
+    "jax-while": "JAX/XLA (lax.while_loop)",
 }
 # Names come from benchmarks.toml, the same file the grid is read from, so a
 # new benchmark is named once. A run whose variants predate an entry still
@@ -238,6 +245,14 @@ SYSTEM_IDENTITY = collections.OrderedDict([
     # not a baseline: the same code with the JIT off, the "before" end of the
     # fusion dumbbell.
     ("nojit",                 ("#9a9994", "",    "o")),
+    # The three arms of the DAG-placement experiment.  virtual is our system
+    # and keeps its colour; the other two are not baselines, they are the same
+    # runtime with the DAG somewhere else.
+    ("virtual",               ("#1a4fa0", "",    "o")),
+    ("deferred",              ("#d94f70", "\\\\", "s")),
+    ("eager",                 ("#9a9994", "",    "^")),
+    ("jax-perlayer",          ("#6b6b6b", "++",  "P")),
+    ("jax-while",             ("#3f3f3f", "..",  "X")),
 ])
 MARKERS = "osD^vP*Xh"
 # Machines are not systems; the compare_* figures colour by machine.
@@ -2100,6 +2115,261 @@ def fig_correctness(out, args):
     return fig, "correctness"
 
 
+# --- where the DAG lives ---------------------------------------------------
+
+LAZY_ARMS = ["virtual", "deferred", "eager"]
+
+
+def _lazy_group(rows, key):
+    g = collections.defaultdict(lambda: collections.defaultdict(list))
+    for r in rows:
+        g[key(r)][r["system"]].append(r)
+    return g
+
+
+def _lazy_ratio_panel(ax, keys, groups, labels, args, field="steady_us"):
+    """Bars per arm, relative to the virtual arm, with the range over rounds."""
+    x = list(range(len(keys)))
+    width = 0.38
+    for i, arm in enumerate(["deferred", "eager"]):
+        vals, lows, highs = [], [], []
+        for k in keys:
+            num = [r[field] for r in groups[k].get(arm, [])]
+            den = [r[field] for r in groups[k].get("virtual", [])]
+            m, lo, hi = ratio_band(num, den)
+            vals.append(m or 0.0)
+            lows.append(lo or 0.0)
+            highs.append(hi or 0.0)
+        colour, hatch, _ = style_of(arm)
+        ax.bar([v + (i - 0.5) * width for v in x], vals, width * 0.92,
+               color=colour, linewidth=0,
+               hatch=hatch if args.texture else None,
+               label=SYSTEM_LABEL.get(arm, arm),
+               yerr=err(vals, lows, highs), **ERRBAR)
+    ax.axhline(1.0, color=INK_2, linewidth=0.8, linestyle="--")
+    ax.set_xticks(x, labels, rotation=30, ha="right")
+    ax.set_yscale("log")
+    ax.yaxis.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    despine(ax)
+
+
+def fig_lazy(out, args):
+    """The experiment the whole deferred layer exists for: one binary, one
+    kernel emitter, one cache, one allocator, one set of forcing boundaries,
+    and the operation DAG in three different places."""
+    rows = read_tsv(os.path.join(out, "lazy.tsv"))
+    if not rows:
+        return None
+    groups = _lazy_group(rows, lambda r: r["model"])
+    keys = [k for k in collections.OrderedDict.fromkeys(r["model"] for r in rows)]
+    fig, axes = plt.subplots(2, 1, figsize=(args.width, 4.4), sharex=True)
+    _lazy_ratio_panel(axes[0], keys, groups, keys, args)
+    axes[0].set_ylabel("latency relative to\nthe DAG in the JIT\n(lower is better)")
+
+    # Allocation is the other half of the story: the deferred arm rebuilds the
+    # DAG on every iteration and the bytes say so.
+    x = list(range(len(keys)))
+    width = 0.27
+    for i, arm in enumerate(LAZY_ARMS):
+        vals = []
+        for k in keys:
+            vals.append(med([r["gc_bytes_per_iter"] for r in groups[k].get(arm, [])]) or 0.0)
+        colour, hatch, _ = style_of(arm)
+        axes[1].bar([v + (i - 1) * width for v in x], vals, width * 0.92,
+                    color=colour, linewidth=0,
+                    hatch=hatch if args.texture else None,
+                    label=SYSTEM_LABEL.get(arm, arm))
+    axes[1].set_yscale("log")
+    axes[1].set_ylabel("bytes allocated per\niteration (lower is better)")
+    axes[1].set_xticks(x, keys, rotation=30, ha="right")
+    axes[1].yaxis.grid(True, zorder=0)
+    axes[1].set_axisbelow(True)
+    despine(axes[1])
+    handles, labels = axes[1].get_legend_handles_labels()
+    legend_below(fig, handles=handles, labels=labels, ncol=3)
+    if args.titles:
+        axes[0].set_title("Where the operation DAG lives")
+
+    table = []
+    for k in keys:
+        for arm in LAZY_ARMS:
+            rs = groups[k].get(arm, [])
+            if not rs:
+                continue
+            m, lo, hi = band([r["steady_us"] for r in rs])
+            table.append([k, SYSTEM_LABEL.get(arm, arm), "%.1f" % m,
+                          spread_str(lo, hi),
+                          "%.1f" % (med([r["launches_per_iter"] for r in rs]) or 0),
+                          "%d" % (med([r["kernels"] for r in rs]) or 0),
+                          "%d" % (med([r["compiles"] for r in rs]) or 0),
+                          si(int(med([r["gc_bytes_per_iter"] for r in rs]) or 0)),
+                          "%d" % (med([r["lazy_nodes"] for r in rs]) or 0),
+                          rs[0].get("argmax_match", "")])
+    write_table(os.path.join(args.outdir, "lazy.tex"),
+                "one binary, three places to keep the operation DAG. "
+                "kernels and Triton compiles are cumulative process counters; "
+                "equal counts on the virtual and deferred arms are the check "
+                "that both arms ran the same kernels",
+                ["model", "DAG lives in", "us/iter", "range", "launches/iter",
+                 "kernels", "compiles", "bytes/iter", "nodes deferred",
+                 "same argmax"], table)
+    return fig, "lazy"
+
+
+def fig_lazy_micro(out, args):
+    """The same three arms across the size range, where the host cost of
+    rebuilding the DAG is the whole story at one end and invisible at the
+    other."""
+    rows = read_tsv(os.path.join(out, "lazy_micro.tsv"))
+    if not rows:
+        return None
+    key = lambda r: (int(r["variant"]), int(r["k"]), int(r["n"]))
+    groups = _lazy_group(rows, key)
+    keys = list(collections.OrderedDict.fromkeys(key(r) for r in rows))
+    labels = [micro_label(*k) for k in keys]
+    fig, ax = plt.subplots(figsize=(args.width, 2.6))
+    _lazy_ratio_panel(ax, keys, groups, labels, args)
+    ax.set_ylabel("latency relative to\nthe DAG in the JIT\n(lower is better)")
+    legend_below(fig, ax, ncol=2)
+    write_table(os.path.join(args.outdir, "lazy_micro.tex"),
+                "median us per iteration over the rounds, with launches per "
+                "iteration",
+                ["benchmark", "DAG lives in", "us/iter", "range",
+                 "launches/iter"],
+                [[labels[i], SYSTEM_LABEL.get(arm, arm),
+                  "%.1f" % band([r["steady_us"] for r in groups[k][arm]])[0],
+                  spread_str(*band([r["steady_us"] for r in groups[k][arm]])[1:]),
+                  "%.2f" % (med([r["launches_per_iter"] for r in groups[k][arm]]) or 0)]
+                 for i, k in enumerate(keys) for arm in LAZY_ARMS
+                 if groups[k].get(arm)])
+    return fig, "lazy_micro"
+
+
+def fig_lazy_warmup(out, args):
+    """Start-up, where the deferred arm should win: it fuses on the first
+    forward, while the trace has to be recorded and optimized first."""
+    rows = read_tsv(os.path.join(out, "lazy_warmup.tsv"))
+    if not rows:
+        return None
+    models = list(collections.OrderedDict.fromkeys(r["model"] for r in rows))
+    fig, axes = plt.subplots(len(models), 1, figsize=(args.width, 2.0 * len(models)),
+                             sharex=True, squeeze=False)
+    for ax, model in zip([a[0] for a in axes], models):
+        for arm in LAZY_ARMS:
+            series = collections.defaultdict(list)
+            for r in rows:
+                if r["model"] == model and r["system"] == arm:
+                    series[int(r["iter"])].append(float(r["us"]))
+            if not series:
+                continue
+            xs = sorted(series)
+            colour, _, marker = style_of(arm)
+            ax.plot(xs, [med(series[i]) for i in xs], color=colour,
+                    linewidth=1.0, marker=marker, markersize=2.2,
+                    markevery=max(1, len(xs) // 12),
+                    label=SYSTEM_LABEL.get(arm, arm))
+        ax.set_yscale("log")
+        ax.set_ylabel("%s\nus per forward\n(lower is better)" % model)
+        ax.yaxis.grid(True, zorder=0)
+        ax.set_axisbelow(True)
+        despine(ax)
+    axes[-1][0].set_xlabel("forward, from a fresh process with an empty kernel cache")
+    legend_below(fig, axes[0][0], ncol=3)
+    return fig, "lazy_warmup"
+
+
+# --- host-dependent control flow in a real model ---------------------------
+
+def fig_control(out, args):
+    """Early exit on distilgpt2: the exit layer is decided on the host from a
+    value the model just computed."""
+    rows = read_tsv(os.path.join(out, "control.tsv"))
+    if not rows:
+        return None
+    regimes = list(collections.OrderedDict.fromkeys(r["regime"] for r in rows))
+    systems = list(collections.OrderedDict.fromkeys(r["system"] for r in rows))
+    fig, axes = plt.subplots(1, len(regimes), figsize=(args.width, 2.8),
+                             squeeze=False, sharey=True)
+    for ax, regime in zip(axes[0], regimes):
+        vals, p95s, colours, hatches, names = [], [], [], [], []
+        for s in systems:
+            rs = [r for r in rows if r["regime"] == regime and r["system"] == s]
+            if not rs:
+                continue
+            vals.append(med([r["p50_us"] for r in rs]) or 0.0)
+            p95s.append(med([r["p95_us"] for r in rs]) or 0.0)
+            c, h, _ = style_of(s)
+            colours.append(c)
+            hatches.append(h)
+            names.append(SYSTEM_LABEL.get(s, s))
+        y = list(range(len(vals)))
+        ax.barh(y, vals, 0.62, color=colours, linewidth=0,
+                hatch=hatches if args.texture else None)
+        for i, (v, p) in enumerate(zip(vals, p95s)):
+            ax.plot([p], [i], marker="|", markersize=9, color=INK_2)
+        ax.set_yticks(y, names)
+        ax.invert_yaxis()
+        ax.set_xlabel("us per iteration, median\nand p95 tick (lower is better)")
+        ax.xaxis.grid(True, zorder=0)
+        ax.set_axisbelow(True)
+        despine(ax, keep=("left",))
+        ax.tick_params(axis="y", length=0)
+        if args.titles or len(regimes) > 1:
+            ax.set_title(regime, fontsize=7)
+    write_table(os.path.join(args.outdir, "control.tex"),
+                "early exit on distilgpt2. total ms is the whole phase "
+                "including every compilation; the exit hash is over the "
+                "per-iteration sequence of exit layers and has to agree "
+                "across systems or the row is not comparable",
+                ["regime", "system", "total ms", "p50 us", "p95 us", "max us",
+                 "bridges", "recompiles", "exit layers", "pass"],
+                [[r["regime"], SYSTEM_LABEL.get(r["system"], r["system"]),
+                  "%.0f" % float(r["total_ms"]), "%.1f" % float(r["p50_us"]),
+                  "%.1f" % float(r["p95_us"]), "%.0f" % float(r["max_us"]),
+                  r.get("bridges", ""), r.get("recompiles", ""),
+                  r.get("exit_seq", ""), r.get("pass", "")]
+                 for r in rows])
+    return fig, "control"
+
+
+def fig_control_cost(out, args):
+    """Cumulative time from the first iteration, so every compilation is
+    inside the number rather than warmed away before it starts."""
+    rows = read_tsv(os.path.join(out, "control_series.tsv"))
+    if not rows:
+        return None
+    regimes = list(collections.OrderedDict.fromkeys(r["regime"] for r in rows))
+    systems = list(collections.OrderedDict.fromkeys(r["system"] for r in rows))
+    fig, axes = plt.subplots(1, len(regimes), figsize=(args.width, 2.6),
+                             squeeze=False, sharey=True)
+    for ax, regime in zip(axes[0], regimes):
+        for sysname in systems:
+            series = collections.defaultdict(list)
+            for r in rows:
+                if r["regime"] == regime and r["system"] == sysname:
+                    series[int(r["iter"])].append(float(r["us"]))
+            if not series:
+                continue
+            xs = sorted(series)
+            total, ys = 0.0, []
+            for i in xs:
+                total += med(series[i]) / 1000.0
+                ys.append(total)
+            colour, _, marker = style_of(sysname)
+            ax.plot(xs, ys, color=colour, linewidth=1.0, marker=marker,
+                    markersize=2.2, markevery=max(1, len(xs) // 10),
+                    label=SYSTEM_LABEL.get(sysname, sysname))
+        ax.set_xlabel("iteration")
+        ax.set_title(regime, fontsize=7)
+        ax.yaxis.grid(True, zorder=0)
+        ax.set_axisbelow(True)
+        despine(ax)
+    axes[0][0].set_ylabel("cumulative ms, compilation\nincluded (lower is better)")
+    legend_below(fig, axes[0][0], ncol=3)
+    return fig, "control_cost"
+
+
 FIGURES = collections.OrderedDict([
     ("micro_speedup", fig_micro_speedup),
     ("integration", fig_integration),
@@ -2118,6 +2388,11 @@ FIGURES = collections.OrderedDict([
     ("compile_overhead", fig_compile_overhead),
     ("gap", fig_gap),
     ("correctness", fig_correctness),
+    ("lazy", fig_lazy),
+    ("lazy_micro", fig_lazy_micro),
+    ("lazy_warmup", fig_lazy_warmup),
+    ("control", fig_control),
+    ("control_cost", fig_control_cost),
     ("warmup", fig_warmup),
 ])
 
