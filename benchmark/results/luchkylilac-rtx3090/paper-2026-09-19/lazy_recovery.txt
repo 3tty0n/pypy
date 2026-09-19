@@ -19,3 +19,25 @@ d2 mut-hazard    yes   -     727200         727200            3.000       1     
 e promotion      yes   -     26700          26700             1.090       3     1       1  shapes=64,96
 
 all cases match
+
+== JIT off ==
+case             ok    vs-ref expected       observed       launch/it kernels loops bridges  effects
+a shared-branch  yes   -     33487.5        33487.5           7.000      51     0       0  true=150 false=150
+b exception      yes   -     22812          22812             4.970       0     0       0  caught=9
+c effects        yes   -     n=250          n=250             5.000       0     0       0  0,-1,3,-3,-5,6,-7,9,-9,-11,12,... (1056 chars)
+d1 mut-alias     yes   -     9664           9664              2.000       0     0       0  first=96 mid=4896
+d2 mut-hazard    yes   -     727200         727200            3.000       0     0       0  first=32 last=4816
+e promotion      yes   -     26700          26700             4.000       0     0       0  shapes=64,96
+
+all cases match
+
+== pass off, no deferral ==
+case             ok    vs-ref expected       observed       launch/it kernels loops bridges  effects
+a shared-branch  yes   -     33487.5        33487.5           7.000      51     4       4  true=150 false=150
+b exception      yes   -     22812          22812             3.050       0     1       7  caught=9
+c effects        yes   -     n=250          n=250             5.000       0     4       6  0,-1,3,-3,-5,6,-7,9,-9,-11,12,... (1056 chars)
+d1 mut-alias     yes   -     9664           9664              2.000       0     1       0  first=96 mid=4896
+d2 mut-hazard    yes   -     727200         727200            3.000       0     1       0  first=32 last=4816
+e promotion      yes   -     26700          26700             4.000       0     1       1  shapes=64,96
+
+all cases match
