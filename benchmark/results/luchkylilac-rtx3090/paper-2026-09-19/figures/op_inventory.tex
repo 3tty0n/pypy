@@ -1,0 +1,79 @@
+\begin{tabular}{llrrrrrrrrrrrrrrrrr}
+\toprule
+model & system & mm & bmm & conv & LN & RMS & smax & gelu & silu & relu & add & mul & res & gather & rope & shape & red & other \\
+\midrule
+distilgpt2 & MetaTensor & 25 & 12 & 0 & 13 & 0 & 6 & 6 & 0 & 0 & 31 & 6 & 12 & 1 & 0 & 0 & 0 & 0 \\
+distilgpt2 & torch & 25 & 12 & 0 & 13 & 0 & 6 & 0 & 0 & 0 & 26 & 24 & 0 & 4 & 0 & 167 & 0 & 134 \\
+tiny-gpt2 & MetaTensor & 9 & 4 & 0 & 5 & 0 & 2 & 2 & 0 & 0 & 11 & 2 & 4 & 1 & 0 & 0 & 0 & 0 \\
+tiny-gpt2 & torch & 9 & 4 & 0 & 5 & 0 & 2 & 0 & 0 & 0 & 12 & 12 & 0 & 4 & 0 & 85 & 0 & 70 \\
+smollm2-135m & MetaTensor & 151 & 60 & 0 & 0 & 61 & 30 & 0 & 30 & 0 & 30 & 60 & 60 & 1 & 30 & 0 & 0 & 0 \\
+smollm2-135m & torch & 211 & 60 & 0 & 0 & 0 & 30 & 0 & 30 & 0 & 182 & 274 & 0 & 2 & 0 & 1037 & 61 & 504 \\
+bert-tiny & MetaTensor & 10 & 4 & 0 & 6 & 0 & 2 & 3 & 0 & 0 & 11 & 2 & 4 & 1 & 0 & 0 & 0 & 0 \\
+bert-tiny & torch & 14 & 4 & 0 & 6 & 0 & 2 & 3 & 0 & 0 & 6 & 2 & 0 & 6 & 0 & 97 & 0 & 24 \\
+bert-mini & MetaTensor & 18 & 8 & 0 & 10 & 0 & 4 & 5 & 0 & 0 & 19 & 4 & 8 & 1 & 0 & 0 & 0 & 0 \\
+bert-mini & torch & 26 & 8 & 0 & 10 & 0 & 4 & 5 & 0 & 0 & 10 & 4 & 0 & 6 & 0 & 167 & 0 & 40 \\
+resnet18-b1 & MetaTensor & 2 & 0 & 20 & 0 & 0 & 0 & 0 & 0 & 17 & 21 & 20 & 8 & 0 & 0 & 20 & 0 & 1 \\
+resnet18-b1 & torch & 1 & 0 & 20 & 0 & 0 & 0 & 0 & 0 & 17 & 8 & 0 & 0 & 0 & 0 & 22 & 1 & 21 \\
+resnet18-b8 & MetaTensor & 2 & 0 & 20 & 0 & 0 & 0 & 0 & 0 & 17 & 21 & 20 & 8 & 0 & 0 & 20 & 0 & 1 \\
+resnet18-b8 & torch & 1 & 0 & 20 & 0 & 0 & 0 & 0 & 0 & 17 & 8 & 0 & 0 & 0 & 0 & 22 & 1 & 21 \\
+mixer\_b16 & MetaTensor & 51 & 0 & 0 & 25 & 0 & 0 & 24 & 0 & 0 & 50 & 0 & 24 & 0 & 0 & 1 & 0 & 0 \\
+mixer\_b16 & torch & 49 & 0 & 1 & 25 & 0 & 0 & 24 & 0 & 0 & 37 & 0 & 0 & 0 & 0 & 236 & 1 & 74 \\
+vit-tiny & MetaTensor & 50 & 24 & 0 & 25 & 0 & 12 & 12 & 0 & 0 & 50 & 12 & 24 & 2 & 0 & 1 & 0 & 0 \\
+vit-tiny & torch & 73 & 24 & 1 & 25 & 0 & 12 & 12 & 0 & 0 & 26 & 12 & 0 & 0 & 0 & 428 & 0 & 98 \\
+\bottomrule
+\end{tabular}
+% operators per forward, both systems in one vocabulary
+
+%% notes
+\begin{minipage}{\linewidth}\footnotesize
+\par\smallskip
+\textbf{Mapping.} torch's rows are one eager forward under \texttt{torch.profiler}, with each aten name mapped to a vocabulary word: \texttt{mm}$\rightarrow$matmul, \texttt{addmm}$\rightarrow$matmul, \texttt{bmm}$\rightarrow$bmm, \texttt{baddbmm}$\rightarrow$bmm, \texttt{convolution}$\rightarrow$conv, \texttt{native\_layer\_norm}$\rightarrow$layernorm, \texttt{\_fused\_rms\_norm}$\rightarrow$rmsnorm, \texttt{rms\_norm}$\rightarrow$rmsnorm, \texttt{\_softmax}$\rightarrow$softmax, \texttt{gelu}$\rightarrow$gelu, \texttt{silu}$\rightarrow$silu, \texttt{relu}$\rightarrow$relu, \texttt{relu\_}$\rightarrow$relu, \texttt{add}$\rightarrow$add, \texttt{add\_}$\rightarrow$add, \texttt{mul}$\rightarrow$mul, \texttt{mul\_}$\rightarrow$mul, \texttt{embedding}$\rightarrow$embedding\_gather, \texttt{index\_select}$\rightarrow$embedding\_gather, \texttt{view}$\rightarrow$reshape\_transpose, \texttt{reshape}$\rightarrow$reshape\_transpose, \texttt{transpose}$\rightarrow$reshape\_transpose, \texttt{permute}$\rightarrow$reshape\_transpose, \texttt{contiguous}$\rightarrow$reshape\_transpose, \texttt{expand}$\rightarrow$reshape\_transpose, \texttt{sum}$\rightarrow$reduce, \texttt{mean}$\rightarrow$reduce, \texttt{amax}$\rightarrow$reduce, \texttt{\_scaled\_dot\_product\_*}$\rightarrow$2 bmm + 1 softmax + 1 mul.
+\par\smallskip
+\textbf{Not counted.} These are the same call seen at an outer or inner dispatch level as one already counted, so counting them too would double-count: \texttt{linear}, \texttt{matmul}, \texttt{conv2d}, \texttt{\_convolution}, \texttt{cudnn\_convolution}, \texttt{convolution\_overrideable}, \texttt{softmax}, \texttt{\_safe\_softmax}, \texttt{layer\_norm}, \texttt{\_unsafe\_view}, \texttt{detach}, \texttt{to}, \texttt{\_to\_copy}, \texttt{copy\_}, \texttt{empty}, \texttt{empty\_like}, \texttt{empty\_strided}, \texttt{resolve\_conj}, \texttt{resolve\_neg}, \texttt{t}, \texttt{flatten}, \texttt{unsqueeze}, \texttt{squeeze}, \texttt{slice}, \texttt{select}, \texttt{size}, \texttt{item}, \texttt{\_has\_compatible\_shallow\_copy\_type}, \texttt{is\_same\_size}, \texttt{as\_strided}, \texttt{\_reshape\_alias}, \texttt{alias}, \texttt{clamp\_min\_}, \texttt{clamp\_min}, \texttt{max\_pool2d\_with\_indices}, \texttt{adaptive\_avg\_pool2d}, \texttt{\_batch\_norm\_impl\_index}, \texttt{cudnn\_batch\_norm}, \texttt{scaled\_dot\_product\_attention}, \texttt{\_efficient\_attention\_forward}, \texttt{\_flash\_attention\_forward}.
+\par\smallskip
+\textbf{Note.} gelu counts 1 per call on both sides, but the two forms are not the same size once lowered. Measured on the generated Triton IR: the tanh form (distilgpt2, gpt2) is a 13-node region - 7 addf, 4 mulf, 1 exp, 1 divf; the erf form (bert, vit, mixer) is an 88-node region - 35 addf, 30 mulf, 16 select, 5 divf, 1 exp, 1 subf. Both regions also carry the fused bias add, and the pass does no common-subexpression elimination, so a shared operand is recomputed at every use
+\par\smallskip
+\textbf{Cells that differ.} Every cell where the two rows disagree, grouped by the one reason it does.
+\par\smallskip
+\emph{we pack q/k/v into one GEMM per layer where HF issues three projections} bert-mini matmul: ours 18, torch 26; bert-tiny matmul: ours 10, torch 14; smollm2-135m matmul: ours 151, torch 211.
+\par\smallskip
+\emph{torch folds every linear's bias into aten::addmm where we issue a separate add, and torch's residual adds land here too} bert-mini add: ours 19, torch 10; bert-tiny add: ours 11, torch 6; distilgpt2 add: ours 31, torch 26; mixer\_b16 add: ours 50, torch 37; tiny-gpt2 add: ours 11, torch 12; vit-tiny add: ours 50, torch 26.
+\par\smallskip
+\emph{we count the block's residual connection as its own word; torch's profiler cannot tell it from a bias add, so torch carries its residuals inside add and residual\_add is 0} bert-mini residual\_add: ours 8, torch 0; bert-tiny residual\_add: ours 4, torch 0; distilgpt2 residual\_add: ours 12, torch 0; mixer\_b16 residual\_add: ours 24, torch 0; resnet18-b1 residual\_add: ours 8, torch 0; resnet18-b8 residual\_add: ours 8, torch 0; smollm2-135m residual\_add: ours 60, torch 0; tiny-gpt2 residual\_add: ours 4, torch 0; vit-tiny residual\_add: ours 24, torch 0.
+\par\smallskip
+\emph{HF looks up token, position and token-type tables with one aten::embedding each; we fold them into one table and one gather, and add the input add separately} bert-mini embedding\_gather: ours 1, torch 6; bert-tiny embedding\_gather: ours 1, torch 6; distilgpt2 embedding\_gather: ours 1, torch 4; smollm2-135m embedding\_gather: ours 1, torch 2; tiny-gpt2 embedding\_gather: ours 1, torch 4.
+\par\smallskip
+\emph{torch materialises a view at every layout change (head split and merge, NCHW/NHWC, every qkv split); our kernels index the flat buffer, so only a real data movement (im2col, the ViT patch gather) is counted} bert-mini reshape\_transpose: ours 0, torch 167; bert-tiny reshape\_transpose: ours 0, torch 97; distilgpt2 reshape\_transpose: ours 0, torch 167; mixer\_b16 reshape\_transpose: ours 1, torch 236; smollm2-135m reshape\_transpose: ours 0, torch 1037; tiny-gpt2 reshape\_transpose: ours 0, torch 85; vit-tiny reshape\_transpose: ours 1, torch 428.
+\par\smallskip
+\emph{aten ops with no word in the vocabulary: dropout in eval, allocation and fill, batch norm, max pool, and the scalar pieces of HF's Python gelu/RMSNorm/rotary} bert-mini other: ours 0, torch 40; bert-tiny other: ours 0, torch 24; distilgpt2 other: ours 0, torch 134; mixer\_b16 other: ours 0, torch 74; resnet18-b1 other: ours 1, torch 21; resnet18-b8 other: ours 1, torch 21; smollm2-135m other: ours 0, torch 504; tiny-gpt2 other: ours 0, torch 70; vit-tiny other: ours 0, torch 98.
+\par\smallskip
+\emph{HF GPT-2 uses NewGELUActivation, written in Python, so the profiler sees pow/tanh/mul/add and never aten::gelu; ours is one gelu op per MLP} distilgpt2 gelu: ours 6, torch 0; tiny-gpt2 gelu: ours 2, torch 0.
+\par\smallskip
+\emph{HF writes gelu, RMSNorm and rotary as Python tensor expressions, so their muls are individual aten::mul calls; ours are inside one gelu/rms\_norm/rotary op} distilgpt2 mul: ours 6, torch 24; smollm2-135m mul: ours 60, torch 274; tiny-gpt2 mul: ours 2, torch 12.
+\par\smallskip
+\emph{our patch embedding and global average pool are GEMMs; torch's are a cuDNN conv and aten::mean} mixer\_b16 matmul: ours 51, torch 49.
+\par\smallskip
+\emph{the patch embedding is a cuDNN conv on torch's side; ours is a gather (ViT) or im2col (Mixer) plus a GEMM, counted as matmul} mixer\_b16 conv: ours 0, torch 1; vit-tiny conv: ours 0, torch 1.
+\par\smallskip
+\emph{torch's global average pool is aten::mean; ours is a [1,tokens] GEMM, counted as matmul} mixer\_b16 reduce: ours 0, torch 1; resnet18-b1 reduce: ours 0, torch 1; resnet18-b8 reduce: ours 0, torch 1.
+\par\smallskip
+\emph{our global average pool is a [B, B*hw] GEMM, torch's is aten::mean} resnet18-b1 matmul: ours 2, torch 1; resnet18-b8 matmul: ours 2, torch 1.
+\par\smallskip
+\emph{the convolutions carry no bias on either side: our adds are the batch-norm shift (20) plus the fc bias, torch's are only the 8 residual connections, with batch norm inside cudnn\_batch\_norm} resnet18-b1 add: ours 21, torch 8; resnet18-b8 add: ours 21, torch 8.
+\par\smallskip
+\emph{batch norm is cudnn\_batch\_norm on torch (counted in other); ours is folded into one mul and one add per conv} resnet18-b1 mul: ours 20, torch 0; resnet18-b8 mul: ours 20, torch 0.
+\par\smallskip
+\emph{one im2col per conv on our side; on torch's, the NCHW/NHWC permutes and the flatten before the fc} resnet18-b1 reshape\_transpose: ours 20, torch 22; resnet18-b8 reshape\_transpose: ours 20, torch 22.
+\par\smallskip
+\emph{HF LlamaRMSNorm is Python (pow, mean, rsqrt, mul), so there is no aten::rms\_norm to count; ours is one row kernel} smollm2-135m rmsnorm: ours 61, torch 0.
+\par\smallskip
+\emph{torch's adds are the residuals, the eps inside HF's Python RMSNorm and the two halves of its Python rotary; ours are the causal mask only, the rest being inside rms\_norm and rotary} smollm2-135m add: ours 30, torch 182.
+\par\smallskip
+\emph{HF applies rotary as Python mul/add over q and k, which lands in mul and add; ours is one rotary op per layer} smollm2-135m rotary: ours 30, torch 0.
+\par\smallskip
+\emph{the aten::mean inside HF's Python RMSNorm; our rms\_norm does that reduction inside the row kernel} smollm2-135m reduce: ours 0, torch 61.
+\par\smallskip
+\emph{we pack q/k/v into one GEMM per layer where HF issues three projections, and our patch embedding is a GEMM where torch's is a cuDNN conv} vit-tiny matmul: ours 50, torch 73.
+\par\smallskip
+\emph{our patch extraction is a gather over the image and the classifier reads the cls row with a second gather; torch does the first with a conv and the second with a slice} vit-tiny embedding\_gather: ours 2, torch 0.
+\end{minipage}

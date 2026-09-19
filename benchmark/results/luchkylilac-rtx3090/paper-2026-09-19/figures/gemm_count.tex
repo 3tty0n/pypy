@@ -1,0 +1,22 @@
+\begin{tabular}{lrrrrrrrrr}
+\toprule
+model & system & gemm & split-K & bmm & gen & copy & other & total & launches \\
+\midrule
+bert-tiny & MetaTensor & 14.0 & 2.0 & 0.0 & 14.0 & 0.0 & 0.0 & 30.0 & 30.0 \\
+bert-tiny & torch.compile & 18.0 & 2.0 & 4.0 & 16.0 & 0.0 & 0.0 & 36.0 & 36.0 \\
+bert-tiny & JAX/XLA & 14.0 & 0.0 & 0.0 & 18.0 & 0.0 & 0.0 & 32.0 & 32.0 \\
+bert-mini & MetaTensor & 26.0 & 17.0 & 8.0 & 24.5 & 0.2 & 0.0 & 67.7 & 67.7 \\
+bert-mini & torch.compile & 34.0 & 25.0 & 8.0 & 30.0 & 0.0 & 0.0 & 89.0 & 89.0 \\
+bert-mini & JAX/XLA & 26.0 & 0.0 & 0.0 & 32.0 & 0.0 & 0.0 & 58.0 & 58.0 \\
+tiny-gpt2 & MetaTensor & 13.6 & 0.0 & 4.6 & 13.0 & 0.0 & 0.0 & 26.6 & 26.6 \\
+tiny-gpt2 & torch.compile & 9.0 & 0.0 & 2.0 & 20.0 & 0.0 & 2.0 & 31.0 & 31.0 \\
+tiny-gpt2 & JAX/XLA & 9.0 & 0.0 & 0.0 & 21.0 & 0.0 & 0.0 & 30.0 & 30.0 \\
+distilgpt2 & MetaTensor & 37.0 & 18.0 & 0.0 & 38.0 & 6.0 & 0.0 & 99.0 & 99.0 \\
+distilgpt2 & torch.compile & 31.0 & 12.0 & 6.0 & 37.0 & 6.0 & 12.0 & 98.0 & 98.0 \\
+distilgpt2 & JAX/XLA & 37.0 & 6.0 & 0.0 & 62.0 & 6.0 & 0.0 & 111.0 & 111.0 \\
+vit-tiny & MetaTensor & 74.0 & 25.0 & 24.0 & 76.0 & 0.0 & 0.0 & 175.0 & 175.0 \\
+vit-tiny & torch.compile & 98.0 & 62.0 & 24.0 & 87.0 & 0.0 & 1.0 & 248.0 & 248.0 \\
+vit-tiny & JAX/XLA & 73.0 & 0.0 & 0.0 & 98.0 & 0.0 & 0.0 & 171.0 & 171.0 \\
+\bottomrule
+\end{tabular}
+% kernel launches per forward, attributed kernel by kernel: matrix products, the cuBLAS split-K reduce/epilogue kernels that finish some of them (kernels, not calls; a run traced before gap\_analysis separated them reports 0 and folds them into gemm), the batched attention products inside gemm (bmm), generated elementwise/reduction kernels, copies, everything else. total is the five classes added up and equals the measured launch count, checked before rounding: the counts are per-forward averages over a differenced trace window and are fractional where cuBLAS does not pick the same kernel every iteration. bmm is a subset of gemm and is not added in; attention products are attributed by launch multiplicity, two per layer, so the GEMM kernel launched 2L times per forward on an L-layer model is the attention pair whatever cuBLAS named it, and name-based where the kernel name says batched or attention. gap\_kernels.tsv is where a forward's launches are attributed kernel by kernel

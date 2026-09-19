@@ -1,0 +1,251 @@
+model	system	class	launches_per_iter	us_per_iter	kernel
+bert-tiny	ours	gemm	11.00	57.4	ampere_sgemm_32x32_sliced1x4_nn
+bert-tiny	ours	gen	4.00	8.3	rtensor_k107
+bert-tiny	ours	gemm	2.00	8.8	ampere_sgemm_32x32_sliced1x4_tn
+bert-tiny	ours	gen	2.00	8.4	rtensor_k108
+bert-tiny	ours	gen	2.00	7.0	rtensor_k105
+bert-tiny	ours	splitk	2.00	3.7	void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, float, float, float, (bool)0, float, float, float, (bool)1, (bool)0, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T10 *, T9 *, T5 *, const T6 *, const T6 *, const T11 *, const T4 *, T11 *, void *, long, T6 *, int *, T6 *, T6 *, const T6 *, const T6 *, const T6 *, const T6 *, const T6 *)
+bert-tiny	ours	gen	2.00	3.1	rtensor_k106
+bert-tiny	ours	gemm	1.00	37.5	ampere_sgemm_128x64_tn
+bert-tiny	ours	gen	1.00	21.0	rtensor_k52
+bert-tiny	ours	gen	1.00	3.9	rtensor_g102
+bert-tiny	ours	gen	1.00	2.2	rtensor_k104
+bert-tiny	ours	gen	1.00	2.1	rtensor_k103
+bert-tiny	torch-compile	gemm	13.00	71.4	ampere_sgemm_32x32_sliced1x4_nn
+bert-tiny	torch-compile	gemm	4.00	45.8	ampere_sgemm_128x128_nn
+bert-tiny	torch-compile	gen	4.00	7.8	triton_per_fused_add_addmm_native_layer_norm_view_5
+bert-tiny	torch-compile	splitk	2.00	3.7	void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, float, float, float, (bool)0, float, float, float, (bool)1, (bool)0, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T10 *, T9 *, T5 *, const T6 *, const T6 *, const T11 *, const T4 *, T11 *, void *, long, T6 *, int *, T6 *, T6 *, const T6 *, const T6 *, const T6 *, const T6 *, const T6 *)
+bert-tiny	torch-compile	gen	2.00	3.4	triton_poi_fused_addmm_gelu_view_6
+bert-tiny	torch-compile	gen	2.00	3.0	triton_per_fused__safe_softmax_add_expand_ge_prepare_softmax_online_scalar_tensor_unsqueeze_view_where_3
+bert-tiny	torch-compile	gen	2.00	2.9	triton_poi_fused_addmm_mul_transpose_view_2
+bert-tiny	torch-compile	gen	2.00	2.5	triton_poi_fused_addmm_mul_transpose_view_1
+bert-tiny	torch-compile	gen	2.00	2.4	triton_poi_fused_clone_transpose_view_4
+bert-tiny	torch-compile	gemm	1.00	44.6	ampere_sgemm_128x32_tn
+bert-tiny	torch-compile	gen	1.00	6.8	triton_per_fused_addmm_gelu_native_layer_norm_view_7
+bert-tiny	torch-compile	gen	1.00	3.0	triton_per_fused_add_embedding_expand_gather_native_layer_norm_slice_0
+bert-tiny	jax	gemm	2.00	11.3	gemm_fusion_dot_general_18
+bert-tiny	jax	gemm	2.00	9.4	gemm_fusion_dot_general_14
+bert-tiny	jax	gemm	2.00	8.5	gemm_fusion_dot_6
+bert-tiny	jax	gemm	2.00	4.4	gemm_fusion_dot_general_15
+bert-tiny	jax	gemm	2.00	5.0	gemm_fusion_dot_5
+bert-tiny	jax	gen	2.00	4.4	triton_softmax_24
+bert-tiny	jax	gemm	2.00	3.5	gemm_fusion_dot_general_16
+bert-tiny	jax	gen	2.00	4.1	triton_softmax_26
+bert-tiny	jax	gen	2.00	2.9	triton_softmax_28
+bert-tiny	jax	gen	2.00	2.8	loop_multiply_fusion_1
+bert-tiny	jax	gen	2.00	2.3	wrapped_slice_1
+bert-tiny	jax	gen	2.00	2.3	wrapped_slice_2
+bert-tiny	jax	gen	2.00	2.3	wrapped_slice
+bert-tiny	jax	gemm	1.00	38.9	ampere_sgemm_128x64_tn
+bert-tiny	jax	gemm	1.00	2.5	gemm_fusion_dot_9
+bert-tiny	jax	gen	1.00	2.3	triton_softmax_16
+bert-tiny	jax	gen	1.00	1.9	loop_add_fusion
+bert-tiny	jax	gen	1.00	1.5	fusion_250
+bert-tiny	jax	gen	1.00	1.4	triton_softmax_30
+bert-mini	ours	splitk	17.00	33.2	void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, float, float, float, (bool)0, float, float, float, (bool)1, (bool)0, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T10 *, T9 *, T5 *, const T6 *, const T6 *, const T11 *, const T4 *, T11 *, void *, long, T6 *, int *, T6 *, T6 *, const T6 *, const T6 *, const T6 *, const T6 *, const T6 *)
+bert-mini	ours	gemm	9.00	41.0	ampere_sgemm_32x32_sliced1x4_nn
+bert-mini	ours	gen	8.05	18.3	rtensor_k105
+bert-mini	ours	gemm	8.00	49.0	void cutlass::Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(T1::Params)
+bert-mini	ours	gen	4.01	17.6	rtensor_k106
+bert-mini	ours	gen	4.01	14.5	rtensor_k103
+bert-mini	ours	gen	4.01	6.7	rtensor_k104
+bert-mini	ours	gemm	4.00	29.8	void cutlass::Kernel2<cutlass_80_simt_sgemm_64x64_8x5_nn_align1>(T1::Params)
+bert-mini	ours	gemm	4.00	18.1	ampere_sgemm_32x32_sliced1x4_tn
+bert-mini	ours	gemm	1.00	61.8	ampere_sgemm_128x64_tn
+bert-mini	ours	gen	1.00	3.6	rtensor_g102
+bert-mini	ours	gen	1.00	2.9	rtensor_k108
+bert-mini	ours	gen	0.99	2.5	rtensor_k107
+bert-mini	ours	gen	0.80	20.3	rtensor_k52
+bert-mini	ours	gen	0.28	0.5	rtensor_k65
+bert-mini	ours	gen	0.25	0.4	rtensor_k60
+bert-mini	ours	copy	0.20	0.5	[CUDA memcpy Host-to-Device]
+bert-mini	ours	gen	0.08	0.1	rtensor_k87
+bert-mini	ours	gen	0.04	0.1	rtensor_k53
+bert-mini	torch-compile	splitk	21.00	38.7	void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, float, float, float, (bool)0, float, float, float, (bool)1, (bool)0, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T10 *, T9 *, T5 *, const T6 *, const T6 *, const T11 *, const T4 *, T11 *, void *, long, T6 *, int *, T6 *, T6 *, const T6 *, const T6 *, const T6 *, const T6 *, const T6 *)
+bert-mini	torch-compile	gemm	17.00	79.9	ampere_sgemm_32x32_sliced1x4_nn
+bert-mini	torch-compile	gemm	8.00	91.8	ampere_sgemm_128x128_nn
+bert-mini	torch-compile	gen	8.00	17.9	triton_per_fused_add_addmm_native_layer_norm_view_5
+bert-mini	torch-compile	gemm	4.00	28.3	void cutlass::Kernel2<cutlass_80_simt_sgemm_64x64_8x5_nn_align1>(T1::Params)
+bert-mini	torch-compile	gemm	4.00	24.3	void cutlass::Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(T1::Params)
+bert-mini	torch-compile	gen	4.00	9.5	triton_poi_fused_addmm_mul_transpose_view_2
+bert-mini	torch-compile	splitk	4.00	8.7	void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, float, float, float, (bool)0, float, float, float, (bool)1, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T10 *, T9 *, T5 *, const T6 *, const T6 *, const T11 *, const T4 *, T11 *, void *, long, T6 *, int *, T6 *, T6 *, const T6 *, const T6 *, const T6 *, const T6 *, const T6 *)
+bert-mini	torch-compile	gen	4.00	7.6	triton_poi_fused_addmm_gelu_view_6
+bert-mini	torch-compile	gen	4.00	6.9	triton_per_fused__safe_softmax_add_expand_ge_prepare_softmax_online_scalar_tensor_unsqueeze_view_where_3
+bert-mini	torch-compile	gen	4.00	6.2	triton_poi_fused_addmm_mul_transpose_view_1
+bert-mini	torch-compile	gen	4.00	5.1	triton_poi_fused_clone_transpose_view_4
+bert-mini	torch-compile	gemm	1.00	61.9	ampere_sgemm_128x64_tn
+bert-mini	torch-compile	gen	1.00	3.2	triton_per_fused_add_embedding_expand_gather_native_layer_norm_slice_0
+bert-mini	torch-compile	gen	1.00	2.2	triton_per_fused_addmm_gelu_native_layer_norm_view_7
+bert-mini	jax	gemm	4.00	30.2	gemm_fusion_dot_10
+bert-mini	jax	gemm	4.00	27.6	gemm_fusion_dot_general_30
+bert-mini	jax	gemm	4.00	26.9	gemm_fusion_dot_general_26
+bert-mini	jax	gemm	4.00	17.7	gemm_fusion_dot_9
+bert-mini	jax	gemm	4.00	12.4	gemm_fusion_dot_general_27
+bert-mini	jax	gen	4.00	10.6	triton_softmax_48
+bert-mini	jax	gemm	4.00	8.6	gemm_fusion_dot_general_28
+bert-mini	jax	gen	4.00	9.0	triton_softmax_50
+bert-mini	jax	gen	4.00	6.7	loop_multiply_fusion
+bert-mini	jax	gen	4.00	6.2	triton_softmax_52
+bert-mini	jax	gen	4.00	4.8	wrapped_slice
+bert-mini	jax	gen	4.00	4.8	wrapped_slice_1
+bert-mini	jax	gen	4.00	4.8	wrapped_slice_2
+bert-mini	jax	gemm	1.00	60.8	ampere_sgemm_128x64_tn
+bert-mini	jax	gemm	1.00	4.7	gemm_fusion_dot_17
+bert-mini	jax	gen	1.00	2.9	loop_add_fusion
+bert-mini	jax	gen	1.00	2.6	triton_softmax_28
+bert-mini	jax	gen	1.00	1.7	triton_softmax_54
+bert-mini	jax	gen	1.00	1.6	fusion_437
+tiny-gpt2	ours	gemm	8.00	24.7	ampere_sgemm_128x32_nn
+tiny-gpt2	ours	gemm	2.62	7.0	void magma_sgemmEx_kernel<float, float, float, (bool)1, (bool)0, (int)6, (int)4, (int)6, (int)3, (int)4>(int, int, int, BatchedTensor, int, BatchedTensor, int, BatchedTensor, int, BatchedTensor, int, int, int, const T1 *, const T1 *, T1, T1, int, cublasLtEpilogue_t, int, const void *, long)
+tiny-gpt2	ours	gen	2.00	7.5	rtensor_k108
+tiny-gpt2	ours	gen	2.00	6.5	rtensor_k105
+tiny-gpt2	ours	gemm	2.00	3.8	void gemv2T_kernel_val<int, int, float, float, float, float, (int)128, (int)16, (int)2, (int)2, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<float>, float>>(T13, T6, T6)
+tiny-gpt2	ours	gen	2.00	3.0	rtensor_k106
+tiny-gpt2	ours	gen	2.00	2.9	rtensor_k107
+tiny-gpt2	ours	gemm	1.00	17.8	ampere_sgemm_128x32_tn
+tiny-gpt2	ours	gen	1.00	3.4	rtensor_k109
+tiny-gpt2	ours	gen	1.00	2.5	rtensor_g102
+tiny-gpt2	ours	gen	1.00	1.5	rtensor_k104
+tiny-gpt2	ours	gen	1.00	1.4	rtensor_k103
+tiny-gpt2	ours	gen	1.00	1.4	rtensor_k110
+tiny-gpt2	torch-compile	gemm	6.00	18.5	ampere_sgemm_128x32_nn
+tiny-gpt2	torch-compile	gen	2.00	5.1	triton_per_fused__safe_softmax_add_addmm_bmm_cat_expand_le_mul_prepare_softmax_online_scalar_tensor_split_transpose_unsqueeze_view_where_2
+tiny-gpt2	torch-compile	gemm	2.00	3.6	std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, float, float, float, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)5, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<float>, float>>(T13)
+tiny-gpt2	torch-compile	other	2.00	3.2	void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 7)]::operator ()() const::[lambda(float) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)
+tiny-gpt2	torch-compile	gen	2.00	2.8	triton_poi_fused_add_addmm_native_layer_norm_view_9
+tiny-gpt2	torch-compile	gen	2.00	2.7	triton_poi_fused_add_addmm_native_layer_norm_view_10
+tiny-gpt2	torch-compile	gen	2.00	2.6	triton_poi_fused_native_layer_norm_6
+tiny-gpt2	torch-compile	gen	2.00	2.5	triton_poi_fused_add_addmm_mul_pow_tanh_view_8
+tiny-gpt2	torch-compile	gen	2.00	2.5	triton_poi_fused_native_layer_norm_7
+tiny-gpt2	torch-compile	gen	2.00	2.5	triton_poi_fused_addmm_cat_split_transpose_view_3
+tiny-gpt2	torch-compile	gen	2.00	2.3	triton_poi_fused_clone_transpose_view_4
+tiny-gpt2	torch-compile	gemm	1.00	18.0	ampere_sgemm_128x32_tn
+tiny-gpt2	torch-compile	gen	1.00	1.5	triton_poi_fused_add_embedding_native_layer_norm_unsqueeze_0
+tiny-gpt2	torch-compile	gen	1.00	1.4	triton_poi_fused_add_embedding_native_layer_norm_unsqueeze_1
+tiny-gpt2	torch-compile	gen	1.00	1.4	triton_poi_fused_add_addmm_clone_embedding_transpose_unsqueeze_view_5
+tiny-gpt2	torch-compile	gen	1.00	1.4	triton_poi_fused_add_addmm_clone_transpose_view_11
+tiny-gpt2	jax	gen	5.00	5.8	input_reduce_fusion_4
+tiny-gpt2	jax	gen	4.00	4.4	loop_add_fusion_1
+tiny-gpt2	jax	gemm	2.00	3.1	gemm_fusion_dot_general_18
+tiny-gpt2	jax	gemm	2.00	2.7	gemm_fusion_dot_general_17
+tiny-gpt2	jax	gemm	2.00	2.7	gemm_fusion_dot_general_16
+tiny-gpt2	jax	gen	2.00	2.3	loop_multiply_fusion_1
+tiny-gpt2	jax	gemm	1.00	17.6	ampere_sgemm_128x32_tn
+tiny-gpt2	jax	gen	1.00	2.2	fusion_38
+tiny-gpt2	jax	gen	1.00	1.7	fusion_39
+tiny-gpt2	jax	gemm	1.00	1.3	gemm_fusion_dot_general_19
+tiny-gpt2	jax	gen	1.00	1.5	loop_add_fusion
+tiny-gpt2	jax	gemm	1.00	1.4	gemm_fusion_dot_general_13
+tiny-gpt2	jax	gen	1.00	1.2	triton_softmax_9
+tiny-gpt2	jax	gen	1.00	1.2	triton_softmax_10
+tiny-gpt2	jax	gen	1.00	1.2	fusion_66
+tiny-gpt2	jax	gen	1.00	1.2	triton_softmax_13
+tiny-gpt2	jax	gen	1.00	1.2	triton_softmax_14
+tiny-gpt2	jax	gen	1.00	1.1	triton_softmax_17
+tiny-gpt2	jax	gen	1.00	1.1	loop_add_fusion_5
+distilgpt2	ours	gemm	18.00	373.6	ampere_sgemm_128x32_nn
+distilgpt2	ours	splitk	18.00	60.2	void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, float, float, float, (bool)0, float, float, float, (bool)1, (bool)0, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T10 *, T9 *, T5 *, const T6 *, const T6 *, const T11 *, const T4 *, T11 *, void *, long, T6 *, int *, T6 *, T6 *, const T6 *, const T6 *, const T6 *, const T6 *, const T6 *)
+distilgpt2	ours	gemm	6.00	175.5	void cutlass::Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(T1::Params)
+distilgpt2	ours	gen	6.00	30.2	rtensor_k107
+distilgpt2	ours	gemm	6.00	28.1	ampere_sgemm_32x32_sliced1x4_tn
+distilgpt2	ours	gemm	6.00	26.6	ampere_sgemm_32x32_sliced1x4_nn
+distilgpt2	ours	gen	6.00	25.6	rtensor_k103
+distilgpt2	ours	gen	6.00	25.2	rtensor_k108
+distilgpt2	ours	gen	6.00	18.6	rtensor_k106
+distilgpt2	ours	gen	6.00	15.2	rtensor_k105
+distilgpt2	ours	gen	6.00	13.5	rtensor_k104
+distilgpt2	ours	copy	6.00	6.0	[CUDA memset]
+distilgpt2	ours	gemm	1.00	386.2	ampere_sgemm_128x64_tn
+distilgpt2	ours	gen	1.00	3.9	rtensor_g102
+distilgpt2	ours	gen	1.00	2.9	rtensor_k109
+distilgpt2	torch-compile	gemm	12.00	245.0	ampere_sgemm_128x32_nn
+distilgpt2	torch-compile	splitk	12.00	36.9	void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, float, float, float, (bool)0, float, float, float, (bool)1, (bool)0, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T10 *, T9 *, T5 *, const T6 *, const T6 *, const T11 *, const T4 *, T11 *, void *, long, T6 *, int *, T6 *, T6 *, const T6 *, const T6 *, const T6 *, const T6 *, const T6 *)
+distilgpt2	torch-compile	other	12.00	13.3	void at::native::vectorized_elementwise_kernel<(int)2, at::native::FillFunctor<long>, std::array<char *, (unsigned long)1>, (bool)0>(int, T2, T3)
+distilgpt2	torch-compile	gemm	6.00	168.5	void cutlass::Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(T1::Params)
+distilgpt2	torch-compile	gemm	6.00	139.1	ampere_sgemm_64x32_sliced1x4_nn
+distilgpt2	torch-compile	gemm	6.00	98.7	fmha_cutlassF_f32_aligned_64x64_rf_sm80(PyTorchMemEffAttention::AttentionKernel<float, cutlass::arch::Sm80, (bool)1, (int)64, (int)64, (int)64, (bool)1, (bool)1>::Params)
+distilgpt2	torch-compile	gen	6.00	18.7	triton_poi_fused_add_addmm_mul_pow_tanh_view_5
+distilgpt2	torch-compile	gen	6.00	10.8	triton_poi_fused__scaled_dot_product_efficient_attention_add_cat_expand_le_scalar_tensor_split_transpose_unsqueeze_view_where_1
+distilgpt2	torch-compile	gen	6.00	9.7	triton_poi_fused__scaled_dot_product_efficient_attention_add_cat_expand_le_scalar_tensor_split_transpose_unsqueeze_view_where_2
+distilgpt2	torch-compile	gen	6.00	6.3	triton_poi_fused__scaled_dot_product_efficient_attention_add_cat_expand_le_scalar_tensor_split_transpose_unsqueeze_view_where_3
+distilgpt2	torch-compile	copy	6.00	6.6	[CUDA memset]
+distilgpt2	torch-compile	gen	5.00	14.6	triton_per_fused_add_addmm_native_layer_norm_view_6
+distilgpt2	torch-compile	gen	5.00	13.6	triton_per_fused_add_addmm_native_layer_norm_view_7
+distilgpt2	torch-compile	gemm	1.00	386.1	ampere_sgemm_128x64_tn
+distilgpt2	torch-compile	gen	1.00	3.3	triton_per_fused_add_embedding_native_layer_norm_unsqueeze_0
+distilgpt2	torch-compile	gen	1.00	2.9	triton_per_fused_add_addmm_embedding_native_layer_norm_unsqueeze_view_4
+distilgpt2	torch-compile	gen	1.00	2.9	triton_per_fused_add_addmm_native_layer_norm_view_8
+distilgpt2	jax	gen	12.00	23.2	fusion_211
+distilgpt2	jax	gemm	6.00	156.2	gemm_fusion_dot_14
+distilgpt2	jax	gemm	6.00	124.2	ampere_sgemm_64x32_sliced1x4_nn
+distilgpt2	jax	gemm	6.00	121.0	void cutlass::Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(T1::Params)
+distilgpt2	jax	gemm	6.00	61.6	gemm_fusion_dot_13
+distilgpt2	jax	gemm	6.00	28.5	gemm_fusion_dot_general_38
+distilgpt2	jax	splitk	6.00	27.4	void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, float, float, float, (bool)0, float, float, float, (bool)1, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T10 *, T9 *, T5 *, const T6 *, const T6 *, const T11 *, const T4 *, T11 *, void *, long, T6 *, int *, T6 *, T6 *, const T6 *, const T6 *, const T6 *, const T6 *, const T6 *)
+distilgpt2	jax	gemm	6.00	20.2	gemm_fusion_dot_general_39
+distilgpt2	jax	gen	6.00	15.3	triton_softmax_70
+distilgpt2	jax	gen	6.00	11.1	loop_multiply_fusion
+distilgpt2	jax	gen	6.00	10.8	triton_softmax_74
+distilgpt2	jax	gen	6.00	8.8	triton_softmax_72
+distilgpt2	jax	gen	6.00	8.6	wrapped_slice_2
+distilgpt2	jax	gen	6.00	8.0	wrapped_slice
+distilgpt2	jax	gen	6.00	8.0	wrapped_slice_1
+distilgpt2	jax	copy	6.00	6.1	[CUDA memset]
+distilgpt2	jax	gen	5.00	17.1	loop_add_fusion_1
+distilgpt2	jax	gemm	1.00	348.7	ampere_sgemm_64x64_tn
+distilgpt2	jax	gen	1.00	4.0	triton_softmax_38
+distilgpt2	jax	gen	1.00	1.9	loop_add_fusion
+distilgpt2	jax	gen	1.00	1.8	fusion_223
+vit-tiny	ours	gemm	37.00	333.8	ampere_sgemm_32x32_sliced1x4_nn
+vit-tiny	ours	splitk	25.00	46.9	void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, float, float, float, (bool)0, float, float, float, (bool)1, (bool)0, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T10 *, T9 *, T5 *, const T6 *, const T6 *, const T11 *, const T4 *, T11 *, void *, long, T6 *, int *, T6 *, T6 *, const T6 *, const T6 *, const T6 *, const T6 *, const T6 *)
+vit-tiny	ours	gemm	24.00	165.9	ampere_sgemm_64x32_sliced1x4_nn
+vit-tiny	ours	gemm	12.00	66.8	ampere_sgemm_32x32_sliced1x4_tn
+vit-tiny	ours	gen	12.00	57.5	rtensor_k107
+vit-tiny	ours	gen	12.00	46.2	rtensor_k103
+vit-tiny	ours	gen	12.00	45.0	rtensor_k108
+vit-tiny	ours	gen	12.00	32.9	rtensor_k106
+vit-tiny	ours	gen	12.00	30.5	rtensor_k105
+vit-tiny	ours	gen	12.00	27.3	rtensor_k104
+vit-tiny	ours	gen	1.00	6.1	rtensor_g102
+vit-tiny	ours	gemm	1.00	3.4	std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, float, float, float, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<float>, float>>(T13)
+vit-tiny	ours	gen	1.00	2.7	rtensor_g109
+vit-tiny	ours	gen	1.00	2.7	rtensor_k110
+vit-tiny	ours	gen	1.00	1.8	rtensor_k51
+vit-tiny	torch-compile	gemm	60.00	383.7	ampere_sgemm_64x32_sliced1x4_tn
+vit-tiny	torch-compile	splitk	49.00	84.7	void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, float, float, float, (bool)0, float, float, float, (bool)1, (bool)0, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T10 *, T9 *, T5 *, const T6 *, const T6 *, const T11 *, const T4 *, T11 *, void *, long, T6 *, int *, T6 *, T6 *, const T6 *, const T6 *, const T6 *, const T6 *, const T6 *)
+vit-tiny	torch-compile	gemm	24.00	453.4	ampere_sgemm_128x128_nn
+vit-tiny	torch-compile	gemm	12.00	126.2	ampere_sgemm_32x32_sliced1x4_tn
+vit-tiny	torch-compile	gen	12.00	39.6	triton_per_fused__safe_softmax_add_expand_ge_prepare_softmax_online_scalar_tensor_unsqueeze_view_where_5
+vit-tiny	torch-compile	gen	12.00	29.8	triton_poi_fused_addmm_gelu_view_8
+vit-tiny	torch-compile	splitk	12.00	25.3	void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, float, float, float, (bool)0, float, float, float, (bool)1, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T10 *, T9 *, T5 *, const T6 *, const T6 *, const T11 *, const T4 *, T11 *, void *, long, T6 *, int *, T6 *, T6 *, const T6 *, const T6 *, const T6 *, const T6 *, const T6 *)
+vit-tiny	torch-compile	gen	12.00	17.9	triton_poi_fused_addmm_mul_transpose_view_4
+vit-tiny	torch-compile	gen	12.00	16.9	triton_poi_fused_addmm_mul_transpose_view_3
+vit-tiny	torch-compile	gen	12.00	15.3	triton_poi_fused_clone_transpose_view_6
+vit-tiny	torch-compile	gen	11.00	27.9	triton_per_fused_add_addmm_native_layer_norm_view_10
+vit-tiny	torch-compile	gen	11.00	26.4	triton_per_fused_add_addmm_native_layer_norm_view_9
+vit-tiny	torch-compile	gemm	1.00	41.4	void precomputed_convolve_sgemm<float, int, (int)1024, (int)5, (int)5, (int)4, (int)3, (int)3, (int)1, (bool)0>(int, int, int, const T1 *, int, T1 *, const T1 *, kernel_conv_params, unsigned long long, T2, float, float, int, bool, bool, const T1 *, const T1 *, int *)
+vit-tiny	torch-compile	gemm	1.00	3.4	std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, float, float, float, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<float>, float>>(T13)
+vit-tiny	torch-compile	gen	1.00	3.1	triton_per_fused_add_addmm_cat_convolution_expand_native_layer_norm_transpose_view_7
+vit-tiny	torch-compile	gen	1.00	2.8	triton_red_fused_add_cat_convolution_expand_native_layer_norm_transpose_view_0
+vit-tiny	torch-compile	gen	1.00	2.7	triton_poi_fused_add_cat_convolution_expand_native_layer_norm_transpose_view_2
+vit-tiny	torch-compile	gen	1.00	2.4	triton_per_fused_add_addmm_native_layer_norm_view_11
+vit-tiny	torch-compile	splitk	1.00	1.7	void cublasLt::epilogue::impl::globalKernel<(int)8, (int)32, float, float, float, (bool)1, (bool)1, (int)1>(int, int, long, T3 *, cublasLtEpilogue_t, int, T4 *, long, void *, long, long, long, T5 *, long, int *)
+vit-tiny	torch-compile	gen	1.00	1.4	triton_per_fused_add_cat_convolution_expand_native_layer_norm_transpose_view_1
+vit-tiny	torch-compile	other	1.00	1.1	void cudnn::cnn::kern_precompute_indices<(bool)0>(int *, int, int, int, int, int)
+vit-tiny	jax	gemm	13.00	113.4	gemm_fusion_dot_25
+vit-tiny	jax	gemm	12.00	124.9	gemm_fusion_dot_general_79
+vit-tiny	jax	gemm	12.00	97.8	gemm_fusion_dot_general_75
+vit-tiny	jax	gemm	12.00	87.4	gemm_fusion_dot_general_77
+vit-tiny	jax	gemm	12.00	68.6	gemm_fusion_dot_26
+vit-tiny	jax	gemm	12.00	63.7	ampere_sgemm_32x32_sliced1x4_tn
+vit-tiny	jax	gen	12.00	30.0	triton_softmax_144
+vit-tiny	jax	gen	12.00	29.3	triton_softmax_142
+vit-tiny	jax	gen	12.00	26.2	loop_multiply_fusion_11
+vit-tiny	jax	gen	12.00	19.3	triton_softmax_146
+vit-tiny	jax	gen	12.00	15.5	wrapped_slice
+vit-tiny	jax	gen	12.00	15.3	wrapped_slice_1
+vit-tiny	jax	gen	12.00	15.2	wrapped_slice_2
+vit-tiny	jax	gen	11.00	29.9	loop_add_fusion_10
+vit-tiny	jax	gen	1.00	5.8	fusion_1030
+vit-tiny	jax	gen	1.00	2.7	loop_pad_fusion
+vit-tiny	jax	gen	1.00	1.8	loop_add_fusion_11

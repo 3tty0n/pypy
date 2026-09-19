@@ -1,0 +1,34 @@
+\begin{tabular}{lrrrrr}
+\toprule
+model & system & max |diff| & min argmax match & tol & pass \\
+\midrule
+bert-mini & PyTorch eager & 2.67e-05 & 1.000 & 0.001 & 5/5 \\
+bert-mini & torch.compile & 2.29e-05 & 1.000 & 0.001 & 5/5 \\
+bert-mini & JAX/XLA & 2.48e-05 & 1.000 & 0.001 & 5/5 \\
+bert-tiny & PyTorch eager & 3.91e-05 & 1.000 & 0.001 & 5/5 \\
+bert-tiny & torch.compile & 5.15e-05 & 1.000 & 0.001 & 5/5 \\
+bert-tiny & JAX/XLA & 3.43e-05 & 1.000 & 0.001 & 5/5 \\
+distilgpt2 & PyTorch eager & 0.000282 & 1.000 & 0.001 & 5/5 \\
+distilgpt2 & torch.compile & 0.000282 & 1.000 & 0.001 & 5/5 \\
+distilgpt2 & JAX/XLA & 0.000221 & 1.000 & 0.001 & 5/5 \\
+mixer\_b16 & PyTorch eager & 5.15e-05 & 1.000 & 0.001 & 5/5 \\
+mixer\_b16 & torch.compile & 5.91e-05 & 1.000 & 0.001 & 5/5 \\
+mixer\_b16 & JAX/XLA & 7.01e-05 & 1.000 & 0.001 & 5/5 \\
+resnet18-b1 & PyTorch eager & 0.0158 & 1.000 & 0.02 & 5/5 \\
+resnet18-b1 & torch.compile & 0.00942 & 1.000 & 0.02 & 5/5 \\
+resnet18-b1 & JAX/XLA & 0.0167 & 1.000 & 0.02 & 5/5 \\
+resnet18-b8 & PyTorch eager & 0.00725 & 1.000 & 0.02 & 5/5 \\
+resnet18-b8 & torch.compile & 0.0122 & 1.000 & 0.02 & 5/5 \\
+resnet18-b8 & JAX/XLA & 0.0123 & 1.000 & 0.02 & 5/5 \\
+smollm2-135m & PyTorch eager & 0.000147 & 1.000 & 0.001 & 5/5 \\
+smollm2-135m & torch.compile & 0.000168 & 1.000 & 0.001 & 5/5 \\
+smollm2-135m & JAX/XLA & 0.000278 & 1.000 & 0.001 & 5/5 \\
+tiny-gpt2 & PyTorch eager & 3.73e-08 & 1.000 & 0.001 & 5/5 \\
+tiny-gpt2 & torch.compile & 3.73e-08 & 1.000 & 0.001 & 5/5 \\
+tiny-gpt2 & JAX/XLA & 3.17e-08 & 1.000 & 0.001 & 5/5 \\
+vit-tiny & PyTorch eager & 1.41e-05 & 1.000 & 0.001 & 5/5 \\
+vit-tiny & torch.compile & 1.19e-05 & 1.000 & 0.001 & 5/5 \\
+vit-tiny & JAX/XLA & 1.05e-05 & 1.000 & 0.001 & 5/5 \\
+\bottomrule
+\end{tabular}
+% each system against MetaTensor on five inputs per model derived from the stored one (INPUT\_SEED=1..5): the worst of the five maximum absolute logit differences, the smallest argmax agreement over the five (fraction of token positions, top-1 for the vision models), the tolerance for that (workload class, dtype), and how many of the five inputs passed it

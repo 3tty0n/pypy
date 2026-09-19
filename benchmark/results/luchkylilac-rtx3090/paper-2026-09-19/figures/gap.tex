@@ -1,0 +1,22 @@
+\begin{tabular}{lrrrrrrrrrrrr}
+\toprule
+model & system & us/iter & launches & kernels & GPU us & GPU util & gemm & split-K & bmm & gen & copy & other \\
+\midrule
+tiny-gpt2 & MetaTensor & 235.9 & 26.6 & 13 & 83.6 & 0.354 & 13.6 & 0.0 & 4.6 & 13.0 & 0.0 & 0.0 \\
+tiny-gpt2 & torch.compile & 413.4 & 31.0 & 16 & 72.1 & 0.174 & 9.0 & 0.0 & 2.0 & 20.0 & 0.0 & 2.0 \\
+tiny-gpt2 & JAX/XLA & 90.6 & 30.0 & 19 & 55.0 & 0.607 & 9.0 & 0.0 & 0.0 & 21.0 & 0.0 & 0.0 \\
+bert-tiny & MetaTensor & 260.3 & 30.0 & 12 & 163.4 & 0.628 & 14.0 & 2.0 & 0.0 & 14.0 & 0.0 & 0.0 \\
+bert-tiny & torch.compile & 549.6 & 36.0 & 12 & 197.3 & 0.359 & 18.0 & 2.0 & 4.0 & 16.0 & 0.0 & 0.0 \\
+bert-tiny & JAX/XLA & 112.5 & 32.0 & 19 & 111.6 & 0.992 & 14.0 & 0.0 & 0.0 & 18.0 & 0.0 & 0.0 \\
+bert-mini & MetaTensor & 438.4 & 67.7 & 19 & 320.9 & 0.732 & 26.0 & 17.0 & 8.0 & 24.5 & 0.2 & 0.0 \\
+bert-mini & torch.compile & 884.5 & 89.0 & 15 & 392.2 & 0.443 & 34.0 & 25.0 & 8.0 & 30.0 & 0.0 & 0.0 \\
+bert-mini & JAX/XLA & 241.7 & 58.0 & 19 & 244.5 & 1.012 & 26.0 & 0.0 & 0.0 & 32.0 & 0.0 & 0.0 \\
+vit-tiny & MetaTensor & 993.1 & 175.0 & 15 & 869.6 & 0.876 & 74.0 & 25.0 & 24.0 & 76.0 & 0.0 & 0.0 \\
+vit-tiny & torch.compile & 2061.0 & 248.0 & 21 & 1306.8 & 0.634 & 98.0 & 62.0 & 24.0 & 87.0 & 0.0 & 1.0 \\
+vit-tiny & JAX/XLA & 736.6 & 171.0 & 17 & 746.9 & 1.014 & 73.0 & 0.0 & 0.0 & 98.0 & 0.0 & 0.0 \\
+distilgpt2 & MetaTensor & 1307.1 & 99.0 & 15 & 1191.2 & 0.911 & 37.0 & 18.0 & 0.0 & 38.0 & 6.0 & 0.0 \\
+distilgpt2 & torch.compile & 1362.7 & 98.0 & 17 & 1176.9 & 0.864 & 31.0 & 12.0 & 6.0 & 37.0 & 6.0 & 12.0 \\
+distilgpt2 & JAX/XLA & 1006.5 & 111.0 & 21 & 1012.5 & 1.006 & 37.0 & 6.0 & 0.0 & 62.0 & 6.0 & 0.0 \\
+\bottomrule
+\end{tabular}
+% per forward: nsys launch counts and GPU busy time against the measured wall time, and the launches attributed kernel by kernel - cuBLAS GEMMs, the cuBLASLt split-K reduce/epilogue kernels that finish some of them, generated (Triton/Inductor/XLA) kernels, copies, everything else; the five classes sum to the launch count (checked before rounding - these are per-forward averages over a differenced trace window and are fractional when cuBLAS does not pick the same kernel every iteration), and bmm is the batched (attention) subset of gemm, attributed by launch multiplicity - two products per layer, so the GEMM kernel launched 2L times on an L-layer model - and name-based where the kernel name says batched or attention

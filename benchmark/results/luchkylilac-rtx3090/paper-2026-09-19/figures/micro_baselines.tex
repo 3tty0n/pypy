@@ -1,0 +1,34 @@
+\begin{tabular}{lrrrrrrr}
+\toprule
+benchmark & MetaTensor (us) & eager & torch.compile & JAX/XLA & IREE & Triton & MT/Triton \\
+\midrule
+TF train n=25.6k & 3886 & 3691 & 3177 & 1501 & 10438 & n/a & n/a \\
+TF train n=191.5k & 93972 & 78929 & 78674 & 41871 & 136368 & n/a & n/a \\
+attention n=256k & 4742 & 4874 & 5029 & 3706 & 5130 & 4679 & 1.01 \\
+MLP train n=256k & 2808 & 3069 & 3056 & 1959 & 31568 & n/a & n/a \\
+TF block n=25.6k & 464 & 556 & 513 & 267 & 923 & n/a & n/a \\
+CNN n=25.6k & 755 & 798 & 864 & 254 & n/a & n/a & n/a \\
+CNN n=256k & 573 & 586 & 678 & 327 & n/a & n/a & n/a \\
+MLP n=256k & 1016 & 1249 & 1253 & 752 & 910 & 850 & 1.19 \\
+MLP train n=25.6k & 648 & 805 & 839 & 325 & 11542 & n/a & n/a \\
+TF block n=256k & 22328 & 27353 & 29735 & 15419 & 38533 & n/a & n/a \\
+attention n=25.6k & 437 & 595 & 598 & 123 & 2797 & 1272 & 0.34 \\
+matmul n=25.6k & 99 & 137 & 138 & 45 & 1833 & 299 & 0.33 \\
+matmul n=256k & 343 & 494 & 494 & 258 & 436 & 300 & 1.15 \\
+MLP n=25.6k & 279 & 394 & 406 & 107 & 5384 & 875 & 0.32 \\
+elementwise k=4 n=1M & 40 & 312 & 68 & 95 & 5756 & 39 & 1.03 \\
+value guard k=4 n=1M & 99 & 377 & 167 & 309 & 81591 & 123 & 0.80 \\
+force k=4 n=1M & 43 & 326 & 73 & 177 & 8978 & 69 & 0.62 \\
+elementwise k=1 n=1M & 29 & 78 & 55 & 52 & 5787 & 31 & 0.94 \\
+elementwise k=8 n=1M & 70 & 624 & 133 & 176 & 5969 & 67 & 1.05 \\
+elementwise k=4 n=10M & 329 & 3045 & 646 & 947 & 51561 & 327 & 1.01 \\
+elementwise k=4 n=100k & 14 & 61 & 45 & 44 & 976 & 20 & 0.68 \\
+elementwise k=4 n=10k & 13 & 59 & 52 & 41 & 439 & 19 & 0.68 \\
+side effect k=4 n=1M & 54 & 342 & 332 & 128 & 10809 & 70 & 0.77 \\
+exception k=4 n=1M & 53 & 342 & 332 & 127 & 10790 & 70 & 0.77 \\
+guard k=4 n=1M & 42 & 317 & 308 & 99 & 6410 & 43 & 0.96 \\
+reduction n=256k & 16 & 151 & 159 & 53 & 190 & 20 & 0.79 \\
+reduction n=25.6k & 4 & 57 & 67 & 50 & 56 & 19 & 0.19 \\
+\bottomrule
+\end{tabular}
+% median us per iteration, MetaTensor and baselines, float64
