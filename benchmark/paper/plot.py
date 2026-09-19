@@ -77,7 +77,7 @@ SINGLE_COL, DOUBLE_COL = 3.25, 6.75   # MLSys column and text widths, inches
 # Figures the paper does not include at column width; they are drawn at the
 # full text width.  --column overrides this.
 WIDE = {"micro_speedup", "models", "ablation", "micro_baselines",
-        "compile_overhead", "integration", "lazy", "lazy_micro", "control"}
+        "compile_overhead", "integration", "lazy"}
 # The width the paper actually draws the figure at, so nothing is rescaled on
 # the page and 7pt in the pdf is 7pt in print.  \columnwidth is 3.25in; the
 # entries are the \includegraphics fractions in sections/*.tex.
@@ -2152,11 +2152,12 @@ def _lazy_ratio_panel(ax, keys, groups, labels, args, field="steady_us"):
             lows.append(lo or 0.0)
             highs.append(hi or 0.0)
         colour, hatch, _ = style_of(arm)
-        ax.bar([v + (i - 0.5) * width for v in x], vals, width * 0.92,
-               color=colour, linewidth=0,
+        xs = [v + (i - 0.5) * width for v in x]
+        ax.bar(xs, vals, width * 0.92, color=colour, linewidth=0,
                hatch=hatch if args.texture else None,
-               label=SYSTEM_LABEL.get(arm, arm),
-               yerr=err(vals, lows, highs), **ERRBAR)
+               label=SYSTEM_LABEL.get(arm, arm))
+        ax.errorbar(xs, vals, yerr=err(vals, lows, highs), fmt="none",
+                    zorder=4, **ERRBAR)
     ax.axhline(1.0, color=INK_2, linewidth=0.8, linestyle="--")
     ax.set_xticks(x, labels, rotation=30, ha="right")
     ax.set_yscale("log")
@@ -2174,9 +2175,9 @@ def fig_lazy(out, args):
         return None
     groups = _lazy_group(rows, lambda r: r["model"])
     keys = [k for k in collections.OrderedDict.fromkeys(r["model"] for r in rows)]
-    fig, axes = plt.subplots(2, 1, figsize=(args.width, 4.4), sharex=True)
+    fig, axes = plt.subplots(1, 2, figsize=(args.width, 2.5))
     _lazy_ratio_panel(axes[0], keys, groups, keys, args)
-    axes[0].set_ylabel("latency relative to\nthe DAG in the JIT\n(lower is better)")
+    axes[0].set_ylabel("latency relative to the DAG\nin the JIT (lower is better)")
 
     # Allocation is the other half of the story: the deferred arm rebuilds the
     # DAG on every iteration and the bytes say so.
@@ -2191,7 +2192,7 @@ def fig_lazy(out, args):
                     color=colour, linewidth=0,
                     hatch=hatch if args.texture else None,
                     label=SYSTEM_LABEL.get(arm, arm))
-    axes[1].set_ylabel("ms in the collector over\nthe timed loop (lower is better)")
+    axes[1].set_ylabel("ms in the collector over the\ntimed loop (lower is better)")
     axes[1].set_xticks(x, keys, rotation=30, ha="right")
     axes[1].yaxis.grid(True, zorder=0)
     axes[1].set_axisbelow(True)
@@ -2302,8 +2303,9 @@ def fig_control(out, args):
         return None
     regimes = list(collections.OrderedDict.fromkeys(r["regime"] for r in rows))
     systems = list(collections.OrderedDict.fromkeys(r["system"] for r in rows))
-    fig, axes = plt.subplots(1, len(regimes), figsize=(args.width, 2.8),
-                             squeeze=False, sharey=True)
+    fig, axes = plt.subplots(len(regimes), 1, figsize=(args.width, 1.5 * len(regimes) + 0.8),
+                             squeeze=False, sharex=True)
+    axes = axes.reshape(1, -1)
     for ax, regime in zip(axes[0], regimes):
         vals, p95s, colours, hatches, names = [], [], [], [], []
         for s in systems:
