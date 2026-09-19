@@ -169,12 +169,12 @@ do_micro() {
           echo "run_lazy.sh: micro v$v/$system failed" >&2
           continue
         fi
-        # mode variant k n iters warm steady kernels acc kernels_delta launches dtype
         local steady launches kern acc
-        steady=$(echo "$line" | awk '"'"'{print $7}'"'"')
-        kern=$(echo "$line" | awk '"'"'{print $10}'"'"')
-        acc=$(echo "$line" | awk '"'"'{print $9}'"'"')
-        launches=$(echo "$line" | awk '"'"'{print $11}'"'"')
+        # mode variant k n iters warm steady kernels acc kernels_delta launches dtype
+        steady=$(echo "$line" | cut -d' ' -f7)
+        kern=$(echo "$line" | cut -d' ' -f10)
+        acc=$(echo "$line" | cut -d' ' -f9)
+        launches=$(echo "$line" | cut -d' ' -f11)
         echo -e "$v\t$k\t$n\t$system\t$round\t$steady\t$launches\t$kern\t$acc\t${PYPY_SHA:-unknown}" >> "$MTSV"
         bench_record lazy_micro variant="$v" k="$k" n="$n" system="$system" \
           round="$round" steady_us="$steady" launches_per_iter="$launches" \

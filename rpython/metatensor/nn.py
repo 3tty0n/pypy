@@ -56,6 +56,12 @@ class Tensor(object):
         return r
 
     def sum(self, axis=core.AXIS_ALL):
+        # A row reduction has to promote the column count, or the pass has no
+        # constant to put in the kernel and compiles the default row tile.
+        # The composites below do this for themselves; an application calling
+        # sum(1) directly went without it.
+        if axis == 1 and ops.tensor_ndim(self.t) > 1:
+            ops.cols_of(self.t)
         node = None
         if self.requires_grad:
             node = SumNode(self, axis)
@@ -110,6 +116,8 @@ class Tensor(object):
         return r
 
     def max(self, axis=core.AXIS_ALL):
+        if axis == 1 and ops.tensor_ndim(self.t) > 1:
+            ops.cols_of(self.t)
         r = Tensor(ops.maxr_p(self.t, axis))
         if self.requires_grad:
             r.requires_grad = True
