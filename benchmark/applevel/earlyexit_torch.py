@@ -18,8 +18,8 @@ torch._dynamo.utils.counters['frames']['total'] across the timed phase.  It
 counts every frame Dynamo compiles inside the measured window, the first
 compilation of a frame included, not only recompilations; there is no
 pre-timing warm-up, so the initial compilations are in it.  What it therefore
-answers is whether a changing exit depth forces ADDITIONAL frame compilations
-over a stable one - one
+answers is whether a changing exit depth forces any additional frame
+compilation over a stable one, and the measured answer is that it does not - one
 frame compilation per compiled path, so in the varying regime it counts the
 additional frame compilations the rotating exit depth forces.
 

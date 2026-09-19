@@ -1,6 +1,6 @@
 \begin{tabular}{lrrrrrrr}
 \toprule
-system & phase & length & loops & bridges & kernels & cache hits & recompiles \\
+system & phase & length & loops & bridges & kernels & cache hits & new graphs \\
 \midrule
 MetaTensor & first visit & 32 & 2 & 4 & 0 & 833 & 0 \\
 MetaTensor & first visit & 48 & 5 & 0 & 4 & 720 & 0 \\
@@ -64,4 +64,4 @@ PyTorch eager & new length distribution & 256 & 0 & 0 & 0 & 0 & 0 \\
 PyTorch eager & new length distribution & 288 & 0 & 0 & 0 & 0 & 0 \\
 \bottomrule
 \end{tabular}
-% per-length compile counters: the delta inside that length's window, median over the rounds
+% per-length compile counters: the delta inside that length's window, median over the rounds. new graphs counts graphs compiled in the window, which on a first visit are first compilations and on a revisit are recompilations

@@ -10,7 +10,7 @@ trap paper_cleanup_pypy EXIT
 SERIES="$OUT/dynamic_series.tsv"
 SUMMARY="$OUT/dynamic_summary.tsv"
 tsv_init "$SERIES" "system\tround\tpass\tlength\tus\tbuild_us\tbinary"
-tsv_init "$SUMMARY" "system\tround\tpass\tlength\tmedian_us\ttotal_us\tloops\tbridges\tkernels\tlaunches\tcache_hits\tgraphs\trecompiles\tcompile_ms\tbinary"
+tsv_init "$SUMMARY" "system\tround\tpass\tlength\tmedian_us\ttotal_us\tloops\tbridges\tkernels\tlaunches\tcache_hits\tgraphs\tnew_graphs\tcompile_ms\tbinary"
 
 # Per-row provenance, same convention as run_models.sh: ours is identified by
 # the pypy-c hash, torch by its version string.
@@ -65,7 +65,7 @@ emit() {
     bench_record dynamic system="$system" round="$round" pass="$p" \
       length="$length" median_us="$med" total_us="$tot" loops="$loops" \
       bridges="$bridges" kernels="$kernels" launches="$launches" \
-      cache_hits="$hits" graphs="$graphs" recompiles="$recomp" \
+      cache_hits="$hits" graphs="$graphs" new_graphs="$recomp" \
       compile_ms="$cms" binary="$binary"
   done
 }

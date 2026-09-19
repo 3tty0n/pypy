@@ -28,4 +28,4 @@ smollm2-135m & deferred library (DAG at run time) & 4279.2 & 4212.3-4312.0 & 205
 smollm2-135m & eager (no DAG) & 5762.0 & 5762.0-5762.6 & 968.0 & 104 & 0 & 13 & 2562.3M & 0 & 1 & 0 & 1 \\
 \bottomrule
 \end{tabular}
-% one binary, three places to keep the operation DAG. kernels and Triton compiles are cumulative process counters; equal counts on the virtual and deferred arms are the check that both arms ran the same kernels
+% one binary, three places to keep the operation DAG. kernels and Triton compiles are cumulative process counters and are cardinalities: they say how many distinct kernels an arm compiled, not which, and do not identify kernel keys or order

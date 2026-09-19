@@ -84,7 +84,7 @@ def main():
 
     per_phase = max(1, iters // len(PHASES))
     print('pass\tlength\tstep_us\tbuild_us\tloops\tbridges\tkernels'
-          '\tlaunches\tgraphs\trecompiles\tcompile_ms')
+          '\tlaunches\tgraphs\tnew_graphs\tcompile_ms')
     for phase, lengths in PHASES:
         for i in range(per_phase):
             t = lengths[i % len(lengths)]

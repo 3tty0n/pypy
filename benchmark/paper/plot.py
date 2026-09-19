@@ -685,7 +685,7 @@ def fig_dynamic(out, args):
     if args.titles:
         fig.suptitle("Changing sequence length")
 
-    DELTAS = ["loops", "bridges", "kernels", "cache_hits", "recompiles"]
+    DELTAS = ["loops", "bridges", "kernels", "cache_hits", "new_graphs"]
 
     def delta(key, col):
         vs = [float(r.get(col) or 0) for r in per.get(key, [])]
@@ -710,13 +710,15 @@ def fig_dynamic(out, args):
                 "lengths again, and the last phase is five lengths the run "
                 "has not seen",
                 ["system", "phase"] + [str(L) for L in lengths]
-                + ["loops", "bridges", "kernels", "hits", "recompiles"],
+                + ["loops", "bridges", "kernels", "hits", "new graphs"],
                 time_rows)
     write_table(os.path.join(args.outdir, "dynamic_deltas.tex"),
                 "per-length compile counters: the delta inside that length's "
-                "window, median over the rounds",
+                "window, median over the rounds. new graphs counts graphs "
+                "compiled in the window, which on a first visit are first "
+                "compilations and on a revisit are recompilations",
                 ["system", "phase", "length", "loops", "bridges", "kernels",
-                 "cache hits", "recompiles"],
+                 "cache hits", "new graphs"],
                 [[SYSTEM_LABEL[s], PHASE_LABEL.get(p, p), str(L)]
                  + ["%.0f" % delta((s, p, L), c) for c in DELTAS]
                  for s in systems for p in phases
@@ -2223,9 +2225,10 @@ def fig_lazy(out, args):
                           rs[0].get("argmax_match", "")])
     write_table(os.path.join(args.outdir, "lazy.tex"),
                 "one binary, three places to keep the operation DAG. "
-                "kernels and Triton compiles are cumulative process counters; "
-                "equal counts on the virtual and deferred arms are the check "
-                "that both arms ran the same kernels",
+                "kernels and Triton compiles are cumulative process counters "
+                "and are cardinalities: they say how many distinct kernels an "
+                "arm compiled, not which, and do not identify kernel keys or "
+                "order",
                 ["model", "DAG lives in", "us/iter", "range", "launches/iter",
                  "kernels", "compiles", "gc ms", "peak bytes",
                  "nodes deferred", "loops", "bridges", "same argmax"], table)
@@ -2348,21 +2351,31 @@ def fig_control(out, args):
         ax.tick_params(axis="y", length=0)
         if args.titles or len(regimes) > 1:
             ax.set_title(regime, fontsize=7)
+    table = []
+    for regime in regimes:
+        for s in systems:
+            rs = [r for r in rows if r["regime"] == regime and r["system"] == s]
+            if not rs:
+                continue
+            col = lambda c, spec="%.1f": (spec % med([r[c] for r in rs
+                                                     if r.get(c) not in (None, "")])
+                                          if any(r.get(c) not in (None, "") for r in rs)
+                                          else "")
+            table.append([regime, SYSTEM_LABEL.get(s, s), col("total_ms", "%.0f"),
+                          col("p50_us"), col("p95_us"), col("max_us", "%.0f"),
+                          col("bridges", "%.0f"), col("frame_compiles", "%.0f"),
+                          rs[0].get("exit_seq", ""),
+                          "yes" if all(r.get("pass") == "1" for r in rs) else "NO"])
     write_table(os.path.join(args.outdir, "control.tex"),
-                "early exit on distilgpt2. total ms is the whole phase "
-                "including every compilation; frame compiles counts every "
-                "frame Dynamo compiled inside that phase, first compilations "
-                "included; the exit hash is over the per-iteration sequence of "
-                "exit layers and has to agree across systems or the row is not "
-                "comparable",
+                "early exit on distilgpt2, median over three rounds. total ms "
+                "is the whole phase including every compilation; frame "
+                "compiles counts every frame Dynamo compiled inside that "
+                "phase, first compilations included; the exit layers are the "
+                "per-iteration sequence of exit depths, which every system has "
+                "to reproduce or the row is not comparable",
                 ["regime", "system", "total ms", "p50 us", "p95 us", "max us",
                  "bridges", "frame compiles", "exit layers", "pass"],
-                [[r["regime"], SYSTEM_LABEL.get(r["system"], r["system"]),
-                  "%.0f" % float(r["total_ms"]), "%.1f" % float(r["p50_us"]),
-                  "%.1f" % float(r["p95_us"]), "%.0f" % float(r["max_us"]),
-                  r.get("bridges", ""), r.get("frame_compiles", ""),
-                  r.get("exit_seq", ""), r.get("pass", "")]
-                 for r in rows])
+                table)
     return fig, "control"
 
 

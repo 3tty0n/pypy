@@ -425,7 +425,7 @@ def main(out_dir):
                 fmt(med([x["median_us"] for x in rows])),
                 fmt(med([x["total_us"] for x in rows])) if rows[0].get("total_us") else "",
                 d(rows, "loops"), d(rows, "bridges"), d(rows, "kernels"),
-                d(rows, "cache_hits"), d(rows, "recompiles")))
+                d(rows, "cache_hits"), d(rows, "new_graphs")))
         lines.append("")
 
     lazy = read_tsv(os.path.join(out_dir, "lazy.tsv"))

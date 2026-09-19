@@ -12,8 +12,9 @@ build is host-side input marshalling, not the runtime under test; see the
 docstring of dynamic_gpt2.py for the numbers that motivate the split.
 
 Per length window the driver reports the delta of torch._dynamo's unique-graph
-counter: graphs is the running total at the end of the window, recompiles the
-number of new graphs inside it, so a non-zero recompiles on a revisit is a
+counter: graphs is the running total at the end of the window, new_graphs the
+number of graphs compiled inside it.  On a first visit those are first
+compilations; a non-zero count on a revisit of the same length is a
 recompilation.  compile_ms is -1: torch.compile does not expose the compile
 time separately from the first iteration that triggers it, so the cost is
 inside that iteration's step_us instead.
@@ -94,7 +95,7 @@ def main():
 
         per_phase = max(1, iters // len(PHASES))
         print('pass\tlength\tstep_us\tbuild_us\tloops\tbridges\tkernels'
-              '\tlaunches\tgraphs\trecompiles\tcompile_ms')
+              '\tlaunches\tgraphs\tnew_graphs\tcompile_ms')
         for phase, lengths in PHASES:
             for i in range(per_phase):
                 t = lengths[i % len(lengths)]
