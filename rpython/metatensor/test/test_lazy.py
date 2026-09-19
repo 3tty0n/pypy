@@ -206,3 +206,40 @@ class TestSameKernelsAsTheFusionPass(LLJitMixin):
         deferred = self._keys(lazily)
         assert fused
         assert deferred == fused
+
+
+def test_mark_step_forces_the_roots_but_not_the_interior():
+    """A deferred library needs a per-iteration materialization point or the
+    DAG grows across iterations.  Only the roots have to be forced: an
+    interior node is computed inside its root's kernel."""
+    x = from_list([1.0, 2.0, 3.0, 4.0])
+    w = from_list([0.5, 0.5, 0.5, 0.5])
+    with Lazily():
+        inner = ops.mul(x, w)
+        root = ops.relu(inner)
+        lazy.mark_step()
+        assert not root.lazy
+        assert inner.lazy
+        assert values(inner) == [0.5, 1.0, 1.5, 2.0]
+
+
+def test_a_loop_without_a_mark_step_keeps_growing():
+    x = from_list([1.0, 2.0, 3.0, 4.0])
+    w = from_list([0.5, 0.5, 0.5, 0.5])
+    with Lazily():
+        h = x
+        for _ in range(20):
+            h = ops.relu(ops.mul(h, w))
+        assert h.lazy
+        depth = 0
+        lz = lazy._lazy_of(h)
+        while lz is not None:
+            depth += 1
+            lz = lazy._lazy_of(lz.a)
+        assert depth == 40
+    with Lazily():
+        h = x
+        for _ in range(20):
+            h = ops.relu(ops.mul(h, w))
+            lazy.mark_step()
+        assert not h.lazy

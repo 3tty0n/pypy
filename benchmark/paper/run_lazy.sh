@@ -24,7 +24,7 @@ paper_setup_pypy
 trap paper_cleanup_pypy EXIT
 
 TSV="$OUT/lazy.tsv"
-tsv_init "$TSV" "model\tsystem\tround\tsteady_us\tlaunches_per_iter\tkernels\tcompiles\tgc_bytes_per_iter\tlazy_nodes\tlazy_forces\tlazy_barriers\tlazy_pruned\tlazy_fallbacks\tloops\tbridges\tfirst_run_ms\tchecksum\targmax_match\tbinary"
+tsv_init "$TSV" "model\tsystem\tround\tsteady_us\tlaunches_per_iter\tkernels\tcompiles\tgc_ms\tpeak_bytes\tlazy_nodes\tlazy_forces\tlazy_barriers\tlazy_pruned\tlazy_fallbacks\tloops\tbridges\tfirst_run_ms\tchecksum\targmax_match\tbinary"
 WTSV="$OUT/lazy_warmup.tsv"
 tsv_init "$WTSV" "model\tsystem\tround\titer\tus\tcompiled\tlaunches\tbinary"
 
@@ -68,12 +68,13 @@ argmax_of() { echo "$1" | grep '^argmax ' | head -1; }
 
 row() {
   local model=$1 system=$2 round=$3 out=$4 match=$5
-  local steady launches kern comp gcb nodes forces barriers pruned fallbacks loops bridges first cks
+  local steady launches kern comp gcms peak nodes forces barriers pruned fallbacks loops bridges first cks
   steady=$(steady_of "$out")
   launches=$(field_of "$out" launches_per_iter)
   kern=$(field_of "$out" kernels)
   comp=$(field_of "$out" compiles)
-  gcb=$(field_of "$out" gc_bytes_per_iter)
+  gcms=$(field_of "$out" gc_ms)
+  peak=$(field_of "$out" peak_bytes)
   nodes=$(field_of "$out" lazy_nodes)
   forces=$(field_of "$out" lazy_forces)
   barriers=$(field_of "$out" lazy_barriers)
@@ -83,10 +84,10 @@ row() {
   bridges=$(field_of "$out" bridges)
   first=$(field_of "$out" first_run_ms)
   cks=$(field_of "$out" checksum)
-  echo -e "$model\t$system\t$round\t$steady\t$launches\t$kern\t$comp\t$gcb\t$nodes\t$forces\t$barriers\t$pruned\t$fallbacks\t$loops\t$bridges\t$first\t$cks\t$match\t${PYPY_SHA:-unknown}" >> "$TSV"
+  echo -e "$model\t$system\t$round\t$steady\t$launches\t$kern\t$comp\t$gcms\t$peak\t$nodes\t$forces\t$barriers\t$pruned\t$fallbacks\t$loops\t$bridges\t$first\t$cks\t$match\t${PYPY_SHA:-unknown}" >> "$TSV"
   bench_record lazy model="$model" system="$system" round="$round" \
     steady_us="$steady" launches_per_iter="$launches" kernels="$kern" \
-    compiles="$comp" gc_bytes_per_iter="$gcb" lazy_nodes="$nodes" \
+    compiles="$comp" gc_ms="$gcms" peak_bytes="$peak" lazy_nodes="$nodes" \
     lazy_forces="$forces" lazy_barriers="$barriers" lazy_pruned="$pruned" \
     lazy_fallbacks="$fallbacks" loops="$loops" bridges="$bridges" \
     first_run_ms="$first" checksum="$cks" \

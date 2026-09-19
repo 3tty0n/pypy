@@ -434,7 +434,7 @@ def main(out_dir):
         # the check that both ran the same kernels; only the host side differs.
         lines.append("## Where the operation DAG lives (median over rounds)\n")
         lines.append("| model | DAG in | steady_us | launches/iter | kernels | "
-                     "compiles | bytes/iter | nodes deferred | same argmax |")
+                     "compiles | gc_ms | nodes deferred | same argmax |")
         lines.append("|---|---|---|---|---|---|---|---|---|")
         g = collections.defaultdict(list)
         for r in lazy:
@@ -447,7 +447,7 @@ def main(out_dir):
             lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
                 key[0], key[1], col("steady_us"), col("launches_per_iter"),
                 col("kernels", "%.0f"), col("compiles", "%.0f"),
-                col("gc_bytes_per_iter", "%.0f"), col("lazy_nodes", "%.0f"),
+                col("gc_ms", "%.0f"), col("lazy_nodes", "%.0f"),
                 rows[0].get("argmax_match", "")))
         lines.append("")
 

@@ -112,6 +112,19 @@ def fit_n(n, units):
     return n
 
 
+_LAZY = [None]
+
+
+def mark_step():
+    """See common.mark_step: a deferred library needs a per-iteration
+    materialization point, a trace boundary already is one."""
+    if _LAZY[0] is None:
+        _LAZY[0] = (hasattr(_metatensor, 'mark_step') and
+                    _metatensor.lazy_enabled())
+    if _LAZY[0]:
+        _metatensor.mark_step()
+
+
 _sink_fd = [-1]
 
 
@@ -129,6 +142,7 @@ def chain(variant, k, n):
     def run(iters):
         h = h0
         for i in range(iters):
+            mark_step()
             for j in range(k):
                 h = (h * b + b).relu()
             if variant == 1:
@@ -174,6 +188,7 @@ def mlp_forward(n):
     def run(iters):
         x = x0
         for i in range(iters):
+            mark_step()
             x = model(x)
         return x.sum().item()
     return run, eff_n
@@ -193,6 +208,7 @@ def mlp_train(n):
         params = model.parameters()
         loss = 0.0
         for i in range(iters):
+            mark_step()
             out = model(x0).sum()
             out.backward()
             sgd_step(params, LR)
@@ -209,6 +225,7 @@ def block(n):
     def run(iters):
         x = x0
         for i in range(iters):
+            mark_step()
             x = model(x)
         return x.sum().item()
     return run, eff_n
@@ -231,6 +248,7 @@ def transformer_train(n):
         params.extend(head.parameters())
         loss = 0.0
         for i in range(iters):
+            mark_step()
             x = x0
             for blk in blocks:
                 x = blk(x)
@@ -250,6 +268,7 @@ def attn(n):
     def run(iters):
         x = x0
         for i in range(iters):
+            mark_step()
             x = model(x)
         return x.sum().item()
     return run, eff_n
@@ -264,6 +283,7 @@ def conv(n):
     def run(iters):
         acc = 0.0
         for i in range(iters):
+            mark_step()
             acc += model(x0).sum().item()
         return acc
     return run, eff_n
@@ -282,6 +302,7 @@ def reduction(n):
     def run(iters):
         x = x0
         for i in range(iters):
+            mark_step()
             half = _metatensor.scalar(0.5)
             one = _metatensor.scalar(1.0)
             two = _metatensor.scalar(2.0)
@@ -300,6 +321,7 @@ def matmul_variant(n):
     def run(iters):
         x = x0
         for i in range(iters):
+            mark_step()
             x = layer(x)
         return x.sum().item()
     return run, eff_n

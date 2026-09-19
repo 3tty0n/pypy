@@ -7,7 +7,9 @@ same DAG out of runtime objects instead, the way a conventional deferred
 tensor library does, and hands it to the same kernel emitter, the same
 in-process and on-disk kernel caches, the same device allocator and the same
 launcher.  The two arms therefore differ only in where the DAG lives and when
-it is built; the kernels are the same, which the cache keys confirm.
+it is built.  On the same DAG they build the same kernel, which the cache keys
+confirm; they do not always see the same DAG, because a trace ends at the loop
+back edge and a deferred library ends at whatever the program materializes.
 
 Turned on by METATENSOR_LAZY=1.  It is only meaningful with the JIT's 'tensor'
 optimization pass disabled (--jit enable_opts=... without 'tensor'), because
@@ -57,6 +59,9 @@ stats = Stats()
 # How long the live set may get before it is swept for entries whose tensor
 # the program has dropped.  A lazy library has to keep this set, because an
 # in-place write has to materialize whatever still reads the destination.
+# The limit doubles when a sweep frees little: the collector runs on its own
+# schedule, so a set that is still mostly alive would otherwise be swept on
+# every single operation.
 LIVE_SWEEP = 256
 
 
@@ -69,6 +74,9 @@ def _prune():
             kept.append(refs[i])
     stats.pruned += len(refs) - len(kept)
     live.refs = kept
+    live.limit = LIVE_SWEEP
+    if 2 * len(kept) > LIVE_SWEEP:
+        live.limit = 2 * len(kept)
 
 
 class Lazy(object):
@@ -82,6 +90,10 @@ class Lazy(object):
 
     opcode = 0
     param = 0
+    # True once this node is an operand of another deferred node.  A
+    # materialization point only has to force the roots; the interior nodes
+    # are computed as part of the root's kernel.
+    interior = False
     a = NULLTENSOR
     b = NULLTENSOR
     out = NULLTENSOR
@@ -89,6 +101,7 @@ class Lazy(object):
     consts = None
 
     def __init__(self, opcode, a, b, param, leaves, consts):
+        self.interior = False
         self.opcode = opcode
         self.a = a
         self.b = b
@@ -101,6 +114,7 @@ class Lazy(object):
 class Live(object):
     def __init__(self):
         self.refs = []
+        self.limit = LIVE_SWEEP
 live = Live()
 
 
@@ -134,6 +148,7 @@ def _index_of(seq, t):
 def _merge(t, leaves, consts):
     lz = _lazy_of(t)
     if lz is not None:
+        lz.interior = True
         for i in range(len(lz.leaves)):
             if _index_of(leaves, lz.leaves[i]) < 0:
                 leaves.append(lz.leaves[i])
@@ -208,7 +223,7 @@ def lazy_op(opcode, a, b, param):
     lz = Lazy(opcode, a, b, param, leaves, consts)
     lz.out = t
     t.lazy = cast_instance_to_base_ptr(lz)
-    if len(live.refs) > LIVE_SWEEP:
+    if len(live.refs) >= live.limit:
         _prune()
     live.refs.append(rweakref.ref(lz))
     stats.nodes += 1
@@ -364,6 +379,20 @@ def force(t):
     return t
 
 
+def mark_step():
+    """The materialization point a deferred library needs and a trace gets for
+    free.  Without one the DAG grows across loop iterations instead of being
+    executed, which is why PyTorch/XLA makes the program call mark_step.  Only
+    the roots are forced; an interior node is computed inside its root's
+    kernel."""
+    refs = live.refs
+    for i in range(len(refs)):
+        other = refs[i]()
+        if other is not None and not other.interior and other.out.lazy:
+            force(other.out)
+    _prune()
+
+
 def barrier():
     """An in-place write is about to happen: materialize every tensor that is
     still deferred, the runtime counterpart of OptTensor.force_live.  It is
@@ -373,6 +402,7 @@ def barrier():
     stats.barriers += 1
     refs = live.refs
     live.refs = []
+    live.limit = LIVE_SWEEP
     for i in range(len(refs)):
         other = refs[i]()
         if other is not None and other.out.lazy:

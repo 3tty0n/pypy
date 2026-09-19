@@ -93,14 +93,31 @@ LAUNCHES_PER_ITER = [None]
 # caller can tell which rtensor_k<n>.ttir files this model's fusion regions
 # produced (everything below the first value is the start-up single-op set).
 KERNEL_WINDOW = [None, None]
-# RTENSOR_LAZY_STATS=1: bytes the GC handed out during the timed loop, per
-# iteration, and the deferred-execution counters.  Where the operation DAG is
-# built shows up here: the fusion pass builds it once when a trace is
-# optimized, a deferred library builds it again on every iteration.
-GC_BYTES_PER_ITER = [None]
+# RTENSOR_LAZY_STATS=1: collector time over the timed loop and the peak heap,
+# plus the deferred-execution counters.  Where the operation DAG is built
+# shows up here: the fusion pass builds it once when a trace is optimized, a
+# deferred library builds it again on every iteration, and the objects that
+# takes are what the collector then has to walk.
+GC_MS = [None]
+PEAK_BYTES = [None]
 
 
 JIT_COUNTERS = [None, None]
+
+
+_LAZY = [None]
+
+
+def mark_step():
+    """Deferred execution needs an explicit per-iteration materialization
+    point, the way PyTorch/XLA needs mark_step; without one the operation
+    graph grows across iterations instead of being executed.  With the fusion
+    pass on this is a no-op: the trace boundary already is one."""
+    if _LAZY[0] is None:
+        _LAZY[0] = (hasattr(_metatensor, 'mark_step') and
+                    _metatensor.lazy_enabled())
+    if _LAZY[0]:
+        _metatensor.mark_step()
 
 
 def _jit_counters():
@@ -116,12 +133,16 @@ def _jit_counters():
         return 0, 0
 
 
-def _gc_allocated():
+def _gc_stats():
+    """PyPy formats the memory fields of gc.get_stats() as strings; the raw
+    integers are on the stats object underneath.  total_gc_time is
+    milliseconds spent collecting."""
     try:
         import gc
-        return gc.get_stats().total_allocated_memory
+        s = gc.get_stats()._s
+        return s.total_gc_time, s.peak_memory
     except (ImportError, AttributeError):
-        return 0
+        return 0, 0
 
 
 def timed(model, args, iters, warmup):
@@ -135,6 +156,7 @@ def timed(model, args, iters, warmup):
             t0 = time.time()
             logits = model(*args)
             logits.sum().item()
+            mark_step()
             dt = (time.time() - t0) * 1e6
             us.append(dt)
             if has_counters:
@@ -156,17 +178,21 @@ def timed(model, args, iters, warmup):
     FIRST_RUN_MS[0] = (time.time() - t0) * 1e3
     for i in range(warmup - 1):
         logits = model(*args)
+        mark_step()
     logits.sum().item()
     launches0 = _metatensor.launch_count()
-    gc0 = _gc_allocated() if os.environ.get('RTENSOR_LAZY_STATS') else 0
+    gc0 = _gc_stats() if os.environ.get('RTENSOR_LAZY_STATS') else (0, 0)
     jit0 = _jit_counters() if os.environ.get('RTENSOR_LAZY_STATS') else (0, 0)
     t0 = time.time()
     for i in range(iters):
         logits = model(*args)
+        mark_step()
     acc = logits.sum().item()
     steady_us = (time.time() - t0) / iters * 1e6
     if os.environ.get('RTENSOR_LAZY_STATS'):
-        GC_BYTES_PER_ITER[0] = (_gc_allocated() - gc0) / float(iters)
+        gc1 = _gc_stats()
+        GC_MS[0] = gc1[0] - gc0[0]
+        PEAK_BYTES[0] = gc1[1]
         jit1 = _jit_counters()
         JIT_COUNTERS[0] = jit1[0] - jit0[0]
         JIT_COUNTERS[1] = jit1[1] - jit0[1]
@@ -246,8 +272,8 @@ def report(line, order):
         line += ' kernel_count_begin=%d kernel_count_end=%d' % (
             KERNEL_WINDOW[0], KERNEL_WINDOW[1])
     if os.environ.get('RTENSOR_LAZY_STATS'):
-        if GC_BYTES_PER_ITER[0] is not None:
-            line += ' gc_bytes_per_iter=%.0f' % GC_BYTES_PER_ITER[0]
+        if GC_MS[0] is not None:
+            line += ' gc_ms=%d peak_bytes=%d' % (GC_MS[0], PEAK_BYTES[0])
         if hasattr(_metatensor, 'lazy_stats'):
             f, n, b, sc, fb = _metatensor.lazy_stats()
             line += (' deferred=%d lazy_forces=%d lazy_nodes=%d'

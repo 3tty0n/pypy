@@ -2185,14 +2185,13 @@ def fig_lazy(out, args):
     for i, arm in enumerate(LAZY_ARMS):
         vals = []
         for k in keys:
-            vals.append(med([r["gc_bytes_per_iter"] for r in groups[k].get(arm, [])]) or 0.0)
+            vals.append(med([r["gc_ms"] for r in groups[k].get(arm, [])]) or 0.0)
         colour, hatch, _ = style_of(arm)
         axes[1].bar([v + (i - 1) * width for v in x], vals, width * 0.92,
                     color=colour, linewidth=0,
                     hatch=hatch if args.texture else None,
                     label=SYSTEM_LABEL.get(arm, arm))
-    axes[1].set_yscale("log")
-    axes[1].set_ylabel("bytes allocated per\niteration (lower is better)")
+    axes[1].set_ylabel("ms in the collector over\nthe timed loop (lower is better)")
     axes[1].set_xticks(x, keys, rotation=30, ha="right")
     axes[1].yaxis.grid(True, zorder=0)
     axes[1].set_axisbelow(True)
@@ -2214,7 +2213,8 @@ def fig_lazy(out, args):
                           "%.1f" % (med([r["launches_per_iter"] for r in rs]) or 0),
                           "%d" % (med([r["kernels"] for r in rs]) or 0),
                           "%d" % (med([r["compiles"] for r in rs]) or 0),
-                          si(int(med([r["gc_bytes_per_iter"] for r in rs]) or 0)),
+                          "%d" % (med([r["gc_ms"] for r in rs]) or 0),
+                          si(int(med([r.get("peak_bytes") for r in rs]) or 0)),
                           "%d" % (med([r["lazy_nodes"] for r in rs]) or 0),
                           "%d" % (med([r.get("loops") for r in rs]) or 0),
                           "%d" % (med([r.get("bridges") for r in rs]) or 0),
@@ -2225,8 +2225,8 @@ def fig_lazy(out, args):
                 "equal counts on the virtual and deferred arms are the check "
                 "that both arms ran the same kernels",
                 ["model", "DAG lives in", "us/iter", "range", "launches/iter",
-                 "kernels", "compiles", "bytes/iter", "nodes deferred",
-                 "loops", "bridges", "same argmax"], table)
+                 "kernels", "compiles", "gc ms", "peak bytes",
+                 "nodes deferred", "loops", "bridges", "same argmax"], table)
     return fig, "lazy"
 
 

@@ -515,6 +515,14 @@ def lazy_enabled(space):
     return space.newbool(lazy.enabled())
 
 
+def mark_step(space):
+    """Materialize every deferred tensor the program still holds as a root.
+    A deferred library needs this once per iteration; with the fusion pass on
+    it does nothing, because the trace boundary already is one."""
+    if lazy.enabled():
+        lazy.mark_step()
+
+
 def lazy_stats(space):
     """Deferred-execution counters: chains forced, nodes deferred, in-place
     barriers, live-set entries swept once the program dropped them, and forces
