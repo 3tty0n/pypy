@@ -475,7 +475,7 @@ def main(out_dir):
         # comparable with the others.
         lines.append("## Host-dependent early exit (median over rounds)\n")
         lines.append("| regime | system | total_ms | p50_us | p95_us | max_us | "
-                     "bridges | recompiles | exit layers | pass |")
+                     "bridges | frame_compiles | exit layers | pass |")
         lines.append("|---|---|---|---|---|---|---|---|---|---|")
         g = collections.defaultdict(list)
         for r in control:
@@ -487,7 +487,7 @@ def main(out_dir):
             lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
                 key[0], key[1], col("total_ms", "%.0f"), col("p50_us"),
                 col("p95_us"), col("max_us", "%.0f"), col("bridges", "%.0f"),
-                col("recompiles", "%.0f"), rows[0].get("exit_seq", ""),
+                col("frame_compiles", "%.0f"), rows[0].get("exit_seq", ""),
                 rows[0].get("pass", "")))
         lines.append("")
 

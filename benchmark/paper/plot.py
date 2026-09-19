@@ -82,6 +82,7 @@ WIDE = {"micro_speedup", "models", "ablation", "micro_baselines",
 # the page and 7pt in the pdf is 7pt in print.  \columnwidth is 3.25in; the
 # entries are the \includegraphics fractions in sections/*.tex.
 PAGE_WIDTH = {
+    "lazy_col": 0.98 * SINGLE_COL,
     "batch": 0.82 * SINGLE_COL,
     "models_col": 0.85 * SINGLE_COL,
     "micro_speedup_col": 0.90 * SINGLE_COL,
@@ -2231,6 +2232,21 @@ def fig_lazy(out, args):
     return fig, "lazy"
 
 
+def fig_lazy_col(out, args):
+    """The body's version: the latency panel alone, at one column, because the
+    collector numbers are in the prose and in the appendix table."""
+    rows = read_tsv(os.path.join(out, "lazy.tsv"))
+    if not rows:
+        return None
+    groups = _lazy_group(rows, lambda r: r["model"])
+    keys = [k for k in collections.OrderedDict.fromkeys(r["model"] for r in rows)]
+    fig, ax = plt.subplots(figsize=(args.width, 2.4))
+    _lazy_ratio_panel(ax, keys, groups, keys, args)
+    ax.set_ylabel("latency relative to the DAG\nin the JIT (lower is better)")
+    legend_below(fig, ax, ncol=2)
+    return fig, "lazy_col"
+
+
 def fig_lazy_micro(out, args):
     """The same three arms across the size range, where the host cost of
     rebuilding the DAG is the whole story at one end and invisible at the
@@ -2334,15 +2350,17 @@ def fig_control(out, args):
             ax.set_title(regime, fontsize=7)
     write_table(os.path.join(args.outdir, "control.tex"),
                 "early exit on distilgpt2. total ms is the whole phase "
-                "including every compilation; the exit hash is over the "
-                "per-iteration sequence of exit layers and has to agree "
-                "across systems or the row is not comparable",
+                "including every compilation; frame compiles counts every "
+                "frame Dynamo compiled inside that phase, first compilations "
+                "included; the exit hash is over the per-iteration sequence of "
+                "exit layers and has to agree across systems or the row is not "
+                "comparable",
                 ["regime", "system", "total ms", "p50 us", "p95 us", "max us",
-                 "bridges", "recompiles", "exit layers", "pass"],
+                 "bridges", "frame compiles", "exit layers", "pass"],
                 [[r["regime"], SYSTEM_LABEL.get(r["system"], r["system"]),
                   "%.0f" % float(r["total_ms"]), "%.1f" % float(r["p50_us"]),
                   "%.1f" % float(r["p95_us"]), "%.0f" % float(r["max_us"]),
-                  r.get("bridges", ""), r.get("recompiles", ""),
+                  r.get("bridges", ""), r.get("frame_compiles", ""),
                   r.get("exit_seq", ""), r.get("pass", "")]
                  for r in rows])
     return fig, "control"
@@ -2404,6 +2422,7 @@ FIGURES = collections.OrderedDict([
     ("gap", fig_gap),
     ("correctness", fig_correctness),
     ("lazy", fig_lazy),
+    ("lazy_col", fig_lazy_col),
     ("lazy_micro", fig_lazy_micro),
     ("lazy_warmup", fig_lazy_warmup),
     ("control", fig_control),

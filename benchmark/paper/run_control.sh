@@ -9,11 +9,12 @@
 # Two regimes:
 #   stable   one input, one threshold - every iteration exits at layer 4
 #   varying  a rotating request mix - exits at layers 2, 3, 5, 6, so guards
-#            fail, bridges are compiled and Dynamo recompiles
+#            fail, bridges are compiled, and Dynamo's frame count is
+#            compared against the stable regime's
 #
 # total_ms spans the whole timed phase including the iterations that compile,
 # so no system gets to warm its compile cost away; p50/p95/max are over the
-# iterations after WARMUP, so a recompilation in the steady state lands in the
+# iterations after WARMUP, so a compilation in the steady state lands in the
 # tail rather than in the cold start.
 #
 # Every system must produce the same exit-layer sequence for a regime.  If one
@@ -29,7 +30,7 @@ trap paper_cleanup_pypy EXIT
 
 TSV="$OUT/control.tsv"
 SERIES="$OUT/control_series.tsv"
-tsv_init "$TSV" "system\tregime\tround\ttotal_ms\tp50_us\tp95_us\tmax_us\tloops\tbridges\tkernels\tgraphs\tbreaks\trecompiles\texit_hash\texit_seq\tmaxabsdiff\ttolerance\tpass\tbinary"
+tsv_init "$TSV" "system\tregime\tround\ttotal_ms\tp50_us\tp95_us\tmax_us\tloops\tbridges\tkernels\tgraphs\tbreaks\tframe_compiles\texit_hash\texit_seq\tmaxabsdiff\ttolerance\tpass\tbinary"
 tsv_init "$SERIES" "system\tregime\tround\titer\tus\texit_layer\tbinary"
 
 # Per-row provenance, same convention as run_models.sh.
@@ -73,7 +74,7 @@ emit() {
   local p95=$(field_of "$row" p95_us) mx=$(field_of "$row" max_us)
   local loops=$(field_of "$row" loops) bridges=$(field_of "$row" bridges)
   local kernels=$(field_of "$row" kernels) graphs=$(field_of "$row" graphs)
-  local breaks=$(field_of "$row" breaks) recomp=$(field_of "$row" recompiles)
+  local breaks=$(field_of "$row" breaks) recomp=$(field_of "$row" frame_compiles)
   local diff=$(field_of "$row" maxabsdiff) tol=$(field_of "$row" tol)
   local passed=$(field_of "$row" pass)
   hash=$(field_of "$row" exit_hash)
@@ -98,7 +99,7 @@ emit() {
   bench_record control system="$system" regime="$regime" round="$round" \
     total_ms="$total" p50_us="$p50" p95_us="$p95" max_us="$mx" \
     loops="$loops" bridges="$bridges" kernels="$kernels" graphs="$graphs" \
-    breaks="$breaks" recompiles="$recomp" exit_hash="$hash" exit_seq="$seq" \
+    breaks="$breaks" frame_compiles="$recomp" exit_hash="$hash" exit_seq="$seq" \
     maxabsdiff="$diff" tolerance="$tol" pass="$passed" iters="$ITERS" \
     warmup="$WARMUP" binary="$binary"
 }

@@ -13,10 +13,15 @@ distinct exit depth is a distinct chain.  That is the cost this experiment is
 about, so it is reported rather than worked around.
 
 Counters: graphs and breaks come from torch._dynamo.explain, run once after
-the timed loop.  recompiles is the delta of
-torch._dynamo.utils.counters['frames']['total'] across the timed phase - one
+the timed loop.  frame_compiles is the delta of
+torch._dynamo.utils.counters['frames']['total'] across the timed phase.  It
+counts every frame Dynamo compiles inside the measured window, the first
+compilation of a frame included, not only recompilations; there is no
+pre-timing warm-up, so the initial compilations are in it.  What it therefore
+answers is whether a changing exit depth forces ADDITIONAL frame compilations
+over a stable one - one
 frame compilation per compiled path, so in the varying regime it counts the
-recompilations the rotating exit depth forces.
+additional frame compilations the rotating exit depth forces.
 
     earlyexit_torch.py MODE WEIGHTS REGIME [ITERS] [WARMUP]
     MODE: eager | compile | compile-ro | compile-mat
@@ -109,7 +114,7 @@ def main():
             exits.append(n)
             print('series\t%d\t%.1f\t%d' % (i, us[-1], n))
         total_ms = (time.time() - t_all) * 1e3
-        recompiles = counters() - frames0
+        frame_compiles = counters() - frames0
         steady = us[warmup:] or us
 
         if exits[:len(inputs.CONTROL_EXITS[regime])] != inputs.CONTROL_EXITS[regime]:
@@ -127,11 +132,11 @@ def main():
 
     print('control regime=%s system=torch-%s iters=%d warmup=%d total_ms=%.1f '
           'p50_us=%.1f p95_us=%.1f max_us=%.1f loops=0 bridges=0 kernels=0 '
-          'graphs=%d breaks=%d recompiles=%d exit_hash=%d exit_seq=%s '
+          'graphs=%d breaks=%d frame_compiles=%d exit_hash=%d exit_seq=%s '
           'maxabsdiff=%.6g tol=%.6g pass=%d' % (
               regime, mode, iters, warmup, total_ms,
               inputs.pctl(steady, 0.5), inputs.pctl(steady, 0.95), max(steady),
-              graphs, breaks, recompiles, inputs.exit_hash(exits),
+              graphs, breaks, frame_compiles, inputs.exit_hash(exits),
               ''.join(str(n) for n in inputs.CONTROL_EXITS[regime]),
               d, tol, ok))
 

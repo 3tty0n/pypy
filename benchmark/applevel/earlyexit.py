@@ -134,7 +134,7 @@ def main():
 
     print('control regime=%s system=ours iters=%d warmup=%d total_ms=%.1f '
           'p50_us=%.1f p95_us=%.1f max_us=%.1f loops=%d bridges=%d '
-          'kernels=%d graphs=0 breaks=0 recompiles=0 exit_hash=%d '
+          'kernels=%d graphs=0 breaks=0 frame_compiles=0 exit_hash=%d '
           'exit_seq=%s maxabsdiff=0 tol=%s pass=1' % (
               regime, iters, warmup, total_ms,
               inputs.pctl(steady, 0.5), inputs.pctl(steady, 0.95), max(steady),

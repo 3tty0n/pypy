@@ -183,7 +183,7 @@ def main():
 
     print('control regime=%s system=jax-%s iters=%d warmup=%d total_ms=%.1f '
           'p50_us=%.1f p95_us=%.1f max_us=%.1f loops=0 bridges=0 kernels=0 '
-          'graphs=%d breaks=0 recompiles=%d exit_hash=%d exit_seq=%s '
+          'graphs=%d breaks=0 frame_compiles=%d exit_hash=%d exit_seq=%s '
           'maxabsdiff=%.6g tol=%.6g pass=%d' % (
               regime, mode, iters, warmup, total_ms,
               inputs.pctl(steady, 0.5), inputs.pctl(steady, 0.95), max(steady),
