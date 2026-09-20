@@ -1,4 +1,6 @@
-import argparse, json, math, os, struct
+import argparse, json, math, os
+
+import numpy
 
 
 def rope_tables(seq, dh, heads, theta):
@@ -51,7 +53,8 @@ def hf_weights(model_id, cfg):
     w = {}
 
     def put(key, t):
-        w[key] = (list(t.shape), t.contiguous().view(-1).float().tolist())
+        w[key] = (list(t.shape),
+                  t.detach().contiguous().view(-1).float().numpy())
 
     def putT(key, t):
         put(key, t.t())
@@ -105,7 +108,10 @@ def write(outdir, cfg, weights, seq):
     with open(os.path.join(outdir, 'weights.bin'), 'wb') as f:
         for name in sorted(weights):
             shape, data = weights[name]
-            f.write(struct.pack('<%df' % len(data), *data))
+            # tofile, not struct.pack(*data): a 1.7B-parameter checkpoint has
+            # single tensors of 100M floats, and unpacking one of those into a
+            # call's argument tuple costs several GB for the same bytes.
+            numpy.asarray(data, dtype='<f4').tofile(f)
             index[name] = [off, shape]
             off += len(data)
     toks = cfg.get('tokens') or []
