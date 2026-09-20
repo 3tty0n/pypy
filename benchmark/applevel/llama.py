@@ -28,9 +28,13 @@ def build(cfg, buf, dtype):
     blocks = []
     for i in range(cfg['n_layer']):
         pre = 'h.%d.' % i
+        bqkv = None
+        if cfg.get('qkv_bias'):
+            bqkv = w.cat([pre + 'attn.q.b', pre + 'attn.k.b',
+                          pre + 'attn.v.b'])
         attn = LlamaAttention(
             w.cat([pre + 'attn.q.w', pre + 'attn.k.w', pre + 'attn.v.w']),
-            w.get(pre + 'attn.proj.w'), h, mask, cos, sin, dh)
+            w.get(pre + 'attn.proj.w'), h, mask, cos, sin, dh, bqkv)
         mlp = LlamaMLP(w.get(pre + 'mlp.gate.w'), w.get(pre + 'mlp.up.w'),
                        w.get(pre + 'mlp.down.w'))
         blocks.append(LlamaBlock(attn, w.get(pre + 'norm1.g'),

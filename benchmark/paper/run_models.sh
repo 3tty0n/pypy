@@ -89,7 +89,7 @@ baseline_row() {
 #   ("linalg.conv_2d_nhwc_hwcf ... strides failed to satisfy constraint:
 #   64-bit signless int elements") for a StableHLO conv from jax.export, the
 #   same compiler limitation as micro variant 9 (CNN).
-IREE_MODELS=" distilgpt2 tiny-gpt2 bert-tiny bert-mini vit-tiny mixer_b16 smollm2-135m "
+IREE_MODELS=" gpt2 distilgpt2 tiny-gpt2 bert-base bert-tiny bert-mini vit-base vit-tiny mixer_b16 smollm2-135m smollm2-360m qwen2.5-0.5b "
 jax_rows() {
   local model=$1 jaxmodel=$2 weights=$3 round=$4; shift 4
   [ -n "${JAX_PYTHON:-}" ] && [ -x "$JAX_PYTHON" ] || return 0
@@ -140,17 +140,26 @@ model() {
 }
 
 # fourth column: the jax_models.py model, "" where there is no JAX twin
+model_gpt2() { model gpt2 gpt2.py gpt2_torch.py gpt2 "$WEIGHTS/gpt2"; }
 model_distilgpt2() { model distilgpt2 gpt2.py gpt2_torch.py gpt2 "$WEIGHTS/distilgpt2"; }
 model_tiny-gpt2() { model tiny-gpt2 gpt2.py gpt2_torch.py gpt2 "$WEIGHTS/tiny-gpt2"; }
 model_smollm2-135m() { model smollm2-135m llama.py llama_torch.py llama "$WEIGHTS/smollm2-135m"; }
+model_smollm2-360m() { model smollm2-360m llama.py llama_torch.py llama "$WEIGHTS/smollm2-360m"; }
+model_qwen2.5-0.5b() { model qwen2.5-0.5b llama.py llama_torch.py llama "$WEIGHTS/qwen2.5-0.5b"; }
+model_bert-base() { model bert-base bert.py bert_torch.py bert "$WEIGHTS/bert-base"; }
 model_bert-tiny() { model bert-tiny bert.py bert_torch.py bert "$WEIGHTS/bert-tiny"; }
 model_bert-mini() { model bert-mini bert.py bert_torch.py bert "$WEIGHTS/bert-mini"; }
 model_resnet18-b1() { model resnet18-b1 resnet.py resnet_torch.py resnet "$WEIGHTS/resnet18" 1; }
 model_resnet18-b8() { model resnet18-b8 resnet.py resnet_torch.py resnet "$WEIGHTS/resnet18" 8; }
 model_mixer_b16() { model mixer_b16 mixer.py mixer_torch.py mixer "$WEIGHTS/mixer_b16"; }
+model_vit-base() { model vit-base vit.py vit_torch.py vit "$WEIGHTS/vit-base"; }
 model_vit-tiny() { model vit-tiny vit.py vit_torch.py vit "$WEIGHTS/vit-tiny"; }
 
-ALL_MODELS="distilgpt2 tiny-gpt2 smollm2-135m bert-tiny bert-mini resnet18-b1 resnet18-b8 mixer_b16 vit-tiny"
+# The population: released, trained checkpoints that are actually served.
+POPULATION="gpt2 distilgpt2 smollm2-135m smollm2-360m qwen2.5-0.5b bert-base bert-mini resnet18-b1 resnet18-b8 mixer_b16 vit-base vit-tiny"
+# Synthetic launch-bound probes, reported apart from the population.
+PROBES="tiny-gpt2 bert-tiny"
+ALL_MODELS="$POPULATION $PROBES"
 MODELS=${MODELS:-}
 if [ "$#" -gt 0 ]; then MODELS="$*"; fi
 MODELS=${MODELS:-$ALL_MODELS}

@@ -46,6 +46,8 @@ def hf_weights(model_id, cfg):
                 c.num_hidden_layers, 'eps': c.rms_norm_eps,
                 'ff': c.intermediate_size, 'rope_theta': theta,
                 'tied': bool(c.tie_word_embeddings)})
+    qkv_bias = 'model.layers.0.self_attn.q_proj.bias' in sd
+    cfg['qkv_bias'] = qkv_bias
     w = {}
 
     def put(key, t):
@@ -59,6 +61,10 @@ def hf_weights(model_id, cfg):
         return t.view(kv, dh, -1).repeat_interleave(n, 0).reshape(heads * dh,
                                                                   -1)
 
+    def repb(t):
+        n = heads // kv
+        return t.view(kv, dh).repeat_interleave(n, 0).reshape(heads * dh)
+
     put('wte', sd['model.embed_tokens.weight'])
     if not c.tie_word_embeddings:
         put('lm_head.w', sd['lm_head.weight'])
@@ -69,6 +75,10 @@ def hf_weights(model_id, cfg):
         putT('h.%d.attn.k.w' % i, rep(sd[pre + 'self_attn.k_proj.weight']))
         putT('h.%d.attn.v.w' % i, rep(sd[pre + 'self_attn.v_proj.weight']))
         putT('h.%d.attn.proj.w' % i, sd[pre + 'self_attn.o_proj.weight'])
+        if qkv_bias:
+            put('h.%d.attn.q.b' % i, sd[pre + 'self_attn.q_proj.bias'])
+            put('h.%d.attn.k.b' % i, repb(sd[pre + 'self_attn.k_proj.bias']))
+            put('h.%d.attn.v.b' % i, repb(sd[pre + 'self_attn.v_proj.bias']))
         putT('h.%d.mlp.gate.w' % i, sd[pre + 'mlp.gate_proj.weight'])
         putT('h.%d.mlp.up.w' % i, sd[pre + 'mlp.up_proj.weight'])
         putT('h.%d.mlp.down.w' % i, sd[pre + 'mlp.down_proj.weight'])

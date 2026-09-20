@@ -15,7 +15,7 @@ paper_setup_pypy
 trap paper_cleanup_pypy EXIT
 
 BATCHES=${BATCHES:-"1 2 4 8 16 32"}
-BATCH_MODELS=${BATCH_MODELS:-"bert-mini distilgpt2"}
+BATCH_MODELS=${BATCH_MODELS:-"bert-base distilgpt2"}
 BATCH_SYSTEMS=${BATCH_SYSTEMS:-"ours torch-eager torch-compile torch-compile-ro jax"}
 
 TSV="$OUT/batch.tsv"

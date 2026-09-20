@@ -124,8 +124,9 @@ class GPT2(Module):
 
 
 class LlamaAttention(Module):
-    def __init__(self, wqkv, wo, heads, mask, cos, sin, head_dim):
+    def __init__(self, wqkv, wo, heads, mask, cos, sin, head_dim, bqkv=None):
         self.wqkv = wqkv
+        self.bqkv = bqkv
         self.wo = wo
         self.heads = heads
         self.mask = mask
@@ -139,6 +140,8 @@ class LlamaAttention(Module):
         d = x.shape[1]
         dh = d // h
         qkv = x.matmul(self.wqkv)
+        if self.bqkv is not None:
+            qkv = qkv.add(self.bqkv)
         qkv = qkv.mul(self.cos).add(qkv.rot_half(self.head_dim).mul(self.sin))
         s = qkv.attn_scores(qkv, h, d, 0, d).mul(
             _scalar(1.0 / math.sqrt(dh), x.dtype)).add(self.mask)

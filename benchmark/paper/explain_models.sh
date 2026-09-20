@@ -18,14 +18,19 @@ explain_row() {
   bench_record explain model="$model" graphs="${graphs:-}" breaks="${breaks:-}" ops="${ops:-}"
 }
 
+explain_row gpt2 gpt2_torch.py "$WEIGHTS/gpt2"
 explain_row distilgpt2 gpt2_torch.py "$WEIGHTS/distilgpt2"
-explain_row tiny-gpt2 gpt2_torch.py "$WEIGHTS/tiny-gpt2"
 explain_row smollm2-135m llama_torch.py "$WEIGHTS/smollm2-135m"
-explain_row bert-tiny bert_torch.py "$WEIGHTS/bert-tiny"
+explain_row smollm2-360m llama_torch.py "$WEIGHTS/smollm2-360m"
+explain_row qwen2.5-0.5b llama_torch.py "$WEIGHTS/qwen2.5-0.5b"
+explain_row bert-base bert_torch.py "$WEIGHTS/bert-base"
 explain_row bert-mini bert_torch.py "$WEIGHTS/bert-mini"
 explain_row resnet18-b1 resnet_torch.py "$WEIGHTS/resnet18" 1
 explain_row resnet18-b8 resnet_torch.py "$WEIGHTS/resnet18" 8
 explain_row mixer_b16 mixer_torch.py "$WEIGHTS/mixer_b16"
+explain_row vit-base vit_torch.py "$WEIGHTS/vit-base"
 explain_row vit-tiny vit_torch.py "$WEIGHTS/vit-tiny"
+explain_row tiny-gpt2 gpt2_torch.py "$WEIGHTS/tiny-gpt2"
+explain_row bert-tiny bert_torch.py "$WEIGHTS/bert-tiny"
 
 echo "wrote $TSV"

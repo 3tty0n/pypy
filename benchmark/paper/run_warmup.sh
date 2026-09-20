@@ -140,7 +140,7 @@ one_model() {
   done
 }
 
-MODELS=${MODELS:-"tiny-gpt2 distilgpt2"}
+MODELS=${MODELS:-"distilgpt2 gpt2"}
 progress_init warmup $((2 * ROUNDS * $(echo $MODELS | wc -w)))
 for m in $MODELS; do one_model "$m"; done
 progress_done

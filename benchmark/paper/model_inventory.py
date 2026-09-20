@@ -39,19 +39,64 @@ APP = os.path.join(HERE, "..", "applevel")
 
 # model -> (family, weights dir, batch).  Same mapping as run_models.sh.
 MODELS = [
+    ("gpt2", "gpt2", "gpt2", 1),
     ("distilgpt2", "gpt2", "distilgpt2", 1),
-    ("tiny-gpt2", "gpt2", "tiny-gpt2", 1),
     ("smollm2-135m", "llama", "smollm2-135m", 1),
-    ("bert-tiny", "bert", "bert-tiny", 1),
+    ("smollm2-360m", "llama", "smollm2-360m", 1),
+    ("qwen2.5-0.5b", "llama", "qwen2.5-0.5b", 1),
+    ("bert-base", "bert", "bert-base", 1),
     ("bert-mini", "bert", "bert-mini", 1),
     ("resnet18-b1", "resnet", "resnet18", 1),
     ("resnet18-b8", "resnet", "resnet18", 8),
     ("mixer_b16", "mixer", "mixer_b16", 1),
+    ("vit-base", "vit", "vit-base", 1),
     ("vit-tiny", "vit", "vit-tiny", 1),
+    ("tiny-gpt2", "gpt2", "tiny-gpt2", 1),
+    ("bert-tiny", "bert", "bert-tiny", 1),
 ]
 
 COLUMNS = ["model", "system", "params_only", "params_plus_buffers", "gflops",
-           "gemm_calls", "bmm_calls", "conv_calls", "sdpa_calls", "notes"]
+           "gemm_calls", "bmm_calls", "conv_calls", "sdpa_calls",
+           "hf_id", "revision", "weights", "notes"]
+
+# Where a checkpoint came from and whether every weight the benchmark reads is
+# a trained one.  A reader cannot check a number against the wrong checkpoint,
+# and "untrained" is a property to declare, not to hide: two of the rows are
+# fixtures whose weights were never trained, and they are reported apart from
+# the population for that reason.
+#
+#   trained      every tensor the forward reads comes from the checkpoint
+#   head-random  the encoder is pretrained, the task head is not in the
+#                checkpoint and transformers initialises it randomly
+#   random       the whole checkpoint is a randomly initialised test fixture
+WEIGHT_PROVENANCE = {
+    "sshleifer/tiny-gpt2": "random",
+    "prajjwal1/bert-tiny": "head-random",
+}
+
+HF_HUB = os.path.join(os.environ.get("HF_HOME",
+                                     os.path.expanduser("~/.cache/huggingface")),
+                      "hub")
+
+
+def hf_revision(source):
+    """The snapshot the export actually read, as the local hub cache names it.
+
+    timm names are not hub ids; the hub repo is timm/<name>, and torchvision's
+    plain "resnet18" resolves to the timm default weights.
+    """
+    for repo in (source, "timm/" + source, "timm/" + source + ".a1_in1k"):
+        d = os.path.join(HF_HUB, "models--" + repo.replace("/", "--"),
+                         "snapshots")
+        if os.path.isdir(d):
+            names = os.listdir(d)
+            if names:
+                # A repo can have several snapshots cached; the export read
+                # the one that was downloaded last.
+                newest = max(names,
+                             key=lambda n: os.path.getmtime(os.path.join(d, n)))
+                return repo + "@" + newest[:12]
+    return source + "@unknown"
 
 # One definition of "parameter", applied to both sides.
 #
@@ -242,7 +287,10 @@ OURS = {"gpt2": ours_gpt2, "bert": ours_bert, "llama": ours_llama,
 
 def ours_row(name, family, cfg, batch):
     ops, notes = OURS[family](cfg, batch)
+    source = cfg.get("source", "unknown")
     return dict(model=name, system="ours",
+                hf_id=source, revision=hf_revision(source),
+                weights=WEIGHT_PROVENANCE.get(source, "trained"),
                 params_only=str(params_of(cfg)),
                 params_plus_buffers=str(params_of(cfg, True)),
                 gflops="%.3f" % (ops.flops / 1e9),

@@ -264,12 +264,16 @@ def build_llama(cfg, flat, dtype):
     blocks = []
     for i in range(cfg['n_layer']):
         p = 'h.%d.' % i
-        blocks.append({
+        block = {
             'wqkv': w.cat([p + 'attn.q.w', p + 'attn.k.w', p + 'attn.v.w']),
             'wo': w.get(p + 'attn.proj.w'),
             'wgate': w.get(p + 'mlp.gate.w'), 'wup': w.get(p + 'mlp.up.w'),
             'wdown': w.get(p + 'mlp.down.w'),
-            'g1': w.get(p + 'norm1.g'), 'g2': w.get(p + 'norm2.g')})
+            'g1': w.get(p + 'norm1.g'), 'g2': w.get(p + 'norm2.g')}
+        if cfg.get('qkv_bias'):
+            block['bqkv'] = w.cat([p + 'attn.q.b', p + 'attn.k.b',
+                                   p + 'attn.v.b'])
+        blocks.append(block)
     params = {'wte': w.get('wte'), 'gf': w.get('norm_f.g'), 'blocks': blocks,
               'cos': w.get('rope.cos')[:t], 'sin': w.get('rope.sin')[:t],
               'mask': jnp.where(jnp.triu(jnp.ones((t, t), bool), 1),
@@ -283,6 +287,8 @@ def build_llama(cfg, flat, dtype):
         for bp in p['blocks']:
             y = rms_norm(x, bp['g1'], eps)
             qkv = y @ bp['wqkv']
+            if 'bqkv' in bp:
+                qkv = qkv + bp['bqkv']
             q = rope(qkv[:, :d], p['cos'], p['sin'], dh)
             k = rope(qkv[:, d:2 * d], p['cos'], p['sin'], dh)
             q, k, v = [z.reshape(t, h, d // h).transpose(1, 0, 2)

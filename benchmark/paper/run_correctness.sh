@@ -34,19 +34,24 @@ WARMUP=${CORRECTNESS_WARMUP:-2}
 TSV="$OUT/correctness.tsv"
 tsv_init "$TSV" "model\tsystem\tseed\tmaxabsdiff\targmax_match\ttol\tpass"
 
-ALL_MODELS="distilgpt2 tiny-gpt2 smollm2-135m bert-tiny bert-mini resnet18-b1 resnet18-b8 mixer_b16 vit-tiny"
+ALL_MODELS="gpt2 distilgpt2 smollm2-135m smollm2-360m qwen2.5-0.5b bert-base bert-mini resnet18-b1 resnet18-b8 mixer_b16 vit-base vit-tiny tiny-gpt2 bert-tiny"
 
 # model -> pypy script, torch script, jax model, weights dir, kind, extra argv
 spec() {
   case "$1" in
+    gpt2)         echo "gpt2.py gpt2_torch.py gpt2 gpt2 text" ;;
     distilgpt2)   echo "gpt2.py gpt2_torch.py gpt2 distilgpt2 text" ;;
     tiny-gpt2)    echo "gpt2.py gpt2_torch.py gpt2 tiny-gpt2 text" ;;
     smollm2-135m) echo "llama.py llama_torch.py llama smollm2-135m text" ;;
+    smollm2-360m) echo "llama.py llama_torch.py llama smollm2-360m text" ;;
+    qwen2.5-0.5b) echo "llama.py llama_torch.py llama qwen2.5-0.5b text" ;;
+    bert-base)    echo "bert.py bert_torch.py bert bert-base text" ;;
     bert-tiny)    echo "bert.py bert_torch.py bert bert-tiny text" ;;
     bert-mini)    echo "bert.py bert_torch.py bert bert-mini text" ;;
     resnet18-b1)  echo "resnet.py resnet_torch.py resnet resnet18 vision 1" ;;
     resnet18-b8)  echo "resnet.py resnet_torch.py resnet resnet18 vision 8" ;;
     mixer_b16)    echo "mixer.py mixer_torch.py mixer mixer_b16 vision" ;;
+    vit-base)     echo "vit.py vit_torch.py vit vit-base vision" ;;
     vit-tiny)     echo "vit.py vit_torch.py vit vit-tiny vision" ;;
     *) return 1 ;;
   esac

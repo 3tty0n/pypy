@@ -34,10 +34,11 @@ APP = os.path.join(HERE, "..", "applevel")
 
 # model -> (pypy module, torch script, jax_models.py name, weights dir)
 MODELS = [
-    ("bert-tiny", "bert", "bert_torch.py", "bert", "bert-tiny"),
+    ("bert-base", "bert", "bert_torch.py", "bert", "bert-base"),
     ("bert-mini", "bert", "bert_torch.py", "bert", "bert-mini"),
-    ("tiny-gpt2", "gpt2", "gpt2_torch.py", "gpt2", "tiny-gpt2"),
+    ("gpt2", "gpt2", "gpt2_torch.py", "gpt2", "gpt2"),
     ("distilgpt2", "gpt2", "gpt2_torch.py", "gpt2", "distilgpt2"),
+    ("vit-base", "vit", "vit_torch.py", "vit", "vit-base"),
     ("vit-tiny", "vit", "vit_torch.py", "vit", "vit-tiny"),
 ]
 

@@ -32,16 +32,16 @@ PYPY_SHA=$(sha256sum "$PYPY" 2>/dev/null | cut -c1-12)
 NOFUSE="enable_opts=intbounds:rewrite:virtualize:string:pure:earlyforce:heap:unroll"
 JIT_INNER="threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000"
 
-LAZY_MODELS=${LAZY_MODELS:-"tiny-gpt2 distilgpt2 bert-tiny bert-mini vit-tiny mixer_b16 resnet18-b1 smollm2-135m"}
+LAZY_MODELS=${LAZY_MODELS:-"gpt2 distilgpt2 bert-base bert-mini vit-base vit-tiny mixer_b16 resnet18-b1 smollm2-135m smollm2-360m"}
 
 script_for() {
   case $1 in
-    distilgpt2|tiny-gpt2) echo "gpt2.py";;
-    smollm2-135m) echo "llama.py";;
-    bert-tiny|bert-mini) echo "bert.py";;
+    gpt2|distilgpt2|tiny-gpt2) echo "gpt2.py";;
+    smollm2-135m|smollm2-360m|qwen2.5-0.5b) echo "llama.py";;
+    bert-base|bert-tiny|bert-mini) echo "bert.py";;
     resnet18-b1|resnet18-b8) echo "resnet.py";;
     mixer_b16) echo "mixer.py";;
-    vit-tiny) echo "vit.py";;
+    vit-base|vit-tiny) echo "vit.py";;
     *) echo "";;
   esac
 }
