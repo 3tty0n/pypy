@@ -48,6 +48,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import matplotlib
+import matplotlib.ticker
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -537,10 +538,19 @@ def fig_fusion_stats(out, args):
     return fig, "fusion_stats"
 
 
-# Two configurations carry weights that were never trained.  They stay in the
-# tables as launch-bound probes, and out of every figure and mean that speaks
-# for the population.
-PROBES = ("tiny-gpt2", "bert-tiny")
+# Out of the population, and so out of every figure, table and mean: two
+# fixtures whose weights were never trained, and one mirror of
+# weights an individual re-uploaded.  No sweep measures them any more; the
+# names stay so that a result set recorded before the rule was applied
+# still draws the population and nothing else.  select_models.py records
+# which criterion each one failed.
+PROBES = ("tiny-gpt2", "bert-tiny", "vit-tiny")
+
+# Admitted although they fall under the usage floor, each as the only cover
+# for something the population would otherwise lose: the small end of the
+# encoder ladder, and the only attention-free architecture.  The headline
+# mean is reported with and without them, so neither can carry a result.
+C3_EXEMPT = ("bert-mini", "mixer_b16")
 
 
 def _model_medians(out):
@@ -591,7 +601,7 @@ def fig_model_speedup(out, args):
     if not models:
         return None
     fig, ax = plt.subplots(figsize=(args.width, 2.5))
-    table_rows = []
+    table_rows, curves = [], []
     for base, label in SPEEDUP_BASES:
         sp = []
         for m in models:
@@ -601,19 +611,37 @@ def fig_model_speedup(out, args):
         if not sp:
             continue
         sp.sort()
+        curves.append(sp)
         gm = _geomean(sp)
         color, _, marker = style_of("torch-compile" if base == "best-of-three" else base)
         ax.plot(range(1, len(sp) + 1), sp, marker=marker, markersize=3.5,
                 linewidth=1.2, color=color,
                 label="%s (gmean %.2f$\\times$)" % (label, gm))
+        qual = [b / g[m]["ours"] for m in models
+                if m not in C3_EXEMPT and g[m].get("ours")
+                for b in [_base_us(g[m], base)] if b]
         table_rows.append([label, "%d" % len(sp), "%.2f" % gm,
+                           "%.2f" % _geomean(qual) if qual else "n/a",
                            "%.2f" % sp[0], "%.2f" % sp[-1],
                            "%d" % sum(1 for x in sp if x > 1.0)])
-    ax.axhline(1.0, color="0.35", linewidth=0.8, linestyle="--", zorder=0)
+    # Everything under the line is a loss; shading it means a reader does not
+    # have to read the axis to see how much of each curve is below one.
+    ax.axhspan(1e-3, 1.0, color="0.92", zorder=0)
+    ax.axhline(1.0, color="0.35", linewidth=0.8, linestyle="--", zorder=1)
     ax.set_yscale("log")
     ax.set_xlabel("model configurations, sorted by speedup")
     ax.set_ylabel("speedup over baseline\n(>1 favours MetaTensor)")
     ax.set_xlim(0.5, max(2, len(models)) + 0.5)
+    # A speedup axis reads as 0.8x and 2x, never as 8 times ten to the
+    # minus one, so the decade ticks a log scale defaults to are replaced.
+    lo = min(min(c) for c in curves) if curves else 0.5
+    hi = max(max(c) for c in curves) if curves else 2.0
+    ticks = [t for t in (0.25, 0.4, 0.5, 0.6, 0.8, 1, 1.5, 2, 3, 4, 6, 8)
+             if lo / 1.15 <= t <= hi * 1.15]
+    ax.set_yticks(ticks)
+    ax.set_yticklabels(["%g$\\times$" % t for t in ticks])
+    ax.yaxis.set_minor_locator(matplotlib.ticker.NullLocator())
+    ax.set_ylim(lo / 1.15, hi * 1.15)
     ax.yaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     despine(ax)
@@ -623,7 +651,8 @@ def fig_model_speedup(out, args):
     write_table(os.path.join(args.outdir, "model_speedup.tex"),
                 "speedup of MetaTensor over each baseline across the "
                 "population, medians of three rounds",
-                ["baseline", "models", "geomean", "min", "max", "faster on"],
+                ["baseline", "models", "geomean", "geomean, C3 only",
+                 "min", "max", "faster on"],
                 table_rows)
     return fig, "model_speedup"
 
@@ -639,7 +668,8 @@ def fig_models(out, args):
     systems = [s for s in ["ours", "torch-compile", "torch-compile-ro", "torch-compile-mat",
                            "torch-eager", "jax", "iree", "torch-tensorrt"]
                if any(s in d for d in g.values())]
-    models = sorted(g, key=lambda m: med(g[m].get("ours", [])) or 0)
+    models = sorted((m for m in g if m not in PROBES),
+                    key=lambda m: med(g[m].get("ours", [])) or 0)
     stats = {s: [band(g[m].get(s, [])) for m in models] for s in systems}
     vals = {s: [b[0] or 0 for b in stats[s]] for s in systems}
 
@@ -746,10 +776,22 @@ def fig_dynamic(out, args):
                                     if r.get("pass", "1") == p})
                          for p in phases}
 
-    fig, axes = plt.subplots(1, len(phases), squeeze=False, sharey=True,
-                             figsize=(args.width, args.width * 0.46))
+    # At one column three panels side by side leave an inch each, which is not
+    # a plot.  They stack, and the whole figure keeps to the column.
+    if args.width >= DOUBLE_COL:
+        fig, axes = plt.subplots(1, len(phases), squeeze=False, sharey=True,
+                                 figsize=(args.width, args.width * 0.46))
+        axes = list(axes[0])
+    else:
+        # Not sharex: each phase sweeps its own lengths, and a shared axis
+        # would stretch every phase over the union of all three and leave the
+        # tick values on the bottom panel only.
+        fig, axes = plt.subplots(len(phases), 1, squeeze=False, sharey=True,
+                                 figsize=(args.width,
+                                          1.25 * len(phases) + 1.0))
+        axes = [a[0] for a in axes]
     top = 0.0
-    for ax, phase in zip(axes[0], phases):
+    for ax, phase in zip(axes, phases):
         xs = per_phase_lengths[phase]
         for s in systems:
             bands = [band([float(r["median_us"]) for r in per.get((s, phase, L), [])])
@@ -766,14 +808,20 @@ def fig_dynamic(out, args):
                     markersize=3.0, markeredgewidth=0,
                     label=SYSTEM_LABEL[s], zorder=3)
         ax.set_xticks(xs)
-        ax.set_xlabel("sequence length (tokens)")
         ax.set_title(PHASE_LABEL.get(phase, phase), fontsize=7)
         ax.yaxis.grid(True, zorder=0)
         ax.set_axisbelow(True)
         despine(ax)
-    axes[0][0].set_ylabel("median time per step (\u00b5s)\nlower is better")
-    axes[0][0].set_ylim(0, top * 1.08)
-    legend_below(fig, axes[0][0], ncol=2)
+    # One x label per figure when the panels are stacked, one per panel when
+    # they are not: a shared axis carries its label once.
+    if args.width >= DOUBLE_COL:
+        for ax in axes:
+            ax.set_xlabel("sequence length (tokens)")
+    else:
+        axes[-1].set_xlabel("sequence length (tokens)")
+    axes[0].set_ylabel("median time per step (\u00b5s)\nlower is better")
+    axes[0].set_ylim(0, top * 1.08)
+    legend_below(fig, axes[0], ncol=2)
     if args.titles:
         fig.suptitle("Changing sequence length")
 
@@ -1048,6 +1096,16 @@ def op_inventory_notes(out):
     return paras
 
 
+def _role(model):
+    """Where a row stands under the selection rule: population, in it
+    under the usage exemption, or out of it."""
+    if model in PROBES:
+        return "excluded"
+    if model in C3_EXEMPT:
+        return "population, C3 exemption"
+    return "population"
+
+
 WEIGHT_LABEL = {"trained": "trained",
                 "head-random": "encoder trained, head random",
                 "random": "randomly initialised fixture"}
@@ -1071,7 +1129,7 @@ def fig_model_provenance(out, args):
         table.append([r["model"], r["hf_id"], rev,
                       si(int(r["params_only"])),
                       WEIGHT_LABEL.get(r["weights"], r["weights"]),
-                      "probe" if r["model"] in PROBES else "population"])
+                      _role(r["model"])])
     path = os.path.join(args.outdir, "model_provenance.tex")
     write_table(path,
                 "checkpoint, snapshot and weight provenance per configuration",
@@ -1986,10 +2044,16 @@ def fig_warmup(out, args):
                            "torch-compile-ro", "jax"]
                if any(k[1] == s for k in series)]
 
-    fig, axes = plt.subplots(1, len(models), sharey=True,
-                             figsize=(args.width, args.width * 0.78),
-                             squeeze=False)
-    axes = axes[0]
+    if args.width >= DOUBLE_COL:
+        fig, axes = plt.subplots(1, len(models), sharey=True, squeeze=False,
+                                 figsize=(args.width, args.width * 0.78))
+        axes = list(axes[0])
+    else:
+        fig, axes = plt.subplots(len(models), 1, sharex=True, sharey=True,
+                                 squeeze=False,
+                                 figsize=(args.width,
+                                          1.35 * len(models) + 0.9))
+        axes = [a[0] for a in axes]
     for ax, model in zip(axes, models):
         for si_, s in enumerate(systems):
             colour, _, _ = style_of(s)
@@ -2014,9 +2078,13 @@ def fig_warmup(out, args):
                         linestyle=ls, linewidth=1.2)
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_xlabel("forward index (log scale)")
         ax.set_title(model, fontsize=8)
         despine(ax)
+    if args.width >= DOUBLE_COL:
+        for ax in axes:
+            ax.set_xlabel("forward index (log scale)")
+    else:
+        axes[-1].set_xlabel("forward index (log scale)")
     axes[0].set_ylabel("cumulative ms (log)\nlower is better")
     # Colour is the system, dash is the kernel cache: ten curves need seven
     # legend entries, not ten.
@@ -2185,7 +2253,10 @@ def fig_correctness(out, args):
         g[r["model"]][r["system"]].append(r)
     systems = [s for s in ["torch-eager", "torch-compile", "jax"]
                if any(s in d for d in g.values())]
-    models = sorted(g)
+    # A result set recorded before the selection rule was applied still
+    # holds rows for models that are no longer measured; the figure shows
+    # the population.
+    models = sorted(m for m in g if m not in PROBES)
 
     def worst(model, sys_):
         rs = g[model].get(sys_) or []
@@ -2513,9 +2584,17 @@ def fig_control_cost(out, args):
         return None
     regimes = list(collections.OrderedDict.fromkeys(r["regime"] for r in rows))
     systems = list(collections.OrderedDict.fromkeys(r["system"] for r in rows))
-    fig, axes = plt.subplots(1, len(regimes), figsize=(args.width, 2.6),
-                             squeeze=False, sharey=True)
-    for ax, regime in zip(axes[0], regimes):
+    if args.width >= DOUBLE_COL:
+        fig, axes = plt.subplots(1, len(regimes), figsize=(args.width, 2.6),
+                                 squeeze=False, sharey=True)
+        axes = list(axes[0])
+    else:
+        fig, axes = plt.subplots(len(regimes), 1, squeeze=False,
+                                 sharex=True, sharey=True,
+                                 figsize=(args.width,
+                                          1.4 * len(regimes) + 0.9))
+        axes = [a[0] for a in axes]
+    for ax, regime in zip(axes, regimes):
         for sysname in systems:
             series = collections.defaultdict(list)
             for r in rows:
@@ -2532,13 +2611,24 @@ def fig_control_cost(out, args):
             ax.plot(xs, ys, color=colour, linewidth=1.0, marker=marker,
                     markersize=2.2, markevery=max(1, len(xs) // 10),
                     label=SYSTEM_LABEL.get(sysname, sysname))
-        ax.set_xlabel("iteration")
         ax.set_title(regime, fontsize=7)
         ax.yaxis.grid(True, zorder=0)
         ax.set_axisbelow(True)
         despine(ax)
-    axes[0][0].set_ylabel("cumulative ms, compilation\nincluded (lower is better)")
-    legend_below(fig, axes[0][0], ncol=3)
+    if args.width >= DOUBLE_COL:
+        for ax in axes:
+            ax.set_xlabel("iteration")
+    else:
+        axes[-1].set_xlabel("iteration")
+    # Stacked, the label belongs to the figure rather than to the top panel:
+    # on one axes constrained_layout sizes it against that panel alone and
+    # clips the longer line.
+    label = "cumulative ms, compilation\nincluded (lower is better)"
+    if args.width >= DOUBLE_COL:
+        axes[0].set_ylabel(label)
+    else:
+        fig.supylabel(label, fontsize=plt.rcParams["axes.labelsize"])
+    legend_below(fig, axes[0], ncol=3)
     return fig, "control_cost"
 
 

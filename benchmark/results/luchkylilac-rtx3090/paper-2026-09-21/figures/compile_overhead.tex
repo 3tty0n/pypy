@@ -1,0 +1,103 @@
+\begin{tabular}{lrrrrr}
+\toprule
+workload & system & compile (ms) & first run (ms) & steady (us) & break-even (iters) \\
+\midrule
+gpt2 & torch.compile & n/a & 2296 & 2215 & 830 \\
+gpt2 & torch.compile (reduce-overhead) & n/a & 2211 & 2057 & 752 \\
+gpt2 & torch.compile (max-autotune) & n/a & 3593 & 2006 & 1232 \\
+gpt2 & Torch-TensorRT & n/a & 31115 & 3283 & 20365 \\
+gpt2 & JAX/XLA & 8407 & 10 & 1644 & 2618 \\
+gpt2 & IREE & 1379 & 136 & 28784 & n/a \\
+gpt2 & MetaTensor & n/a & 725 & 2107 & 215 \\
+distilgpt2 & torch.compile & n/a & 1704 & 1382 & 955 \\
+distilgpt2 & torch.compile (reduce-overhead) & n/a & 1628 & 1310 & 871 \\
+distilgpt2 & torch.compile (max-autotune) & n/a & 2192 & 1280 & 1181 \\
+distilgpt2 & Torch-TensorRT & n/a & 16834 & 1724 & 12931 \\
+distilgpt2 & JAX/XLA & 8001 & 5 & 1004 & 3911 \\
+distilgpt2 & IREE & 924 & 83 & 17192 & n/a \\
+distilgpt2 & MetaTensor & n/a & 658 & 1290 & 298 \\
+smollm2-135m & torch.compile & n/a & 4171 & 6079 & 309 \\
+smollm2-135m & torch.compile (reduce-overhead) & n/a & 4646 & 3785 & 292 \\
+smollm2-135m & torch.compile (max-autotune) & n/a & 5535 & 3853 & 357 \\
+smollm2-135m & Torch-TensorRT & n/a & 25668 & 3750 & 1791 \\
+smollm2-135m & JAX/XLA & 12286 & 19 & 2666 & 777 \\
+smollm2-135m & IREE & 2445 & 195 & 19251 & n/a \\
+smollm2-135m & MetaTensor & n/a & 651 & 3675 & 6 \\
+smollm2-360m & torch.compile & n/a & 4421 & 7688 & 384 \\
+smollm2-360m & torch.compile (reduce-overhead) & n/a & 4543 & 6282 & 348 \\
+smollm2-360m & torch.compile (max-autotune) & n/a & 4946 & 6326 & 384 \\
+smollm2-360m & Torch-TensorRT & n/a & 30333 & 6489 & 2618 \\
+smollm2-360m & JAX/XLA & 13491 & 26 & 4588 & 979 \\
+smollm2-360m & IREE & 2496 & 501 & 33036 & n/a \\
+smollm2-360m & MetaTensor & n/a & 991 & 6078 & 41 \\
+qwen2.5-0.5b & torch.compile & n/a & 4104 & 7444 & 521 \\
+qwen2.5-0.5b & torch.compile (reduce-overhead) & n/a & 3987 & 7105 & 481 \\
+qwen2.5-0.5b & torch.compile (max-autotune) & n/a & 4228 & 7128 & 516 \\
+qwen2.5-0.5b & Torch-TensorRT & n/a & 23271 & 7102 & 3169 \\
+qwen2.5-0.5b & JAX/XLA & 14314 & 21 & 5232 & 1525 \\
+qwen2.5-0.5b & IREE & 2137 & 585 & 86467 & n/a \\
+qwen2.5-0.5b & MetaTensor & n/a & 2244 & 6526 & 220 \\
+bert-base & torch.compile & n/a & 2169 & 2309 & 788 \\
+bert-base & torch.compile (reduce-overhead) & n/a & 2445 & 2118 & 833 \\
+bert-base & torch.compile (max-autotune) & n/a & 2510 & 1873 & 787 \\
+bert-base & Torch-TensorRT & n/a & 9950 & 2180 & 3604 \\
+bert-base & JAX/XLA & 9484 & 8 & 1465 & 2722 \\
+bert-base & IREE & 1753 & 128 & 26093 & n/a \\
+bert-base & MetaTensor & n/a & 521 & 1850 & 130 \\
+bert-mini & torch.compile & n/a & 1405 & 836 & 1135 \\
+bert-mini & torch.compile (reduce-overhead) & n/a & 1586 & 500 & 999 \\
+bert-mini & torch.compile (max-autotune) & n/a & 2958 & 438 & 1849 \\
+bert-mini & Torch-TensorRT & n/a & 4676 & 748 & 3710 \\
+bert-mini & JAX/XLA & 8052 & 6 & 243 & 4578 \\
+bert-mini & IREE & 1155 & 22 & 3668 & n/a \\
+bert-mini & MetaTensor & n/a & 202 & 432 & 62 \\
+resnet18-b1 & torch.compile & n/a & 1091 & 984 & 1495 \\
+resnet18-b1 & torch.compile (reduce-overhead) & n/a & 1088 & 925 & 1357 \\
+resnet18-b1 & torch.compile (max-autotune) & n/a & 5610 & 1062 & 10428 \\
+resnet18-b1 & Torch-TensorRT & n/a & 5002 & 999 & 8256 \\
+resnet18-b1 & JAX/XLA & 694 & 6 & 1114 & 1075 \\
+resnet18-b1 & MetaTensor & n/a & 152 & 724 & -55 \\
+resnet18-b8 & torch.compile & n/a & 1115 & 2188 & 10003 \\
+resnet18-b8 & torch.compile (reduce-overhead) & n/a & 1129 & 2134 & 6273 \\
+resnet18-b8 & torch.compile (max-autotune) & n/a & 5688 & 2136 & 39098 \\
+resnet18-b8 & Torch-TensorRT & n/a & 5498 & 1951 & 16179 \\
+resnet18-b8 & JAX/XLA & 986 & 5 & 2287 & n/a \\
+resnet18-b8 & MetaTensor & n/a & 151 & 2737 & n/a \\
+mixer\_b16 & torch.compile & n/a & 1234 & 3168 & n/a \\
+mixer\_b16 & torch.compile (reduce-overhead) & n/a & 1379 & 3086 & n/a \\
+mixer\_b16 & torch.compile (max-autotune) & n/a & 4411 & 3138 & n/a \\
+mixer\_b16 & Torch-TensorRT & n/a & 5255 & 2506 & 12530 \\
+mixer\_b16 & JAX/XLA & 7681 & 7 & 2249 & 11357 \\
+mixer\_b16 & IREE & 1542 & 754 & 674484 & n/a \\
+mixer\_b16 & MetaTensor & n/a & 209 & 2713 & 385 \\
+vit-base & torch.compile & n/a & 1842 & 4661 & n/a \\
+vit-base & torch.compile (reduce-overhead) & n/a & 2097 & 4613 & n/a \\
+vit-base & torch.compile (max-autotune) & n/a & 2298 & 4432 & 50014 \\
+vit-base & Torch-TensorRT & n/a & 8298 & 3798 & 12041 \\
+vit-base & JAX/XLA & 9378 & 11 & 3186 & 7170 \\
+vit-base & IREE & 1695 & 992 & 883624 & n/a \\
+vit-base & MetaTensor & n/a & 295 & 3723 & 190 \\
+vit-tiny & torch.compile & n/a & 1950 & 2541 & 714 \\
+vit-tiny & torch.compile (reduce-overhead) & n/a & 2217 & 1438 & 571 \\
+vit-tiny & torch.compile (max-autotune) & n/a & 4195 & 1334 & 1082 \\
+vit-tiny & Torch-TensorRT & n/a & 8562 & 1166 & 2149 \\
+vit-tiny & JAX/XLA & 7740 & 8 & 740 & 1751 \\
+vit-tiny & IREE & 1772 & 39 & 25164 & n/a \\
+vit-tiny & MetaTensor & n/a & 139 & 1034 & 2 \\
+tiny-gpt2 & torch.compile & n/a & 1284 & 460 & 653 \\
+tiny-gpt2 & torch.compile (reduce-overhead) & n/a & 1347 & 209 & 582 \\
+tiny-gpt2 & torch.compile (max-autotune) & n/a & 2162 & 297 & 1226 \\
+tiny-gpt2 & Torch-TensorRT & n/a & 7840 & 591 & 6957 \\
+tiny-gpt2 & JAX/XLA & 1425 & 2 & 119 & 601 \\
+tiny-gpt2 & IREE & 482 & 14 & 211 & -10 \\
+tiny-gpt2 & MetaTensor & n/a & 129 & 250 & -274 \\
+bert-tiny & torch.compile & n/a & 1236 & 528 & 1515 \\
+bert-tiny & torch.compile (reduce-overhead) & n/a & 1337 & 327 & 1297 \\
+bert-tiny & torch.compile (max-autotune) & n/a & 2642 & 268 & 2531 \\
+bert-tiny & Torch-TensorRT & n/a & 4968 & 514 & 6465 \\
+bert-tiny & JAX/XLA & 6094 & 2 & 111 & 5186 \\
+bert-tiny & IREE & 892 & 15 & 1343 & n/a \\
+bert-tiny & MetaTensor & n/a & 142 & 289 & 20 \\
+\bottomrule
+\end{tabular}
+% median compile / first-run cost and break-even iteration count against torch eager
