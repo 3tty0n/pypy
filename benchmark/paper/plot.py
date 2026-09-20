@@ -40,6 +40,7 @@ import csv
 import glob
 import json
 import os
+import math
 import re
 import statistics
 import sys
@@ -536,6 +537,97 @@ def fig_fusion_stats(out, args):
     return fig, "fusion_stats"
 
 
+# Two configurations carry weights that were never trained.  They stay in the
+# tables as launch-bound probes, and out of every figure and mean that speaks
+# for the population.
+PROBES = ("tiny-gpt2", "bert-tiny")
+
+
+def _model_medians(out):
+    """{model: {system: median us}} from models.tsv."""
+    rows = read_tsv(os.path.join(out, "models.tsv"))
+    g = collections.defaultdict(lambda: collections.defaultdict(list))
+    for r in rows:
+        try:
+            g[r["model"]][r["system"]].append(float(r["steady_us"]))
+        except (ValueError, KeyError):
+            pass
+    return dict((m, dict((s, med(v)) for s, v in d.items()))
+                for m, d in g.items())
+
+
+def _geomean(xs):
+    return math.exp(sum(math.log(x) for x in xs) / len(xs)) if xs else None
+
+
+# The baselines the distribution is drawn against, in the order they are drawn.
+# "best-of-three" is the fastest of the three torch.compile modes per model,
+# which is the strongest configuration a PyTorch user can reach without
+# changing the model.
+SPEEDUP_BASES = [("torch-eager", "PyTorch eager"),
+                 ("best-of-three", "torch.compile, fastest of three modes"),
+                 ("jax", "JAX/XLA"),
+                 ("torch-tensorrt", "Torch-TensorRT")]
+COMPILE_MODES = ("torch-compile", "torch-compile-ro", "torch-compile-mat")
+
+
+def _base_us(d, base):
+    if base == "best-of-three":
+        cands = [d[s] for s in COMPILE_MODES if d.get(s)]
+        return min(cands) if cands else None
+    return d.get(base)
+
+
+def fig_model_speedup(out, args):
+    """The per-model speedup distribution, the way a compiler paper reports it.
+
+    One sorted curve per baseline over the population, so the spread is
+    visible rather than averaged away, with the geometric mean in the legend.
+    A tally would hide that the same mean can come from one large win or from
+    twelve small ones.
+    """
+    g = _model_medians(out)
+    models = [m for m in g if m not in PROBES]
+    if not models:
+        return None
+    fig, ax = plt.subplots(figsize=(args.width, 2.5))
+    table_rows = []
+    for base, label in SPEEDUP_BASES:
+        sp = []
+        for m in models:
+            ours, b = g[m].get("ours"), _base_us(g[m], base)
+            if ours and b:
+                sp.append(b / ours)
+        if not sp:
+            continue
+        sp.sort()
+        gm = _geomean(sp)
+        color, _, marker = style_of("torch-compile" if base == "best-of-three" else base)
+        ax.plot(range(1, len(sp) + 1), sp, marker=marker, markersize=3.5,
+                linewidth=1.2, color=color,
+                label="%s (gmean %.2f$\\times$)" % (label, gm))
+        table_rows.append([label, "%d" % len(sp), "%.2f" % gm,
+                           "%.2f" % sp[0], "%.2f" % sp[-1],
+                           "%d" % sum(1 for x in sp if x > 1.0)])
+    ax.axhline(1.0, color="0.35", linewidth=0.8, linestyle="--", zorder=0)
+    ax.set_yscale("log")
+    ax.set_xlabel("model configurations, sorted by speedup")
+    ax.set_ylabel("speedup over baseline\n(>1 favours MetaTensor)")
+    ax.set_xlim(0.5, max(2, len(models)) + 0.5)
+    ax.yaxis.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    despine(ax)
+    legend_below(fig, ax, ncol=1 if args.width < DOUBLE_COL else 2)
+    if args.titles:
+        ax.set_title("End-to-end speedup distribution")
+    write_table(os.path.join(args.outdir, "model_speedup.tex"),
+                "speedup of MetaTensor over each baseline across the "
+                "population, medians of three rounds",
+                ["baseline", "models", "geomean", "min", "max", "faster on"],
+                table_rows)
+    return fig, "model_speedup"
+
+
 def fig_models(out, args):
     """Three systems per model, all in the same unit: grouped bars from zero."""
     rows = read_tsv(os.path.join(out, "models.tsv"))
@@ -954,6 +1046,40 @@ def op_inventory_notes(out):
             paras.append(r"\emph{%s} %s." % (tex(why), "; ".join(
                 tex(c) for c in cells)))
     return paras
+
+
+WEIGHT_LABEL = {"trained": "trained",
+                "head-random": "encoder trained, head random",
+                "random": "randomly initialised fixture"}
+
+
+def fig_model_provenance(out, args):
+    """Table only: which checkpoint each row is, and whether it was trained.
+
+    A number cannot be checked against the wrong checkpoint, and a model whose
+    weights were never trained is a property to declare rather than to leave
+    for a reader to discover.  One row per configuration: the HuggingFace id,
+    the snapshot the export read, the parameter count and the weight
+    provenance."""
+    rows = [r for r in read_tsv(os.path.join(out, "model_inventory.tsv"))
+            if r.get("system") == "ours" and r.get("hf_id")]
+    if not rows:
+        return None
+    table = []
+    for r in rows:
+        repo, _, rev = r["revision"].rpartition("@")
+        table.append([r["model"], r["hf_id"], rev,
+                      si(int(r["params_only"])),
+                      WEIGHT_LABEL.get(r["weights"], r["weights"]),
+                      "probe" if r["model"] in PROBES else "population"])
+    path = os.path.join(args.outdir, "model_provenance.tex")
+    write_table(path,
+                "checkpoint, snapshot and weight provenance per configuration",
+                ["model", "HuggingFace id", "snapshot", "params", "weights",
+                 "role"], table, align="lllrll")
+    fig, ax = plt.subplots(figsize=(args.width, 0.3))
+    ax.axis("off")
+    return fig, "model_provenance"
 
 
 def fig_model_inventory(out, args):
@@ -2422,12 +2548,14 @@ FIGURES = collections.OrderedDict([
     ("fusion", fig_fusion),
     ("fusion_stats", fig_fusion_stats),
     ("models", fig_models),
+    ("model_speedup", fig_model_speedup),
     ("dynamic", fig_dynamic),
     ("batch", fig_batch),
     ("precision", fig_precision),
     ("ablation", fig_ablation),
     ("explain", fig_explain),
     ("model_inventory", fig_model_inventory),
+    ("model_provenance", fig_model_provenance),
     ("op_inventory", fig_op_inventory),
     ("deopt", fig_deopt),
     ("micro_baselines", fig_micro_baselines),

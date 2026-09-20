@@ -54,12 +54,12 @@ commands:
                          only, which needs no GPU)
   fusion [MODEL...]      fusion-region statistics per model forward (kernels,
                          nodes per kernel, why each region was cut) into
-                         \$OUT/fusion.tsv; no args = all eight paper models
+                         \$OUT/fusion.tsv; no args = all eleven paper models
   gap [MODEL...]         launches, kernel granularity and GPU utilisation per
                          system, into \$OUT/gap.tsv (needs nsys)
   correctness [NAME...]  each system against ours on five derived inputs per
                          model (INPUT_SEED=1..5), into \$OUT/correctness.tsv;
-                         no args = all nine models (SEEDS overrides the seeds)
+                         no args = all fourteen models (SEEDS overrides the seeds)
   summarize              render \$OUT/summary.md from the tsv files
   size                   render \$OUT/figures/impl_size.tex, print the table
   check [GROUP...]       smallest run that exercises every mode; groups are

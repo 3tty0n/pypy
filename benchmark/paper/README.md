@@ -430,7 +430,7 @@ which need a `tl.dot`-capable code generator, since the codegen here has none
 
 ## Correctness on more than one input
 
-    benchmark/paper/bench.sh correctness             # all nine models
+    benchmark/paper/bench.sh correctness             # all fourteen models
     benchmark/paper/bench.sh correctness bert-mini   # one
     SEEDS="1 2" benchmark/paper/bench.sh correctness # fewer inputs
 
