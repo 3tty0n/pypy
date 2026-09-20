@@ -32,7 +32,7 @@ PYPY_SHA=$(sha256sum "$PYPY" 2>/dev/null | cut -c1-12)
 NOFUSE="enable_opts=intbounds:rewrite:virtualize:string:pure:earlyforce:heap:unroll"
 JIT_INNER="threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000"
 
-LAZY_MODELS=${LAZY_MODELS:-"gpt2 distilgpt2 bert-base bert-mini vit-base vit-tiny mixer_b16 resnet18-b1 smollm2-135m smollm2-360m"}
+LAZY_MODELS=${LAZY_MODELS:-"gpt2 distilgpt2 bert-base bert-mini vit-base mixer_b16 resnet18-b1 smollm2-135m smollm2-360m"}
 
 script_for() {
   case $1 in

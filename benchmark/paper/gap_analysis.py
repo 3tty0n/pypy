@@ -39,7 +39,6 @@ MODELS = [
     ("gpt2", "gpt2", "gpt2_torch.py", "gpt2", "gpt2"),
     ("distilgpt2", "gpt2", "gpt2_torch.py", "gpt2", "distilgpt2"),
     ("vit-base", "vit", "vit_torch.py", "vit", "vit-base"),
-    ("vit-tiny", "vit", "vit_torch.py", "vit", "vit-tiny"),
 ]
 
 SYSTEMS = ["ours", "torch-compile", "jax"]
