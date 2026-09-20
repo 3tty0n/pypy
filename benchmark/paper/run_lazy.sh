@@ -122,7 +122,7 @@ do_model() {
 # of building the DAG the first time is visible on both arms.
 do_warmup() {
   local n=${WARMUP_N:-60}
-  for model in tiny-gpt2 distilgpt2; do
+  for model in bert-mini distilgpt2; do
     local script=$(script_for "$model") weights=$(weights_for "$model")
     for round in $(seq "$ROUNDS"); do
       for system in virtual deferred eager; do

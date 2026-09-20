@@ -158,11 +158,11 @@ group_baselines() {
 }
 
 group_models() {
-  echo "== model path (tiny-gpt2) =="
-  if [ ! -d "$WEIGHTS/tiny-gpt2" ]; then
-    skip "tiny-gpt2" "no checkpoint, run bench.sh export"; return
+  echo "== model path (bert-mini) =="
+  if [ ! -d "$WEIGHTS/bert-mini" ]; then
+    skip "bert-mini" "no checkpoint, run bench.sh export"; return
   fi
-  if ! bash "$HERE/run_models.sh" tiny-gpt2 >/dev/null 2>&1; then
+  if ! bash "$HERE/run_models.sh" bert-mini >/dev/null 2>&1; then
     bad "run_models.sh"; return
   fi
   local ours diff tol launches
@@ -172,17 +172,17 @@ group_models() {
   # The absolute threshold the row was actually judged by: tolerance_for is
   # a fraction of the reference magnitude, and models.tsv records the product.
   tol=$(awk -F'\t' '$2=="torch-eager"{print $10}' "$OUT/models.tsv" | head -1)
-  if positive "${ours:-0}"; then ok "tiny-gpt2 runs" "steady=${ours}us"
-  else bad "tiny-gpt2 runs" "no steady_us in models.tsv"; fi
+  if positive "${ours:-0}"; then ok "bert-mini runs" "steady=${ours}us"
+  else bad "bert-mini runs" "no steady_us in models.tsv"; fi
   if positive "${launches:-0}"; then
-    ok "tiny-gpt2 runs on the GPU" "launches/iter=$launches"
+    ok "bert-mini runs on the GPU" "launches/iter=$launches"
   else
-    bad "tiny-gpt2 runs on the GPU" "launches/iter=${launches:-missing}"
+    bad "bert-mini runs on the GPU" "launches/iter=${launches:-missing}"
   fi
   if [ -n "$diff" ] && awk -v d="$diff" -v t="$tol" 'BEGIN{exit !(d+0 <= t+0)}'; then
-    ok "tiny-gpt2 matches torch" "maxabsdiff=$diff tol=$tol"
+    ok "bert-mini matches torch" "maxabsdiff=$diff tol=$tol"
   else
-    bad "tiny-gpt2 matches torch" "maxabsdiff=${diff:-missing} tol=$tol"
+    bad "bert-mini matches torch" "maxabsdiff=${diff:-missing} tol=$tol"
   fi
 }
 

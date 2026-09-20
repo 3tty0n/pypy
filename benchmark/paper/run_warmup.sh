@@ -1,6 +1,6 @@
 #!/bin/bash
 # Per-forward warm-up trace: every forward's latency from a fresh process
-# until steady state, for tiny-gpt2/distilgpt2, on ours/torch-eager/
+# until steady state, for distilgpt2/gpt2, on ours/torch-eager/
 # torch-compile/torch-compile-ro/jax, cold and warm kernel caches, ROUNDS
 # times.  Replaces "first_run_ms" as the measure of start-up cost.
 set -e

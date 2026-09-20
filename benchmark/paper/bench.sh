@@ -1,7 +1,7 @@
 #!/bin/bash
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-ALL_MODELS="distilgpt2 tiny-gpt2 smollm2-135m bert-tiny bert-mini resnet18-b1 resnet18-b8 mixer_b16 vit-tiny"
+ALL_MODELS="distilgpt2 gpt2 gpt2-medium smollm2-135m smollm2-360m smollm2-1.7b qwen2.5-0.5b bert-mini bert-base resnet18-b1 resnet18-b8 mixer_b16 deit-tiny vit-base"
 ALL_EXPERIMENTS="fusion flat_block budget_mb precision tf32 max_inputs"
 
 usage() {
@@ -40,7 +40,7 @@ commands:
   deopt [PATTERN...]     cost of a guard failure against the steady state
                          (patterns: never alternate both-hot fresh; plus the
                           recovery_probe (a)/(e) rows)
-  warmup [--n N]         per-forward warm-up trace (tiny-gpt2, distilgpt2;
+  warmup [--n N]         per-forward warm-up trace (distilgpt2, gpt2;
                          ours/torch-eager/torch-compile/torch-compile-ro/jax;
                          cold+warm kernel caches; N forwards, default 300)
   explain                torch._dynamo.explain graph structure per model,
