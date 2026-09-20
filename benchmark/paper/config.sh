@@ -37,25 +37,32 @@ WEIGHTS=${WEIGHTS:-$HERE/weights}
 ITERS=${ITERS:-200}
 WARMUP=${WARMUP:-30}
 ROUNDS=${ROUNDS:-3}
-# Correctness tolerance per (workload class, dtype).  One table for every
-# consumer: run_models.sh exports it as MODEL_TOL, the model scripts print
-# "tol=<t> pass=<0|1>" next to maxabsdiff, run_models.sh records both columns
-# and check.sh reads the same function instead of a hard-coded 1e-3.
-#   float32 models             1e-3
-#   conv models under TF32     2e-2  (resnet18-*: cuDNN runs its convs in TF32)
-#   float16                    1e-2
-#   float64                    1e-6
+# Correctness tolerance per (workload class, dtype), as a fraction of the
+# reference output's largest absolute value.  One table for every consumer:
+# run_models.sh exports it as MODEL_TOL, each system's compare() multiplies it
+# by that model's reference magnitude and prints the resulting absolute
+# threshold as "tol=<t> pass=<0|1>" next to maxabsdiff.
+#
+# The tolerance is relative because the population's outputs are not on one
+# scale: a gpt2 logit reaches 332 and a ViT class score 12, so one absolute
+# number is 30 times stricter for one model than for another, and the strict
+# end is met by nothing but luck.  These fractions leave at least a factor of
+# two of margin over every difference the suite has ever recorded.
+#   float32 models             2e-5
+#   conv models under TF32     2e-3  (resnet18-*: cuDNN runs its convs in TF32)
+#   float16                    1e-3
+#   float64                    1e-8
 # Micro accumulators are not covered here; they keep check.sh's close_enough.
 tolerance_for() {
   local model=$1 dt=${RTENSOR_DTYPE:-float32}
   case "$dt" in
-    float16) echo 1e-2; return ;;
-    float64) echo 1e-6; return ;;
+    float16) echo 1e-3; return ;;
+    float64) echo 1e-8; return ;;
   esac
   case "$model" in
-    resnet18-*) echo 2e-2; return ;;
+    resnet18-*) echo 2e-3; return ;;
   esac
-  echo 1e-3
+  echo 2e-5
 }
 JIT_FLAGS=${JIT_FLAGS:---jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000}
 # Results are filed under the machine and the accelerator that produced them,

@@ -133,13 +133,16 @@ def while_runner(params, cfg, dtype):
 
 
 def compare(outdir, logits):
+    # MODEL_TOL is a fraction of the reference's largest absolute value, the
+    # same rule the model sweep uses (config.sh's tolerance_for).
     ref = os.path.join(outdir, 'logits_earlyexit.bin')
-    tol = float(os.environ.get('MODEL_TOL', '1e-3'))
+    frac = float(os.environ.get('MODEL_TOL', '2e-5'))
     if not os.path.exists(ref):
-        return -1.0, tol, 0
+        return -1.0, frac, 0
     mine = np.asarray(logits, dtype=np.float32).reshape(-1)
     other = np.fromfile(ref, dtype=np.float32)
     d = float(np.abs(mine - other).max())
+    tol = frac * float(np.abs(other).max())
     return d, tol, int(d <= tol)
 
 

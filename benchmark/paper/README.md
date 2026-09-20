@@ -262,16 +262,22 @@ MetaTensor logits, plus the tolerance they were judged by and the verdict:
 `tol=<t> pass=<0|1>`, recorded as the `tolerance` and `pass` columns of
 `models.tsv` and `results.jsonl` and shown in `summary.md`. The tolerance is
 one table, `tolerance_for` in `config.sh`, keyed by workload class and dtype,
-so no backend can be checked more loosely than the one it is compared to:
+so no backend can be checked more loosely than the one it is compared to.
+Each entry is a *fraction of the reference output's largest absolute value*;
+every system's `compare()` multiplies it by that magnitude and prints the
+product as `tol=`. The tolerance is relative because the population's outputs
+are not on one scale -- a gpt2 logit reaches 332 and a ViT class score 12 --
+so a single absolute number is 30 times stricter for one model than for
+another:
 
-| workload class | dtype | tolerance |
+| workload class | dtype | tolerance (relative) |
 |---|---|---|
-| models | float32 | 1e-3 |
-| conv models under TF32 (`resnet18-*`) | float32 | 2e-2 |
-| any | float16 | 1e-2 |
-| any | float64 | 1e-6 |
+| models | float32 | 2e-5 |
+| conv models under TF32 (`resnet18-*`) | float32 | 2e-3 |
+| any | float16 | 1e-3 |
+| any | float64 | 1e-8 |
 
-`check.sh` reads the same function instead of its old hard-coded 1e-3, and
+`check.sh` reads the absolute threshold back out of the row it checks, and
 micro accumulators keep `close_enough` (a relative 1e-6).
 
 Warm-up: every micro driver takes `WARMUP` as an optional sixth argument

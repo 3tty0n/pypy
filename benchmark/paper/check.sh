@@ -169,8 +169,9 @@ group_models() {
   ours=$(awk -F'\t' '$2=="ours"{print $4}' "$OUT/models.tsv" | head -1)
   diff=$(awk -F'\t' '$2=="torch-eager"{print $5}' "$OUT/models.tsv" | head -1)
   launches=$(awk -F'\t' '$2=="ours"{print $9}' "$OUT/models.tsv" | head -1)
-  # Same table every system is judged by, not a second hard-coded number.
-  tol=$(tolerance_for tiny-gpt2)
+  # The absolute threshold the row was actually judged by: tolerance_for is
+  # a fraction of the reference magnitude, and models.tsv records the product.
+  tol=$(awk -F'\t' '$2=="torch-eager"{print $10}' "$OUT/models.tsv" | head -1)
   if positive "${ours:-0}"; then ok "tiny-gpt2 runs" "steady=${ours}us"
   else bad "tiny-gpt2 runs" "no steady_us in models.tsv"; fi
   if positive "${launches:-0}"; then

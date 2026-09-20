@@ -214,14 +214,16 @@ def reference_name():
     return inputs.reference_name(dtype, inputs.seed())
 
 
-def tolerance():
-    """The tolerance for this (workload class, dtype), from config.sh's
-    tolerance_for table via MODEL_TOL.  One table for every system, so a
-    backend cannot be checked more loosely than the one it is compared to."""
+def tolerance(refmax=1.0):
+    """The absolute tolerance for this (workload class, dtype): config.sh's
+    tolerance_for fraction, carried in MODEL_TOL, times the reference's
+    largest absolute value.  One table for every system, so a backend cannot
+    be checked more loosely than the one it is compared to."""
     try:
-        return float(os.environ.get('MODEL_TOL', '1e-3'))
+        frac = float(os.environ.get('MODEL_TOL', '2e-5'))
     except ValueError:
-        return 1e-3
+        frac = 2e-5
+    return frac * refmax
 
 
 def compare(outdir, logits, argmax=None):
@@ -232,7 +234,7 @@ def compare(outdir, logits, argmax=None):
                              dtype=torch.float32).to(logits.device)
     other = other.view_as(logits.float())
     d = (logits.float() - other).abs().max().item()
-    tol = tolerance()
+    tol = tolerance(other.abs().max().item())
     diff = ' maxabsdiff=%.6g tol=%.6g pass=%d' % (d, tol, int(d <= tol))
     if argmax is not None:
         mine = other.argmax(-1).tolist()

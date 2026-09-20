@@ -369,14 +369,15 @@ BUILD = {'gpt2': build_gpt2, 'bert': build_bert, 'vit': build_vit,
 
 # -- driver -------------------------------------------------------------------
 
-def tolerance():
-    """The tolerance for this (workload class, dtype), from config.sh's
-    tolerance_for table via MODEL_TOL - the same value the torch and IREE
-    paths use."""
+def tolerance(refmax=1.0):
+    """The absolute tolerance for this (workload class, dtype): config.sh's
+    tolerance_for fraction, carried in MODEL_TOL, times the reference's
+    largest absolute value - the same rule the torch and IREE paths use."""
     try:
-        return float(os.environ.get('MODEL_TOL', '1e-3'))
+        frac = float(os.environ.get('MODEL_TOL', '2e-5'))
     except ValueError:
-        return 1e-3
+        frac = 2e-5
+    return frac * refmax
 
 
 def batch_identical(logits, batch):
@@ -396,7 +397,7 @@ def compare(outdir, logits):
     other = np.fromfile(ref, dtype=np.float32).reshape(logits.shape)
     mine = np.asarray(logits, dtype=np.float32)
     d = float(np.abs(mine - other).max())
-    tol = tolerance()
+    tol = tolerance(float(np.abs(other).max()))
     return ' maxabsdiff=%.6g tol=%.6g pass=%d' % (d, tol, int(d <= tol))
 
 

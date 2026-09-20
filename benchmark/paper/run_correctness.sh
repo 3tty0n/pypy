@@ -101,7 +101,8 @@ one_model() {
       continue
     fi
     ref=$(argmax_line "$out")
-    row "$model" ours "$seed" 0 1.0000 "$MODEL_TOL" 1
+    # The reference row: zero by construction, so it carries no threshold.
+    row "$model" ours "$seed" 0 1.0000 0 1
 
     system_row() {
       local system=$1; shift

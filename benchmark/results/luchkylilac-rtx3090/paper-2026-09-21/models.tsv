@@ -1,0 +1,8 @@
+model	system	round	steady_us	maxabsdiff	argmax_match	compile_ms	first_run_ms	launches_per_iter	tolerance	pass	binary	reference
+gpt2	ours	1	2111.1			-1	698.9	74.2			ddc8008cdeaf	916a219aa639
+gpt2	torch-eager	1	4734.1	0.000854492	1	-1	156.1	283.0	0.001	1	torch-2.14.0+cu130	916a219aa639
+gpt2	torch-compile	1	2316.8	0.00158691	1	-1	6076.6	194.0	0.001	0	torch-2.14.0+cu130	916a219aa639
+gpt2	torch-compile-ro	1	2051.8	0.00158691	1	-1	5827.9	195.0	0.001	0	torch-2.14.0+cu130	916a219aa639
+gpt2	torch-compile-mat	1	2001.0	0.00209045	1	-1	10411.1	182.0	0.001	0	torch-2.14.0+cu130	916a219aa639
+gpt2	jax	1	1646.3	0.000549316	1	8576.4	10.4		0.001	1	jax-0.11.1	916a219aa639
+gpt2	iree	1	28801.3	0.00154114	1	1611.3	136.7		0.001	0	jax-0.11.1	916a219aa639

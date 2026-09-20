@@ -1,5 +1,5 @@
 host          luchkylilac
-date          2026-09-21T05:52:38+09:00
+date          2026-09-21T05:54:23+09:00
 gpu           NVIDIA GeForce RTX 3090
 gpu_memory    24576 MiB
 compute_cap   86
@@ -15,7 +15,7 @@ jax           0.11.1
 jaxlib        0.11.1
 iree.compiler 3.11.0
 iree.runtime  3.11.0
-[09/21/2026-05:52:41] [TRT] [W] Functionality provided through tensorrt.plugin module is experimental.
+[09/21/2026-05:54:27] [TRT] [W] Functionality provided through tensorrt.plugin module is experimental.
 torch_tensorrt 2.14.0+cu130
 tensorrt      11.1.0.106
 trt_torch     2.14.0+cu130
@@ -33,4 +33,4 @@ pypy_c_sha256 ddc8008cdeafc19ca2b5fc4f7a332ef469d376f7e86675a0c137d4e917705b78
 bench_sha256  6cbe459c1039463a9c8517449f5f8e3c71b8f411474339dfbf1bf6a0d90377c3
 budget_mb     8
 jit_flags     --jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000
-commit        5180eed0d6
+commit        c4985fae52
