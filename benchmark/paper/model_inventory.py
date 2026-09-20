@@ -406,7 +406,11 @@ def torch_row(data):
     sdpa = sum(v for k, v in c.items() if k.startswith(SDPA_PREFIX))
     per_op = " ".join("%s=%d" % (k.replace("aten::", ""), c[k])
                       for k in sorted(c))
+    # Provenance is a property of the checkpoint, not of the system that
+    # loads it, so it is carried on the ours row alone and left blank here;
+    # the provenance table reads the ours rows.
     return dict(model=data["model"], system="torch",
+                hf_id="", revision="", weights="",
                 params_only=str(data["params"]),
                 params_plus_buffers=str(data["params"] + data["buffers"]),
                 gflops="%.3f" % (data["flops"] / 1e9),

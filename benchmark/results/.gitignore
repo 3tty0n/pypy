@@ -5,3 +5,6 @@
 # Figure previews; the committed figure is the vector PDF beside them.
 */*/figures/*.png
 */*/figures/*.svg
+# run_models.sh's argmax scratch: one file per system, written and re-read
+# inside a single stage and deleted when it ends. Never a result.
+*/*/.last_argmax_*
