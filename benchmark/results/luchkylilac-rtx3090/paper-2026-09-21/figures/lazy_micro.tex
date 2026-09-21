@@ -1,0 +1,22 @@
+\begin{tabular}{lrrrr}
+\toprule
+benchmark & DAG lives in & us/iter & range & launches/iter \\
+\midrule
+elementwise k=1 n=10k & MetaTensor (DAG in the JIT) & 4.7 & 4.7-4.8 & 1.01 \\
+elementwise k=1 n=10k & deferred library (DAG at run time) & 4.7 & 4.6-4.7 & 1.00 \\
+elementwise k=1 n=10k & eager (no DAG) & 10.6 & 10.6-10.6 & 3.00 \\
+elementwise k=4 n=1M & MetaTensor (DAG in the JIT) & 117.9 & 117.4-118.4 & 4.01 \\
+elementwise k=4 n=1M & deferred library (DAG at run time) & 39.3 & 39.2-40.9 & 1.00 \\
+elementwise k=4 n=1M & eager (no DAG) & 307.4 & 307.4-308.7 & 12.01 \\
+TF block n=65.5k & MetaTensor (DAG in the JIT) & 1716.8 & 1716.7-1722.2 & 11.14 \\
+TF block n=65.5k & deferred library (DAG at run time) & 1745.3 & 1743.3-1787.5 & 9.00 \\
+TF block n=65.5k & eager (no DAG) & 2306.4 & 2305.8-2331.5 & 38.01 \\
+reduction n=256k & MetaTensor (DAG in the JIT) & 16.1 & 14.8-16.2 & 2.04 \\
+reduction n=256k & deferred library (DAG at run time) & 25.9 & 23.7-26.2 & 2.00 \\
+reduction n=256k & eager (no DAG) & 141.4 & 135.4-143.0 & 8.01 \\
+attention n=65.5k & MetaTensor (DAG in the JIT) & 591.5 & 591.3-625.6 & 5.00 \\
+attention n=65.5k & deferred library (DAG at run time) & 591.7 & 591.7-591.8 & 5.00 \\
+attention n=65.5k & eager (no DAG) & 792.2 & 792.1-792.2 & 10.01 \\
+\bottomrule
+\end{tabular}
+% median us per iteration over the rounds, with launches per iteration

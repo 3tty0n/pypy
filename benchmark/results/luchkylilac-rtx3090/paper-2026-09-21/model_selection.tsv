@@ -1,0 +1,19 @@
+model	hf_id	family	params	grid_point	status	author	downloads_30d	c1_publisher	c2_weights	c3_used	c4_operators	c5_distinct	verdict	reason
+distilgpt2	distilbert/distilgpt2	gpt2	82M	gpt2 small	measured	distilbert	2070768	pass	pass	pass	pass	pass	population	
+gpt2	openai-community/gpt2	gpt2	124M	gpt2 medium	measured	openai-community	15132408	pass	pass	pass	pass	pass	population	
+gpt2-medium	openai-community/gpt2-medium	gpt2	355M	gpt2 large	to-port	openai-community	317467	pass	pass	pass	pass	pass	population	
+smollm2-135m	HuggingFaceTB/SmolLM2-135M	llama	135M	llama small	measured	HuggingFaceTB	1977502	pass	pass	pass	pass	pass	population	
+smollm2-360m	HuggingFaceTB/SmolLM2-360M	llama	360M	llama medium	measured	HuggingFaceTB	481492	pass	pass	pass	pass	pass	population	
+smollm2-1.7b	HuggingFaceTB/SmolLM2-1.7B	llama	1.7B	llama large	to-port	HuggingFaceTB	243405	pass	pass	pass	pass	pass	population	
+qwen2.5-0.5b	Qwen/Qwen2.5-0.5B-Instruct	llama	494M	qwen2 bias	measured	Qwen	8490785	pass	pass	pass	pass	pass	population	
+bert-base	google-bert/bert-base-uncased	bert	109M	bert base	measured	google-bert	46579428	pass	pass	pass	pass	pass	population	
+bert-mini	google/bert_uncased_L-4_H-256_A-4	bert	11M	bert small	measured	google	29803	pass	pass	fail	pass	pass	population*	C3 exemption: only small end of the encoder ladder; the alternative (all-MiniLM-L6-v2) has no masked-language head and is not ported
+minilm-l6	sentence-transformers/all-MiniLM-L6-v2	bert	23M	bert small	not-ported	sentence-transformers	252170882	pass	pass	pass	pass	n/a	not ported	BertModel with no masked-language head: the output is the encoder state, which needs a second output path through the export, the model and both baseline twins
+vit-base	google/vit-base-patch16-224	vit	87M	vit base	measured	google	7262445	pass	pass	pass	pass	pass	population	
+vit-tiny	WinKawaks/vit-tiny-patch16-224	vit	5.7M	vit small	measured	WinKawaks	32417	fail	pass	fail	pass	n/a	excluded	fails C1, C3
+deit-tiny	facebook/deit-tiny-patch16-224	vit	5.7M	vit small	to-port	facebook	115946	pass	pass	pass	pass	pass	population	
+resnet18-b1	timm/resnet18.a1_in1k	resnet	11.7M	resnet b1	measured	timm	2034361	pass	pass	pass	pass	pass	population	
+resnet18-b8	timm/resnet18.a1_in1k	resnet	11.7M	resnet b8	measured	timm	2034361	pass	pass	pass	pass	pass	population	
+mixer_b16	timm/mixer_b16_224.goog_in21k_ft_in1k	mixer	60M	mixer base	measured	timm	3923	pass	pass	fail	pass	pass	population*	C3 exemption: only attention-free, convolution-free architecture in the candidate set; no MLP-only vision checkpoint at this scale is served
+tiny-gpt2	sshleifer/tiny-gpt2	gpt2	103k	fixture	measured	sshleifer	1179715	fail	fail	pass	pass	n/a	excluded	random: a test fixture, never trained
+bert-tiny	prajjwal1/bert-tiny	bert	4.4M	fixture	measured	prajjwal1	949735	fail	fail	pass	pass	n/a	excluded	partial: pretrained encoder, masked-language head absent from the checkpoint and initialised randomly at load

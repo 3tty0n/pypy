@@ -82,13 +82,16 @@ HF_HUB = os.path.join(os.environ.get("HF_HOME",
                       "hub")
 
 
-def hf_revision(source):
-    """The snapshot the export actually read, as the local hub cache names it.
+def hf_revision(source, *also):
+    """The repository and snapshot the export actually read, as "repo@sha".
 
     timm names are not hub ids; the hub repo is timm/<name>, and torchvision's
-    plain "resnet18" resolves to the timm default weights.
+    plain "resnet18" resolves to the timm default weights.  `also` carries the
+    name the export recorded, for a checkpoint whose id the hub has since
+    redirected: the cache is keyed by the name that was downloaded.
     """
-    for repo in (source, "timm/" + source, "timm/" + source + ".a1_in1k"):
+    for repo in (source,) + also + ("timm/" + source,
+                                    "timm/" + source + ".a1_in1k"):
         d = os.path.join(HF_HUB, "models--" + repo.replace("/", "--"),
                          "snapshots")
         if os.path.isdir(d):
@@ -296,10 +299,20 @@ CANONICAL_ID = {"distilgpt2": "distilbert/distilgpt2"}
 
 def ours_row(name, family, cfg, batch):
     ops, notes = OURS[family](cfg, batch)
-    source = cfg.get("source", "unknown")
-    source = CANONICAL_ID.get(source, source)
+    recorded = cfg.get("source", "unknown")
+    source = CANONICAL_ID.get(recorded, recorded)
+    # The id column names the repository the snapshot was actually found in,
+    # so a timm short name reads as the hub repo that holds those weights
+    # rather than as the string the export happened to pass to timm.
+    revision = hf_revision(source, recorded)
+    # A name with no slash is a timm or torchvision short name, not a hub id,
+    # so the id column takes the repository the snapshot was found in.  A name
+    # that already is a hub id keeps its canonical spelling even when the
+    # cache is keyed by the one the hub redirects from.
+    repo = revision.rpartition("@")[0]
+    hf_id = source if "/" in source else (repo or source)
     return dict(model=name, system="ours",
-                hf_id=source, revision=hf_revision(source),
+                hf_id=hf_id, revision=revision,
                 weights=WEIGHT_PROVENANCE.get(source, "trained"),
                 params_only=str(params_of(cfg)),
                 params_plus_buffers=str(params_of(cfg, True)),

@@ -1,0 +1,12 @@
+\begin{tabular}{lrrrrrrrr}
+\toprule
+variant & MetaTensor us & launches/iter & torch.compile us & graphs & breaks & eager us & JAX us & compile/ours \\
+\midrule
+guard & 41.6 & 1.06 & 308.2 & 1 & 0 & 317.0 & 101.1 & 7.40 \\
+force & 42.7 & 1.15 & 72.7 & 2 & 1 & 326.3 & 171.3 & 1.70 \\
+value guard & 99.9 & 2.00 & 168.5 & 2 & 1 & 389.4 & 332.5 & 1.69 \\
+exception & 53.7 & 1.06 & 334.0 & 1 & 0 & 342.7 & 138.3 & 6.22 \\
+side effect & 53.6 & 1.06 & 333.0 & 2 & 1 & 342.8 & 134.4 & 6.21 \\
+\bottomrule
+\end{tabular}
+% control-flow variants at k=4 n=1M float64: steady us, MetaTensor launches/iter, torch.compile graphs/breaks, ratio torch.compile/ours

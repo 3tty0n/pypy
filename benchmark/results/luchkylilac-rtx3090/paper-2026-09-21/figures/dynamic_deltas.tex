@@ -1,0 +1,67 @@
+\begin{tabular}{lrrrrrrr}
+\toprule
+system & phase & length & loops & bridges & kernels & cache hits & new graphs \\
+\midrule
+MetaTensor & first visit & 32 & 2 & 4 & 0 & 833 & 0 \\
+MetaTensor & first visit & 48 & 5 & 0 & 4 & 720 & 0 \\
+MetaTensor & first visit & 64 & 1 & 3 & 0 & 597 & 0 \\
+MetaTensor & first visit & 96 & 1 & 0 & 0 & 597 & 0 \\
+MetaTensor & first visit & 128 & 0 & 1 & 0 & 632 & 0 \\
+MetaTensor & revisit & 32 & 0 & 0 & 0 & 630 & 0 \\
+MetaTensor & revisit & 48 & 0 & 0 & 0 & 585 & 0 \\
+MetaTensor & revisit & 64 & 0 & 0 & 0 & 585 & 0 \\
+MetaTensor & revisit & 96 & 0 & 0 & 0 & 585 & 0 \\
+MetaTensor & revisit & 128 & 0 & 0 & 0 & 585 & 0 \\
+MetaTensor & new length distribution & 160 & 0 & 0 & 0 & 630 & 0 \\
+MetaTensor & new length distribution & 192 & 0 & 0 & 0 & 585 & 0 \\
+MetaTensor & new length distribution & 224 & 0 & 0 & 0 & 585 & 0 \\
+MetaTensor & new length distribution & 256 & 0 & 0 & 0 & 585 & 0 \\
+MetaTensor & new length distribution & 288 & 0 & 0 & 0 & 585 & 0 \\
+torch.compile (static) & first visit & 32 & 0 & 0 & 0 & 0 & 1 \\
+torch.compile (static) & first visit & 48 & 0 & 0 & 0 & 0 & 1 \\
+torch.compile (static) & first visit & 64 & 0 & 0 & 0 & 0 & 1 \\
+torch.compile (static) & first visit & 96 & 0 & 0 & 0 & 0 & 1 \\
+torch.compile (static) & first visit & 128 & 0 & 0 & 0 & 0 & 1 \\
+torch.compile (static) & revisit & 32 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (static) & revisit & 48 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (static) & revisit & 64 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (static) & revisit & 96 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (static) & revisit & 128 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (static) & new length distribution & 160 & 0 & 0 & 0 & 0 & 1 \\
+torch.compile (static) & new length distribution & 192 & 0 & 0 & 0 & 0 & 1 \\
+torch.compile (static) & new length distribution & 224 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (static) & new length distribution & 256 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (static) & new length distribution & 288 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & first visit & 32 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & first visit & 48 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & first visit & 64 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & first visit & 96 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & first visit & 128 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & revisit & 32 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & revisit & 48 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & revisit & 64 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & revisit & 96 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & revisit & 128 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & new length distribution & 160 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & new length distribution & 192 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & new length distribution & 224 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & new length distribution & 256 & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & new length distribution & 288 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & first visit & 32 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & first visit & 48 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & first visit & 64 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & first visit & 96 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & first visit & 128 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & revisit & 32 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & revisit & 48 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & revisit & 64 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & revisit & 96 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & revisit & 128 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & new length distribution & 160 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & new length distribution & 192 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & new length distribution & 224 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & new length distribution & 256 & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & new length distribution & 288 & 0 & 0 & 0 & 0 & 0 \\
+\bottomrule
+\end{tabular}
+% per-length compile counters: the delta inside that length's window, median over the rounds. new graphs counts graphs compiled in the window, which on a first visit are first compilations and on a revisit are recompilations

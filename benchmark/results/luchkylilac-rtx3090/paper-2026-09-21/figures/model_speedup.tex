@@ -2,10 +2,10 @@
 \toprule
 baseline & models & geomean & geomean, C3 only & min & max & faster on \\
 \midrule
-PyTorch eager & 11 & 2.16 & 2.15 & 0.83 & 4.84 & 10 \\
-torch.compile, fastest of three modes & 11 & 1.04 & 1.03 & 0.78 & 1.28 & 8 \\
-JAX/XLA & 11 & 0.82 & 0.85 & 0.56 & 1.54 & 1 \\
-Torch-TensorRT & 11 & 1.15 & 1.13 & 0.71 & 1.73 & 9 \\
+PyTorch eager & 14 & 2.18 & 2.17 & 0.83 & 4.84 & 13 \\
+torch.compile, fastest of three modes & 14 & 1.06 & 1.06 & 0.78 & 1.28 & 10 \\
+JAX/XLA & 14 & 0.82 & 0.84 & 0.56 & 1.54 & 1 \\
+Torch-TensorRT & 14 & 1.15 & 1.13 & 0.71 & 1.73 & 12 \\
 \bottomrule
 \end{tabular}
 % speedup of MetaTensor over each baseline across the population, medians of three rounds
