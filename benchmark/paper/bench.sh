@@ -37,6 +37,11 @@ commands:
                          distilgpt2 across ours/torch-eager/torch-compile/
                          torch-compile-ro/jax, into \$OUT/batch.tsv
                          (BATCHES and BATCH_SYSTEMS override the grid)
+  transition             what a fused value costs to carry across a guard:
+                         keeping its descriptor against draining it to
+                         canonical form and re-recording, one binary and one
+                         bit apart, into \$OUT/transition.tsv (needs a binary
+                         with the drain knob: TRANSITION_PYPY=...)
   deopt [PATTERN...]     cost of a guard failure against the steady state
                          (patterns: never alternate both-hot fresh; plus the
                           recovery_probe (a)/(e) rows)
@@ -162,6 +167,9 @@ run_cmd() {
       ;;
     batch)
       bash "$HERE/run_batch.sh" "$@"
+      ;;
+    transition)
+      bash "$HERE/run_transition.sh" "$@"
       ;;
     deopt)
       if [ $# -gt 0 ]; then PATTERNS="$*"; export PATTERNS; fi

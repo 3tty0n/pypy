@@ -66,10 +66,31 @@ class _LazyKnob(object):
     on = False
 lazy_knob = _LazyKnob()
 
+class _DrainKnob(object):
+    # Which way a value leaves a fused region when something downstream needs
+    # it and the region has already been launched.
+    #
+    #   off  keep the descriptor: the launched kernel gains one output, so
+    #        the device buffers, the input set and the layout all stay, and
+    #        only the signature is recompiled.
+    #   on   drain to canonical form: forget that the region ran, walk the
+    #        operation graph back to its leaves and record a fresh kernel.
+    #
+    # Read once at device init, so the optimizer's branch on it is a constant
+    # for the whole process.
+    _immutable_fields_ = ['on?']
+    on = False
+drain_knob = _DrainKnob()
+
 def init_lazy():
     """Read METATENSOR_LAZY once, at device init."""
     value = os.environ.get('METATENSOR_LAZY')
     lazy_knob.on = value is not None and value != '' and value != '0'
+
+def init_drain():
+    """Read METATENSOR_DRAIN once, at device init."""
+    value = os.environ.get('METATENSOR_DRAIN')
+    drain_knob.on = value is not None and value != '' and value != '0'
 
 def max_inputs():
     """Leaves a fused kernel may take, from RTENSOR_MAX_INPUTS (4..8).

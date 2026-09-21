@@ -1,0 +1,36 @@
+host          luchkylilac
+date          2026-09-22T00:09:35+09:00
+gpu           NVIDIA GeForce RTX 3090
+gpu_memory    24576 MiB
+compute_cap   86
+driver        595.84
+cuda_home     /usr/local/cuda
+cpu           AMD Ryzen 9 5950X 16-Core Processor
+cpu_threads   32
+kernel        Linux 7.0.0-31-generic
+torch         2.14.0+cu130
+triton        3.8.0
+transformers  5.16.1
+jax           0.11.1
+jaxlib        0.11.1
+iree.compiler 3.11.0
+iree.runtime  3.11.0
+[09/22/2026-00:09:38] [TRT] [W] Functionality provided through tensorrt.plugin module is experimental.
+torch_tensorrt 2.14.0+cu130
+tensorrt      11.1.0.106
+trt_torch     2.14.0+cu130
+iters         200
+rounds        3
+warmup_models 30
+warmup_micro  30
+max_inputs    6
+compute_cap_r 86
+torch_tf32_matmul 0
+torch_tf32_cudnn  1
+jax_matmul_precision highest
+trt_tf32      0
+pypy_c_sha256 9e5d6fb336d4458cd3465b775781592a645ca9dfab14fdf333b30fb148b19828
+bench_sha256  6cbe459c1039463a9c8517449f5f8e3c71b8f411474339dfbf1bf6a0d90377c3
+budget_mb     8
+jit_flags     --jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000
+commit        f83f248b73

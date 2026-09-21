@@ -36,7 +36,12 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         if not self._is_virtual:
             return op
         self._is_virtual = False
-        if self.launched_kernel:
+        if self.launched_kernel and not core.drain_knob.on:
+            # The region this value came from has already run, so the value is
+            # a device buffer with a known layout; ask the kernel for it
+            # rather than rebuilding the graph that produced it.  Under
+            # METATENSOR_DRAIN that knowledge is discarded on purpose, which
+            # is the comparison the transition probe measures.
             return self.force_as_extra_output(op, optforce)
         leaves, consts = [], []
         opcodes, lefts, rights, params, infos = [], [], [], [], []
