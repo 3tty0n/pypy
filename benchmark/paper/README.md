@@ -280,6 +280,22 @@ another:
 `check.sh` reads the absolute threshold back out of the row it checks, and
 micro accumulators keep `close_enough` (a relative 1e-6).
 
+### What a result directory holds
+
+The row data -- every `*.tsv`, `results.jsonl` and the per-forward
+`.warmup_series/` traces -- is committed packed, as one `data.tar.gz` per
+run. About 3MB of text becomes 300KB, and `results.jsonl`, which every stage
+rewrites whole, stops re-entering the history at full size each time.
+
+    benchmark/paper/archive.sh unpack results/<host>/<run>   # rows back out
+    benchmark/paper/archive.sh pack   results/<host>/<run>   # rows back in
+    benchmark/paper/archive.sh check  results/<host>/<run>   # they agree
+
+The archive is reproducible: packing rows that have not changed produces the
+same bytes, so a re-pack is not a diff. `machine.txt`, `summary.md`, the
+notes files and `figures/` stay loose, so a run's provenance and its results
+can be read on the web without downloading anything.
+
 Warm-up: every micro driver takes `WARMUP` as an optional sixth argument
 (default 30) and runs exactly that many iterations before the timed loop -
 the first of them separately, because that is the one that traces and

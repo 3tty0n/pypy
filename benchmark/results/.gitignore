@@ -8,3 +8,12 @@
 # run_models.sh's argmax scratch: one file per system, written and re-read
 # inside a single stage and deleted when it ends. Never a result.
 */*/.last_argmax_*
+
+# Row data is committed packed, one data.tar.gz per run: about 3MB of tsv and
+# jsonl becomes 300KB, and results.jsonl stops rewriting itself whole in the
+# history on every stage. benchmark/paper/archive.sh packs and unpacks it;
+# machine.txt, summary.md and figures/ stay loose so a run can be read
+# without downloading anything.
+*/*/*.tsv
+*/*/results.jsonl
+*/*/.warmup_series/
