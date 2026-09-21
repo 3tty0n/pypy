@@ -40,9 +40,11 @@ APP = os.path.join(HERE, "..", "applevel")
 # model -> (family, weights dir, batch).  Same mapping as run_models.sh.
 MODELS = [
     ("gpt2", "gpt2", "gpt2", 1),
+    ("gpt2-medium", "gpt2", "gpt2-medium", 1),
     ("distilgpt2", "gpt2", "distilgpt2", 1),
     ("smollm2-135m", "llama", "smollm2-135m", 1),
     ("smollm2-360m", "llama", "smollm2-360m", 1),
+    ("smollm2-1.7b", "llama", "smollm2-1.7b", 1),
     ("qwen2.5-0.5b", "llama", "qwen2.5-0.5b", 1),
     ("bert-base", "bert", "bert-base", 1),
     ("bert-mini", "bert", "bert-mini", 1),
@@ -50,6 +52,7 @@ MODELS = [
     ("resnet18-b8", "resnet", "resnet18", 8),
     ("mixer_b16", "mixer", "mixer_b16", 1),
     ("vit-base", "vit", "vit-base", 1),
+    ("deit-tiny", "vit", "deit-tiny", 1),
     ("vit-tiny", "vit", "vit-tiny", 1),
     ("tiny-gpt2", "gpt2", "tiny-gpt2", 1),
     ("bert-tiny", "bert", "bert-tiny", 1),
@@ -285,9 +288,16 @@ OURS = {"gpt2": ours_gpt2, "bert": ours_bert, "llama": ours_llama,
         "vit": ours_vit, "mixer": ours_mixer, "resnet": ours_resnet}
 
 
+# A checkpoint the export recorded under a name the Hub now redirects.
+# The weights are the same bytes; the provenance table should name the
+# repository as it is addressed today.
+CANONICAL_ID = {"distilgpt2": "distilbert/distilgpt2"}
+
+
 def ours_row(name, family, cfg, batch):
     ops, notes = OURS[family](cfg, batch)
     source = cfg.get("source", "unknown")
+    source = CANONICAL_ID.get(source, source)
     return dict(model=name, system="ours",
                 hf_id=source, revision=hf_revision(source),
                 weights=WEIGHT_PROVENANCE.get(source, "trained"),

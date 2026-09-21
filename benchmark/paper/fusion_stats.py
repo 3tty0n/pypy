@@ -35,13 +35,16 @@ APP = os.path.join(HERE, "..", "applevel")
 # model -> (applevel script, weights dir, extra argv), as in run_models.sh
 MODELS = collections.OrderedDict([
     ("gpt2",         ("gpt2.py", "gpt2", [])),
+    ("gpt2-medium",  ("gpt2.py", "gpt2-medium", [])),
     ("distilgpt2",   ("gpt2.py", "distilgpt2", [])),
     ("smollm2-135m", ("llama.py", "smollm2-135m", [])),
     ("smollm2-360m", ("llama.py", "smollm2-360m", [])),
+    ("smollm2-1.7b", ("llama.py", "smollm2-1.7b", [])),
     ("qwen2.5-0.5b", ("llama.py", "qwen2.5-0.5b", [])),
     ("bert-base",    ("bert.py", "bert-base", [])),
     ("bert-mini",    ("bert.py", "bert-mini", [])),
     ("vit-base",     ("vit.py", "vit-base", [])),
+    ("deit-tiny",    ("vit.py", "deit-tiny", [])),
     ("vit-tiny",     ("vit.py", "vit-tiny", [])),
     ("mixer_b16",    ("mixer.py", "mixer_b16", [])),
     ("resnet18-b1",  ("resnet.py", "resnet18", ["1"])),

@@ -141,10 +141,12 @@ model() {
 
 # fourth column: the jax_models.py model, "" where there is no JAX twin
 model_gpt2() { model gpt2 gpt2.py gpt2_torch.py gpt2 "$WEIGHTS/gpt2"; }
+model_gpt2-medium() { model gpt2-medium gpt2.py gpt2_torch.py gpt2 "$WEIGHTS/gpt2-medium"; }
 model_distilgpt2() { model distilgpt2 gpt2.py gpt2_torch.py gpt2 "$WEIGHTS/distilgpt2"; }
 model_tiny-gpt2() { model tiny-gpt2 gpt2.py gpt2_torch.py gpt2 "$WEIGHTS/tiny-gpt2"; }
 model_smollm2-135m() { model smollm2-135m llama.py llama_torch.py llama "$WEIGHTS/smollm2-135m"; }
 model_smollm2-360m() { model smollm2-360m llama.py llama_torch.py llama "$WEIGHTS/smollm2-360m"; }
+model_smollm2-1.7b() { model smollm2-1.7b llama.py llama_torch.py llama "$WEIGHTS/smollm2-1.7b"; }
 model_qwen2.5-0.5b() { model qwen2.5-0.5b llama.py llama_torch.py llama "$WEIGHTS/qwen2.5-0.5b"; }
 model_bert-base() { model bert-base bert.py bert_torch.py bert "$WEIGHTS/bert-base"; }
 model_bert-tiny() { model bert-tiny bert.py bert_torch.py bert "$WEIGHTS/bert-tiny"; }
@@ -153,13 +155,18 @@ model_resnet18-b1() { model resnet18-b1 resnet.py resnet_torch.py resnet "$WEIGH
 model_resnet18-b8() { model resnet18-b8 resnet.py resnet_torch.py resnet "$WEIGHTS/resnet18" 8; }
 model_mixer_b16() { model mixer_b16 mixer.py mixer_torch.py mixer "$WEIGHTS/mixer_b16"; }
 model_vit-base() { model vit-base vit.py vit_torch.py vit "$WEIGHTS/vit-base"; }
+model_deit-tiny() { model deit-tiny vit.py vit_torch.py vit "$WEIGHTS/deit-tiny"; }
 model_vit-tiny() { model vit-tiny vit.py vit_torch.py vit "$WEIGHTS/vit-tiny"; }
 
 # The population: released, trained checkpoints that are actually served.
-POPULATION="gpt2 distilgpt2 smollm2-135m smollm2-360m qwen2.5-0.5b bert-base bert-mini resnet18-b1 resnet18-b8 mixer_b16 vit-base vit-tiny"
+POPULATION="distilgpt2 gpt2 gpt2-medium smollm2-135m smollm2-360m smollm2-1.7b qwen2.5-0.5b bert-mini bert-base resnet18-b1 resnet18-b8 mixer_b16 deit-tiny vit-base"
 # Synthetic launch-bound probes, reported apart from the population.
-PROBES="tiny-gpt2 bert-tiny"
-ALL_MODELS="$POPULATION $PROBES"
+# Excluded by the selection rule (benchmark/paper/select_models.py):
+# vit-tiny mirrors weights an individual re-uploaded; tiny-gpt2 and
+# bert-tiny are fixtures whose weights were never trained.  Runnable
+# by name, never by default.
+EXCLUDED="vit-tiny tiny-gpt2 bert-tiny"
+ALL_MODELS="$POPULATION"
 MODELS=${MODELS:-}
 if [ "$#" -gt 0 ]; then MODELS="$*"; fi
 MODELS=${MODELS:-$ALL_MODELS}

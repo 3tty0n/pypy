@@ -36,8 +36,8 @@ LAZY_MODELS=${LAZY_MODELS:-"gpt2 distilgpt2 bert-base bert-mini vit-base mixer_b
 
 script_for() {
   case $1 in
-    gpt2|distilgpt2|tiny-gpt2) echo "gpt2.py";;
-    smollm2-135m|smollm2-360m|qwen2.5-0.5b) echo "llama.py";;
+    gpt2|gpt2-*|distilgpt2|tiny-gpt2) echo "gpt2.py";;
+    smollm2-*|qwen*) echo "llama.py";;
     bert-base|bert-tiny|bert-mini) echo "bert.py";;
     resnet18-b1|resnet18-b8) echo "resnet.py";;
     mixer_b16) echo "mixer.py";;
