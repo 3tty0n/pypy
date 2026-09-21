@@ -102,8 +102,10 @@ sweep() {
   done
 }
 
+model_bert-base() { sweep bert-base bert.py bert_torch.py bert "$WEIGHTS/bert-base"; }
 model_bert-mini() { sweep bert-mini bert.py bert_torch.py bert "$WEIGHTS/bert-mini"; }
 model_distilgpt2() { sweep distilgpt2 gpt2.py gpt2_torch.py gpt2 "$WEIGHTS/distilgpt2"; }
+model_gpt2() { sweep gpt2 gpt2.py gpt2_torch.py gpt2 "$WEIGHTS/gpt2"; }
 
 if [ "$#" -gt 0 ]; then BATCH_MODELS="$*"; fi
 
@@ -111,7 +113,8 @@ progress_init batch $((ROUNDS * $(echo $BATCHES | wc -w) * $(echo $BATCH_MODELS 
 for m in $BATCH_MODELS; do
   fn="model_$m"
   if ! declare -f "$fn" >/dev/null; then
-    echo "run_batch.sh: unknown model '$m', valid: bert-mini distilgpt2" >&2
+    echo "run_batch.sh: unknown model '$m', valid:" \
+         "$(declare -F | sed -n 's/^declare -f model_//p' | tr '\n' ' ')" >&2
     exit 1
   fi
   "$fn"
