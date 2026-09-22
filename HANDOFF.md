@@ -215,8 +215,11 @@ So the claim for Part I §4 is not "keep the descriptor". It is that the
 descriptor decision does not change what the boundary costs; it changes the
 residual program, and **a kept descriptor does not survive a guard**.
 
-**The MOTION demonstration (r15's single deficiency) is attempted and returns
-a null, with the blocker named.** `benchmark/motion/layout_rule.py` states the
+**Superseded below.** The paragraph that follows was written before the
+demonstration was retried on a second change class; read it as the record of
+the first attempt, and see "MOTION: the demonstration succeeds" after it.
+
+**Attempt 1 returns a null, with the blocker named.** `benchmark/motion/layout_rule.py` states the
 change class as an equation and nothing else; `benchmark/paper/audit_rules.py`
 is the documented firewall, a program rather than a promise, and
 `layout_rule_leaky.py` is a deliberately contaminated control it must reject
@@ -244,3 +247,67 @@ one arm and a warm one in the other; with a fresh cache per run both arms pay
 The audit, the rule, the probe, the 10-run protocol and `live_bytes` are all
 in place and reusable, so when the prerequisite lands the measurement is a
 re-run rather than a rebuild.
+
+## MOTION: the demonstration succeeds (22 Sep 2026, second attempt)
+
+The first attempt's conclusion was too narrow. MetaTensor cannot derive a
+*gather* transition, because the pass has no fusible node for one. It can
+derive a transition for a change class that lives inside the vocabulary the
+pass does build nodes for, and the demonstration then works end to end.
+
+`benchmark/motion/axis_rule.py` states the change class as an equation and
+nothing else: the same vector read along the other axis of a square matrix,
+`out[i,j] = m[i,j] + v[j]` against `m[i,j] + v[i]`. It passes the same
+firewall (no imports, twelve identifiers, one constant). The axis rides in
+the fusion node's broadcast parameter, and a row-addressed vector fixes the
+tile width, so this is a layout change the region being specialised can take
+on itself.
+
+Ten fresh processes per arm, 200 steps, transition at 100, sign-test
+intervals at 97.9% coverage:
+
+| | rule applied in place | canonicalised first |
+|---|---|---|
+| launches / step after | **1.16** | 2.12 |
+| step latency | **13.0 us** [12.9, 13.1] | 21.1 us [21.0, 22.9] |
+| transition step | **40.0 us** [39.1, 41.0] | 1999.5 us [1962.9, 2098.1] |
+| kernels after | 3 | 2 |
+| retained bytes | 9145432 | 12389520 |
+
+**The launch count is the evidence**, not the clock: 2.12 launches a step
+becomes 1.16, which is specialisation absorbing the rule into the region.
+Latency follows — 0.62x a step, one fiftieth of the transition, intervals
+disjoint. The derived arm compiles one kernel more, specialising per layout
+instead of reusing one.
+
+**Retention crosses over and the loop length must be quoted with it.** At 200
+steps the derived arm holds 0.74x the bytes; at 60 steps it holds 2.11x
+(n=3/n=2, an observation not a measurement). The hand-written arm
+materialises the region every step, so its retention grows 4.66x between the
+two lengths against the derived arm's 1.63x: derived starts higher and ends
+lower. A single retention number for this comparison would be a choice of
+loop length, not a result.
+
+**Status against r15's four requirements.**
+1. Rule written without target knowledge — done, twice, for two change
+   classes; firewall in `benchmark/paper/audit_rules.py`, negative control
+   rejected on all six counts, runner refuses to measure otherwise.
+2. Meta-tracer specialises it — done for the axis class, shown by the launch
+   count; **not** for the gather class, shown by identical counters.
+3. Audit for target knowledge — done, mechanical, re-runnable.
+4. Compared against the hand-written guard-recovery path on latency and
+   retained bytes, 10 runs, medians, intervals — done.
+
+**What is still missing for the referee's exact wording.** r15 asks for a
+transition "across at least two representations" in a *non-toy* artifact.
+This is two layouts of a vector inside one fused region, on a synthetic
+square matrix — not two representations of a model's state, and not a
+next-token loop (there is no in-place KV cache, so no next-token latency
+exists to measure; per-step latency of a decoder-shaped forward is what the
+probes report and they say so). Closing that gap needs either a fusible
+gather node, which would let the blocked-layout class work and gives a
+genuinely different representation pair, or a change class over model state.
+
+Everything is reusable: rule, firewall, negative control, probes, the 10-run
+protocol, `motion_stats.py`, and `live_bytes`. A second change class is a new
+rule file plus a probe, not a rebuild.
