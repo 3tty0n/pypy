@@ -15,7 +15,7 @@ tsv_init "$TSV" "model\tsystem\tround\tsteady_us\tmaxabsdiff\targmax_match\tcomp
 # was checked against.  Ours is a binary we build, so it is identified by its
 # hash; the baselines come out of a wheel, so the version string is the thing
 # that identifies them.
-PYPY_SHA=$(sha256sum "$PYPY" 2>/dev/null | cut -c1-12)
+PYPY_SHA=$(binary_sha "$PYPY")
 TORCH_VER=$(pkg_version "$TORCH_PYTHON" torch torch)
 JAX_VER=$(pkg_version "$JAX_PYTHON" jax jax)
 TRT_VER=$(pkg_version "$TRT_PYTHON" torch_tensorrt torch_tensorrt)

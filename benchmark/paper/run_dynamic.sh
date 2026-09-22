@@ -14,7 +14,7 @@ tsv_init "$SUMMARY" "system\tround\tpass\tlength\tmedian_us\ttotal_us\tloops\tbr
 
 # Per-row provenance, same convention as run_models.sh: ours is identified by
 # the pypy-c hash, torch by its version string.
-PYPY_SHA=$(sha256sum "$PYPY" 2>/dev/null | cut -c1-12)
+PYPY_SHA=$(binary_sha "$PYPY")
 TORCH_VER=$([ -n "$TORCH_PYTHON" ] && [ -x "$TORCH_PYTHON" ] && \
   "$TORCH_PYTHON" -c "import torch; print('torch-' + torch.__version__)" 2>/dev/null || echo unknown)
 binary_of() { case "$1" in ours) echo "${PYPY_SHA:-unknown}" ;; *) echo "$TORCH_VER" ;; esac; }

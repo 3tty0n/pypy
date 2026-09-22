@@ -21,7 +21,7 @@ BATCH_SYSTEMS=${BATCH_SYSTEMS:-"ours torch-eager torch-compile torch-compile-ro 
 TSV="$OUT/batch.tsv"
 tsv_init "$TSV" "model\tsystem\tbatch\tround\tsteady_us\tper_seq_us\tmaxabsdiff\tbatch_rows_identical\tstatus\tbinary\treference"
 
-PYPY_SHA=$(sha256sum "$PYPY" 2>/dev/null | cut -c1-12)
+PYPY_SHA=$(binary_sha "$PYPY")
 TORCH_VER=$(pkg_version "$TORCH_PYTHON" torch torch)
 JAX_VER=$(pkg_version "$JAX_PYTHON" jax jax)
 binary_of() {

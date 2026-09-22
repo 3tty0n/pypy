@@ -106,6 +106,15 @@ resolved_cc() {
   fi
   echo "${cc:-unknown}"
 }
+# A translated pypy-c is a 15 KB launcher that is byte-identical across
+# builds; the code is the libpypy-c.so next to it, so that is what identifies
+# the binary.
+binary_sha() {
+  local f=$1
+  [ -f "$(dirname "$f")/libpypy-c.so" ] && f="$(dirname "$f")/libpypy-c.so"
+  [ -f "$f" ] || { echo unknown; return; }
+  sha256sum "$f" | cut -c1-12
+}
 sha256_of() {
   [ -f "$1" ] || { echo unknown; return; }
   sha256sum "$1" | cut -d' ' -f1

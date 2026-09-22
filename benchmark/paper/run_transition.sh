@@ -39,7 +39,7 @@ SERIES="$OUT/transition_series.tsv"
 tsv_init "$TSV" "arm\tcache\trows\tcols\tround\tbefore_us\tat_us\tsettling_us\tafter_us\ttotal_ms\tloops\tbridges\tlaunches\tcompiles\tkernels\tpass\tbinary"
 tsv_init "$SERIES" "arm\tcache\trows\tcols\tround\titer\tus\tbinary"
 
-BINARY=$(sha256sum "$PROBE_PYPY" | cut -c1-12)
+BINARY=$(binary_sha "$PROBE_PYPY")
 STATUS=0
 
 # Both cache states, because they answer different questions and the answers

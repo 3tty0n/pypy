@@ -28,7 +28,7 @@ tsv_init "$TSV" "model\tsystem\tround\tsteady_us\tlaunches_per_iter\tkernels\tco
 WTSV="$OUT/lazy_warmup.tsv"
 tsv_init "$WTSV" "model\tsystem\tround\titer\tus\tcompiled\tlaunches\tbinary"
 
-PYPY_SHA=$(sha256sum "$PYPY" 2>/dev/null | cut -c1-12)
+PYPY_SHA=$(binary_sha "$PYPY")
 NOFUSE="enable_opts=intbounds:rewrite:virtualize:string:pure:earlyforce:heap:unroll"
 JIT_INNER="threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=60000"
 

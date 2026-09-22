@@ -30,7 +30,7 @@ SERIES_DIR="$OUT/.warmup_series"
 mkdir -p "$SERIES_DIR"
 
 # Per-row provenance, same convention as run_models.sh.
-PYPY_SHA=$(sha256sum "$PYPY" 2>/dev/null | cut -c1-12)
+PYPY_SHA=$(binary_sha "$PYPY")
 TORCH_VER=$([ -n "$TORCH_PYTHON" ] && [ -x "$TORCH_PYTHON" ] && \
   "$TORCH_PYTHON" -c "import torch; print('torch-' + torch.__version__)" 2>/dev/null || echo unknown)
 JAX_VER=$([ -n "${JAX_PYTHON:-}" ] && [ -x "${JAX_PYTHON:-}" ] && \

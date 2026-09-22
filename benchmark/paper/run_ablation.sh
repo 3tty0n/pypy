@@ -11,7 +11,7 @@ tsv_init "$TSV" "experiment\tvariant\tmodel\tround\tsteady_us\tmaxabsdiff\tnote\
 
 # Every row here runs on our own translated pypy-c; identify it by its hash
 # the same way run_models.sh identifies the "ours" system.
-PYPY_SHA=$(sha256sum "$PYPY" 2>/dev/null | cut -c1-12)
+PYPY_SHA=$(binary_sha "$PYPY")
 
 NOFUSE_OPTS="enable_opts=intbounds:rewrite:virtualize:string:pure:earlyforce:heap:unroll"
 

@@ -34,7 +34,7 @@ tsv_init "$TSV" "system\tregime\tround\ttotal_ms\tp50_us\tp95_us\tmax_us\tloops\
 tsv_init "$SERIES" "system\tregime\tround\titer\tus\texit_layer\tbinary"
 
 # Per-row provenance, same convention as run_models.sh.
-PYPY_SHA=$(sha256sum "$PYPY" 2>/dev/null | cut -c1-12)
+PYPY_SHA=$(binary_sha "$PYPY")
 TORCH_VER=$(pkg_version "$TORCH_PYTHON" torch torch)
 JAX_VER=$(pkg_version "$JAX_PYTHON" jax jax)
 binary_of() {
