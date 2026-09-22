@@ -1,0 +1,23 @@
+\begin{tabular}{lrrrrrr}
+\toprule
+change class & arm & launches/step & step us & transition us & retained bytes & n \\
+\midrule
+blocked layout & derived (rule specialised in place) & 1.20 & 29.1 [28.8, 29.1] & 455263 & 8454248 & 10 \\
+blocked layout & canonicalised first & 2.16 & 21.0 [21.0, 21.0] & 457515 & 5308480 & 10 \\
+blocked layout & hand-written adapter, descriptor kept & 2.20 & 29.8 [29.1, 30.0] & 455301 & 8454336 & 10 \\
+blocked layout & hand-written adapter, drained & 4.12 & 31.9 [31.9, 31.9] & 455712 & 6488296 & 10 \\
+blocked layout, no dead locals & derived (rule specialised in place) & 1.20 & 17.9 [17.9, 17.9] & 455851 & 1179672 & 10 \\
+blocked layout, no dead locals & canonicalised first & 2.16 & 20.0 [20.0, 20.0] & 455007 & 2359320 & 10 \\
+blocked layout, no dead locals & hand-written adapter, descriptor kept & 2.20 & 28.8 [26.0, 29.1] & 454636 & 5505352 & 10 \\
+blocked layout, no dead locals & hand-written adapter, drained & 3.16 & 31.9 [31.9, 31.9] & 454102 & 2949272 & 10 \\
+vector axis & derived (rule specialised in place) & 1.16 & 12.9 [12.2, 13.1] & 40 & 9145432 & 10 \\
+vector axis & canonicalised first & 2.12 & 21.0 [21.0, 22.9] & 2034 & 12389520 & 10 \\
+vector axis & hand-written adapter, descriptor kept & 2.16 & 31.0 [31.0, 32.9] & 1094 & 16813472 & 10 \\
+vector axis & hand-written adapter, drained & 4.08 & 40.1 [40.1, 40.1] & 54 & 8850656 & 10 \\
+vector axis, no dead locals & derived (rule specialised in place) & 1.16 & 17.9 [17.9, 17.9] & 48 & 1182744 & 10 \\
+vector axis, no dead locals & canonicalised first & 2.12 & 20.0 [20.0, 21.0] & 46 & 10914840 & 10 \\
+vector axis, no dead locals & hand-written adapter, descriptor kept & 2.16 & 30.5 [30.0, 31.9] & 56 & 9440712 & 10 \\
+vector axis, no dead locals & hand-written adapter, drained & 3.12 & 32.2 [31.9, 33.1] & 56 & 4721880 & 10 \\
+\bottomrule
+\end{tabular}
+% the MOTION demonstration: medians over fresh processes, sign-test intervals (97.9%% at n=10), cold kernel cache

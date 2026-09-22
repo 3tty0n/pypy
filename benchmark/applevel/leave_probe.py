@@ -2,7 +2,7 @@
 
     leave_probe.py HISTORY [--impl motion|adapter] [--steps S] [--at K]
                            [--n N] [--save FILE] [--nostats] [--times]
-                           [--policy retain-only]
+                           [--policy retain-only] [--sync]
 
 Workers A and B each compute a gradient from their own shard, the step
 commits w -= lr * (g_A + g_B), and at step K (after the loop is hot, so in
@@ -94,6 +94,10 @@ def counters():
     return loops, bridges, mt.launch_count()
 
 
+# --sync ends every timed step with a host read (w.sum().item()), so the time
+# includes the device finishing the step; without it a step is timed to the
+# end of its launches, which are asynchronous: host dispatch time.
+SYNC = '--sync' in sys.argv
 STEADY = [0, 0]
 
 
@@ -134,7 +138,10 @@ def run_motion(history, steps, k, n, times):
         w = motion_step(g, xa, xb, w, mt.scalar(float(1 + step % 4),
                                                 'float64'))
         if times is not None:
-            w.force()
+            if SYNC:
+                w.sum().item()
+            else:
+                w.force()
             times.append((time.time() - t0) * 1e6)
         if step == k:
             w_k = w.tolist()
@@ -171,7 +178,10 @@ def run_adapter(history, steps, k, n, times):
         w = adapter_step(agg, step, xa, xb, w, lr,
                          mt.scalar(float(1 + step % 4), 'float64'))
         if times is not None:
-            w.force()
+            if SYNC:
+                w.sum().item()
+            else:
+                w.force()
             times.append((time.time() - t0) * 1e6)
         if step == k:
             w_k = w.tolist()

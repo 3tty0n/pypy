@@ -36,6 +36,8 @@ N=${LEAVE_N:-64}
 HISTORIES=${LEAVE_HISTORIES:-"h1 h2 h3 h2post none"}
 STATUS=0
 
+# LEAVE_PERF_ONLY=1 skips 1-4, for a second timing pass (e.g. LEAVE_SYNC=1).
+if [ "${LEAVE_PERF_ONLY:-0}" != 1 ]; then
 echo "== audit" | tee "$D/audit.log"
 python3 "$HERE/audit_rules.py" "$REPO_ROOT/pypy/module/_metatensor/rule_leave.py" \
   | tee -a "$D/audit.log" || { echo "run_leave.sh: the rule failed the audit" >&2; exit 1; }
@@ -106,12 +108,17 @@ cat "$D/checker.log"
 echo "== count"
 python3 "$MOT/count_lines.py" | tee "$D/counts.txt"
 python3 "$MOT/count_lines.py" --json > "$D/counts.json"
+fi
 
 if [ "${LEAVE_PERF:-0}" = 1 ]; then
   echo "== perf"
   PTSV="$OUT/leave_perf.tsv"
-  tsv_init "$PTSV" "config\trun\tn\tsteps\tstep_us\tbefore_us\tevent_us\tsteady_launches\tlaunches_per_step\tbinary"
+  tsv_init "$PTSV" "config\tsync\trun\tn\tsteps\tstep_us\tbefore_us\tevent_us\tsteady_launches\tlaunches_per_step\tbinary"
   PN=${LEAVE_PERF_N:-65536}
+  # LEAVE_SYNC=1: time each step to device completion (a host read per step)
+  # instead of to the end of its asynchronous launches.
+  SYNCFLAG=""
+  [ "${LEAVE_SYNC:-0}" = 1 ] && SYNCFLAG="--sync"
   RUNS=${LEAVE_RUNS:-10}
   progress_init leave $((RUNS * 5))
   for run in $(seq "$RUNS"); do
@@ -122,9 +129,9 @@ if [ "${LEAVE_PERF:-0}" = 1 ]; then
       name=$1 hist=$2; shift 2
       progress_step "$name run $run/$RUNS"
       line=$("$P" $JIT_FLAGS "$APP/leave_probe.py" "$hist" --steps "$STEPS" \
-             --n "$PN" --times "$@" 2>/dev/null | grep '^leave ' | tail -1) || true
+             --n "$PN" --times $SYNCFLAG "$@" 2>/dev/null | grep '^leave ' | tail -1) || true
       [ -n "$line" ] || { echo "run_leave.sh: perf $name run $run produced no row" >&2; STATUS=1; continue; }
-      echo -e "$name\t$run\t$PN\t$STEPS\t$(field_of "$line" step_us)\t$(field_of "$line" before_us)\t$(field_of "$line" event_us)\t$(field_of "$line" steady_launches)\t$(field_of "$line" launches_per_step)\t$BINARY" >> "$PTSV"
+      echo -e "$name\t${LEAVE_SYNC:-0}\t$run\t$PN\t$STEPS\t$(field_of "$line" step_us)\t$(field_of "$line" before_us)\t$(field_of "$line" event_us)\t$(field_of "$line" steady_launches)\t$(field_of "$line" launches_per_step)\t$BINARY" >> "$PTSV"
     done
   done
   progress_done

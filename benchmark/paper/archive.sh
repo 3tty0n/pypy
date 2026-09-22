@@ -21,8 +21,9 @@
 set -eu
 
 # The per-forward warm-up traces are one small file per (model, cache,
-# round, system) - a few hundred of them, all raw rows.
-ROWS=("*.tsv" "results.jsonl" ".warmup_series")
+# round, system) - a few hundred of them, all raw rows.  leave/ is the MOTION
+# leave check: every run's saved result and output, the checker and audit logs.
+ROWS=("*.tsv" "results.jsonl" ".warmup_series" "leave")
 NAME=data.tar.gz
 
 usage() { sed -n '2,/^set -eu/p' "$0" | sed 's/^# \?//;$d'; exit 2; }
