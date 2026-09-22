@@ -1202,6 +1202,108 @@ DEOPT_LABEL = {
 }
 
 
+TRANSITION_ARM = {"direct": ("#1a4fa0", "", "o"),
+                  "drain": ("#8a5cd6", "\\\\", "v")}
+TRANSITION_LABEL = {"direct": "descriptor kept",
+                    "drain": "drained to canonical, re-recorded"}
+# The three ways the interior consumer can be present, in the order that makes
+# the story readable: never, always, and arriving after a guard.
+READ_ORDER = ["none", "every", "half"]
+READ_LABEL = {"none": "no interior\nconsumer",
+              "every": "consumer from\nthe first step",
+              "half": "consumer after\na guard fails"}
+
+
+def fig_transition(out, args):
+    """What a fused value costs to carry across a guard.
+
+    Two panels, because the two halves of the result are of different kinds.
+    Above: launches per iteration, which is structure and is identical across
+    rounds and cache states - it shows that reusing a launched region is what
+    keeps the chain one kernel at all, and that the advantage does not survive
+    the guard.  Below: cumulative time in each cache state, which is where the
+    extra kernel's compile shows up and then stops showing up.
+    """
+    phases = read_tsv(os.path.join(out, "transition_phases.tsv"))
+    rows = read_tsv(os.path.join(out, "transition.tsv"))
+    if not phases and not rows:
+        return None
+    fig, axes = plt.subplots(2, 1, figsize=(args.width, 4.1),
+                            gridspec_kw={"height_ratios": [1.0, 0.85]})
+
+    ax = axes[0]
+    per = {(r["arm"], r["interior_reads"]): float(r["launches_per_iter"])
+           for r in phases}
+    reads = [k for k in READ_ORDER if any((a, k) in per
+                                          for a in TRANSITION_ARM)]
+    x = list(range(len(reads)))
+    width = 0.38
+    for i, arm in enumerate(("direct", "drain")):
+        vals = [per.get((arm, k), 0.0) for k in reads]
+        colour, hatch, _ = TRANSITION_ARM[arm]
+        ax.bar([v + (i - 0.5) * width for v in x], vals, width * 0.9,
+               color=colour, linewidth=0,
+               hatch=hatch if args.texture else None,
+               label=TRANSITION_LABEL[arm])
+        for xi, v in zip(x, vals):
+            if v:
+                ax.text(xi + (i - 0.5) * width, v + 0.12, "%.2f" % v,
+                        ha="center", fontsize=6)
+    ax.set_xticks(x, [READ_LABEL.get(k, k) for k in reads])
+    ax.set_ylabel("kernel launches\nper iteration (lower is better)")
+    ax.set_ylim(0, max([v for v in per.values()] or [1]) * 1.22)
+    ax.yaxis.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    despine(ax)
+
+    ax = axes[1]
+    g = collections.defaultdict(list)
+    for r in rows:
+        try:
+            g[(r["cache"], r["arm"])].append(float(r["total_ms"]))
+        except (KeyError, ValueError):
+            pass
+    caches = [c for c in ("cold", "warm") if any(k[0] == c for k in g)]
+    x = list(range(len(caches)))
+    for i, arm in enumerate(("direct", "drain")):
+        vals = [med(g.get((c, arm), [])) or 0.0 for c in caches]
+        colour, hatch, _ = TRANSITION_ARM[arm]
+        ax.bar([v + (i - 0.5) * width for v in x], vals, width * 0.9,
+               color=colour, linewidth=0,
+               hatch=hatch if args.texture else None)
+        lo = [min(g.get((c, arm), [0])) for c in caches]
+        hi = [max(g.get((c, arm), [0])) for c in caches]
+        ax.errorbar([v + (i - 0.5) * width for v in x], vals,
+                    yerr=err(vals, lo, hi), fmt="none", zorder=4, **ERRBAR)
+    ax.set_xticks(x, ["cold kernel cache", "warm kernel cache"][:len(caches)])
+    ax.set_yscale("log")
+    ax.set_ylabel("cumulative ms over the run\n(log scale, lower is better)")
+    ax.yaxis.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    despine(ax)
+
+    legend_below(fig, axes[0], ncol=1 if args.width < DOUBLE_COL else 2)
+    if args.titles:
+        fig.suptitle("Carrying a fused value across a guard")
+
+    table = []
+    for k in reads:
+        row = [READ_LABEL.get(k, k).replace("\n", " ")]
+        for arm in ("direct", "drain"):
+            row.append("%.2f" % per[(arm, k)] if (arm, k) in per else "n/a")
+        if ("direct", k) in per and ("drain", k) in per:
+            row.append("%.2f" % (per[("drain", k)] / per[("direct", k)]))
+        else:
+            row.append("n/a")
+        table.append(row)
+    write_table(os.path.join(args.outdir, "transition.tex"),
+                "kernel launches per iteration, 400 iterations, identical "
+                "across rounds and cache states",
+                ["interior consumer", "descriptor kept", "drained",
+                 "drained / kept"], table)
+    return fig, "transition"
+
+
 def fig_deopt(out, args):
     """Two questions, two panels, same rows.  Left: what an iteration costs
     once the dust settles, which is where a bridge either did or did not
@@ -2648,6 +2750,7 @@ FIGURES = collections.OrderedDict([
     ("model_provenance", fig_model_provenance),
     ("op_inventory", fig_op_inventory),
     ("deopt", fig_deopt),
+    ("transition", fig_transition),
     ("micro_baselines", fig_micro_baselines),
     ("compile_overhead", fig_compile_overhead),
     ("gap", fig_gap),
