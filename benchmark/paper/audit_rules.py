@@ -42,6 +42,9 @@ ALLOWED_IMPORTS = {
     "rpython.metatensor.ops",        # the interpreter's primitive operations
     "rpython.rlib.jit",              # annotations only; checked below
     "math",
+    # membership, declared policy and uncommitted contributions: the whole
+    # vocabulary of the leave rule, and nothing about their representation
+    "pypy.module._metatensor.motion_iface",
 }
 
 # Names from the target representation and from the machinery that builds it.
@@ -62,7 +65,18 @@ FORBIDDEN = {
     "Optimization", "getptrinfo", "emit_extra",
     # representation tests
     "is_virtual", "_is_virtual", "virtual", "forced", "unforce",
+    # the recovery machinery a leave rule must not know about: guards, resume
+    # data, and the representation the meta-tracer gives contributions
+    "resume", "resumedata", "numb", "snapshot", "fail_args", "guard",
+    "invalidate", "quasi_immut", "blackhole", "bridge", "fused", "fusion",
+    "parts", "Part", "retains", "total", "materialise", "materialize",
+    "interp_group", "W_Group", "W_Aggregate", "version",
 }
+
+# Names that are forbidden as attributes but ordinary as local names:
+# `.pending` is the fusion pass's list of kernels, a parameter called
+# `pending` is not.
+FORBIDDEN_ATTR_ONLY = {"pending"}
 
 # Constants that only mean something if you know the kernel signature.  A
 # rule is allowed small integers (0, 1, 2 for axes and arity); anything that
@@ -100,7 +114,7 @@ class Audit(object):
                                     "declared vocabulary" % mod)
             elif isinstance(node, ast.Name):
                 self.names.add(node.id)
-                if node.id in FORBIDDEN:
+                if node.id in FORBIDDEN and node.id not in FORBIDDEN_ATTR_ONLY:
                     self.fail(node, "mentions %r, a name from the target "
                                     "representation" % node.id)
             elif isinstance(node, ast.Attribute):
