@@ -1,5 +1,5 @@
 from rpython.rlib.rfloat import formatd
-from rpython.metatensor.core import (ADD, ARITY, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_MAXPOOL_NHWC, GA_ROTHALF, MAXR, MUL, RELU, RELUGRAD, SQRT, STORE_TYPE, SUB, SUM, config, is_reduction, nvals)
+from rpython.metatensor.core import (ADD, ARITY, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, GATHER, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_MAXPOOL_NHWC, GA_ROTHALF, MAXR, MUL, RELU, RELUGRAD, SQRT, STORE_TYPE, SUB, SUM, config, gather_changes_shape, gather_dh, gather_heads, gather_kind, is_reduction, nvals)
 
 
 def next_pow2(c):
@@ -78,6 +78,8 @@ def row_mode(kernel, modes):
     nin = nvals(kernel)
     nodes = kernel.nodes
     if len(modes) != nin + len(nodes):
+        return False
+    if has_gather(kernel):
         return False
     for k in range(len(nodes)):
         node = nodes[k]
@@ -169,46 +171,51 @@ def to_tile_ir(kernel, name, n):
     lines.append('}')
     return '\n'.join(lines)
 
+def has_gather(kernel):
+    for k in range(len(kernel.nodes)):
+        if kernel.nodes[k].opcode == GATHER:
+            return True
+    return False
+
 def to_ttir(kernel, name):
     modes = all_modes(kernel)
     if len(modes) != nvals(kernel) + len(kernel.nodes):
         return ''
+    if has_gather(kernel):
+        return to_ttir_gathered(kernel, name, modes)
     if row_mode(kernel, modes):
         return to_ttir_row(kernel, name, modes)
     return to_ttir_flat(kernel, name)
 
 def _elementwise(lines, node, v, T, I1):
-    if node.opcode == ADD:
-        lines.append('    %%v%d = arith.addf %%v%d, %%v%d : %s'
-                     % (v, node.a, node.b, T))
-    elif node.opcode == MUL:
-        lines.append('    %%v%d = arith.mulf %%v%d, %%v%d : %s'
-                     % (v, node.a, node.b, T))
-    elif node.opcode == RELU:
-        lines.append('    %%c%d = arith.cmpf ogt, %%v%d, %%zero : %s'
-                     % (v, node.a, T))
-        lines.append('    %%v%d = arith.select %%c%d, %%v%d, %%zero : %s, %s'
-                     % (v, v, node.a, I1, T))
-    elif node.opcode == RELUGRAD:
-        lines.append('    %%c%d = arith.cmpf ogt, %%v%d, %%zero : %s'
-                     % (v, node.a, T))
-        lines.append('    %%v%d = arith.select %%c%d, %%v%d, %%zero : %s, %s'
-                     % (v, v, node.b, I1, T))
-    elif node.opcode == SUB:
-        lines.append('    %%v%d = arith.subf %%v%d, %%v%d : %s'
-                     % (v, node.a, node.b, T))
-    elif node.opcode == DIV:
-        lines.append('    %%v%d = arith.divf %%v%d, %%v%d : %s'
-                     % (v, node.a, node.b, T))
-    elif node.opcode == EXP:
-        lines.append('    %%v%d = math.exp %%v%d : %s' % (v, node.a, T))
-    elif node.opcode == SQRT:
-        lines.append('    %%v%d = math.sqrt %%v%d : %s' % (v, node.a, T))
-    elif node.opcode == EQMASK:
-        lines.append('    %%c%d = arith.cmpf oeq, %%v%d, %%v%d : %s'
-                     % (v, node.a, node.b, T))
-        lines.append('    %%v%d = arith.select %%c%d, %%one, %%zero : %s, %s'
-                     % (v, v, I1, T))
+    return _ew(lines, node.opcode, '%%v%d' % v, '%%c%d' % v,
+               '%%v%d' % node.a, '%%v%d' % node.b, T, I1)
+
+def _ew(lines, opcode, dst, cmp, a, b, T, I1):
+    if opcode == ADD:
+        lines.append('    %s = arith.addf %s, %s : %s' % (dst, a, b, T))
+    elif opcode == MUL:
+        lines.append('    %s = arith.mulf %s, %s : %s' % (dst, a, b, T))
+    elif opcode == RELU:
+        lines.append('    %s = arith.cmpf ogt, %s, %%zero : %s' % (cmp, a, T))
+        lines.append('    %s = arith.select %s, %s, %%zero : %s, %s'
+                     % (dst, cmp, a, I1, T))
+    elif opcode == RELUGRAD:
+        lines.append('    %s = arith.cmpf ogt, %s, %%zero : %s' % (cmp, a, T))
+        lines.append('    %s = arith.select %s, %s, %%zero : %s, %s'
+                     % (dst, cmp, b, I1, T))
+    elif opcode == SUB:
+        lines.append('    %s = arith.subf %s, %s : %s' % (dst, a, b, T))
+    elif opcode == DIV:
+        lines.append('    %s = arith.divf %s, %s : %s' % (dst, a, b, T))
+    elif opcode == EXP:
+        lines.append('    %s = math.exp %s : %s' % (dst, a, T))
+    elif opcode == SQRT:
+        lines.append('    %s = math.sqrt %s : %s' % (dst, a, T))
+    elif opcode == EQMASK:
+        lines.append('    %s = arith.cmpf oeq, %s, %s : %s' % (cmp, a, b, T))
+        lines.append('    %s = arith.select %s, %%one, %%zero : %s, %s'
+                     % (dst, cmp, I1, T))
     else:
         return False
     return True
@@ -575,6 +582,229 @@ def to_ttir_flat(kernel, name):
     lines.append('  }')
     lines.append('}')
     return '\n'.join(lines) + '\n'
+
+def _gather_src(e, p, idx, rd, I64):
+    """Where output lane `idx` of a GATHER node reads its operand.  `rd` is
+    rows * dh, a splat of n / heads, since rows is not in the param."""
+    kind = gather_kind(p)
+    dh = gather_dh(p)
+    if kind == GA_ROTHALF:
+        blk = _gdiv(e, idx, dh, I64)
+        c = _gmod(e, idx, dh, I64)
+        rc = _gmod(e, _gaddc(e, c, dh // 2, I64), dh, I64)
+        return _gbin(e, 'addi', _gmul(e, blk, dh, I64), rc, I64)
+    hd = gather_heads(p) * dh
+    if kind == GA_HEADSPLIT:
+        oi = _gbin(e, 'divsi', idx, rd, I64)
+        rem = _gbin(e, 'remsi', idx, rd, I64)
+        return _gbin(e, 'addi', _gbin(e, 'addi',
+                                      _gmul(e, _gdiv(e, rem, dh, I64), hd, I64),
+                                      _gmul(e, oi, dh, I64), I64),
+                     _gmod(e, rem, dh, I64), I64)
+    oi = _gdiv(e, idx, hd, I64)
+    rem = _gmod(e, idx, hd, I64)
+    return _gbin(e, 'addi', _gbin(e, 'addi',
+                                  _gbin(e, 'muli', _gdiv(e, rem, dh, I64), rd,
+                                        I64),
+                                  _gmul(e, oi, dh, I64), I64),
+                 _gmod(e, rem, dh, I64), I64)
+
+
+class Gathered(object):
+    """Emits a flat kernel whose nodes may include GATHERs.  A value is
+    emitted once per index it is read at: a gather reads its operand at a
+    permuted index, and everything under it - leaves included - is evaluated
+    there, so the permutation costs addressing and nothing else."""
+
+    def __init__(self, kernel, e, modes, T, P, I64, I1, S, half):
+        self.kernel = kernel
+        self.e = e
+        self.modes = modes
+        self.T = T
+        self.P = P
+        self.I64 = I64
+        self.I1 = I1
+        self.S = S
+        self.half = half
+        self.memo = {}
+
+    def val(self, v, idx):
+        key = '%d@%s' % (v, idx)
+        r = self.memo.get(key, '')
+        if r:
+            return r
+        r = self._val(v, idx)
+        self.memo[key] = r
+        return r
+
+    def _val(self, v, idx):
+        kernel = self.kernel
+        e = self.e
+        nreal = kernel.ninputs
+        nin = nvals(kernel)
+        if v >= nreal and v < nin:
+            return '%%v%d' % v
+        if v < nreal:
+            mode = self.modes[v]
+            if mode == 1:
+                off = _gbin(e, 'remsi', idx, '%cs', self.I64)
+            elif mode == 3:
+                off = _gbin(e, 'divsi', idx, '%cs', self.I64)
+            elif mode == 2:
+                off = _gconst(e, 0, self.I64)
+            else:
+                off = idx
+            q = e.tmp()
+            e.add('    %s = tt.addptr %%p%d, %s : %s, %s'
+                  % (q, v, off, self.P, self.I64))
+            r = e.tmp()
+            if self.half:
+                e.add('    %s = tt.load %s, %%mask, %%zeros : %s' % (r, q, self.P))
+                x = e.tmp()
+                e.add('    %s = arith.extf %s : %s to %s'
+                      % (x, r, 'tensor<%dx%s>' % (config.flat, self.S), self.T))
+                return x
+            e.add('    %s = tt.load %s, %%mask, %%zero : %s' % (r, q, self.P))
+            return r
+        node = kernel.nodes[v - nin]
+        if node.opcode == GATHER:
+            src = _gather_src(e, node.p, idx, '%rd', self.I64)
+            return self.val(node.a, src)
+        a = self.val(node.a, idx)
+        b = ''
+        if node.b >= 0:
+            b = self.val(node.b, idx)
+        r = e.tmp()
+        if not _ew(e.lines, node.opcode, r, e.tmp(), a, b, self.T, self.I1):
+            return ''
+        return r
+
+
+def to_ttir_gathered(kernel, name, modes):
+    nodes = kernel.nodes
+    nreal = kernel.ninputs
+    nin = nvals(kernel)
+    last = len(nodes) - 1
+    if last < 0:
+        return ''
+    omodes = out_modes(kernel)
+    if len(omodes) != len(kernel.outputs):
+        return ''
+    for k in range(len(omodes)):
+        if omodes[k] != 0:
+            return ''
+    BLOCK = config.flat
+    dt = kernel.dtype
+    S = STORE_TYPE[dt]
+    C = COMP_TYPE[dt]
+    half = S != C
+    T, TS, P, I32, I64, I1 = _tile_types(BLOCK, S, C)
+    reshaped = False
+    heads = 1
+    for k in range(len(nodes)):
+        node = nodes[k]
+        if node.opcode == GATHER:
+            if gather_changes_shape(node.p):
+                if reshaped and heads != gather_heads(node.p):
+                    return ''
+                reshaped = True
+                heads = gather_heads(node.p)
+        elif is_reduction(node.opcode):
+            if k != last or node.p != AXIS_ALL:
+                return ''
+            if node.opcode == MAXR and (kernel.n == 0 or kernel.n > BLOCK):
+                return ''
+            if half and node.opcode == SUM:
+                return ''
+    for i in range(nreal):
+        # A row- or column-broadcast operand is addressed by the column count
+        # of the big input, which a reshaping gather makes ambiguous.
+        if reshaped and (modes[i] == 1 or modes[i] == 3):
+            return ''
+    e = Emitter()
+    e.add('module {')
+    params = ['%%in%d: !tt.ptr<%s>' % (i, S) for i in range(nreal)]
+    params.append('%%out: !tt.ptr<%s>' % S)
+    for k in range(len(kernel.outputs)):
+        params.append('%%out%d: !tt.ptr<%s>' % (k, S))
+    e.add('  tt.func public @%s(%s, %%n: i64, %%c: i64) '
+          'attributes {noinline = false} {' % (name, ', '.join(params)))
+    e.add('    %%zero = arith.constant dense<0.0> : %s' % T)
+    e.add('    %%one = arith.constant dense<1.0> : %s' % T)
+    if not _emit_consts(e.lines, kernel, nreal, T):
+        return ''
+    _flat_prologue(e.lines, BLOCK, I32, I64)
+    e.add('    %%cs = tt.splat %%c : i64 -> %s' % I64)
+    e.add('    %%hc = arith.constant %d : i64' % heads)
+    e.add('    %nh = arith.divsi %n, %hc : i64')
+    e.add('    %%rd = tt.splat %%nh : i64 -> %s' % I64)
+    if half:
+        e.add('    %%zeros = arith.constant dense<0.0> : %s' % TS)
+    for i in range(nreal):
+        e.add('    %%p%d = tt.splat %%in%d : !tt.ptr<%s> -> %s' % (i, i, S, P))
+    g = Gathered(kernel, e, modes, T, P, I64, I1, S, half)
+    root = nodes[last]
+    if is_reduction(root.opcode):
+        x = g.val(root.a, '%offs64')
+        if not x:
+            return ''
+        init = '%zero'
+        combine = 'addf'
+        if root.opcode == MAXR:
+            e.add('    %%ninf = arith.constant dense<%s> : %s'
+                  % (COMP_NEG_INF[dt], T))
+            init = '%ninf'
+            combine = 'maximumf'
+        m = e.tmp()
+        e.add('    %s = arith.select %%mask, %s, %s : %s, %s'
+              % (m, x, init, I1, T))
+        r = e.tmp()
+        e.add('    %s = "tt.reduce"(%s) <{axis = 0 : i32}> ({' % (r, m))
+        e.add('    ^bb0(%%x: %s, %%y: %s):' % (C, C))
+        e.add('      %%r = arith.%s %%x, %%y : %s' % (combine, C))
+        e.add('      tt.reduce.return %%r : %s' % C)
+        e.add('    }) : (%s) -> %s' % (T, C))
+        if root.opcode == MAXR:
+            if half:
+                t = e.tmp()
+                e.add('    %s = arith.truncf %s : %s to %s' % (t, r, C, S))
+                r = t
+            e.add('    tt.store %%out, %s : !tt.ptr<%s>' % (r, S))
+        else:
+            e.add('    %true = arith.constant true')
+            e.add('    %%o = tt.atomic_rmw fadd, acq_rel, gpu, %%out, %s, '
+                  '%%true : (!tt.ptr<%s>, %s, i1) -> %s' % (r, S, C, C))
+    else:
+        x = g.val(nin + last, '%offs64')
+        if not x:
+            return ''
+        if half:
+            t = e.tmp()
+            e.add('    %s = arith.truncf %s : %s to %s' % (t, x, T, TS))
+            x = t
+        e.add('    %%po = tt.splat %%out : !tt.ptr<%s> -> %s' % (S, P))
+        e.add('    %%qo = tt.addptr %%po, %%offs64 : %s, %s' % (P, I64))
+        e.add('    tt.store %%qo, %s, %%mask : %s' % (x, P))
+    # An extra output is a node's own value, so it is read at the lane's own
+    # index even when the root reads it through a gather.
+    for k in range(len(kernel.outputs)):
+        x = g.val(kernel.outputs[k], '%offs64')
+        if not x:
+            return ''
+        if half:
+            t = e.tmp()
+            e.add('    %s = arith.truncf %s : %s to %s' % (t, x, T, TS))
+            x = t
+        po = e.tmp()
+        e.add('    %s = tt.splat %%out%d : !tt.ptr<%s> -> %s' % (po, k, S, P))
+        qo = e.tmp()
+        e.add('    %s = tt.addptr %s, %%offs64 : %s, %s' % (qo, po, P, I64))
+        e.add('    tt.store %s, %s, %%mask : %s' % (qo, x, P))
+    e.add('    tt.return')
+    e.add('  }')
+    e.add('}')
+    return '\n'.join(e.lines) + '\n'
+
 
 class Emitter(object):
     def __init__(self):

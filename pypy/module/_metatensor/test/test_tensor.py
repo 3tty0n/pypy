@@ -370,6 +370,39 @@ class AppTestTensor(object):
         for a, b in zip(c0, c1):
             assert abs(a - b) < 1e-9
 
+    def test_decode_attention_matches_last_row(self):
+        """One query row against a key/value cache holding every row so far
+        is the last row of full attention, head by head."""
+        import _metatensor
+        rows, d, h = 5, 4, 2
+        flat = [float(((i * 7) % 13) - 6) / 8.0 for i in range(rows * 3 * d)]
+        qkv = _metatensor.tensor(flat, [rows, 3 * d])
+        cache = _metatensor.zeros([8, 3 * d])
+        assert cache.write_rows(0, qkv) is cache
+        last = _metatensor.tensor(flat[(rows - 1) * 3 * d:], [1, 3 * d])
+        full = qkv.attn_scores(qkv, h, d, 0, d).tolist()
+        dec = last.decode_scores(cache, h, rows, d, 0, d).tolist()
+        assert len(dec) == h * rows
+        for hd in range(h):
+            for j in range(rows):
+                want = full[(hd * rows + rows - 1) * rows + j]
+                assert abs(dec[hd * rows + j] - want) < 1e-12
+        pfull = _metatensor.tensor(full, [h * rows, rows])
+        cfull = pfull.attn_context(qkv, h, d, 2 * d).tolist()
+        pdec = _metatensor.tensor(dec, [h, rows])
+        cdec = pdec.decode_context(cache, h, d, 2 * d).tolist()
+        assert len(cdec) == d
+        for c in range(d):
+            assert abs(cdec[c] - cfull[(rows - 1) * d + c]) < 1e-12
+
+    def test_write_rows_in_place_and_bounds(self):
+        import _metatensor
+        t = _metatensor.zeros([3, 2])
+        t.write_rows(1, _metatensor.tensor([1.0, 2.0], [1, 2]))
+        assert t.tolist() == [0.0, 0.0, 1.0, 2.0, 0.0, 0.0]
+        raises(ValueError, t.write_rows, 3, _metatensor.tensor([1.0, 2.0],
+                                                               [1, 2]))
+
     def test_attn_batched_matches_per_sequence(self):
         """seqs > 1 says the rows are a folded batch of independent
         sequences; each must come out exactly as it does on its own."""

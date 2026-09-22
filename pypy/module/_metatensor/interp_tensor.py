@@ -23,6 +23,25 @@ def _mismatch(space):
     return oefmt(space.w_ValueError, "shape mismatch")
 
 
+class _Iotas(object):
+    def __init__(self):
+        self.cache = {}
+_iotas = _Iotas()
+
+def _iota(like):
+    n = ops.tensor_size(like)
+    dtype = ops.tensor_dtype(like)
+    key = n * core.NDTYPES + dtype
+    t = _iotas.cache.get(key, core.NULLTENSOR)
+    if not t:
+        t = core.new_tensor(n, like.shape, dtype)
+        for i in range(n):
+            t.host[i] = float(i)
+        device.dev(t)
+        _iotas.cache[key] = t
+    return t
+
+
 def _wrap(t):
     return W_Tensor(nn.Tensor(t))
 
@@ -138,6 +157,15 @@ class W_Tensor(W_Root):
     def descr_item(self, space):
         return space.newfloat(self.tensor.item())
 
+    def descr_argmax(self, space):
+        """Index of the largest element, as a host int: max, then the
+        position of the element equal to it.  On a tie the indices add up,
+        which a caller comparing token streams will see."""
+        t = self.tensor.t
+        m = ops.max(t)
+        hit = ops.eqmask(t, m, ops.bcast(t, m))
+        return space.newint(int(ops.item(ops.sum(ops.mul(hit, _iota(t))))))
+
     @unwrap_spec(transpose_b=bool, tf32=bool)
     def descr_matmul(self, space, w_other, transpose_b=False, tf32=False):
         try:
@@ -200,6 +228,55 @@ class W_Tensor(W_Root):
             raise _mismatch(space)
         return W_Tensor(self.tensor.attn_context(
             other, heads, rows, d // heads, ldb, off_b, seqs))
+
+    @unwrap_spec(heads=int, krows=int, dcols=int, off_a=int, off_b=int)
+    def descr_decode_scores(self, space, w_cache, heads, krows, dcols,
+                            off_a=0, off_b=0):
+        """Scores of this tensor's rows against the first krows rows of a
+        key/value cache: [heads*rows, krows].  dcols is the model width, the
+        cache and the queries may be wider (whole qkv rows)."""
+        qrows, lda = self._rows_cols(space)
+        cache = self._other(space, w_cache)
+        if ops.tensor_ndim(cache.t) != 2 or heads <= 0 or dcols % heads != 0:
+            raise _mismatch(space)
+        ldb = ops.tensor_shape(cache.t, 1)
+        if (krows <= 0 or krows > ops.tensor_shape(cache.t, 0) or
+                off_a < 0 or off_b < 0 or off_a + dcols > lda or
+                off_b + dcols > ldb or
+                ops.tensor_dtype(cache.t) != ops.tensor_dtype(self.tensor.t)):
+            raise _mismatch(space)
+        return W_Tensor(self.tensor.decode_scores(
+            cache, heads, qrows, krows, dcols // heads, lda, ldb, off_a,
+            off_b))
+
+    @unwrap_spec(heads=int, dcols=int, off_b=int)
+    def descr_decode_context(self, space, w_cache, heads, dcols, off_b=0):
+        """[heads*rows, krows] probabilities against the first krows rows of
+        the cache, back to [rows, dcols]."""
+        hq, krows = self._rows_cols(space)
+        cache = self._other(space, w_cache)
+        if (ops.tensor_ndim(cache.t) != 2 or heads <= 0 or hq % heads != 0 or
+                dcols % heads != 0):
+            raise _mismatch(space)
+        ldb = ops.tensor_shape(cache.t, 1)
+        if (krows > ops.tensor_shape(cache.t, 0) or off_b < 0 or
+                off_b + dcols > ldb or
+                ops.tensor_dtype(cache.t) != ops.tensor_dtype(self.tensor.t)):
+            raise _mismatch(space)
+        return W_Tensor(self.tensor.decode_context(
+            cache, heads, hq // heads, krows, dcols // heads, ldb, off_b))
+
+    @unwrap_spec(row=int)
+    def descr_write_rows(self, space, row, w_src):
+        """self[row:row+len(src)] = src, in place; returns self."""
+        rows, c = self._rows_cols(space)
+        src = self._other(space, w_src)
+        n = ops.tensor_size(src.t)
+        if (row < 0 or c <= 0 or n % c != 0 or row + n // c > rows or
+                ops.tensor_dtype(src.t) != ops.tensor_dtype(self.tensor.t)):
+            raise _mismatch(space)
+        self.tensor.write_rows(row, src)
+        return self
 
     @unwrap_spec(dh=int)
     def descr_rot_half(self, space, dh):
@@ -392,10 +469,14 @@ W_Tensor.typedef = TypeDef(
     silu=interp2app(W_Tensor.descr_silu),
     sum=interp2app(W_Tensor.descr_sum),
     item=interp2app(W_Tensor.descr_item),
+    argmax=interp2app(W_Tensor.descr_argmax),
     matmul=interp2app(W_Tensor.descr_matmul),
     reshape=interp2app(W_Tensor.descr_reshape),
     attn_scores=interp2app(W_Tensor.descr_attn_scores),
     attn_context=interp2app(W_Tensor.descr_attn_context),
+    decode_scores=interp2app(W_Tensor.descr_decode_scores),
+    decode_context=interp2app(W_Tensor.descr_decode_context),
+    write_rows=interp2app(W_Tensor.descr_write_rows),
     rot_half=interp2app(W_Tensor.descr_rot_half),
     head_split=interp2app(W_Tensor.descr_head_split),
     head_merge=interp2app(W_Tensor.descr_head_merge),

@@ -2119,3 +2119,173 @@ def test_meta_with_mismatched_cc_is_not_accepted():
         assert not kernels._meta_cc_matches('256 0 2\n')
     finally:
         kernels.config.cc = old
+
+
+def _ref_head_split(vals, rows, dh, heads):
+    out = [0.0] * (rows * dh * heads)
+    for b in range(heads):
+        for i in range(rows):
+            for j in range(dh):
+                out[(b * rows + i) * dh + j] = vals[i * heads * dh + b * dh + j]
+    return out
+
+
+class TestGatherFusion(LLJitMixin):
+
+    def setup_method(self, meth):
+        core.policy.static = True
+        core.policy.seen = []
+
+    def test_rope_is_one_kernel(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'c', 's', 'w', 'acc'])
+        def f(n):
+            x = core.zeros([3, 8])
+            c = core.zeros([3, 8])
+            s = core.zeros([3, 8])
+            w = core.zeros([3, 8])
+            for i in range(24):
+                x.host[i] = (i % 5) - 2.0 + i * 0.25
+                c.host[i] = 0.5 + (i % 3) * 0.25
+                s.host[i] = (i % 4) * 0.125 - 0.2
+                w.host[i] = 1.0 + (i % 7)
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, c=c, s=s, w=w, acc=acc)
+                t = nn.Tensor(x)
+                y = ops.add(ops.mul(x, c), ops.mul(t.rot_half(4).t, s))
+                acc += ops.item(ops.sum(ops.mul(y, w)))
+                n -= 1
+            return acc
+        before = set(kernels.kernel_cache.kernels)
+        xs = [(i % 5) - 2.0 + i * 0.25 for i in range(24)]
+        expect = 0.0
+        for i in range(24):
+            r = xs[i // 4 * 4 + (i % 4 + 2) % 4]
+            y = xs[i] * (0.5 + (i % 3) * 0.25) + r * ((i % 4) * 0.125 - 0.2)
+            expect += y * (1.0 + (i % 7))
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+        self.check_simple_loop(call_r=1)
+        assert len(set(kernels.kernel_cache.kernels) - before) == 1
+
+    def test_head_split_of_a_region_is_one_kernel(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
+        def f(n):
+            x = core.zeros([4, 6])
+            w = core.zeros([12, 2])
+            for i in range(24):
+                x.host[i] = (i % 7) - 2.5 + i * 0.1
+                w.host[i] = 1.0 + i
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, w=w, acc=acc)
+                a = nn.Tensor(ops.relu(ops.mul(x, x)))
+                b = a.head_split(4, 2, 3)
+                acc += ops.item(ops.sum(ops.mul(b.t, w)))
+                n -= 1
+            return acc
+        before = set(kernels.kernel_cache.kernels)
+        xs = [(i % 7) - 2.5 + i * 0.1 for i in range(24)]
+        blocked = _ref_head_split([v * v for v in xs], 4, 2, 3)
+        expect = sum([blocked[i] * (1.0 + i) for i in range(24)])
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+        self.check_simple_loop(call_r=1)
+        assert len(set(kernels.kernel_cache.kernels) - before) == 1
+
+    def test_fused_head_split_result_has_blocked_shape(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'm', 'acc'])
+        def f(n):
+            x = core.zeros([4, 6])
+            m = core.zeros([2, 1])
+            for i in range(24):
+                x.host[i] = (i % 7) - 2.5 + i * 0.1
+            m.host[0] = 1.0
+            m.host[1] = -2.0
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, m=m, acc=acc)
+                b = nn.Tensor(ops.relu(x)).head_split(4, 2, 3)
+                z = ops.matmul(b.t, m)
+                acc += ops.item(ops.sum(z))
+                n -= 1
+            return acc
+        xs = [max((i % 7) - 2.5 + i * 0.1, 0.0) for i in range(24)]
+        blocked = _ref_head_split(xs, 4, 2, 3)
+        expect = sum([blocked[2 * r] - 2.0 * blocked[2 * r + 1]
+                      for r in range(12)])
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+
+    def test_head_split_fuses_when_sizes_come_from_shapes(self):
+        # dh read off a shape is not a trace constant until promoted
+        driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
+        def f(n):
+            x = core.zeros([4, 6])
+            w = core.zeros([12, 2])
+            for i in range(24):
+                x.host[i] = (i % 7) - 2.5 + i * 0.1
+                w.host[i] = 1.0 + i
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, w=w, acc=acc)
+                a = nn.Tensor(ops.relu(ops.mul(x, x)))
+                heads = 3
+                dh = ops.tensor_shape(a.t, 1) // heads
+                b = a.head_split(4, dh, heads)
+                acc += ops.item(ops.sum(ops.mul(b.t, w)))
+                n -= 1
+            return acc
+        xs = [(i % 7) - 2.5 + i * 0.1 for i in range(24)]
+        blocked = _ref_head_split([v * v for v in xs], 4, 2, 3)
+        expect = sum([blocked[i] * (1.0 + i) for i in range(24)])
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+        self.check_simple_loop(call_r=1)
+
+    def test_values_of_a_gathered_kernel_become_extra_outputs(self):
+        # a sits under the gather and b is the gather; both are needed after
+        # the kernel that computed them has run.
+        driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'm', 'acc'])
+        def f(n):
+            x = core.zeros([4, 6])
+            w = core.zeros([12, 2])
+            m = core.zeros([2, 1])
+            for i in range(24):
+                x.host[i] = (i % 7) - 2.5 + i * 0.1
+                w.host[i] = 1.0 + i
+            m.host[0] = 1.0
+            m.host[1] = -2.0
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, w=w, m=m, acc=acc)
+                a = nn.Tensor(ops.relu(ops.mul(x, x)))
+                b = a.head_split(4, 2, 3)
+                acc += ops.item(ops.sum(ops.mul(b.t, w)))
+                acc += 100.0 * ops.item(ops.sum(ops.mul(a.t, x)))
+                acc += 1000.0 * ops.item(ops.sum(ops.matmul(b.t, m)))
+                n -= 1
+            return acc
+        xs = [(i % 7) - 2.5 + i * 0.1 for i in range(24)]
+        sq = [v * v for v in xs]
+        blocked = _ref_head_split(sq, 4, 2, 3)
+        expect = (sum([blocked[i] * (1.0 + i) for i in range(24)]) +
+                  100.0 * sum([sq[i] * xs[i] for i in range(24)]) +
+                  1000.0 * sum([blocked[2 * r] - 2.0 * blocked[2 * r + 1]
+                                for r in range(12)]))
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-6
+        assert any(',o' in k and ',11:' in k
+                   for k in kernels.kernel_cache.kernels)
+
+    def test_eager_gather_matches_host_loops(self):
+        x = core.zeros([4, 6])
+        for i in range(24):
+            x.host[i] = i * 1.0
+        y = ops.gather(x, core.GA_HEADSPLIT, 2, 3)
+        assert [y.shape[0], y.shape[1]] == [12, 2]
+        assert list(device.host(y))[:24] == _ref_head_split(
+            [i * 1.0 for i in range(24)], 4, 2, 3)
+        z = ops.gather(y, core.GA_HEADMERGE, 2, 3)
+        assert [z.shape[0], z.shape[1]] == [4, 6]
+        assert list(device.host(z))[:24] == [i * 1.0 for i in range(24)]

@@ -186,6 +186,33 @@ class Tensor(object):
             seqs * heads * rows, oa, ob, 0, 0,
             seqs, rows * lda, rows * ldb, heads * rows * rows), node, needs)
 
+    def decode_scores(self, k, heads, qrows, krows, dh, lda, ldb, oa, ob):
+        """attn_scores with qrows query rows against the first krows rows of
+        k, which may be a longer buffer: a key/value cache.  Inference only.
+        Result [heads*qrows, krows]."""
+        _ready(self.t)
+        _ready(k.t)
+        return Tensor(runtime.tensor_bmm(
+            self.t, k.t, heads, qrows, krows, dh, 0, 1, lda, ldb, krows,
+            dh, dh, qrows * krows, heads * qrows * krows, heads * qrows,
+            oa, ob, 0, 0))
+
+    def decode_context(self, v, heads, qrows, krows, dh, ldb, ob):
+        """The mirror of decode_scores: [heads*qrows, krows] probabilities
+        against the first krows rows of v, back to [qrows, heads*dh]."""
+        _ready(self.t)
+        _ready(v.t)
+        d = heads * dh
+        return Tensor(runtime.tensor_bmm(
+            self.t, v.t, heads, qrows, dh, krows, 0, 0, krows, ldb, d,
+            qrows * krows, dh, dh, qrows * d, qrows, 0, ob, 0, 0))
+
+    def write_rows(self, row, src):
+        """Copy src's rows into this tensor starting at `row`, in place."""
+        _ready(src.t)
+        runtime.tensor_write_rows(self.t, src.t, row)
+        return self
+
     def attn_context(self, v, heads, rows, dh, ldb=0, ob=0, seqs=1):
         _ready(self.t)
         _ready(v.t)
@@ -209,7 +236,7 @@ class Tensor(object):
         node = None
         if self.requires_grad:
             node = RotHalfNode(self, dh)
-        return self._wrap(runtime.rot_half(self.t, dh), node,
+        return self._wrap(ops.gather(self.t, core.GA_ROTHALF, dh, 0), node,
                           self.requires_grad)
 
     def head_split(self, rows, dh, heads):
@@ -217,7 +244,8 @@ class Tensor(object):
         node = None
         if self.requires_grad:
             node = HeadSplitNode(self, rows, dh, heads)
-        return self._wrap(runtime.head_split(self.t, rows, dh, heads), node,
+        return self._wrap(ops.gather(self.t, core.GA_HEADSPLIT, dh, heads),
+                          node,
                           self.requires_grad)
 
     def head_merge(self, rows, dh, heads):
@@ -225,7 +253,8 @@ class Tensor(object):
         node = None
         if self.requires_grad:
             node = HeadMergeNode(self, rows, dh, heads)
-        return self._wrap(runtime.head_merge(self.t, rows, dh, heads), node,
+        return self._wrap(ops.gather(self.t, core.GA_HEADMERGE, dh, heads),
+                          node,
                           self.requires_grad)
 
     @jit.unroll_safe

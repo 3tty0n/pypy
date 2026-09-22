@@ -2,9 +2,9 @@ from rpython.rlib import jit
 from rpython.rlib.rarithmetic import intmask
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
-from rpython.metatensor.core import (NDTYPES, F16, GA_ROWS, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_ROTHALF, GA_MAXPOOL, GA_MAXPOOL_NHWC, HOSTARRAY, NEG_INF, NULLTENSOR, SHAPEARRAY, _shape2, cols, config, nbytes, new_tensor, policy)
+from rpython.metatensor.core import (NDTYPES, F16, GA_ROWS, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_ROTHALF, GA_MAXPOOL, GA_MAXPOOL_NHWC, HOSTARRAY, NEG_INF, NULLTENSOR, SHAPEARRAY, _shape2, cols, config, gather_kind, gather_shape, nbytes, new_tensor, policy)
 from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, gpu_enabled, host, prof_begin, prof_end, rt_cuda_alloc, rt_cuda_bmm2, rt_cuda_copy, rt_cuda_free, rt_cuda_launch, rt_cuda_matmul)
-from rpython.metatensor.kernels import (gather_kernel)
+from rpython.metatensor.kernels import (gather_kernel, gather_params, lookup_gather)
 
 def matmul_cpu(a, b, rows, cols, inner, ta, tb):
     ha = host(a)
@@ -166,9 +166,13 @@ def tensor_bmm(a, b, batch, rows, cols, inner, ta, tb, lda=0, ldb=0, ldc=0,
 
 
 def gather_gpu(op, params, x, outn, shape):
+    return gather_launch(gather_kernel(op, params, x.dtype), x, outn, shape)
+
+
+@jit.dont_look_inside
+def gather_launch(kernel, x, outn, shape):
     dt = x.dtype
-    kernel = gather_kernel(op, params, dt)
-    if kernel.fn == 0:
+    if kernel is None or kernel.fn == 0:
         return NULLTENSOR
     dptr = dev(x)
     if dptr == 0:
@@ -191,6 +195,26 @@ def gather_gpu(op, params, x, outn, shape):
     lltype.free(ins, flavor='raw')
     lltype.free(outs, flavor='raw')
     return result
+
+
+@jit.dont_look_inside
+def gather_op(x, p):
+    """One GATHER node on its own: the precompiled gather if ensure_gather
+    has built it, the host loop otherwise.  Reached from under the oopspecs,
+    so it only looks kernels up."""
+    kind = gather_kind(p)
+    n = x.size
+    shape = gather_shape(p, n, _shape2(n // cols(x), cols(x)))
+    params = gather_params(p, n)
+    if gpu_enabled():
+        r = gather_launch(lookup_gather(kind, params, x.dtype), x, n, shape)
+        if r:
+            return r
+    if kind == GA_ROTHALF:
+        return rot_half_cpu(x, params[0])
+    if kind == GA_HEADSPLIT:
+        return head_split_cpu(x, params[0], params[1], params[2])
+    return head_merge_cpu(x, params[0], params[1], params[2])
 
 
 def rowgather_gpu(table, idx, rows, cols):
@@ -628,6 +652,30 @@ def _tensor_assign_impl(dst, src):
     for i in range(dst.size):
         hdst[i] = hsrc[i]
     return dst
+
+@jit.dont_look_inside
+def tensor_write_rows(dst, src, row):
+    """dst[row:row+rows(src)] = src, in place, on the device when dst lives
+    there.  Callers check the bounds."""
+    off = row * cols(dst)
+    if dst.dptr != 0 and gpu_enabled():
+        dptr_src = dev(src)
+        if dptr_src != 0:
+            isz = nbytes(1, dst.dtype)
+            ok = rffi.cast(lltype.Signed, rt_cuda_copy(
+                dst.dptr + off * isz, dptr_src,
+                nbytes(src.size, dst.dtype))) != 0
+            if ok:
+                dst.host = lltype.nullptr(HOSTARRAY)
+                return dst
+    # The host path is for a host-resident dst (RTENSOR_CPU).  A failed copy
+    # into a device dst would leave the device copy stale.
+    hdst = host(dst)
+    hsrc = host(src)
+    for i in range(src.size):
+        hdst[off + i] = hsrc[i]
+    return dst
+
 
 @jit.dont_look_inside
 def tensor_assign(dst, src):

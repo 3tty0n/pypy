@@ -1,11 +1,12 @@
+from rpython.rlib import jit
 from rpython.rlib.rfloat import formatd
 from rpython.rlib.rmd5 import md5
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import os
-from rpython.metatensor.core import (init_drain, init_lazy, ARITY, AXIS_ALL, F64, KERNEL, NO_CONSTS, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, SHAPEARRAY, SUM, config, is_reduction, param_slot, slot_param, slot_used)
+from rpython.metatensor.core import (GA_ROTHALF, gather_dh, gather_heads, gather_kind, init_drain, init_lazy, ARITY, AXIS_ALL, F64, KERNEL, NO_CONSTS, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, SHAPEARRAY, SUM, config, is_reduction, param_slot, slot_param, slot_used)
 from rpython.metatensor.device import (_env, _here, gpu_enabled, profile, rt_cuda_load, rt_cuda_set_budget)
-from rpython.metatensor.ttir import (input_modes, kernel_row_mode, out_modes, row_tile, row_warps, to_tile_ir, to_ttir, to_ttir_gather)
+from rpython.metatensor.ttir import (has_gather, input_modes, kernel_row_mode, out_modes, row_tile, row_warps, to_tile_ir, to_ttir, to_ttir_gather)
 
 class SingleKernels(object):
     def __init__(self):
@@ -368,6 +369,31 @@ def gather_kernel(op, params, dtype):
         k = _gather_compile(op, params, dtype)
         gather_cache.kernels[key] = k
     return k
+
+
+def lookup_gather(op, params, dtype):
+    """The compiled gather, or None; never compiles.  This is what runs under
+    the oopspecs, whose declared effects a kernel compile would break."""
+    return gather_cache.kernels.get(gather_key(op, params, dtype), None)
+
+
+def gather_params(p, n):
+    """The kernel parameters of the gather a GATHER node's param describes,
+    for an operand of n elements."""
+    kind = gather_kind(p)
+    dh = gather_dh(p)
+    if kind == GA_ROTHALF:
+        return [dh]
+    heads = gather_heads(p)
+    rows = n // (dh * heads) if dh * heads > 0 else 0
+    return [rows, dh, heads]
+
+
+@jit.dont_look_inside
+def ensure_gather(p, n, dtype):
+    """Compile the standalone gather a GATHER node falls back to, outside any
+    oopspec."""
+    return gather_kernel(gather_kind(p), gather_params(p, n), dtype).fn
 
 
 def _gather_compile(op, params, dtype):

@@ -1,10 +1,11 @@
 from rpython.rlib import jit
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.rclass import OBJECTPTR
-from rpython.metatensor.core import (ADD, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_NONE, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, MAXR, MUL, NDTYPES, NULLTENSOR, RELU, RELUGRAD, SHAPEARRAY, SQRT, SUB, SUM, TENSOR, TENSORARRAY, _shape2, cols, new_tensor, note_cols, note_dtype, note_size, policy)
+from rpython.metatensor.core import (ADD, AXIS_ALL, GA_HEADSPLIT, GA_ROTHALF, GATHER, gather_param, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_NONE, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, MAXR, MUL, NDTYPES, NULLTENSOR, RELU, RELUGRAD, SHAPEARRAY, SQRT, SUB, SUM, TENSOR, TENSORARRAY, _shape2, cols, new_tensor, note_cols, note_dtype, note_size, policy)
 from rpython.metatensor.device import (host)
+from rpython.metatensor.kernels import (ensure_gather)
 from rpython.metatensor import lazy
-from rpython.metatensor.runtime import (_make_ones, eval_op, ones, tensor_assign, tensor_matmul)
+from rpython.metatensor.runtime import (_make_ones, eval_op, head_merge, head_split, rot_half, ones, tensor_assign, tensor_matmul)
 
 def astype(t, dtype):
     if lazy.enabled():
@@ -112,6 +113,35 @@ def tensor_maxr(a, axis):
 @jit.oopspec("tensor.eqmask(a, b, bcast)")
 def tensor_eqmask(a, b, bcast):
     return eval_op(EQMASK, a, b, bcast)
+
+@jit.oopspec("tensor.gather(a, p)")
+def tensor_gather(a, p):
+    # `a` in the unused slot: a constant NULLTENSOR there would pin eval_op's
+    # annotation, and launch() is annotated late with a real tensor.
+    return eval_op(GATHER, a, a, p)
+
+def gather(a, kind, dh, heads):
+    """rot_half / head_split / head_merge as a fusible node.  Deferred
+    execution keeps its standalone gathers, which it has no node for."""
+    if lazy.enabled():
+        lazy.force(a)
+        if kind == GA_ROTHALF:
+            return rot_half(a, dh)
+        rows = tensor_size(a) // (dh * heads)
+        if kind == GA_HEADSPLIT:
+            return head_split(a, rows, dh, heads)
+        return head_merge(a, rows, dh, heads)
+    # The pass fuses a node only when its param is a trace constant, and dh
+    # usually comes from a shape read on a value the trace does not know.
+    dh = jit.promote(dh)
+    heads = jit.promote(heads)
+    p = gather_param(kind, dh, heads)
+    if not jit.we_are_jitted():
+        # The standalone gather a GATHER node falls back to.  It compiles
+        # here, the first time the interpreter runs the op, and never under
+        # the oopspec; traces fuse the node and do not need it.
+        ensure_gather(p, tensor_size(a), tensor_dtype(a))
+    return tensor_gather(a, p)
 
 @jit.oopspec("tensor.assign(dst, src)")
 def tensor_assign_op(dst, src):

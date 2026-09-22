@@ -5,12 +5,14 @@ from rpython.rlib.rfloat import NAN
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import math
-from rpython.metatensor.core import (ADD, ARITY, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, cols, config, nbytes, new_tensor)
+from rpython.metatensor.core import (ADD, ARITY, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GATHER, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, cols, config, gather_changes_shape, gather_shape, nbytes, new_tensor, nvals)
 from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, host, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_free, rt_cuda_launch, rt_cuda_reset, rt_cuda_warn_arity, rt_cuda_warn_cpu)
-from rpython.metatensor.kernels import (needs_zero, row_tile, single_kernel)
-from rpython.metatensor.devops import (_make_ones, ones, col2chw, head_merge, head_split, im2col, im2col_nhwc, maxpool2, maxpool2_nhwc, rot_half, rowgather, scalar, scalar_of, scalars, tensor_assign, tensor_bmm, tensor_matmul)
+from rpython.metatensor.kernels import (has_gather, needs_zero, row_tile, single_kernel)
+from rpython.metatensor.devops import (_make_ones, ones, col2chw, gather_op, head_merge, head_split, im2col, im2col_nhwc, maxpool2, maxpool2_nhwc, rot_half, rowgather, scalar, scalar_of, scalars, tensor_assign, tensor_bmm, tensor_matmul, tensor_write_rows)
 
 def eval_op(opcode, a, b, p):
+    if opcode == GATHER:
+        return gather_op(a, p)
     kernel = single_kernel(opcode, p, a.dtype)
     if kernel.fn != 0:
         inputs = [a]
@@ -170,6 +172,26 @@ def modes_fit(kernel, inputs, n, c):
             return False
     return True
 
+def result_shape(kernel, inputs, n, like, v=-1):
+    """Value v's shape (the root's by default), found the way eager
+    evaluation finds it: down the big operand of each node, stopping at a
+    gather that reshapes."""
+    nin = nvals(kernel)
+    if v < 0:
+        v = nin + len(kernel.nodes) - 1
+    while v >= nin:
+        node = kernel.nodes[v - nin]
+        if node.opcode == GATHER and gather_changes_shape(node.p):
+            return gather_shape(node.p, n, like)
+        if (ARITY[node.opcode] == 2 and (node.p == BC_L_ROW or
+                node.p == BC_L_SCALAR or node.p == BC_L_COL)):
+            v = node.b
+        else:
+            v = node.a
+    if v < kernel.ninputs:
+        return inputs[v].shape
+    return like
+
 def launch_gpu(kernel, inputs):
     nin = len(inputs)
     dt = kernel.dtype
@@ -206,6 +228,8 @@ def launch_gpu(kernel, inputs):
         if outlen <= 0:
             outlen = 1
         shape = _shape1(outlen)
+    elif has_gather(kernel):
+        shape = result_shape(kernel, inputs, n, shape)
     nout = 1 + len(kernel.outputs)
     collect_if_needed(nbytes(n, dt))
     dptrs = lltype.malloc(SIGNEDARRAY, nin, flavor='raw')
@@ -245,10 +269,14 @@ def launch_gpu(kernel, inputs):
         result = device_tensor(outlen, outs[0], shape, dt)
         if nout > 1:
             result.extra = lltype.malloc(TENSORARRAY, nout - 1)
+            gathered = has_gather(kernel)
             for k in range(1, nout):
                 eshape = inputs[big].shape
                 if esizes[k] != n:
                     eshape = _shape1(esizes[k])
+                elif gathered:
+                    eshape = result_shape(kernel, inputs, n, eshape,
+                                          kernel.outputs[k - 1])
                 result.extra[k - 1] = device_tensor(esizes[k], outs[k],
                                                     eshape, dt)
     lltype.free(esizes, flavor='raw')

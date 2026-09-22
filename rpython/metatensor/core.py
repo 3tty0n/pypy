@@ -40,12 +40,16 @@ def nbytes(n, dtype):
 ADD, MUL, RELU, SUM, RELUGRAD = 0, 1, 2, 3, 4
 SUB, DIV, EXP, SQRT, MAXR = 5, 6, 7, 8, 9
 EQMASK = 10
-NOPCODES = 11
-ARITY = [2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 2]
+# A permutation of its operand's elements: rot_half, head_split, head_merge.
+# The param packs which one and its sizes (gather_param below), so the node
+# is fully described by (opcode, param) like every other node.
+GATHER = 11
+NOPCODES = 12
+ARITY = [2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 2, 1]
 NAMES = ['add', 'mul', 'relu', 'sum', 'relugrad',
-         'sub', 'div', 'exp', 'sqrt', 'maxr', 'eqmask']
+         'sub', 'div', 'exp', 'sqrt', 'maxr', 'eqmask', 'gather']
 HAS_PARAM = [True, True, False, True, True,
-             True, True, False, False, True, True]
+             True, True, False, False, True, True, True]
 # Hard ceiling on a fused kernel's input slots.  It is a compile-time
 # constant because the tensor.launch oopspec has that many tensor arguments;
 # how many of them the fusion pass is actually allowed to use is the runtime
@@ -211,6 +215,8 @@ def slot_param(opcode, slot):
     return slot
 
 def slot_used(opcode, slot):
+    if opcode == GATHER:
+        return False
     if is_reduction(opcode):
         return slot < 3
     if not HAS_PARAM[opcode]:
@@ -260,6 +266,36 @@ GA_ROWS = 5
 GA_ROTHALF = 6
 GA_IM2COL_NHWC = 7
 GA_MAXPOOL_NHWC = 8
+
+# kind in the low 4 bits, dh in the next 20, heads above.  rows is not stored:
+# it is size // (dh * heads), and leaving it out keeps one kernel per layout
+# rather than one per sequence length.
+def gather_param(kind, dh, heads):
+    return kind + ((dh + (heads << 20)) << 4)
+
+def gather_kind(p):
+    return p & 15
+
+def gather_dh(p):
+    return (p >> 4) & 0xFFFFF
+
+def gather_heads(p):
+    return p >> 24
+
+def gather_changes_shape(p):
+    k = gather_kind(p)
+    return k == GA_HEADSPLIT or k == GA_HEADMERGE
+
+def gather_shape(p, n, like):
+    """The shape of a gather's result, given its operand's size and shape."""
+    k = gather_kind(p)
+    dh = gather_dh(p)
+    heads = gather_heads(p)
+    if k == GA_HEADSPLIT:
+        return _shape2(n // dh, dh)
+    if k == GA_HEADMERGE:
+        return _shape2(n // (heads * dh), heads * dh)
+    return like
 
 
 def _shape2(rows, cols):

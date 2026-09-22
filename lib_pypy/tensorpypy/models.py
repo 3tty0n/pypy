@@ -58,12 +58,14 @@ class CausalSelfAttention(Module):
         self.mask = mask
         self.seqs = seqs
 
-    def forward(self, x):
+    def forward(self, x, cache=None):
         import math
         h = self.heads
         d = x.shape[1]
         dh = d // h
         qkv = x.matmul(self.wqkv).add(self.bqkv)
+        if cache is not None:
+            cache.write_rows(0, qkv)
         if self.seqs > 1:
             s = qkv.attn_scores(qkv, h, d, 0, d, self.seqs)
         else:
@@ -76,6 +78,25 @@ class CausalSelfAttention(Module):
             c = p.attn_context(qkv, h, d, 2 * d, self.seqs)
         else:
             c = p.attn_context(qkv, h, d, 2 * d)
+        return c.matmul(self.wo).add(self.bo)
+
+    def prefill(self, x, cache):
+        """forward() that also leaves every row's q|k|v in `cache`, a
+        [max_len, 3d] buffer, for step() to attend over."""
+        return self.forward(x, cache)
+
+    def step(self, x, cache, t):
+        """One new token at position t: x is [1, d].  Its q|k|v row goes into
+        the cache at row t and the query attends over rows 0..t, so no mask
+        is needed."""
+        import math
+        h = self.heads
+        d = x.shape[1]
+        qkv = x.matmul(self.wqkv).add(self.bqkv)
+        cache.write_rows(t, qkv)
+        s = qkv.decode_scores(cache, h, t + 1, d, 0, d)
+        s = s.mul(_scalar(1.0 / math.sqrt(d // h), x.dtype))
+        c = softmax(s).decode_context(cache, h, d, 2 * d)
         return c.matmul(self.wo).add(self.bo)
 
 
@@ -106,6 +127,16 @@ class GPT2Block(Module):
         x = x.add(self.attn(layer_norm(x, self.g1, self.b1, self.eps)))
         return x.add(self.mlp(layer_norm(x, self.g2, self.b2, self.eps)))
 
+    def prefill(self, x, cache):
+        x = x.add(self.attn.prefill(layer_norm(x, self.g1, self.b1, self.eps),
+                                    cache))
+        return x.add(self.mlp(layer_norm(x, self.g2, self.b2, self.eps)))
+
+    def step(self, x, cache, t):
+        x = x.add(self.attn.step(layer_norm(x, self.g1, self.b1, self.eps),
+                                 cache, t))
+        return x.add(self.mlp(layer_norm(x, self.g2, self.b2, self.eps)))
+
 
 class GPT2(Module):
     def __init__(self, wte, blocks, gf, bf, eps=1e-5):
@@ -119,6 +150,24 @@ class GPT2(Module):
         x = self.wte.take(idx).add(pos)
         for block in self.blocks:
             x = block(x)
+        x = layer_norm(x, self.gf, self.bf, self.eps)
+        return x.matmul(self.wte, True)
+
+    def prefill(self, idx, pos, caches):
+        """forward() over the prompt, filling one [max_len, 3d] cache per
+        block.  Returns the logits of the last prompt row."""
+        x = self.wte.take(idx).add(pos)
+        for i in range(len(self.blocks)):
+            x = self.blocks[i].prefill(x, caches[i])
+        x = layer_norm(x, self.gf, self.bf, self.eps)
+        return x.matmul(self.wte, True)
+
+    def step(self, idx, pos, caches, t):
+        """Logits [1, vocab] for one token at position t: idx is [1], pos
+        the [1, d] position embedding for t."""
+        x = self.wte.take(idx).add(pos)
+        for i in range(len(self.blocks)):
+            x = self.blocks[i].step(x, caches[i], t)
         x = layer_norm(x, self.gf, self.bf, self.eps)
         return x.matmul(self.wte, True)
 

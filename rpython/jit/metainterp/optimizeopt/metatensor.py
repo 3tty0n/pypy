@@ -131,6 +131,20 @@ class VTensorInfo(AbstractVirtualPtrInfo):
             return sub.size_leaf()
         return box
 
+    def shape_leaf(self):
+        """A leaf with this value's shape, or None when a gather between
+        them changes the shape; size_leaf stays right, since a gather keeps
+        the element count."""
+        if self.opcode == core.GATHER and core.gather_changes_shape(self.param):
+            return None
+        if core.is_reduction(self.opcode):
+            return None
+        box = self.args[self.big_arg()]
+        sub = vtensor_info(box)
+        if sub is not None:
+            return sub.shape_leaf()
+        return box
+
     def big_leaf(self):
         if core.is_reduction(self.opcode):
             box = self.args[0]
@@ -280,7 +294,7 @@ class OptTensor(Optimization):
             # deferred read sees the operand as it was when it was built.
             self.force_live()
             return self.emit(op)
-        if EffectInfo.OS_TENSOR_ADD <= idx <= EffectInfo.OS_TENSOR_EQMASK:
+        if EffectInfo.OS_TENSOR_ADD <= idx <= EffectInfo.OS_TENSOR_GATHER:
             opcode = idx - EffectInfo.OS_TENSOR_ADD
             nargs = core.ARITY[opcode]
             param = 0
@@ -327,7 +341,10 @@ class OptTensor(Optimization):
                 idx == EffectInfo.OS_TENSOR_NDIM):
             info = vtensor_info(op.getarg(1))
             if info is not None:
-                leaf = info.size_leaf()
+                if idx == EffectInfo.OS_TENSOR_SHAPE:
+                    leaf = info.shape_leaf()
+                else:
+                    leaf = info.size_leaf()
                 if leaf is None:
                     if not info.is_scalar():
                         return self.emit(op)

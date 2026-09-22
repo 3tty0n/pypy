@@ -115,13 +115,14 @@ class EffectInfo(object):
     OS_TENSOR_SQRT              = 138
     OS_TENSOR_MAXR              = 139
     OS_TENSOR_EQMASK            = 140
-    OS_TENSOR_LAUNCH            = 141
-    OS_TENSOR_SIZE              = 142
-    OS_TENSOR_SHAPE             = 143
-    OS_TENSOR_OUTPUT            = 144
-    OS_TENSOR_NDIM              = 145
-    OS_TENSOR_DTYPE             = 146
-    OS_TENSOR_ASSIGN            = 147
+    OS_TENSOR_GATHER            = 141     # = OS_TENSOR_ADD + core.GATHER
+    OS_TENSOR_LAUNCH            = 142
+    OS_TENSOR_SIZE              = 143
+    OS_TENSOR_SHAPE             = 144
+    OS_TENSOR_OUTPUT            = 145
+    OS_TENSOR_NDIM              = 146
+    OS_TENSOR_DTYPE             = 147
+    OS_TENSOR_ASSIGN            = 148
 
     # for debugging:
     _OS_CANRAISE = set([
