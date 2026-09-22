@@ -1482,9 +1482,10 @@ def fig_decode(out, args):
                 label=SYSTEM_LABEL.get(sysname, sysname))
         ax.errorbar(vals, ys, xerr=err(vals, lo, hi), fmt="none", zorder=4,
                     **ERRBAR)
-        for y, v in zip(ys, vals):
+        for y, v, h in zip(ys, vals, hi):
             if v:
-                ax.text(v * 1.02, y, "%.2f" % v, va="center", fontsize=5.5)
+                ax.text(max(v, h) * 1.02 + 0.05, y, "%.2f" % v, va="center",
+                        fontsize=5.5)
     ax.set_yticks(range(len(models)), models)
     ax.invert_yaxis()
     ax.set_xlabel("next-token latency, ms (lower is better)")

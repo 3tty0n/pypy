@@ -1,0 +1,19 @@
+\begin{tabular}{lrrrrr}
+\toprule
+model & system & token us & vs ours & launches/token & tokens match \\
+\midrule
+distilgpt2 & MetaTensor & 744 [738, 751] & 1.00 & 49.97 & 10/10 \\
+distilgpt2 & PyTorch eager & 2017 [2009, 2161] & 2.71 & - & 10/10 \\
+distilgpt2 & torch.compile & 852 [814, 928] & 1.15 & - & 10/10 \\
+distilgpt2 & torch.compile (reduce-overhead) & 890 [812, 918] & 1.20 & - & 10/10 \\
+gpt2 & MetaTensor & 1175 [1172, 1181] & 1.00 & 92.63 & 10/10 \\
+gpt2 & PyTorch eager & 3778 [3704, 4166] & 3.22 & - & 10/10 \\
+gpt2 & torch.compile & 1471 [1289, 1607] & 1.25 & - & 10/10 \\
+gpt2 & torch.compile (reduce-overhead) & 1416 [1265, 1459] & 1.21 & - & 10/10 \\
+gpt2-medium & MetaTensor & 2684 [2680, 2685] & 1.00 & 177.98 & 10/10 \\
+gpt2-medium & PyTorch eager & 7237 [7195, 7732] & 2.70 & - & 10/10 \\
+gpt2-medium & torch.compile & 2460 [2459, 2508] & 0.92 & - & 10/10 \\
+gpt2-medium & torch.compile (reduce-overhead) & 2474 [2466, 2511] & 0.92 & - & 10/10 \\
+\bottomrule
+\end{tabular}
+% next-token latency (us), greedy decode with a key/value cache, medians and sign-test intervals over fresh processes
