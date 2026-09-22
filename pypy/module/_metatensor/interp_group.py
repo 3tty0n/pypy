@@ -90,10 +90,10 @@ class W_Group(Membership):
         self.retains = False
         self.reasons = []
         self.actions = []
-        self.armed_at = []
-        self.armed_p = []
-        self.armed_reason = []
-        self.polls = 0
+        self.armed_at = []  # [harness]
+        self.armed_p = []  # [harness]
+        self.armed_reason = []  # [harness]
+        self.polls = 0  # [harness]
         self.notices_p = []
         self.notices_reason = []
         self.log = []
