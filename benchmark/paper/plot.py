@@ -1309,7 +1309,10 @@ MOTION_LABEL = {"derived": "derived (rule specialised in place)",
                 "handwritten": "canonicalised first",
                 "direct": "hand-written adapter, descriptor kept",
                 "drain": "hand-written adapter, drained"}
-MOTION_CASE = {"axis": "vector axis", "layout": "blocked layout"}
+MOTION_CASE = {"axis": "vector axis", "layout": "blocked layout",
+               "axis+scoped": "vector axis,\nno dead locals",
+               "layout+scoped": "blocked layout,\nno dead locals"}
+MOTION_CASE_ORDER = ["layout", "layout+scoped", "axis", "axis+scoped"]
 
 
 def _motion_rows(out):
@@ -1337,7 +1340,10 @@ def fig_motion(out, args):
     rows = [r for r in _motion_rows(out) if r["cache"] == "cold"]
     if not rows:
         return None
-    cases = [c for c in MOTION_CASE if any(r["case"] == c for r in rows)]
+    for r in rows:
+        if r.get("scoped") == "1":
+            r["case"] = r["case"] + "+scoped"
+    cases = [c for c in MOTION_CASE_ORDER if any(r["case"] == c for r in rows)]
     arms = [a for a in MOTION_ARMS if any(r["arm"] == a for r in rows)]
     g = collections.defaultdict(list)
     for r in rows:
@@ -1387,7 +1393,7 @@ def fig_motion(out, args):
             st = [float(r["step_us"]) for r in rs]
             at = [float(r["at_us"]) for r in rs]
             a, b = _sign_interval(st)
-            table.append([MOTION_CASE[c], MOTION_LABEL[arm],
+            table.append([MOTION_CASE[c].replace("\n", " "), MOTION_LABEL[arm],
                           "%.2f" % med([float(r["launches_after"]) for r in rs]),
                           "%.1f [%.1f, %.1f]" % (med(st), a, b),
                           "%.0f" % med(at),
@@ -1405,10 +1411,11 @@ def fig_motion_retention(out, args):
     """Device bytes still held at the end of a run, against the run's length.
     The comparison changes direction with length, so it is drawn as a curve
     rather than quoted at one length."""
-    rows = [r for r in _motion_rows(out) if r["cache"] == "warm"]
+    rows = [r for r in _motion_rows(out)
+            if r["cache"] == "warm" and r.get("scoped", "0") != "1"]
     if not rows:
         return None
-    cases = [c for c in MOTION_CASE if any(r["case"] == c for r in rows)]
+    cases = [c for c in MOTION_CASE_ORDER if any(r["case"] == c for r in rows)]
     fig, axes = plt.subplots(len(cases), 1,
                              figsize=(args.width, 2.1 * len(cases) + 0.5),
                              squeeze=False)

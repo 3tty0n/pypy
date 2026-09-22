@@ -28,9 +28,16 @@ weights have that layout's shape, so reading the wrong order is caught.
 Needs a binary whose gathers are fusion nodes; on one without, derived and
 handwritten are the same program, which was the first attempt's null.
 
+--scoped ends every step with `del` on the step's tensors.  Without it they
+are still locals at the loop's back-edge, and this interpreter keeps dead
+locals alive there, so the JIT has to materialise them every step - in the
+region's kernel as extra outputs.  The flag separates that cost, which every
+arm pays in its own way, from the transition's.
+
 Both layouts are checked against the rule's own arithmetic on plain floats.
 
     motion_probe.py ARM STEPS SWITCH [--rows N] [--cols N] [--heads N]
+                    [--scoped]
 """
 
 import os
@@ -62,7 +69,7 @@ def weight_values(n):
     return [((i * 13 + 2) % 29) * 0.05 - 0.6 for i in range(n)]
 
 
-def run(arm, steps, switch, rows, cols, heads):
+def run(arm, steps, switch, rows, cols, heads, scoped=False):
     n = rows * cols
     leaf = _metatensor.tensor(leaf_values(n), [rows, cols], False, 'float64')
     one = _metatensor.scalar(1.0, 'float64')
@@ -92,6 +99,8 @@ def run(arm, steps, switch, rows, cols, heads):
         if layout == 'blocked':
             out = layout_rule.apply(region, heads)
         got[layout] = out.mul(weights[layout]).sum().item()
+        if scoped:
+            del region, out
         us.append((time.time() - t0) * 1e6)
     if anchor is not None:
         got['anchor'] = anchor.item()
@@ -116,6 +125,8 @@ def main():
     rest = sys.argv[1:]
     while rest:
         a = rest.pop(0)
+        if a == '--scoped':
+            continue
         if a.startswith('--'):
             rest = rest[1:]
         else:
@@ -134,7 +145,9 @@ def main():
                          % (arm, 'set' if arm == 'drain' else 'unset'))
         return 2
 
-    us, got, retained, c = run(arm, steps, switch, rows, cols, heads)
+    scoped = '--scoped' in sys.argv
+    us, got, retained, c = run(arm, steps, switch, rows, cols, heads,
+                               scoped)
 
     region = [max(v * v + 1.0, 0.0) for v in leaf_values(rows * cols)]
     wv = weight_values(rows * cols)
@@ -152,11 +165,11 @@ def main():
             ok = 0
 
     after = median(us[switch + 8:]) if steps > switch + 8 else median(us)
-    print('motion arm=%s steps=%d switch=%d rows=%d cols=%d heads=%d '
+    print('motion arm=%s scoped=%d steps=%d switch=%d rows=%d cols=%d heads=%d '
           'step_us=%.1f at_us=%.1f retained_bytes=%d '
           'launches_before=%.2f launches_after=%.2f '
           'kernels_before=%d kernels_after=%d pass=%d'
-          % (arm, steps, switch, rows, cols, heads, after,
+          % (arm, int(scoped), steps, switch, rows, cols, heads, after,
              us[switch] if switch < len(us) else 0.0, retained,
              c[0], c[1], c[2], c[3], ok))
     return 0 if ok else 1

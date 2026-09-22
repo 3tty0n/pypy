@@ -57,9 +57,14 @@ ARMS=${MOTION_ARMS:-"derived handwritten"}
 # compile it causes.  warm: one primed cache per arm, for sweeps where only
 # the steady state and retention are read.
 CACHE=${MOTION_CACHE:-cold}
+# 1: every step ends with `del` on its tensors (the probe's --scoped), so no
+# dead local is materialised at the loop's back-edge.
+SCOPED=${MOTION_SCOPED:-0}
+SCOPE_FLAG=""
+[ "$SCOPED" = 1 ] && SCOPE_FLAG="--scoped"
 
 TSV="$OUT/motion.tsv"
-tsv_init "$TSV" "case\tarm\trun\tsteps\tswitch\tstep_us\tat_us\tretained_bytes\tlaunches_before\tlaunches_after\tkernels_before\tkernels_after\tpass\tcache\tbinary"
+tsv_init "$TSV" "case\tarm\trun\tsteps\tswitch\tstep_us\tat_us\tretained_bytes\tlaunches_before\tlaunches_after\tkernels_before\tkernels_after\tpass\tcache\tscoped\tbinary"
 BINARY=$(binary_sha "$PROBE_PYPY")
 ORIG_TMPDIR=${TMPDIR:-/tmp}
 WARM_DIR="$OUT/.motion_cache"
@@ -86,7 +91,7 @@ for STEPS in $STEPS_LIST; do
     err=$(mktemp)
     row=$(TMPDIR="$cache" TRITON_CACHE_DIR="$cache/triton" METATENSOR_DRAIN=$(drain_for "$arm") \
           "$PROBE_PYPY" $JIT_FLAGS "$APP/$PROBE" "$arm" "$STEPS" \
-          "$SWITCH" 2>"$err" | grep -E '^(motion|axis|blocked) ' | tail -1) || true
+          "$SWITCH" $SCOPE_FLAG 2>"$err" | grep -E '^(motion|axis|blocked) ' | tail -1) || true
     if [ -z "$row" ]; then
       echo "run_motion.sh: $arm run $run produced no row:" \
            "$(grep -m1 -E 'Error|error|Exception|says|needs' "$err" || tail -1 "$err")" >&2
@@ -94,7 +99,7 @@ for STEPS in $STEPS_LIST; do
     else
       passed=$(field_of "$row" pass)
       [ "$passed" = 1 ] || { echo "run_motion.sh: $arm run $run disagreed with the rule" >&2; STATUS=1; }
-      echo -e "$TAG\t$arm\t$run\t$STEPS\t$SWITCH\t$(field_of "$row" step_us)\t$(field_of "$row" at_us)\t$(field_of "$row" retained_bytes)\t$(field_of "$row" launches_before)\t$(field_of "$row" launches_after)\t$(field_of "$row" kernels_before)\t$(field_of "$row" kernels_after)\t$passed\t$CACHE\t$BINARY" >> "$TSV"
+      echo -e "$TAG\t$arm\t$run\t$STEPS\t$SWITCH\t$(field_of "$row" step_us)\t$(field_of "$row" at_us)\t$(field_of "$row" retained_bytes)\t$(field_of "$row" launches_before)\t$(field_of "$row" launches_after)\t$(field_of "$row" kernels_before)\t$(field_of "$row" kernels_after)\t$passed\t$CACHE\t$SCOPED\t$BINARY" >> "$TSV"
       bench_record motion case="$TAG" arm="$arm" run="$run" steps="$STEPS" switch="$SWITCH" \
         step_us="$(field_of "$row" step_us)" at_us="$(field_of "$row" at_us)" \
         retained_bytes="$(field_of "$row" retained_bytes)" \
@@ -102,7 +107,7 @@ for STEPS in $STEPS_LIST; do
         launches_after="$(field_of "$row" launches_after)" \
         kernels_before="$(field_of "$row" kernels_before)" \
         kernels_after="$(field_of "$row" kernels_after)" pass="$passed" \
-        cache="$CACHE" binary="$BINARY"
+        cache="$CACHE" scoped="$SCOPED" binary="$BINARY"
     fi
     rm -f "$err"
     [ "$CACHE" = warm ] || rm -rf "$cache"

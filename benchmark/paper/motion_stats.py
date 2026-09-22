@@ -64,12 +64,12 @@ def main(argv):
     path = os.path.join(argv[1], "motion.tsv")
     rows = list(csv.DictReader(open(path), delimiter="\t"))
     for r in rows:
-        r.setdefault("cache", "cold")
-        r["cache"] = r["cache"] or "cold"
+        r["cache"] = r.get("cache") or "cold"
+        r["scoped"] = r.get("scoped") or "0"
     groups = collections.defaultdict(list)
     for r in rows:
-        groups[(r["case"], r["cache"], int(r["steps"]))].append(r)
-    for (case, cache, steps), grp in sorted(groups.items()):
+        groups[(r["case"], r["scoped"], r["cache"], int(r["steps"]))].append(r)
+    for (case, scoped, cache, steps), grp in sorted(groups.items()):
         by = collections.defaultdict(list)
         for r in grp:
             by[r["arm"]].append(r)
@@ -77,8 +77,9 @@ def main(argv):
         n = min(len(by[a]) for a in arms)
         if cache == "warm" and n < 6:
             continue
-        print("== %s, %s cache, %d steps: %d runs per arm, all pass=%s"
-              % (case, cache, steps, n, all(r["pass"] == "1" for r in grp)))
+        print("== %s, %s, %s cache, %d steps: %d runs per arm, all pass=%s"
+              % (case, "scoped" if scoped == "1" else "locals live", cache,
+                 steps, n, all(r["pass"] == "1" for r in grp)))
         print("%-24s" % "" + "".join("%-30s" % a for a in arms))
         for key, label, fmt in FIELDS:
             print("%-24s" % label +
@@ -91,7 +92,7 @@ def main(argv):
         print()
     curve = collections.defaultdict(list)
     for r in rows:
-        if r["cache"] == "warm":
+        if r["cache"] == "warm" and r["scoped"] == "0":
             curve[(r["case"], int(r["steps"]), r["arm"])].append(r)
     if curve:
         cases = sorted(set(k[0] for k in curve))
