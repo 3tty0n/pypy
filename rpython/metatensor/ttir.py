@@ -583,9 +583,29 @@ def to_ttir_flat(kernel, name):
     lines.append('}')
     return '\n'.join(lines) + '\n'
 
+def _gdivv(e, a, v, ty):
+    if v > 0:
+        return _gdiv(e, a, v, ty)
+    return _gbin(e, 'divsi', a, '%rd', ty)
+
+
+def _gmodv(e, a, v, ty):
+    if v > 0:
+        return _gmod(e, a, v, ty)
+    return _gbin(e, 'remsi', a, '%rd', ty)
+
+
+def _gmulv(e, a, v, ty):
+    if v > 0:
+        return _gmul(e, a, v, ty)
+    return _gbin(e, 'muli', a, '%rd', ty)
+
+
 def _gather_src(e, p, idx, rd, I64):
     """Where output lane `idx` of a GATHER node reads its operand.  `rd` is
-    rows * dh, a splat of n / heads, since rows is not in the param."""
+    rows * dh: a constant when the kernel's size is, else 0 for the %rd
+    splat of n / heads.  Dividing by a constant is a multiply and a shift;
+    dividing by %rd is a real division in every lane."""
     kind = gather_kind(p)
     dh = gather_dh(p)
     if kind == GA_ROTHALF:
@@ -595,8 +615,8 @@ def _gather_src(e, p, idx, rd, I64):
         return _gbin(e, 'addi', _gmul(e, blk, dh, I64), rc, I64)
     hd = gather_heads(p) * dh
     if kind == GA_HEADSPLIT:
-        oi = _gbin(e, 'divsi', idx, rd, I64)
-        rem = _gbin(e, 'remsi', idx, rd, I64)
+        oi = _gdivv(e, idx, rd, I64)
+        rem = _gmodv(e, idx, rd, I64)
         return _gbin(e, 'addi', _gbin(e, 'addi',
                                       _gmul(e, _gdiv(e, rem, dh, I64), hd, I64),
                                       _gmul(e, oi, dh, I64), I64),
@@ -604,8 +624,7 @@ def _gather_src(e, p, idx, rd, I64):
     oi = _gdiv(e, idx, hd, I64)
     rem = _gmod(e, idx, hd, I64)
     return _gbin(e, 'addi', _gbin(e, 'addi',
-                                  _gbin(e, 'muli', _gdiv(e, rem, dh, I64), rd,
-                                        I64),
+                                  _gmulv(e, _gdiv(e, rem, dh, I64), rd, I64),
                                   _gmul(e, oi, dh, I64), I64),
                  _gmod(e, rem, dh, I64), I64)
 
@@ -616,13 +635,14 @@ class Gathered(object):
     permuted index, and everything under it - leaves included - is evaluated
     there, so the permutation costs addressing and nothing else."""
 
-    def __init__(self, kernel, e, modes, T, P, I64, I1, S, half):
+    def __init__(self, kernel, e, modes, T, P, IX, I1, S, half, rd):
+        self.rd = rd
         self.kernel = kernel
         self.e = e
         self.modes = modes
         self.T = T
         self.P = P
-        self.I64 = I64
+        self.IX = IX
         self.I1 = I1
         self.S = S
         self.half = half
@@ -647,16 +667,16 @@ class Gathered(object):
         if v < nreal:
             mode = self.modes[v]
             if mode == 1:
-                off = _gbin(e, 'remsi', idx, '%cs', self.I64)
+                off = _gbin(e, 'remsi', idx, '%cs', self.IX)
             elif mode == 3:
-                off = _gbin(e, 'divsi', idx, '%cs', self.I64)
+                off = _gbin(e, 'divsi', idx, '%cs', self.IX)
             elif mode == 2:
-                off = _gconst(e, 0, self.I64)
+                off = _gconst(e, 0, self.IX)
             else:
                 off = idx
             q = e.tmp()
             e.add('    %s = tt.addptr %%p%d, %s : %s, %s'
-                  % (q, v, off, self.P, self.I64))
+                  % (q, v, off, self.P, self.IX))
             r = e.tmp()
             if self.half:
                 e.add('    %s = tt.load %s, %%mask, %%zeros : %s' % (r, q, self.P))
@@ -668,7 +688,7 @@ class Gathered(object):
             return r
         node = kernel.nodes[v - nin]
         if node.opcode == GATHER:
-            src = _gather_src(e, node.p, idx, '%rd', self.I64)
+            src = _gather_src(e, node.p, idx, self.rd, self.IX)
             return self.val(node.a, src)
         a = self.val(node.a, idx)
         b = ''
@@ -734,18 +754,26 @@ def to_ttir_gathered(kernel, name, modes):
     if not _emit_consts(e.lines, kernel, nreal, T):
         return ''
     _flat_prologue(e.lines, BLOCK, I32, I64)
-    e.add('    %%cs = tt.splat %%c : i64 -> %s' % I64)
-    e.add('    %%hc = arith.constant %d : i64' % heads)
-    e.add('    %nh = arith.divsi %n, %hc : i64')
-    e.add('    %%rd = tt.splat %%nh : i64 -> %s' % I64)
+    # Lane indices are i32: a flat kernel's size is below 2**31, and 64-bit
+    # division and remainder cost several times the 32-bit ones.
+    e.add('    %c32 = arith.trunci %c : i64 to i32')
+    e.add('    %%cs = tt.splat %%c32 : i32 -> %s' % I32)
+    rd = 0
+    if kernel.n > 0 and kernel.n % heads == 0:
+        rd = kernel.n // heads
+    else:
+        e.add('    %%hc = arith.constant %d : i64' % heads)
+        e.add('    %nh = arith.divsi %n, %hc : i64')
+        e.add('    %nh32 = arith.trunci %nh : i64 to i32')
+        e.add('    %%rd = tt.splat %%nh32 : i32 -> %s' % I32)
     if half:
         e.add('    %%zeros = arith.constant dense<0.0> : %s' % TS)
     for i in range(nreal):
         e.add('    %%p%d = tt.splat %%in%d : !tt.ptr<%s> -> %s' % (i, i, S, P))
-    g = Gathered(kernel, e, modes, T, P, I64, I1, S, half)
+    g = Gathered(kernel, e, modes, T, P, I32, I1, S, half, rd)
     root = nodes[last]
     if is_reduction(root.opcode):
-        x = g.val(root.a, '%offs64')
+        x = g.val(root.a, '%offs')
         if not x:
             return ''
         init = '%zero'
@@ -775,7 +803,7 @@ def to_ttir_gathered(kernel, name, modes):
             e.add('    %%o = tt.atomic_rmw fadd, acq_rel, gpu, %%out, %s, '
                   '%%true : (!tt.ptr<%s>, %s, i1) -> %s' % (r, S, C, C))
     else:
-        x = g.val(nin + last, '%offs64')
+        x = g.val(nin + last, '%offs')
         if not x:
             return ''
         if half:
@@ -783,12 +811,12 @@ def to_ttir_gathered(kernel, name, modes):
             e.add('    %s = arith.truncf %s : %s to %s' % (t, x, T, TS))
             x = t
         e.add('    %%po = tt.splat %%out : !tt.ptr<%s> -> %s' % (S, P))
-        e.add('    %%qo = tt.addptr %%po, %%offs64 : %s, %s' % (P, I64))
+        e.add('    %%qo = tt.addptr %%po, %%offs : %s, %s' % (P, I32))
         e.add('    tt.store %%qo, %s, %%mask : %s' % (x, P))
     # An extra output is a node's own value, so it is read at the lane's own
     # index even when the root reads it through a gather.
     for k in range(len(kernel.outputs)):
-        x = g.val(kernel.outputs[k], '%offs64')
+        x = g.val(kernel.outputs[k], '%offs')
         if not x:
             return ''
         if half:
@@ -798,7 +826,7 @@ def to_ttir_gathered(kernel, name, modes):
         po = e.tmp()
         e.add('    %s = tt.splat %%out%d : !tt.ptr<%s> -> %s' % (po, k, S, P))
         qo = e.tmp()
-        e.add('    %s = tt.addptr %s, %%offs64 : %s, %s' % (qo, po, P, I64))
+        e.add('    %s = tt.addptr %s, %%offs : %s, %s' % (qo, po, P, I32))
         e.add('    tt.store %s, %s, %%mask : %s' % (qo, x, P))
     e.add('    tt.return')
     e.add('  }')

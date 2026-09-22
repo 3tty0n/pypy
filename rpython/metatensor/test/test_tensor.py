@@ -2136,6 +2136,16 @@ class TestGatherFusion(LLJitMixin):
         core.policy.static = True
         core.policy.seen = []
 
+    def teardown_method(self, meth):
+        # Every result below would also come out right from the host loops a
+        # failed compile falls back to, so check that it did not happen.
+        import os
+        if 'RTENSOR_CPU' in os.environ:
+            return
+        for key, k in kernels.kernel_cache.kernels.items():
+            if ',11:' in key:
+                assert k.fn != 0, key
+
     def test_rope_is_one_kernel(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'c', 's', 'w', 'acc'])
         def f(n):
