@@ -1304,6 +1304,210 @@ def fig_transition(out, args):
     return fig, "transition"
 
 
+MOTION_ARMS = ["derived", "handwritten", "direct", "drain"]
+MOTION_LABEL = {"derived": "derived (rule specialised in place)",
+                "handwritten": "canonicalised first",
+                "direct": "hand-written adapter, descriptor kept",
+                "drain": "hand-written adapter, drained"}
+MOTION_CASE = {"axis": "vector axis", "layout": "blocked layout"}
+
+
+def _motion_rows(out):
+    rows = read_tsv(os.path.join(out, "motion.tsv"))
+    for r in rows:
+        r["cache"] = r.get("cache") or "cold"
+    return rows
+
+
+def _sign_interval(xs):
+    s = sorted(xs)
+    n = len(s)
+    if n < 6:
+        return (s[0], s[-1]) if s else (0.0, 0.0)
+    k = 2 if n >= 10 else 1
+    return s[k - 1], s[n - k]
+
+
+def fig_motion(out, args):
+    """The MOTION demonstration, one change class per group.  Above: kernel
+    launches per step after the transition, which is the evidence that the
+    rule was specialised into the region (it does not depend on a clock).
+    Below: the step latency those launches cost, medians with sign-test
+    intervals over fresh processes."""
+    rows = [r for r in _motion_rows(out) if r["cache"] == "cold"]
+    if not rows:
+        return None
+    cases = [c for c in MOTION_CASE if any(r["case"] == c for r in rows)]
+    arms = [a for a in MOTION_ARMS if any(r["arm"] == a for r in rows)]
+    g = collections.defaultdict(list)
+    for r in rows:
+        g[(r["case"], r["arm"])].append(r)
+    fig, axes = plt.subplots(2, 1, figsize=(args.width, 4.3), sharex=True)
+    width = 0.8 / max(len(arms), 1)
+    x = list(range(len(cases)))
+    table = []
+    for panel, key, ylabel in ((0, "launches_after",
+                                "kernel launches per step\nafter the change"),
+                               (1, "step_us", "step latency (us)")):
+        ax = axes[panel]
+        for i, arm in enumerate(arms):
+            vals, lo, hi = [], [], []
+            for c in cases:
+                xs = [float(r[key]) for r in g.get((c, arm), [])]
+                m = med(xs) if xs else 0.0
+                a, b = _sign_interval(xs) if xs else (0.0, 0.0)
+                vals.append(m)
+                lo.append(a)
+                hi.append(b)
+            pos = [v + (i - (len(arms) - 1) / 2.0) * width for v in x]
+            ax.bar(pos, vals, width * 0.9, color=SERIES[i], linewidth=0,
+                   hatch=HATCH[i] if args.texture else None,
+                   label=MOTION_LABEL[arm])
+            if panel == 1:
+                ax.errorbar(pos, vals, yerr=err(vals, lo, hi), fmt="none",
+                            zorder=4, **ERRBAR)
+            for p_, v in zip(pos, vals):
+                ax.text(p_, v * 1.02 + 0.02, ("%.2f" if panel == 0 else
+                                              "%.0f") % v,
+                        ha="center", va="bottom", fontsize=5.5)
+        ax.set_ylabel(ylabel)
+        ax.yaxis.grid(True, zorder=0)
+        ax.set_axisbelow(True)
+        ax.set_ylim(0, ax.get_ylim()[1] * 1.12)
+        despine(ax)
+    axes[1].set_xticks(x, [MOTION_CASE[c] for c in cases])
+    legend_below(fig, axes[1], ncol=1 if args.width < DOUBLE_COL else 2)
+    if args.titles:
+        fig.suptitle("A change rule derived, against hand-written recovery")
+    for c in cases:
+        for arm in arms:
+            rs = g.get((c, arm), [])
+            if not rs:
+                continue
+            st = [float(r["step_us"]) for r in rs]
+            at = [float(r["at_us"]) for r in rs]
+            a, b = _sign_interval(st)
+            table.append([MOTION_CASE[c], MOTION_LABEL[arm],
+                          "%.2f" % med([float(r["launches_after"]) for r in rs]),
+                          "%.1f [%.1f, %.1f]" % (med(st), a, b),
+                          "%.0f" % med(at),
+                          "%.0f" % med([float(r["retained_bytes"]) for r in rs]),
+                          str(len(rs))])
+    write_table(os.path.join(args.outdir, "motion.tex"),
+                "the MOTION demonstration: medians over fresh processes, "
+                "sign-test intervals (97.9%% at n=10), cold kernel cache",
+                ["change class", "arm", "launches/step", "step us",
+                 "transition us", "retained bytes", "n"], table)
+    return fig, "motion"
+
+
+def fig_motion_retention(out, args):
+    """Device bytes still held at the end of a run, against the run's length.
+    The comparison changes direction with length, so it is drawn as a curve
+    rather than quoted at one length."""
+    rows = [r for r in _motion_rows(out) if r["cache"] == "warm"]
+    if not rows:
+        return None
+    cases = [c for c in MOTION_CASE if any(r["case"] == c for r in rows)]
+    fig, axes = plt.subplots(len(cases), 1,
+                             figsize=(args.width, 2.1 * len(cases) + 0.5),
+                             squeeze=False)
+    for ci, c in enumerate(cases):
+        ax = axes[ci][0]
+        for i, arm in enumerate(MOTION_ARMS):
+            pts = collections.defaultdict(list)
+            for r in rows:
+                if r["case"] == c and r["arm"] == arm:
+                    pts[int(r["steps"])].append(float(r["retained_bytes"]))
+            if not pts:
+                continue
+            ls = sorted(pts)
+            ax.plot(ls, [med(pts[L]) / 1e6 for L in ls], marker=MARKERS[i],
+                    color=SERIES[i], markersize=3.5, linewidth=1.2,
+                    label=MOTION_LABEL[arm] if ci == 0 else None)
+        ax.set_xscale("log")
+        ax.set_ylabel("retained MB\n(%s)" % MOTION_CASE[c])
+        ax.yaxis.grid(True, zorder=0)
+        ax.set_axisbelow(True)
+        despine(ax)
+    axes[-1][0].set_xlabel("steps in the run (change at the midpoint)")
+    legend_below(fig, axes[-1][0], ncol=1 if args.width < DOUBLE_COL else 2)
+    return fig, "motion_retention"
+
+
+DECODE_SYSTEMS = ["ours", "torch-eager", "torch-compile", "torch-compile-ro"]
+
+
+def fig_decode(out, args):
+    """Next-token latency with a key/value cache, per model, medians with
+    sign-test intervals over fresh processes.  Stacked one model per row so
+    it fits a column."""
+    rows = read_tsv(os.path.join(out, "decode.tsv"))
+    if not rows:
+        return None
+    models = []
+    for r in rows:
+        if r["model"] not in models:
+            models.append(r["model"])
+    systems = [s for s in DECODE_SYSTEMS if any(r["system"] == s for r in rows)]
+    g = collections.defaultdict(list)
+    for r in rows:
+        try:
+            g[(r["model"], r["system"])].append(float(r["token_us"]))
+        except ValueError:
+            pass
+    fig, ax = plt.subplots(figsize=(args.width, 0.55 + 0.62 * len(models)))
+    height = 0.8 / max(len(systems), 1)
+    table = []
+    for i, sysname in enumerate(systems):
+        vals, lo, hi, ys = [], [], [], []
+        for mi, m in enumerate(models):
+            xs = g.get((m, sysname), [])
+            v = med(xs) / 1e3 if xs else 0.0
+            a, b = _sign_interval(xs) if xs else (0.0, 0.0)
+            vals.append(v)
+            lo.append(a / 1e3)
+            hi.append(b / 1e3)
+            ys.append(mi + (i - (len(systems) - 1) / 2.0) * height)
+        colour, hatch, _ = style_of(sysname)
+        ax.barh(ys, vals, height * 0.9, color=colour, linewidth=0,
+                hatch=hatch if args.texture else None,
+                label=SYSTEM_LABEL.get(sysname, sysname))
+        ax.errorbar(vals, ys, xerr=err(vals, lo, hi), fmt="none", zorder=4,
+                    **ERRBAR)
+        for y, v in zip(ys, vals):
+            if v:
+                ax.text(v * 1.02, y, "%.2f" % v, va="center", fontsize=5.5)
+    ax.set_yticks(range(len(models)), models)
+    ax.invert_yaxis()
+    ax.set_xlabel("next-token latency, ms (lower is better)")
+    ax.xaxis.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    ax.set_xlim(0, ax.get_xlim()[1] * 1.12)
+    despine(ax)
+    legend_below(fig, ax, ncol=1 if args.width < DOUBLE_COL else 2)
+    for m in models:
+        base = med(g.get((m, "ours"), [])) if g.get((m, "ours")) else 0.0
+        for sysname in systems:
+            xs = g.get((m, sysname), [])
+            if not xs:
+                continue
+            a, b = _sign_interval(xs)
+            rs = [r for r in rows if r["model"] == m and r["system"] == sysname]
+            table.append([m, SYSTEM_LABEL.get(sysname, sysname),
+                          "%.0f [%.0f, %.0f]" % (med(xs), a, b),
+                          "%.2f" % (med(xs) / base) if base else "n/a",
+                          "%s" % (rs[0].get("launches_per_token") or "-"),
+                          "%d/%d" % (sum(r["tokens_match"] == "1" for r in rs),
+                                     len(rs))])
+    write_table(os.path.join(args.outdir, "decode.tex"),
+                "next-token latency (us), greedy decode with a key/value "
+                "cache, medians and sign-test intervals over fresh processes",
+                ["model", "system", "token us", "vs ours", "launches/token",
+                 "tokens match"], table)
+    return fig, "decode"
+
+
 def fig_deopt(out, args):
     """Two questions, two panels, same rows.  Left: what an iteration costs
     once the dust settles, which is where a bridge either did or did not
@@ -2751,6 +2955,9 @@ FIGURES = collections.OrderedDict([
     ("op_inventory", fig_op_inventory),
     ("deopt", fig_deopt),
     ("transition", fig_transition),
+    ("motion", fig_motion),
+    ("motion_retention", fig_motion_retention),
+    ("decode", fig_decode),
     ("micro_baselines", fig_micro_baselines),
     ("compile_overhead", fig_compile_overhead),
     ("gap", fig_gap),

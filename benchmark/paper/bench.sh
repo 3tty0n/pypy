@@ -41,7 +41,14 @@ commands:
                          guard-recovery path: the rule is audited for target
                          knowledge first, then both arms are measured over
                          ten fresh processes, into \$OUT/motion.tsv
-                         (MOTION_PYPY=... for a binary with live_bytes)
+                         (MOTION_PYPY=... for a binary with live_bytes;
+                         MOTION_CASE=axis|layout, MOTION_ARMS, MOTION_STEPS
+                         as a list for the retention curve, MOTION_CACHE)
+  decode                 next-token latency: greedy decode against a key/value
+                         cache for the GPT-2 ladder, ours against torch
+                         eager/compile/compile-ro, same token stream required,
+                         into \$OUT/decode.tsv (DECODE_PYPY=... for a binary
+                         with decode_scores)
   transition             what a fused value costs to carry across a guard:
                          keeping its descriptor against draining it to
                          canonical form and re-recording, one binary and one
@@ -175,6 +182,9 @@ run_cmd() {
       ;;
     motion)
       bash "$HERE/run_motion.sh" "$@"
+      ;;
+    decode)
+      bash "$HERE/run_decode.sh" "$@"
       ;;
     transition)
       bash "$HERE/run_transition.sh" "$@"

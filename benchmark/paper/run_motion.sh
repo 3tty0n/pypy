@@ -23,10 +23,11 @@ source "$HERE/config.sh"
 APP="$HERE/../applevel"
 RULES="$HERE/../motion"
 
-# Which change class to demonstrate.  layout: the same values addressed as
-# blocks, which the pass cannot absorb because a gather has no fusible node.
-# axis: the same vector addressed along the other axis, which it can, because
-# the axis rides in the node's broadcast parameter.
+# Which change class to demonstrate.  axis: the same vector addressed along
+# the other axis, carried in a fusion node's broadcast parameter.  layout: the
+# same values addressed as blocks of heads - a different shape and element
+# order - which needs a binary whose gathers are fusion nodes; on an older one
+# the derived and handwritten arms are the same program.
 CASE=${MOTION_CASE:-axis}
 case "$CASE" in
   axis)   RULE="$RULES/axis_rule.py"; PROBE="axis_probe.py"; TAG=axis ;;
@@ -48,32 +49,52 @@ fi
 echo "   the contaminated control is rejected, as it must be"
 
 RUNS=${MOTION_RUNS:-10}
-STEPS=${MOTION_STEPS:-200}
-SWITCH=${MOTION_SWITCH:-$((STEPS / 2))}
+# A list: the retention comparison changes direction with loop length, so a
+# single length is a choice, not a result.  The transition is always halfway.
+STEPS_LIST=${MOTION_STEPS:-200}
+ARMS=${MOTION_ARMS:-"derived handwritten"}
+# cold: an empty kernel cache per run, so the transition step pays for every
+# compile it causes.  warm: one primed cache per arm, for sweeps where only
+# the steady state and retention are read.
+CACHE=${MOTION_CACHE:-cold}
 
 TSV="$OUT/motion.tsv"
-tsv_init "$TSV" "case\tarm\trun\tsteps\tswitch\tstep_us\tat_us\tretained_bytes\tlaunches_before\tlaunches_after\tkernels_before\tkernels_after\tpass\tbinary"
-BINARY=$(sha256sum "$PROBE_PYPY" | cut -c1-12)
+tsv_init "$TSV" "case\tarm\trun\tsteps\tswitch\tstep_us\tat_us\tretained_bytes\tlaunches_before\tlaunches_after\tkernels_before\tkernels_after\tpass\tcache\tbinary"
+BINARY=$(binary_sha "$PROBE_PYPY")
 ORIG_TMPDIR=${TMPDIR:-/tmp}
+WARM_DIR="$OUT/.motion_cache"
 STATUS=0
 
-progress_init motion $((RUNS * 2))
-for run in $(seq "$RUNS"); do
-  for arm in derived handwritten; do
-    progress_step "$arm run $run/$RUNS"
-    cache=$(mktemp -d -p "$ORIG_TMPDIR")
+drain_for() { [ "$1" = drain ] && echo 1 || echo ""; }
+
+progress_init motion $((RUNS * $(echo $ARMS | wc -w) * $(echo $STEPS_LIST | wc -w)))
+for STEPS in $STEPS_LIST; do
+ SWITCH=$((STEPS / 2))
+ for run in $(seq "$RUNS"); do
+  for arm in $ARMS; do
+    progress_step "$arm steps=$STEPS run $run/$RUNS"
+    if [ "$CACHE" = warm ]; then
+      cache="$WARM_DIR/$TAG-$arm"
+      if [ ! -d "$cache" ]; then
+        mkdir -p "$cache/triton"
+        TMPDIR="$cache" TRITON_CACHE_DIR="$cache/triton" METATENSOR_DRAIN=$(drain_for "$arm") \
+          "$PROBE_PYPY" $JIT_FLAGS "$APP/$PROBE" "$arm" 40 20 >/dev/null 2>&1 || true
+      fi
+    else
+      cache=$(mktemp -d -p "$ORIG_TMPDIR")
+    fi
     err=$(mktemp)
-    row=$(TMPDIR="$cache" TRITON_CACHE_DIR="$cache/triton" \
+    row=$(TMPDIR="$cache" TRITON_CACHE_DIR="$cache/triton" METATENSOR_DRAIN=$(drain_for "$arm") \
           "$PROBE_PYPY" $JIT_FLAGS "$APP/$PROBE" "$arm" "$STEPS" \
-          "$SWITCH" 2>"$err" | grep -E '^(motion|axis) ' | tail -1) || true
+          "$SWITCH" 2>"$err" | grep -E '^(motion|axis|blocked) ' | tail -1) || true
     if [ -z "$row" ]; then
       echo "run_motion.sh: $arm run $run produced no row:" \
-           "$(grep -m1 -E 'Error|error|Exception|says' "$err" || tail -1 "$err")" >&2
+           "$(grep -m1 -E 'Error|error|Exception|says|needs' "$err" || tail -1 "$err")" >&2
       STATUS=1
     else
       passed=$(field_of "$row" pass)
       [ "$passed" = 1 ] || { echo "run_motion.sh: $arm run $run disagreed with the rule" >&2; STATUS=1; }
-      echo -e "$TAG\t$arm\t$run\t$STEPS\t$SWITCH\t$(field_of "$row" step_us)\t$(field_of "$row" at_us)\t$(field_of "$row" retained_bytes)\t$(field_of "$row" launches_before)\t$(field_of "$row" launches_after)\t$(field_of "$row" kernels_before)\t$(field_of "$row" kernels_after)\t$passed\t$BINARY" >> "$TSV"
+      echo -e "$TAG\t$arm\t$run\t$STEPS\t$SWITCH\t$(field_of "$row" step_us)\t$(field_of "$row" at_us)\t$(field_of "$row" retained_bytes)\t$(field_of "$row" launches_before)\t$(field_of "$row" launches_after)\t$(field_of "$row" kernels_before)\t$(field_of "$row" kernels_after)\t$passed\t$CACHE\t$BINARY" >> "$TSV"
       bench_record motion case="$TAG" arm="$arm" run="$run" steps="$STEPS" switch="$SWITCH" \
         step_us="$(field_of "$row" step_us)" at_us="$(field_of "$row" at_us)" \
         retained_bytes="$(field_of "$row" retained_bytes)" \
@@ -81,10 +102,12 @@ for run in $(seq "$RUNS"); do
         launches_after="$(field_of "$row" launches_after)" \
         kernels_before="$(field_of "$row" kernels_before)" \
         kernels_after="$(field_of "$row" kernels_after)" pass="$passed" \
-        binary="$BINARY"
+        cache="$CACHE" binary="$BINARY"
     fi
-    rm -rf "$err" "$cache"
+    rm -f "$err"
+    [ "$CACHE" = warm ] || rm -rf "$cache"
   done
+ done
 done
 progress_done
 echo "wrote $TSV"

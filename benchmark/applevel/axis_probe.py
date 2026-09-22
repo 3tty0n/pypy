@@ -10,6 +10,16 @@ the two arms are genuinely two programs:
                meta-tracer is specialising takes the new addressing itself
   handwritten  the value brought to canonical form through the existing
                recovery path first, and the rule applied to that
+  direct       the hand-written adapter that keeps the descriptor: the region
+               has already run (its sum is launched first), so the rule reaches
+               its value as one more output of the launched kernel, which is
+               recompiled for the new signature
+  drain        the same program as direct under METATENSOR_DRAIN=1: the
+               descriptor is discarded and the value re-recorded from leaves
+
+direct and drain pay for one reduction the other two arms do not compute; it
+is fused into the region's own kernel, and it is what makes the region a
+launched value, which is the only situation those adapters exist for.
 
 Up to SWITCH the vector is addressed along columns; from SWITCH along rows.
 That changes the kernel's layout - a row-addressed vector fixes the tile
@@ -19,6 +29,7 @@ constant on the warm trace, so the first step past SWITCH fails its guard.
 Both arms are checked against the rule's arithmetic on plain floats.
 
     axis_probe.py ARM STEPS SWITCH [--n N]
+    ARM: derived | handwritten | direct | drain
 """
 
 import os
@@ -32,6 +43,7 @@ import _metatensor
 import axis_rule
 
 N = 192
+ARMS = ('derived', 'handwritten', 'direct', 'drain')
 
 
 def median(xs):
@@ -59,6 +71,7 @@ def run(arm, steps, switch, n):
                                          False, 'float64')
     us = []
     got = {}
+    anchor = None
     l0, k0 = _metatensor.launch_count(), _metatensor.kernel_count()
     lsw = ksw = 0
     for i in range(steps):
@@ -69,10 +82,15 @@ def run(arm, steps, switch, n):
         axis = 'columns' if i < switch else 'rows'
         if arm == 'derived':
             out = axis_rule.apply(region, along[axis])
+        elif arm == 'direct' or arm == 'drain':
+            anchor = region.sum().force()
+            out = axis_rule.apply(region, along[axis])
         else:
             out = axis_rule.apply(region.force(), along[axis])
         got[axis] = out.sum().item()
         us.append((time.time() - t0) * 1e6)
+    if anchor is not None:
+        got['anchor'] = anchor.item()
     nafter = steps - switch
     counters = ((lsw - l0) / float(switch or 1),
                 (_metatensor.launch_count() - lsw) / float(nafter or 1),
@@ -91,8 +109,13 @@ def main():
     n = N
     if '--n' in sys.argv:
         n = int(sys.argv[sys.argv.index('--n') + 1])
-    if arm not in ('derived', 'handwritten'):
+    if arm not in ARMS:
         sys.stderr.write('axis_probe: unknown arm %r\n' % arm)
+        return 2
+    drain = os.environ.get('METATENSOR_DRAIN', '') not in ('', '0')
+    if drain != (arm == 'drain'):
+        sys.stderr.write('axis_probe: arm %s needs METATENSOR_DRAIN %s\n'
+                         % (arm, 'set' if arm == 'drain' else 'unset'))
         return 2
 
     us, got, retained, c = run(arm, steps, switch, n)
@@ -101,10 +124,12 @@ def main():
     squared = [v * v + 1.0 for v in mv]
     squared = [x if x > 0.0 else 0.0 for x in squared]
     ok = 1
-    for axis in ('columns', 'rows'):
+    checks = [(axis, axis_rule.reference(squared, vv, n, axis))
+              for axis in ('columns', 'rows')]
+    checks.append(('anchor', sum(squared)))
+    for axis, want in checks:
         if axis not in got:
             continue
-        want = axis_rule.reference(squared, vv, n, axis)
         if abs(got[axis] - want) > 1e-9 * max(1.0, abs(want)):
             sys.stderr.write('axis_probe: %s %r, the rule says %r\n'
                              % (axis, got[axis], want))
