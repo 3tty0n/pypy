@@ -37,6 +37,11 @@ commands:
                          distilgpt2 across ours/torch-eager/torch-compile/
                          torch-compile-ro/jax, into \$OUT/batch.tsv
                          (BATCHES and BATCH_SYSTEMS override the grid)
+  motion                 a declared change rule against the hand-written
+                         guard-recovery path: the rule is audited for target
+                         knowledge first, then both arms are measured over
+                         ten fresh processes, into \$OUT/motion.tsv
+                         (MOTION_PYPY=... for a binary with live_bytes)
   transition             what a fused value costs to carry across a guard:
                          keeping its descriptor against draining it to
                          canonical form and re-recording, one binary and one
@@ -167,6 +172,9 @@ run_cmd() {
       ;;
     batch)
       bash "$HERE/run_batch.sh" "$@"
+      ;;
+    motion)
+      bash "$HERE/run_motion.sh" "$@"
       ;;
     transition)
       bash "$HERE/run_transition.sh" "$@"

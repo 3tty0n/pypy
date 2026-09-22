@@ -15,6 +15,7 @@ class Module(MixedModule):
         'lazy_stats': 'interp_tensor.lazy_stats',
         'mark_step': 'interp_tensor.mark_step',
         'mem_total': 'interp_tensor.mem_total',
+        'live_bytes': 'interp_tensor.live_bytes',
         'alloc_failed': 'interp_tensor.alloc_failed',
     }
 

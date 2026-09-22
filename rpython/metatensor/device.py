@@ -241,6 +241,12 @@ def mem_total():
     """Bytes of device memory on GPU 0, or 0 when there is no usable GPU."""
     return rt_cuda_mem_total()
 
+def live_bytes():
+    """Device bytes the allocator is still holding, as opposed to the card's
+    capacity that mem_total() reports.  This is what a retention question
+    asks about."""
+    return rt_cuda_live_bytes()
+
 def alloc_failed():
     """True if a device allocation has fallen back to the CPU."""
     return rt_cuda_alloc_failed() != 0

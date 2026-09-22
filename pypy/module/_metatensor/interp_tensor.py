@@ -538,5 +538,9 @@ def mem_total(space):
     return space.newint(device.mem_total())
 
 
+def live_bytes(space):
+    return space.newint(device.live_bytes())
+
+
 def alloc_failed(space):
     return space.newbool(device.alloc_failed())
