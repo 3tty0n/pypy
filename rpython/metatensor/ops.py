@@ -1,7 +1,7 @@
 from rpython.rlib import jit
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.rclass import OBJECTPTR
-from rpython.metatensor.core import (ADD, AXIS_ALL, GA_HEADSPLIT, GA_ROTHALF, GATHER, gather_param, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_NONE, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, MAXR, MUL, NDTYPES, NULLTENSOR, RELU, RELUGRAD, SHAPEARRAY, SQRT, SUB, SUM, TENSOR, TENSORARRAY, _shape2, cols, new_tensor, note_cols, note_dtype, note_size, policy)
+from rpython.metatensor.core import (ADD, AXIS_ALL, GA_HEADSPLIT, GA_ROTHALF, GATHER, gather_knob, gather_param, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_NONE, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, MAXR, MUL, NDTYPES, NULLTENSOR, RELU, RELUGRAD, SHAPEARRAY, SQRT, SUB, SUM, TENSOR, TENSORARRAY, _shape2, cols, new_tensor, note_cols, note_dtype, note_size, policy)
 from rpython.metatensor.device import (host)
 from rpython.metatensor.kernels import (ensure_gather)
 from rpython.metatensor import lazy
@@ -122,9 +122,11 @@ def tensor_gather(a, p):
 
 def gather(a, kind, dh, heads):
     """rot_half / head_split / head_merge as a fusible node.  Deferred
-    execution keeps its standalone gathers, which it has no node for."""
-    if lazy.enabled():
-        lazy.force(a)
+    execution keeps its standalone gathers, which it has no node for, and so
+    does METATENSOR_NO_GATHER_FUSION (the ablation)."""
+    if lazy.enabled() or gather_knob.off:
+        if lazy.enabled():
+            lazy.force(a)
         if kind == GA_ROTHALF:
             return rot_half(a, dh)
         rows = tensor_size(a) // (dh * heads)

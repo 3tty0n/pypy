@@ -1,6 +1,11 @@
 """Greedy autoregressive decode with a key/value cache, MetaTensor side.
 
-    gpt2_decode.py WEIGHTS_DIR [NEW] [ROUNDS]
+    lm_decode.py WEIGHTS_DIR [NEW] [ROUNDS]
+
+GPT-2 and the Llama-architecture models (SmolLM2, Qwen2.5), when the weights'
+index names a head_dim: the same loop, with RoPE applied to the new row
+before it enters the cache, one [1, 3d] cos/sin row per step shared by
+every block.
 
 The prompt is the model's exported token sequence.  Its first seq-1 tokens
 are prefilled - one forward that also writes every row's q|k|v into a
@@ -36,6 +41,7 @@ import time
 import _metatensor
 import common
 import gpt2
+import llama
 
 
 def median(xs):
@@ -58,23 +64,41 @@ def main():
     tokens = cfg['tokens']
     tmax = p + new
 
-    model = gpt2.build_model(cfg, buf, dtype, common.causal_mask(h, p - 1,
-                                                                 dtype))
+    is_llama = 'head_dim' in cfg
     w = common.Weights(cfg, buf, dtype)
-    wpe = w.get('wpe')
-    wpe_off = cfg['index']['wpe'][0]
     idx0 = common.tensor([float(x) for x in tokens[:p - 1]], [p - 1], False,
                          dtype)
-    pos0 = common.tensor(list(buf[wpe_off:wpe_off + (p - 1) * d]),
-                         [p - 1, d], False, dtype)
     pos_ids = [common.tensor([float(t)], [1], False, dtype)
                for t in range(tmax)]
     caches = [_metatensor.zeros([tmax, 3 * d], False, dtype)
-              for _ in model.blocks]
+              for _ in range(cfg['n_layer'])]
+    if is_llama:
+        model, _ = llama.build(cfg, buf, dtype, p - 1)
+        cos, sin = llama.rope3(cfg, w, dtype, tmax)
+
+        def prefill():
+            return model.prefill(idx0, caches)
+
+        def step(x, t):
+            return model.step(x, caches, t, cos.take(pos_ids[t]),
+                              sin.take(pos_ids[t]))
+    else:
+        model = gpt2.build_model(cfg, buf, dtype,
+                                 common.causal_mask(h, p - 1, dtype))
+        wpe = w.get('wpe')
+        wpe_off = cfg['index']['wpe'][0]
+        pos0 = common.tensor(list(buf[wpe_off:wpe_off + (p - 1) * d]),
+                             [p - 1, d], False, dtype)
+
+        def prefill():
+            return model.prefill(idx0, pos0, caches)
+
+        def step(x, t):
+            return model.step(x, wpe.take(pos_ids[t]), caches, t)
 
     def generate():
         t0 = time.time()
-        model.prefill(idx0, pos0, caches).sum().item()
+        prefill().sum().item()
         prefill_ms = (time.time() - t0) * 1e3
         tok = tokens[p - 1]
         out = []
@@ -82,7 +106,7 @@ def main():
         for t in range(p - 1, p - 1 + new):
             t0 = time.time()
             x = common.tensor([float(tok)], [1], False, dtype)
-            tok = model.step(x, wpe.take(pos_ids[t]), caches, t).argmax()
+            tok = step(x, t).argmax()
             us.append((time.time() - t0) * 1e6)
             out.append(tok)
         return out, us, prefill_ms
@@ -109,17 +133,24 @@ def main():
     # generated token i.
     seq = tokens[:p] + out[:-1]
     n = len(seq)
-    full = gpt2.build_model(cfg, buf, dtype, common.causal_mask(h, n, dtype))
-    pos = common.tensor(list(buf[wpe_off:wpe_off + n * d]), [n, d], False,
-                        dtype)
-    flat = full(common.tensor([float(x) for x in seq], [n], False, dtype),
-                pos).tolist()
+    ids = common.tensor([float(x) for x in seq], [n], False, dtype)
+    if is_llama:
+        cfg_full = dict(cfg)
+        cfg_full['tokens'] = seq
+        full, _ = llama.build(cfg_full, buf, dtype, n)
+        flat = full(ids).tolist()
+    else:
+        full = gpt2.build_model(cfg, buf, dtype,
+                                common.causal_mask(h, n, dtype))
+        pos = common.tensor(list(buf[wpe_off:wpe_off + n * d]), [n, d],
+                            False, dtype)
+        flat = full(ids, pos).tolist()
     forced = 1
     for i in range(new):
         row = flat[(p - 1 + i) * vocab:(p + i) * vocab]
         if row.index(max(row)) != out[i]:
             forced = 0
-            sys.stderr.write('gpt2_decode: token %d: decode %d, full forward '
+            sys.stderr.write('lm_decode: token %d: decode %d, full forward '
                              '%d\n' % (i, out[i], row.index(max(row))))
             break
 

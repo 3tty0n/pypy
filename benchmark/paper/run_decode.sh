@@ -6,15 +6,19 @@
 # against a cache of everything before it, and each step waits for the last
 # one's argmax.  This stage measures that step.
 #
-#   ours            applevel/gpt2_decode.py
-#   torch-eager     applevel/gpt2_decode_torch.py, the cache sliced per step
-#   torch-compile   the same, static cache + mask so shapes do not change
+#   ours            applevel/lm_decode.py
+#   torch-eager     GPT-2: applevel/gpt2_decode_torch.py, a mirror of the same
+#                   algorithm with the cache sliced per step.  Llama family
+#                   (SmolLM2, Qwen2.5): applevel/llama_decode_torch.py, the
+#                   transformers model itself with DynamicCache
+#   torch-compile   GPT-2: static cache + mask so shapes do not change;
+#                   Llama family: transformers' StaticCache + torch.compile
 #   torch-compile-ro   and CUDA graphs on top
 #
 # All four run the same prompt on the same weights and must produce the same
 # token stream; ours also checks itself against one full causal forward.
 #
-#   DECODE_MODELS  default "distilgpt2 gpt2 gpt2-medium" (the GPT-2 ladder)
+#   DECODE_MODELS  default: the GPT-2 ladder, the SmolLM2 ladder and Qwen2.5
 #   DECODE_NEW     tokens generated per round (64)
 #   DECODE_ROUNDS  generations per process; the first is cold (5)
 #   DECODE_RUNS    processes per system and model (10)
@@ -26,7 +30,7 @@ APP="$HERE/../applevel"
 
 PROBE_PYPY=${DECODE_PYPY:-$PYPY}
 [ -x "$PROBE_PYPY" ] || { echo "run_decode.sh: no interpreter at $PROBE_PYPY" >&2; exit 1; }
-MODELS=${DECODE_MODELS:-"distilgpt2 gpt2 gpt2-medium"}
+MODELS=${DECODE_MODELS:-"distilgpt2 gpt2 gpt2-medium smollm2-135m smollm2-360m smollm2-1.7b qwen2.5-0.5b"}
 NEW=${DECODE_NEW:-64}
 GEN_ROUNDS=${DECODE_ROUNDS:-5}
 RUNS=${DECODE_RUNS:-10}
@@ -49,11 +53,13 @@ for model in $MODELS; do
       progress_step "$model $system run $run/$RUNS"
       err=$(mktemp)
       if [ "$system" = ours ]; then
-        row=$("$PROBE_PYPY" $JIT_FLAGS "$APP/gpt2_decode.py" "$W" "$NEW" \
+        row=$("$PROBE_PYPY" $JIT_FLAGS "$APP/lm_decode.py" "$W" "$NEW" \
               "$GEN_ROUNDS" 2>"$err" | grep '^decode ' | tail -1) || true
         binary=$PYPY_SHA
       else
-        row=$("$TORCH_PYTHON" "$APP/gpt2_decode_torch.py" "${system#torch-}" \
+        torchscript=gpt2_decode_torch.py
+        case "$model" in smollm2-*|qwen*) torchscript=llama_decode_torch.py ;; esac
+        row=$("$TORCH_PYTHON" "$APP/$torchscript" "${system#torch-}" \
               "$W" "$NEW" "$GEN_ROUNDS" 2>"$err" | grep '^decode ' | tail -1) || true
         binary=$TORCH_VER
       fi

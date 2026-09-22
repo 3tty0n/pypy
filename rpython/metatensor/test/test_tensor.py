@@ -2178,6 +2178,42 @@ class TestGatherFusion(LLJitMixin):
         self.check_simple_loop(call_r=1)
         assert len(set(kernels.kernel_cache.kernels) - before) == 1
 
+    def test_rope_without_gather_fusion(self):
+        # The ablation switch: the gather runs as its own kernel again, the
+        # arithmetic is the same.
+        core.gather_knob.off = True
+        try:
+            before = set(kernels.kernel_cache.kernels)
+            driver = JitDriver(greens=[], reds=['n', 'x', 'c', 's', 'acc'])
+            def f(n):
+                x = core.zeros([3, 8])
+                c = core.zeros([3, 8])
+                s = core.zeros([3, 8])
+                for i in range(24):
+                    x.host[i] = (i % 5) - 2.0 + i * 0.25
+                    c.host[i] = 0.5 + (i % 3) * 0.25
+                    s.host[i] = (i % 4) * 0.125 - 0.2
+                acc = 0.0
+                while n > 0:
+                    driver.jit_merge_point(n=n, x=x, c=c, s=s, acc=acc)
+                    t = nn.Tensor(x)
+                    y = ops.add(ops.mul(x, c), ops.mul(t.rot_half(4).t, s))
+                    acc += ops.item(ops.sum(y))
+                    n -= 1
+                return acc
+            xs = [(i % 5) - 2.0 + i * 0.25 for i in range(24)]
+            expect = 0.0
+            for i in range(24):
+                r = xs[i // 4 * 4 + (i % 4 + 2) % 4]
+                expect += (xs[i] * (0.5 + (i % 3) * 0.25) +
+                           r * ((i % 4) * 0.125 - 0.2))
+            res = self.meta_interp(f, [10])
+            assert abs(res - expect * 10) < 1e-9
+            added = set(kernels.kernel_cache.kernels) - before
+            assert not [k for k in added if ',11:' in k]
+        finally:
+            core.gather_knob.off = False
+
     def test_head_split_of_a_region_is_one_kernel(self):
         driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
         def f(n):

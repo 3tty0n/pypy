@@ -183,18 +183,37 @@ class LlamaAttention(Module):
         self.sin = sin
         self.head_dim = head_dim
 
-    def forward(self, x):
+    def _qkv(self, x, cos, sin):
+        qkv = x.matmul(self.wqkv)
+        if self.bqkv is not None:
+            qkv = qkv.add(self.bqkv)
+        return qkv.mul(cos).add(qkv.rot_half(self.head_dim).mul(sin))
+
+    def forward(self, x, cache=None):
         import math
         h = self.heads
         d = x.shape[1]
         dh = d // h
-        qkv = x.matmul(self.wqkv)
-        if self.bqkv is not None:
-            qkv = qkv.add(self.bqkv)
-        qkv = qkv.mul(self.cos).add(qkv.rot_half(self.head_dim).mul(self.sin))
+        qkv = self._qkv(x, self.cos, self.sin)
+        if cache is not None:
+            cache.write_rows(0, qkv)
         s = qkv.attn_scores(qkv, h, d, 0, d).mul(
             _scalar(1.0 / math.sqrt(dh), x.dtype)).add(self.mask)
         c = softmax(s).attn_context(qkv, h, d, 2 * d)
+        return c.matmul(self.wo)
+
+    def step(self, x, cache, t, cos, sin):
+        """One token at position t against the cache; cos and sin are that
+        position's [1, 3d] rows.  The rotated q|k|v row goes into the cache,
+        as prefill's rows do."""
+        import math
+        h = self.heads
+        d = x.shape[1]
+        qkv = self._qkv(x, cos, sin)
+        cache.write_rows(t, qkv)
+        s = qkv.decode_scores(cache, h, t + 1, d, 0, d)
+        s = s.mul(_scalar(1.0 / math.sqrt(d // h), x.dtype))
+        c = softmax(s).decode_context(cache, h, d, 2 * d)
         return c.matmul(self.wo)
 
 
@@ -221,6 +240,15 @@ class LlamaBlock(Module):
         x = x.add(self.attn(rms_norm(x, self.g1, self.eps)))
         return x.add(self.mlp(rms_norm(x, self.g2, self.eps)))
 
+    def prefill(self, x, cache):
+        x = x.add(self.attn(rms_norm(x, self.g1, self.eps), cache))
+        return x.add(self.mlp(rms_norm(x, self.g2, self.eps)))
+
+    def step(self, x, cache, t, cos, sin):
+        x = x.add(self.attn.step(rms_norm(x, self.g1, self.eps), cache, t,
+                                 cos, sin))
+        return x.add(self.mlp(rms_norm(x, self.g2, self.eps)))
+
 
 class Llama(Module):
     def __init__(self, wte, blocks, gf, head=None, eps=1e-5):
@@ -234,10 +262,25 @@ class Llama(Module):
         x = self.wte.take(idx)
         for block in self.blocks:
             x = block(x)
+        return self._logits(x)
+
+    def _logits(self, x):
         x = rms_norm(x, self.gf, self.eps)
         if self.head is None:
             return x.matmul(self.wte, True)
         return x.matmul(self.head, True)
+
+    def prefill(self, idx, caches):
+        x = self.wte.take(idx)
+        for i in range(len(self.blocks)):
+            x = self.blocks[i].prefill(x, caches[i])
+        return self._logits(x)
+
+    def step(self, idx, caches, t, cos, sin):
+        x = self.wte.take(idx)
+        for i in range(len(self.blocks)):
+            x = self.blocks[i].step(x, caches[i], t, cos, sin)
+        return self._logits(x)
 
 
 class BertBlock(Module):

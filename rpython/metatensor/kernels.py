@@ -4,7 +4,7 @@ from rpython.rlib.rmd5 import md5
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import os
-from rpython.metatensor.core import (GA_ROTHALF, gather_dh, gather_heads, gather_kind, init_drain, init_lazy, ARITY, AXIS_ALL, F64, KERNEL, NO_CONSTS, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, SHAPEARRAY, SUM, config, is_reduction, param_slot, slot_param, slot_used)
+from rpython.metatensor.core import (GA_ROTHALF, gather_dh, gather_heads, gather_kind, init_drain, init_gather, init_lazy, ARITY, AXIS_ALL, F64, KERNEL, NO_CONSTS, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, SHAPEARRAY, SUM, config, is_reduction, param_slot, slot_param, slot_used)
 from rpython.metatensor.device import (_env, _here, gpu_enabled, profile, rt_cuda_load, rt_cuda_set_budget)
 from rpython.metatensor.ttir import (has_gather, input_modes, kernel_row_mode, out_modes, row_tile, row_warps, to_tile_ir, to_ttir, to_ttir_gather)
 
@@ -38,6 +38,7 @@ def single_kernel(opcode, p, dtype):
 def init_device():
     init_lazy()
     init_drain()
+    init_gather()
     try:
         config.block = int(_env('RTENSOR_BLOCK', '4096'))
         config.flat = int(_env('RTENSOR_FLAT_BLOCK', '4096'))

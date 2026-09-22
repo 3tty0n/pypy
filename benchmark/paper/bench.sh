@@ -2,7 +2,7 @@
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 ALL_MODELS="distilgpt2 gpt2 gpt2-medium smollm2-135m smollm2-360m smollm2-1.7b qwen2.5-0.5b bert-mini bert-base resnet18-b1 resnet18-b8 mixer_b16 deit-tiny vit-base"
-ALL_EXPERIMENTS="fusion flat_block budget_mb precision tf32 max_inputs"
+ALL_EXPERIMENTS="fusion flat_block budget_mb precision tf32 max_inputs gather"
 
 usage() {
   cat <<EOF
@@ -45,7 +45,8 @@ commands:
                          MOTION_CASE=axis|layout, MOTION_ARMS, MOTION_STEPS
                          as a list for the retention curve, MOTION_CACHE)
   decode                 next-token latency: greedy decode against a key/value
-                         cache for the GPT-2 ladder, ours against torch
+                         cache for the GPT-2 and SmolLM2 ladders and Qwen2.5,
+                         ours against torch
                          eager/compile/compile-ro, same token stream required,
                          into \$OUT/decode.tsv (DECODE_PYPY=... for a binary
                          with decode_scores)

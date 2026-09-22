@@ -491,6 +491,49 @@ def main(out_dir):
                 rows[0].get("pass", "")))
         lines.append("")
 
+    decode = read_tsv(os.path.join(out_dir, "decode.tsv"))
+    if decode:
+        # One row per process; each is already the median token of its warm
+        # generations.  A system whose tokens differ from the first system's
+        # is not measuring the same computation.
+        lines.append("## Next-token latency, greedy decode with a KV cache "
+                     "(median over processes)\n")
+        lines.append("| model | system | us/token | p90 us | launches/token | "
+                     "tokens match | teacher-forced |")
+        lines.append("|---|---|---|---|---|---|---|")
+        g = collections.OrderedDict()
+        for r in decode:
+            g.setdefault((r["model"], r["system"]), []).append(r)
+        for key, rows in g.items():
+            col = lambda c, spec="%.1f": fmt(med([x[c] for x in rows
+                                                  if x.get(c) not in (None, "")]), spec)
+            lines.append("| %s | %s | %s | %s | %s | %d/%d | %s |" % (
+                key[0], key[1], col("token_us", "%.0f"), col("p90_us", "%.0f"),
+                col("launches_per_token", "%.2f"),
+                sum(x.get("tokens_match") == "1" for x in rows), len(rows),
+                rows[0].get("teacher_forced") or "-"))
+        lines.append("")
+
+    trans = read_tsv(os.path.join(out_dir, "transition.tsv"))
+    if trans:
+        lines.append("## Carrying a fused value across a guard: descriptor "
+                     "kept (direct) against drained (median over rounds)\n")
+        lines.append("| cache | shape | arm | before us | at us | after us | "
+                     "total ms | launches | kernels |")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
+        g = collections.defaultdict(list)
+        for r in trans:
+            g[(r["cache"], "%sx%s" % (r["rows"], r["cols"]), r["arm"])].append(r)
+        for key in sorted(g):
+            rows = g[key]
+            col = lambda c, spec="%.1f": fmt(med([x[c] for x in rows
+                                                  if x.get(c) not in (None, "")]), spec)
+            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+                key[0], key[1], key[2], col("before_us"), col("at_us"),
+                col("after_us"), col("total_ms"), col("launches", "%.0f"),
+                col("kernels", "%.0f")))
+        lines.append("")
+
     text = "\n".join(lines) + "\n"
     out_path = os.path.join(out_dir, "summary.md")
     with open(out_path, "w") as f:

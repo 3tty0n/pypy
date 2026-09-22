@@ -1,30 +1,45 @@
 import common
+import rope
 
 from tensorpypy.models import LlamaAttention, LlamaMLP, LlamaBlock, Llama
 
 
-def build(cfg, buf, dtype):
-    w = common.Weights(cfg, buf, dtype)
-    t = cfg['seq']
-    h = cfg['n_head']
-    eps = cfg['eps']
-    idx = common.tensor([float(tok) for tok in cfg['tokens']],
-                                    [t], False, dtype)
-    mask = common.causal_mask(h, t, dtype)
+def rope3(cfg, w, dtype, t):
+    """cos and sin as [t, 3d] tables for the fused q|k|v rows: the rotation
+    for q and k, identity for v.  The first seq rows are the exported ones;
+    decoding past them computes the rest with the exporter's formula."""
     dh = cfg['head_dim']
-    cvals, cshape = w.raw('rope.cos')
-    svals, _ = w.raw('rope.sin')
-    d = cshape[1]
+    if t == cfg['seq']:
+        cvals, cshape = w.raw('rope.cos')
+        svals, _ = w.raw('rope.sin')
+        d = cshape[1]
+    else:
+        d = cfg['n_embd']
+        cvals, svals = rope.rope_tables(t, dh, cfg['n_head'],
+                                        cfg['rope_theta'])
     c3, s3 = [], []
-    for r in range(cshape[0]):
-        row = cvals[r * d:(r + 1) * d]
+    for r in range(t):
+        row = list(cvals[r * d:(r + 1) * d])
         srow = svals[r * d:(r + 1) * d]
         srow = [-v if (i % dh) < dh // 2 else v
                 for i, v in enumerate(srow)]
         c3.extend(row + row + [1.0] * d)
         s3.extend(srow + srow + [0.0] * d)
-    cos = common.tensor(c3, [cshape[0], 3 * d], False, dtype)
-    sin = common.tensor(s3, [cshape[0], 3 * d], False, dtype)
+    return (common.tensor(c3, [t, 3 * d], False, dtype),
+            common.tensor(s3, [t, 3 * d], False, dtype))
+
+
+def build(cfg, buf, dtype, t=None):
+    w = common.Weights(cfg, buf, dtype)
+    if t is None:
+        t = cfg['seq']
+    h = cfg['n_head']
+    eps = cfg['eps']
+    idx = common.tensor([float(tok) for tok in cfg['tokens'][:t]],
+                                    [t], False, dtype)
+    mask = common.causal_mask(h, t, dtype)
+    dh = cfg['head_dim']
+    cos, sin = rope3(cfg, w, dtype, t)
     blocks = []
     for i in range(cfg['n_layer']):
         pre = 'h.%d.' % i

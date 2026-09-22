@@ -86,6 +86,18 @@ class _DrainKnob(object):
     on = False
 drain_knob = _DrainKnob()
 
+class _GatherKnob(object):
+    # METATENSOR_NO_GATHER_FUSION=1: rot_half, head_split and head_merge run
+    # as standalone gather kernels, as they did before GATHER was a fusion
+    # node - the ablation of that node on the same binary.
+    _immutable_fields_ = ['off?']
+    off = False
+gather_knob = _GatherKnob()
+
+def init_gather():
+    value = os.environ.get('METATENSOR_NO_GATHER_FUSION')
+    gather_knob.off = value is not None and value != '' and value != '0'
+
 def init_lazy():
     """Read METATENSOR_LAZY once, at device init."""
     value = os.environ.get('METATENSOR_LAZY')

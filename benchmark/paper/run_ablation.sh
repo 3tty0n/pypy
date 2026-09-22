@@ -120,7 +120,25 @@ exp_max_inputs() {
   done
 }
 
-ALL_EXPERIMENTS="fusion flat_block budget_mb precision tf32 max_inputs"
+# Gathers as fusion nodes (rot_half in RoPE; qwen2.5 also fuses its qkv bias
+# into it) against the standalone gather kernels they replaced, on the same
+# binary, the two variants interleaved within each round.
+exp_gather() {
+  for round in $(seq "$ROUNDS"); do
+    for model in smollm2-135m smollm2-360m qwen2.5-0.5b smollm2-1.7b; do
+      for variant in fused standalone; do
+        local off=""
+        [ "$variant" = standalone ] && off=1
+        out=$(METATENSOR_NO_GATHER_FUSION=$off "$RUN_PYPY" $JIT_FLAGS \
+              "$APP/llama.py" "$WEIGHTS/$model" "$ITERS" "$WARMUP" 2>&1)
+        ab_row gather "$variant" "$model" "$round" "$(steady_of "$out")" "" \
+          "checksum=$(field_of "$out" checksum)" "$(field_of "$out" launches_per_iter)"
+      done
+    done
+  done
+}
+
+ALL_EXPERIMENTS="fusion flat_block budget_mb precision tf32 max_inputs gather"
 EXPERIMENTS=${EXPERIMENTS:-}
 if [ "$#" -gt 0 ]; then EXPERIMENTS="$*"; fi
 EXPERIMENTS=${EXPERIMENTS:-$ALL_EXPERIMENTS}
