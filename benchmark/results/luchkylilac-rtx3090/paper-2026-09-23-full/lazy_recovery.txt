@@ -1,0 +1,21 @@
+== deferred (METATENSOR_LAZY=1, pass off) ==
+case             ok    vs-ref expected       observed       launch/it kernels loops bridges  effects
+a shared-branch  yes   -     33487.5        33487.5           2.000      59     4       6  true=150 false=150
+b exception      yes   -     22812          22812             1.000       2     4       5  caught=9
+c effects        yes   -     n=250          n=250             1.000       0     2       7  0,-1,3,-3,-5,6,-7,9,-9,-11,12,... (1056 chars)
+d1 mut-alias     yes   -     9664           9664              2.183       7     1       0  first=96 mid=4896
+d2 mut-hazard    yes   -     727200         727200            3.000       0     1       0  first=32 last=4816
+e promotion      yes   -     26700          26700             1.000       1     1       2  shapes=64,96
+
+all cases match
+
+== virtual (the pass) ==
+case             ok    vs-ref expected       observed       launch/it kernels loops bridges  effects
+a shared-branch  yes   -     33487.5        33487.5           2.267      60     4       4  true=150 false=150
+b exception      yes   -     22812          22812             1.150       5     4       5  caught=9
+c effects        yes   -     n=250          n=250             1.307       8     2       6  0,-1,3,-3,-5,6,-7,9,-9,-11,12,... (1056 chars)
+d1 mut-alias     yes   -     9664           9664              2.000       2     1       0  first=96 mid=4896
+d2 mut-hazard    yes   -     727200         727200            3.000       1     1       0  first=32 last=4816
+e promotion      yes   -     26700          26700             1.090       3     1       1  shapes=64,96
+
+all cases match

@@ -1,0 +1,49 @@
+\begin{tabular}{lrrrrr}
+\toprule
+model & system & max |diff| & min argmax match & tol & pass \\
+\midrule
+bert-base & PyTorch eager & 8.01e-05 & 1.000 & 0.000535593 & 5/5 \\
+bert-base & torch.compile & 9.3e-05 & 1.000 & 0.000535593 & 5/5 \\
+bert-base & JAX/XLA & 0.000101 & 1.000 & 0.000535593 & 5/5 \\
+bert-mini & PyTorch eager & 2.67e-05 & 1.000 & 0.0005167 & 5/5 \\
+bert-mini & torch.compile & 2.29e-05 & 1.000 & 0.0005167 & 5/5 \\
+bert-mini & JAX/XLA & 2.48e-05 & 1.000 & 0.0005167 & 5/5 \\
+deit-tiny & PyTorch eager & 1.32e-05 & 1.000 & 0.000133298 & 5/5 \\
+deit-tiny & torch.compile & 1.34e-05 & 1.000 & 0.000133298 & 5/5 \\
+deit-tiny & JAX/XLA & 1.12e-05 & 1.000 & 0.000133298 & 5/5 \\
+distilgpt2 & PyTorch eager & 0.000282 & 1.000 & 0.00311393 & 5/5 \\
+distilgpt2 & torch.compile & 0.000282 & 1.000 & 0.00311393 & 5/5 \\
+distilgpt2 & JAX/XLA & 0.000221 & 1.000 & 0.00311393 & 5/5 \\
+gpt2 & PyTorch eager & 0.00389 & 1.000 & 0.00648755 & 5/5 \\
+gpt2 & torch.compile & 0.00463 & 1.000 & 0.00648755 & 5/5 \\
+gpt2 & JAX/XLA & 0.00335 & 1.000 & 0.00648755 & 5/5 \\
+gpt2-medium & PyTorch eager & 0.00439 & 1.000 & 0.0073956 & 5/5 \\
+gpt2-medium & torch.compile & 0.00645 & 1.000 & 0.0073956 & 5/5 \\
+gpt2-medium & JAX/XLA & 0.00516 & 1.000 & 0.0073956 & 5/5 \\
+mixer\_b16 & PyTorch eager & 5.15e-05 & 1.000 & 0.000280097 & 5/5 \\
+mixer\_b16 & torch.compile & 5.91e-05 & 1.000 & 0.000280097 & 5/5 \\
+mixer\_b16 & JAX/XLA & 7.06e-05 & 1.000 & 0.000280097 & 5/5 \\
+qwen2.5-0.5b & PyTorch eager & 0.000149 & 1.000 & 0.000553048 & 5/5 \\
+qwen2.5-0.5b & torch.compile & 0.000137 & 1.000 & 0.000553048 & 5/5 \\
+qwen2.5-0.5b & JAX/XLA & 0.000376 & 1.000 & 0.000553048 & 5/5 \\
+resnet18-b1 & PyTorch eager & 0.0158 & 1.000 & 0.0299742 & 5/5 \\
+resnet18-b1 & torch.compile & 0.00942 & 1.000 & 0.0299742 & 5/5 \\
+resnet18-b1 & JAX/XLA & 0.0167 & 1.000 & 0.0299742 & 5/5 \\
+resnet18-b8 & PyTorch eager & 0.00725 & 1.000 & 0.0299708 & 5/5 \\
+resnet18-b8 & torch.compile & 0.0122 & 1.000 & 0.0299708 & 5/5 \\
+resnet18-b8 & JAX/XLA & 0.0123 & 1.000 & 0.0299708 & 5/5 \\
+smollm2-1.7b & PyTorch eager & 0.00107 & 1.000 & 0.000504007 & 3/5 \\
+smollm2-1.7b & torch.compile & 0.000765 & 1.000 & 0.000504007 & 2/5 \\
+smollm2-1.7b & JAX/XLA & 0.00027 & 1.000 & 0.000504007 & 5/5 \\
+smollm2-135m & PyTorch eager & 0.000147 & 1.000 & 0.000808265 & 5/5 \\
+smollm2-135m & torch.compile & 0.000168 & 1.000 & 0.000808265 & 5/5 \\
+smollm2-135m & JAX/XLA & 0.000215 & 1.000 & 0.000808265 & 5/5 \\
+smollm2-360m & PyTorch eager & 0.000219 & 1.000 & 0.000582302 & 5/5 \\
+smollm2-360m & torch.compile & 0.00022 & 1.000 & 0.000582302 & 5/5 \\
+smollm2-360m & JAX/XLA & 0.000318 & 1.000 & 0.000582302 & 5/5 \\
+vit-base & PyTorch eager & 1.07e-05 & 1.000 & 0.000248661 & 5/5 \\
+vit-base & torch.compile & 1.17e-05 & 1.000 & 0.000248661 & 5/5 \\
+vit-base & JAX/XLA & 1.26e-05 & 1.000 & 0.000248661 & 5/5 \\
+\bottomrule
+\end{tabular}
+% each system against MetaTensor on five inputs per model derived from the stored one (INPUT\_SEED=1..5): the worst of the five maximum absolute logit differences, the smallest argmax agreement over the five (fraction of token positions, top-1 for the vision models), the tolerance for that (workload class, dtype), and how many of the five inputs passed it

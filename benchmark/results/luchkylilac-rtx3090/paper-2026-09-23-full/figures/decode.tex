@@ -1,0 +1,35 @@
+\begin{tabular}{lrrrrr}
+\toprule
+model & system & token us & vs ours & launches/token & tokens match \\
+\midrule
+distilgpt2 & MetaTensor & 744 [744, 749] & 1.00 & 49.96 & 10/10 \\
+distilgpt2 & PyTorch eager & 2016 [2000, 2197] & 2.71 & - & 10/10 \\
+distilgpt2 & torch.compile & 818 [810, 923] & 1.10 & - & 10/10 \\
+distilgpt2 & torch.compile (reduce-overhead) & 912 [812, 920] & 1.23 & - & 10/10 \\
+gpt2 & MetaTensor & 1175 [1172, 1177] & 1.00 & 92.62 & 10/10 \\
+gpt2 & PyTorch eager & 3705 [3690, 3952] & 3.15 & - & 10/10 \\
+gpt2 & torch.compile & 1460 [1280, 1471] & 1.24 & - & 10/10 \\
+gpt2 & torch.compile (reduce-overhead) & 1427 [1262, 1442] & 1.21 & - & 10/10 \\
+gpt2-medium & MetaTensor & 2678 [2676, 2682] & 1.00 & 177.98 & 10/10 \\
+gpt2-medium & PyTorch eager & 7125 [7096, 7716] & 2.66 & - & 10/10 \\
+gpt2-medium & torch.compile & 2498 [2455, 2503] & 0.93 & - & 10/10 \\
+gpt2-medium & torch.compile (reduce-overhead) & 2470 [2464, 2471] & 0.92 & - & 10/10 \\
+smollm2-135m & MetaTensor & 2167 [2162, 2171] & 1.00 & 190.43 & 10/10 \\
+smollm2-135m & PyTorch eager & 14890 [14086, 15746] & 6.87 & - & 10/10 \\
+smollm2-135m & torch.compile & 5542 [5496, 5636] & 2.56 & - & 10/10 \\
+smollm2-135m & torch.compile (reduce-overhead) & 2844 [2841, 2909] & 1.31 & - & 10/10 \\
+smollm2-360m & MetaTensor & 3160 [3158, 3164] & 1.00 & 202.57 & 10/10 \\
+smollm2-360m & PyTorch eager & 15489 [15090, 16481] & 4.90 & - & 10/10 \\
+smollm2-360m & torch.compile & 5985 [5918, 6692] & 1.89 & - & 10/10 \\
+smollm2-360m & torch.compile (reduce-overhead) & 3955 [3951, 4016] & 1.25 & - & 10/10 \\
+smollm2-1.7b & MetaTensor & 9242 [9238, 9244] & 1.00 & 153.82 & 10/10 \\
+smollm2-1.7b & PyTorch eager & 11929 [11808, 13484] & 1.29 & - & 10/10 \\
+smollm2-1.7b & torch.compile & 9812 [9801, 9845] & 1.06 & - & 10/10 \\
+smollm2-1.7b & torch.compile (reduce-overhead) & 9517 [9515, 9533] & 1.03 & - & 10/10 \\
+qwen2.5-0.5b & MetaTensor & 3635 [3629, 3642] & 1.00 & 153.83 & 10/10 \\
+qwen2.5-0.5b & PyTorch eager & 13246 [12192, 13661] & 3.64 & - & 10/10 \\
+qwen2.5-0.5b & torch.compile & 5399 [5353, 5478] & 1.49 & - & 10/10 \\
+qwen2.5-0.5b & torch.compile (reduce-overhead) & 4085 [4081, 4148] & 1.12 & - & 10/10 \\
+\bottomrule
+\end{tabular}
+% next-token latency (us), greedy decode with a key/value cache, medians and sign-test intervals over fresh processes

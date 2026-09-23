@@ -1,0 +1,34 @@
+\begin{tabular}{lrrrrrrrrrrrr}
+\toprule
+model & DAG lives in & us/iter & range & launches/iter & kernels & compiles & gc ms & peak bytes & nodes deferred & loops & bridges & same argmax \\
+\midrule
+gpt2 & MetaTensor (DAG in the JIT) & 2094.0 & 2085.4-2112.1 & 74.2 & 110 & 0 & 14 & 2877M & 0 & 1 & 0 & 1 \\
+gpt2 & deferred library (DAG at run time) & 3217.6 & 3217.4-3245.2 & 86.0 & 113 & 0 & 91 & 2877.1M & 121443 & 5 & 53 & 1 \\
+gpt2 & eager (no DAG) & 3395.1 & 3381.1-3417.3 & 529.0 & 103 & 0 & 13 & 2877.1M & 0 & 1 & 0 & 1 \\
+distilgpt2 & MetaTensor (DAG in the JIT) & 1302.3 & 1300.6-1304.6 & 38.2 & 110 & 0 & 12 & 2536.8M & 0 & 1 & 0 & 1 \\
+distilgpt2 & deferred library (DAG at run time) & 2220.6 & 2058.2-2224.3 & 44.0 & 113 & 0 & 62 & 2426.3M & 62103 & 8 & 32 & 1 \\
+distilgpt2 & eager (no DAG) & 1954.2 & 1946.9-1955.0 & 271.0 & 103 & 0 & 14 & 2426.3M & 0 & 1 & 0 & 1 \\
+bert-base & MetaTensor (DAG in the JIT) & 1841.5 & 1839.8-1851.8 & 64.3 & 109 & 0 & 11 & 2000.6M & 0 & 1 & 0 & 1 \\
+bert-base & deferred library (DAG at run time) & 2828.9 & 2819.0-3052.3 & 64.0 & 112 & 0 & 75 & 2000.6M & 174343 & 1 & 41 & 1 \\
+bert-base & eager (no DAG) & 3827.0 & 3822.0-3842.2 & 759.0 & 103 & 0 & 17 & 2000.6M & 0 & 1 & 0 & 1 \\
+bert-mini & MetaTensor (DAG in the JIT) & 417.4 & 408.5-427.8 & 24.3 & 109 & 0 & 9 & 479.1M & 0 & 3 & 0 & 1 \\
+bert-mini & deferred library (DAG at run time) & 1664.3 & 1635.2-1673.2 & 24.0 & 112 & 0 & 53 & 479.1M & 65783 & 3 & 18 & 1 \\
+bert-mini & eager (no DAG) & 1159.8 & 1151.1-1169.3 & 287.0 & 103 & 0 & 14 & 479.1M & 0 & 1 & 0 & 1 \\
+vit-base & MetaTensor (DAG in the JIT) & 3687.0 & 3670.3-3694.2 & 76.3 & 111 & 0 & 14 & 1311.9M & 0 & 1 & 0 & 1 \\
+vit-base & deferred library (DAG at run time) & 4486.2 & 4483.1-4494.3 & 88.0 & 116 & 0 & 102 & 1311.9M & 165833 & 4 & 43 & 1 \\
+vit-base & eager (no DAG) & 6353.8 & 6353.1-6356.2 & 723.0 & 104 & 0 & 20 & 1311.9M & 0 & 1 & 0 & 1 \\
+mixer\_b16 & MetaTensor (DAG in the JIT) & 2703.6 & 2694.2-2713.3 & 63.4 & 109 & 0 & 17 & 968.4M & 0 & 1 & 0 & 1 \\
+mixer\_b16 & deferred library (DAG at run time) & 4458.6 & 4448.6-4473.5 & 75.0 & 122 & 0 & 146 & 968.5M & 218273 & 1 & 48 & 1 \\
+mixer\_b16 & eager (no DAG) & 5904.8 & 5901.4-5909.6 & 950.0 & 103 & 0 & 22 & 968.5M & 0 & 1 & 0 & 1 \\
+resnet18-b1 & MetaTensor (DAG in the JIT) & 700.1 & 693.8-700.3 & 39.0 & 117 & 0 & 1 & 285.5M & 0 & 2 & 0 & 1 \\
+resnet18-b1 & deferred library (DAG at run time) & 732.4 & 732.3-733.2 & 39.0 & 123 & 0 & 19 & 297.2M & 15183 & 1 & 0 & 1 \\
+resnet18-b1 & eager (no DAG) & 859.5 & 858.6-865.0 & 87.0 & 114 & 0 & 15 & 297.2M & 0 & 1 & 0 & 1 \\
+smollm2-135m & MetaTensor (DAG in the JIT) & 3605.9 & 3589.3-3608.7 & 182.1 & 110 & 0 & 13 & 2814.1M & 0 & 1 & 0 & 1 \\
+smollm2-135m & deferred library (DAG at run time) & 4131.0 & 4106.8-4145.2 & 205.0 & 117 & 0 & 80 & 2814.1M & 215513 & 4 & 38 & 1 \\
+smollm2-135m & eager (no DAG) & 5782.3 & 5781.3-5785.8 & 968.0 & 104 & 0 & 14 & 2814.1M & 0 & 1 & 0 & 1 \\
+smollm2-360m & MetaTensor (DAG in the JIT) & 6025.0 & 6023.2-6028.9 & 194.1 & 110 & 0 & 18 & 6453.3M & 0 & 1 & 0 & 1 \\
+smollm2-360m & deferred library (DAG at run time) & 6402.8 & 6395.5-6416.6 & 218.0 & 117 & 0 & 77 & 6681.6M & 229773 & 3 & 43 & 1 \\
+smollm2-360m & eager (no DAG) & 8432.1 & 8428.5-8443.2 & 1032.0 & 104 & 0 & 13 & 6681.6M & 0 & 1 & 0 & 1 \\
+\bottomrule
+\end{tabular}
+% one binary, three places to keep the operation DAG. kernels and Triton compiles are cumulative process counters and are cardinalities: they say how many distinct kernels an arm compiled, not which, and do not identify kernel keys or order

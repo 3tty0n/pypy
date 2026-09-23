@@ -1,0 +1,24 @@
+\begin{tabular}{lllrll}
+\toprule
+model & HuggingFace id & snapshot & params & weights & role \\
+\midrule
+gpt2 & openai-community/gpt2 & 607a30d783df & 124.4M & trained & population \\
+gpt2-medium & openai-community/gpt2-medium & 6dcaa7a952f7 & 354.8M & trained & population \\
+distilgpt2 & distilbert/distilgpt2 & 2290a62682d0 & 81.9M & trained & population \\
+smollm2-135m & HuggingFaceTB/SmolLM2-135M & 93efa2f097d5 & 147.8M & trained & population \\
+smollm2-360m & HuggingFaceTB/SmolLM2-360M & f8027fd0eaee & 401.1M & trained & population \\
+smollm2-1.7b & HuggingFaceTB/SmolLM2-1.7B & effd688a1292 & 1711.4M & trained & population \\
+qwen2.5-0.5b & Qwen/Qwen2.5-0.5B-Instruct & 7ae557604adf & 527.1M & trained & population \\
+bert-base & google-bert/bert-base-uncased & 86b5e0934494 & 109.2M & trained & population \\
+bert-mini & google/bert\_uncased\_L-4\_H-256\_A-4 & 43ca9bbcdffc & 11.1M & trained & population, C3 exemption \\
+resnet18-b1 & timm/resnet18.a1\_in1k & 491b427b45c9 & 11.7M & trained & population \\
+resnet18-b8 & timm/resnet18.a1\_in1k & 491b427b45c9 & 11.7M & trained & population \\
+mixer\_b16 & timm/mixer\_b16\_224.goog\_in21k\_ft\_in1k & 0006300d6049 & 59.9M & trained & population, C3 exemption \\
+vit-base & google/vit-base-patch16-224 & 3f49326eb077 & 86.6M & trained & population \\
+deit-tiny & facebook/deit-tiny-patch16-224 & 7cfd95ac4c91 & 5.7M & trained & population \\
+vit-tiny & WinKawaks/vit-tiny-patch16-224 & 77d1485af66b & 5.7M & trained & excluded \\
+tiny-gpt2 & sshleifer/tiny-gpt2 & d1856183d08a & 102.7k & randomly initialised fixture & excluded \\
+bert-tiny & prajjwal1/bert-tiny & 1c438adbccfa & 4.4M & encoder trained, head random & excluded \\
+\bottomrule
+\end{tabular}
+% checkpoint, snapshot and weight provenance per configuration

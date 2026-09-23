@@ -1,0 +1,25 @@
+\begin{tabular}{lrrrrrrrrr}
+\toprule
+system & pattern & steady us & first fail & after fail & peak & cold & launch/it & loops & bridges \\
+\midrule
+MetaTensor & guard holds & 37.9 & n/a & n/a & 64 & 4024 & 2.02 & 0 & 0 \\
+PyTorch eager & guard holds & 114.9 & n/a & n/a & 127 & 39838 & n/a & 0 & n/a \\
+torch.compile & guard holds & 176.4 & n/a & n/a & 209 & 587595 & n/a & 0 & n/a \\
+torch.compile (reduce-overhead) & guard holds & 244.4 & n/a & n/a & 280 & 538822 & n/a & 0 & n/a \\
+MetaTensor & guard fails every iter & 37.6 & 60 & 54 & 281 & 4075 & 2.17 & 0 & 2 \\
+PyTorch eager & guard fails every iter & 115.4 & 116 & 116 & 148 & 39770 & n/a & 0 & n/a \\
+torch.compile & guard fails every iter & 177.5 & 122103 & 195 & 122103 & 584289 & n/a & 2 & n/a \\
+torch.compile (reduce-overhead) & guard fails every iter & 263.0 & 126324 & 346 & 126324 & 598603 & n/a & 2 & n/a \\
+MetaTensor & both paths hot & 37.2 & n/a & n/a & 65 & 4088 & 2.02 & 0 & 0 \\
+PyTorch eager & both paths hot & 110.4 & n/a & n/a & 120 & 36842 & n/a & 0 & n/a \\
+torch.compile & both paths hot & 188.4 & n/a & n/a & 208 & 587942 & n/a & 0 & n/a \\
+torch.compile (reduce-overhead) & both paths hot & 249.5 & n/a & n/a & 295 & 541611 & n/a & 0 & n/a \\
+MetaTensor & fresh value every iter & 69.0 & 68 & 70 & 1590 & 4011 & 7.00 & 0 & 63 \\
+PyTorch eager & fresh value every iter & 112.5 & 116 & 114 & 143 & 38822 & n/a & 0 & n/a \\
+torch.compile & fresh value every iter & 145.2 & 147 & 147 & 165 & 530990 & n/a & 0 & n/a \\
+torch.compile (reduce-overhead) & fresh value every iter & 166.7 & 169 & 168 & 216 & 591332 & n/a & 0 & n/a \\
+MetaTensor & probe (a) shared branch & 35.0 & n/a & 52 & 1799 & 3777 & 2.25 & 5 & 3 \\
+MetaTensor & probe (e) shape change & 17.9 & 1345 & 33 & 1533 & 94 & 1.09 & 3 & 4 \\
+\bottomrule
+\end{tabular}
+% median over the rounds; first/after/peak are single iterations, peak is the deoptimization itself

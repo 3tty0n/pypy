@@ -1,0 +1,41 @@
+\begin{tabular}{lrrrrr}
+\toprule
+experiment & model & setting & us & range & launches/iter \\
+\midrule
+budget mb & distilgpt2 & 8 & 1307 & 1288-1308 &  \\
+budget mb & distilgpt2 & 64 & 1295 & 1292-1302 &  \\
+flat block & distilgpt2 & 256 & 1260 & 1259-1270 &  \\
+flat block & distilgpt2 & 4096 & 1292 & 1289-1293 &  \\
+flat block & resnet18 & 256 & 637 & 631-638 &  \\
+flat block & resnet18 & 4096 & 701 & 695-703 &  \\
+fusion & distilgpt2 & off & 1964 & 1956-1981 &  \\
+fusion & distilgpt2 & on & 1292 & 1292-1298 &  \\
+gather & qwen2.5-0.5b & fused & 6394 & 6385-6417 & 146.1 \\
+gather & qwen2.5-0.5b & standalone & 6536 & 6530-6549 & 194.1 \\
+gather & smollm2-1.7b & fused & 14185 & 14178-14190 & 146.1 \\
+gather & smollm2-1.7b & standalone & 14264 & 14247-14279 & 170.1 \\
+gather & smollm2-135m & fused & 3595 & 3579-3602 & 182.1 \\
+gather & smollm2-135m & standalone & 3688 & 3663-3706 & 212.1 \\
+gather & smollm2-360m & fused & 6018 & 6016-6026 & 194.1 \\
+gather & smollm2-360m & standalone & 6079 & 6072-6091 & 226.1 \\
+max inputs & bert-mini & mi4 & 466 & 463-471 & 34.3 \\
+max inputs & bert-mini & mi6 & 424 & 423-433 & 24.3 \\
+max inputs & bert-mini & mi8 & 432 & 423-434 & 24.3 \\
+max inputs & distilgpt2 & mi4 & 1320 & 1319-1331 & 45.2 \\
+max inputs & distilgpt2 & mi6 & 1291 & 1288-1303 & 38.2 \\
+max inputs & distilgpt2 & mi8 & 1292 & 1289-1299 & 38.2 \\
+max inputs & mixer\_b16 & mi4 & 2742 & 2740-2746 & 76.4 \\
+max inputs & mixer\_b16 & mi6 & 2695 & 2688-2703 & 63.4 \\
+max inputs & mixer\_b16 & mi8 & 2696 & 2692-2697 & 63.4 \\
+precision & distilgpt2 & float16 & 922 & 916-933 &  \\
+precision & distilgpt2 & float32 & 1294 & 1291-1296 &  \\
+precision & smollm2-135m & float16 & 2158 & 2152-2168 &  \\
+precision & smollm2-135m & float32 & 3615 & 3608-3620 &  \\
+tf32 & resnet18-b1 & fp32 & 786 & 784-792 &  \\
+tf32 & resnet18-b1 & tf32 & 722 & 722-729 &  \\
+tf32 & resnet18-b8 & fp32 & 3214 & 3212-3215 &  \\
+tf32 & resnet18-b8 & tf32 & 2736 & 2712-2736 &  \\
+tf32 & resnet18-b8 & torch-fp32 & 3068 & 3059-3070 &  \\
+\bottomrule
+\end{tabular}
+% median us per iteration over the rounds, with the observed range, and launches/iter where the experiment records it

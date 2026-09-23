@@ -1,0 +1,21 @@
+\begin{tabular}{lrrrrrrrrr}
+\toprule
+regime & system & total ms & p50 us & p95 us & max us & bridges & frame compiles & exit layers & pass \\
+\midrule
+stable & MetaTensor & 760 & 1071.2 & 2153.9 & 2244 & 1 & 0 & 4 & yes \\
+stable & PyTorch eager & 477 & 1896.4 & 1942.4 & 1972 & 0 & 0 & 4 & yes \\
+stable & torch.compile & 1017 & 1400.2 & 1445.8 & 1470 & 0 & 4 & 4 & yes \\
+stable & torch.compile (reduce-overhead) & 1145 & 1424.3 & 1464.1 & 1489 & 0 & 4 & 4 & yes \\
+stable & torch.compile (max-autotune) & 1145 & 1312.0 & 1349.9 & 1375 & 0 & 4 & 4 & yes \\
+stable & JAX/XLA (per-layer jit, host sync) & 11563 & 1720.9 & 1828.4 & 2054 & 0 & 0 & 4 & yes \\
+stable & JAX/XLA (lax.while\_loop) & 7314 & 1330.6 & 1379.3 & 1420 & 0 & 0 & 4 & yes \\
+varying & MetaTensor & 788 & 1195.9 & 2013.9 & 2515 & 3 & 0 & 2356 & yes \\
+varying & PyTorch eager & 480 & 2206.3 & 2644.3 & 2673 & 0 & 0 & 2356 & yes \\
+varying & torch.compile & 1098 & 1691.1 & 1971.5 & 1991 & 0 & 4 & 2356 & yes \\
+varying & torch.compile (reduce-overhead) & 1106 & 1530.2 & 1799.3 & 1845 & 0 & 4 & 2356 & yes \\
+varying & torch.compile (max-autotune) & 1199 & 1524.2 & 1796.2 & 1856 & 0 & 4 & 2356 & yes \\
+varying & JAX/XLA (per-layer jit, host sync) & 11171 & 1928.6 & 2389.0 & 2647 & 0 & 0 & 2356 & yes \\
+varying & JAX/XLA (lax.while\_loop) & 7546 & 1440.8 & 1667.5 & 1735 & 0 & 0 & 2356 & yes \\
+\bottomrule
+\end{tabular}
+% early exit on distilgpt2, median over three rounds. total ms is the whole phase including every compilation; frame compiles counts every frame Dynamo compiled inside that phase, first compilations included; the exit layers are the per-iteration sequence of exit depths, which every system has to reproduce or the row is not comparable

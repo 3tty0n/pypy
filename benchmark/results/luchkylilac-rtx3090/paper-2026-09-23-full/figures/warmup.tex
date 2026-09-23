@@ -1,0 +1,27 @@
+\begin{tabular}{lrrrrrr}
+\toprule
+model & system & cache & first forward (ms) & steady\_at (iters) & steady (us) & crossover vs eager (iters) \\
+\midrule
+distilgpt2 & PyTorch eager & warm & 134.20 & 2 & 3056.2 & none \\
+distilgpt2 & PyTorch eager & cold & 136.64 & 2 & 3054.0 & none \\
+distilgpt2 & MetaTensor & warm & 587.56 & 167 & 1261.5 & 274 \\
+distilgpt2 & MetaTensor & cold & 3968.52 & 127 & 1254.1 & none \\
+distilgpt2 & torch.compile & warm & 1567.98 & 54 & 1451.6 & none \\
+distilgpt2 & torch.compile & cold & 3956.03 & 89 & 1395.0 & none \\
+distilgpt2 & torch.compile (reduce-overhead) & warm & 1579.03 & 64 & 1333.1 & none \\
+distilgpt2 & torch.compile (reduce-overhead) & cold & 3387.48 & 135 & 1303.7 & none \\
+distilgpt2 & JAX/XLA & warm & 57.62 & 15 & 1165.4 & 1 \\
+distilgpt2 & JAX/XLA & cold & 4.87 & 27 & 1173.5 & 1 \\
+gpt2 & PyTorch eager & warm & 134.20 & 184 & 4962.6 & none \\
+gpt2 & PyTorch eager & cold & 139.20 & 225 & 5341.6 & none \\
+gpt2 & MetaTensor & warm & 643.80 & 8 & 2075.9 & 161 \\
+gpt2 & MetaTensor & cold & 3923.57 & 215 & 2073.0 & none \\
+gpt2 & torch.compile & warm & 2062.83 & 18 & 2334.5 & none \\
+gpt2 & torch.compile & cold & 5770.11 & 35 & 2256.3 & none \\
+gpt2 & torch.compile (reduce-overhead) & warm & 2094.62 & 19 & 2129.0 & none \\
+gpt2 & torch.compile (reduce-overhead) & cold & 5074.07 & 41 & 2103.9 & none \\
+gpt2 & JAX/XLA & warm & 56.09 & 60 & 1922.2 & 1 \\
+gpt2 & JAX/XLA & cold & 8.55 & 6 & 1946.1 & 1 \\
+\bottomrule
+\end{tabular}
+% first forward and steady-state onset from a fresh process, median over the rounds; crossover is the first forward at which cumulative time drops below torch-eager's

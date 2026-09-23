@@ -18,8 +18,9 @@
 */*/results.jsonl
 */*/.warmup_series/
 # The MOTION leave check's per-run files (packed, see archive.sh), the warm
-# kernel cache run_motion.sh keeps for its sweeps, and run_decode.sh's token
+# kernel caches run_motion.sh and run_transition.sh keep for their sweeps, and run_decode.sh's token
 # scratch.
 */*/leave/
 */*/.motion_cache/
+*/*/.transition_cache/
 */*/.decode_tokens_*

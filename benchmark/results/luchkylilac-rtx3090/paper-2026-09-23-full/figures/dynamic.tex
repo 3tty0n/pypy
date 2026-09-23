@@ -1,0 +1,19 @@
+\begin{tabular}{lrrrrrrrrrrrrrrrr}
+\toprule
+system & phase & 32 & 48 & 64 & 96 & 128 & 160 & 192 & 224 & 256 & 288 & loops & bridges & kernels & hits & new graphs \\
+\midrule
+MetaTensor & first visit & 972 [972-974] & 1385 [1385-1386] & 1425 [1425-1432] & 1701 [1697-1705] & 2030 [2023-2042] & - & - & - & - & - & 9 & 8 & 4 & 3379 & 0 \\
+MetaTensor & revisit & 942 [936-966] & 1328 [1324-1361] & 1390 [1382-1413] & 1638 [1626-1690] & 1965 [1940-2021] & - & - & - & - & - & 0 & 0 & 0 & 2970 & 0 \\
+MetaTensor & new length distribution & - & - & - & - & - & 2426 [2407-2433] & 2712 [2701-2714] & 3130 [3125-3136] & 3220 [3216-3230] & 3744 [3733-3789] & 0 & 0 & 0 & 2970 & 0 \\
+torch.compile (static) & first visit & 1004 [1002-1018] & 1370 [1356-1371] & 1407 [1398-1422] & 1639 [1624-1648] & 1792 [1786-1792] & - & - & - & - & - & 0 & 0 & 0 & 0 & 5 \\
+torch.compile (static) & revisit & 998 [988-1003] & 1347 [1327-1356] & 1380 [1355-1388] & 1622 [1578-1626] & 1782 [1746-1790] & - & - & - & - & - & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (static) & new length distribution & - & - & - & - & - & 2214 [2212-2224] & 2403 [2402-2408] & 3372 [3357-3372] & 3527 [3526-3530] & 4196 [4190-4197] & 0 & 0 & 0 & 0 & 2 \\
+torch.compile (dynamic) & first visit & 1077 [1072-1077] & 1495 [1492-1502] & 1544 [1526-1545] & 1717 [1717-1721] & 1920 [1915-1921] & - & - & - & - & - & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & revisit & 1070 [1069-1071] & 1482 [1470-1482] & 1528 [1519-1540] & 1719 [1713-1721] & 1919 [1910-1923] & - & - & - & - & - & 0 & 0 & 0 & 0 & 0 \\
+torch.compile (dynamic) & new length distribution & - & - & - & - & - & 2346 [2344-2351] & 2579 [2577-2586] & 2996 [2995-3013] & 3071 [3071-3082] & 3726 [3725-3745] & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & first visit & 2153 [2145-2174] & 2362 [2327-2368] & 2364 [2344-2382] & 2429 [2406-2433] & 2491 [2484-2503] & - & - & - & - & - & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & revisit & 2148 [2145-2164] & 2337 [2325-2350] & 2350 [2342-2358] & 2402 [2399-2411] & 2464 [2459-2480] & - & - & - & - & - & 0 & 0 & 0 & 0 & 0 \\
+PyTorch eager & new length distribution & - & - & - & - & - & 2703 [2702-2722] & 2898 [2888-2908] & 3309 [3302-3310] & 3492 [3478-3495] & 4159 [4152-4172] & 0 & 0 & 0 & 0 & 0 \\
+\bottomrule
+\end{tabular}
+% median us per step over the rounds (range in brackets), and the compile counters summed over the phase. first visit is the first time each length is seen, revisit is the same lengths again, and the last phase is five lengths the run has not seen
