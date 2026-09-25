@@ -16,14 +16,12 @@ index.json:
   params  {name: [byte offset, shape, dtype]}
   inputs  [[byte offset, shape, dtype], ...]   positional, in call order
   kwargs  {name: [byte offset, shape, dtype]}
-  outputs [[byte offset, shape, dtype], ...]   flattened in pytree order
-  outputs_fp64  the same forward with model and inputs cast to float64 by
-                the dashboard's cast_to_fp64, the reference its accuracy
-                check measures errors against
-  tolerance, cosine, larger_multiplier   what the runner's
-                get_tolerance_and_cosine_flag and config give this model
+  config  a transformers model's config, as its constructor reads it
+
+The outputs are not stored: suite_check.py recomputes the eager and float64
+references through the runner and judges the port's outputs with the
+dashboard's own same().
 """
-import copy
 import json
 import os
 import subprocess
@@ -55,23 +53,12 @@ def config_of(model):
 
 def main(argv):
     import torch
-    from torch.utils._pytree import tree_flatten
     suite, name, out = argv[1], argv[2], os.path.abspath(argv[3])
     batch = int(argv[argv.index("--batch") + 1]) if "--batch" in argv else None
     runner, args = suite_census.make_runner(suite, name)
     _, _, model, inputs, batch = runner.load_model("cuda", name,
                                                    batch_size=batch)
     model, inputs = runner.cast_based_on_args(model, inputs)
-    import common
-    with torch.no_grad():
-        result = runner.forward_pass(model, inputs)
-        m64, i64 = common.cast_to_fp64(copy.deepcopy(model),
-                                       copy.deepcopy(inputs))
-        result64 = runner.forward_pass(m64, i64)
-    torch.cuda.synchronize()
-    tol, cosine = runner.get_tolerance_and_cosine_flag(False, "cuda", name)
-    larger = name in getattr(
-        runner, "require_larger_multiplier_for_smaller_tensor", ())
 
     os.makedirs(out, exist_ok=True)
     blob = open(os.path.join(out, "data.bin"), "wb")
@@ -90,24 +77,17 @@ def main(argv):
     else:
         pos = [put(v) for v in inputs if isinstance(v, torch.Tensor)]
         kw = {}
-    outs = [put(v) for v in tree_flatten(result)[0]
-            if isinstance(v, torch.Tensor)]
-    outs64 = [put(v) for v in tree_flatten(result64)[0]
-              if isinstance(v, torch.Tensor)]
     blob.close()
     src = suite_census.TORCHBENCH if suite == "torchbench" else \
         suite_census.DYNAMO
     json.dump({"suite": suite, "model": name, "batch": batch,
                "torch": torch.__version__, "source": revision(src),
                "params": params, "inputs": pos, "kwargs": kw,
-               "outputs": outs, "outputs_fp64": outs64,
-               "config": config_of(model),
-               "tolerance": tol, "cosine": bool(cosine),
-               "larger_multiplier": bool(larger)},
+               "config": config_of(model)},
               open(os.path.join(out, "index.json"), "w"), indent=1,
               sort_keys=True)
-    print("wrote %s: %d params, %d inputs, %d outputs, %.1f MB" % (
-        out, len(params), len(pos) + len(kw), len(outs),
+    print("wrote %s: %d params, %d inputs, %.1f MB" % (
+        out, len(params), len(pos) + len(kw),
         os.path.getsize(os.path.join(out, "data.bin")) / 1e6))
 
 

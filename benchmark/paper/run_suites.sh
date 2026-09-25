@@ -10,9 +10,11 @@
 #   inductor-cg   the same with inductor's CUDA graphs
 #
 # Each model is exported once (benchmark/paper/suite_export.py: state_dict,
-# inputs, eager and float64 outputs, tolerance) into SUITES_EXPORTS; ours
-# is checked against that export with same()'s rule, and a run in which any
-# op fell back to the CPU is recorded as failed, not timed.
+# inputs, config) into SUITES_EXPORTS.  The first run of ours dumps its
+# outputs and suite_check.py judges them the way check_accuracy() judges a
+# compiled model: references through the runner, verdict from
+# torch._dynamo.utils.same().  A run in which any op fell back to the CPU
+# is recorded as failed, not timed.
 #
 #   SUITES_MODELS    "suite/model ..." (default: every model with a port)
 #   SUITES_RUNS      processes per system and model (3)
@@ -34,6 +36,11 @@ RUNS=${SUITES_RUNS:-3}
 REPEAT=${SUITES_REPEAT:-30}
 JIT=${SUITES_JIT:-"--jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=200000"}
 [ -x "$P" ] || { echo "run_suites.sh: no interpreter at $P" >&2; exit 1; }
+# A row kernel takes a whole row in one tile of at most RTENSOR_BLOCK
+# columns, and a wider row runs on the CPU; the suites reduce over vocabulary
+# rows of 30-50k (the HF suite's loss).  Rows up to 4096, the default, get
+# the same tile either way.
+export RTENSOR_BLOCK=${RTENSOR_BLOCK:-65536}
 [ -x "$SP" ] || { echo "run_suites.sh: no suite venv at $SP (setup_suites.sh)" >&2; exit 1; }
 MODELS=${SUITES_MODELS:-$("$P" -c "
 import sys; sys.argv = ['x']
@@ -57,16 +64,27 @@ for sm in $MODELS; do
       echo "run_suites.sh: export of $sm failed: $(tail -1 "$X.log")" >&2
       STATUS=1; continue; }
   fi
+  pass= rmse= trmse=
   for run in $(seq "$RUNS"); do
     progress_step "$sm run $run/$RUNS"
+    dumparg=""
+    [ "$run" = 1 ] && rm -rf "$X.dump" && dumparg="--dump $X.dump"
     line=$("$P" $JIT "$SUITES/run_port.py" "$X" --repeat "$REPEAT" \
-           2>"$X.err" | grep '^port ' | tail -1) || true
+           $dumparg 2>"$X.err" | grep '^port ' | tail -1) || true
+    if [ "$run" = 1 ] && [ -n "$line" ]; then
+      check=$("$SP" "$HERE/suite_check.py" "$suite" "$model" "$X.dump" \
+              --export "$X" 2>"$X.check.err" | grep '^check ' | tail -1) || true
+      pass=$(field_of "$check" pass) rmse=$(field_of "$check" rmse)
+      trmse=$(field_of "$check" torch_rmse)
+      [ -n "$pass" ] || { pass=0; echo "run_suites.sh: $sm check: $(tail -1 "$X.check.err")" >&2; }
+      rm -rf "$X.dump"
+    fi
     if [ -z "$line" ]; then
       echo "run_suites.sh: $sm ours run $run: $(grep -m1 -E 'Error|error' "$X.err" || tail -1 "$X.err")" >&2
       echo -e "$suite\t$model\tours\t$run\t\t\t\t\t\t0\t\t\t\t$PYPY_SHA" >> "$TSV"
       STATUS=1
     else
-      echo -e "$suite\t$model\tours\t$run\t$(field_of "$line" batch)\t$(field_of "$line" median_ms)\t$(field_of "$line" min_ms)\t$(field_of "$line" first_ms)\t$(field_of "$line" launches)\t$(field_of "$line" pass)\t$(field_of "$line" rmse)\t$(field_of "$line" torch_rmse)\t$(field_of "$line" cpu_fallback)\t$PYPY_SHA" >> "$TSV"
+      echo -e "$suite\t$model\tours\t$run\t$(field_of "$line" batch)\t$(field_of "$line" median_ms)\t$(field_of "$line" min_ms)\t$(field_of "$line" first_ms)\t$(field_of "$line" launches)\t$pass\t$rmse\t$trmse\t$(field_of "$line" cpu_fallback)\t$PYPY_SHA" >> "$TSV"
     fi
     "$SP" "$SUITES/run_torch.py" "$suite" "$model" --repeat "$REPEAT" \
         2>/dev/null | grep '^torch ' | while read -r tline; do

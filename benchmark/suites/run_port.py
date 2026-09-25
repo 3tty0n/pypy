@@ -1,10 +1,11 @@
 """Run one ported suite model under pypy-c and time it the dashboard's way.
 
-    pypy-c run_port.py EXPORT_DIR [--repeat 30] [--warmup 10]
+    pypy-c run_port.py EXPORT_DIR [--repeat 30] [--warmup 10] [--dump DIR]
 
 EXPORT_DIR is what suite_export.py wrote.  The model is built by the ported
-upstream source (ports/), its state_dict and inputs come from the export,
-and the output is compared with the reference the export recorded.
+upstream source (ports/), its state_dict and inputs come from the export.
+--dump writes the last forward's outputs (flattened in pytree order) for
+suite_check.py, which judges them with the dashboard's own same().
 
 Timing follows benchmarks/dynamo/common.py: `repeat` measurements, each one
 forward run to completion on the device, and the median of them.  The
@@ -137,45 +138,17 @@ def outputs_of(out):
     return [o for o in out if isinstance(o, torch.Tensor)]
 
 
-def flat(x):
-    return x.tolist()
-
-
-def same(res, ref, fp64, shape, tol, cosine, larger):
-    """torch._dynamo.utils.same() for one float32 tensor: allclose at tol,
-    else the fp64 check - res's RMSE against the float64 forward may be at
-    most `multiplier` times eager torch's own plus tol/10.  Returns
-    (pass, res_rmse, ref_rmse, multiplier).  One pass over the three
-    sequences, so a 250M-element output costs no more memory than itself."""
-    n = len(ref)
-    if cosine:
-        num = den_g = den_w = 0.0
-        for i in range(n):
-            num += res[i] * ref[i]
-            den_g += res[i] * res[i]
-            den_w += ref[i] * ref[i]
-        return num / ((den_g * den_w) ** 0.5 or 1.0) >= 0.99, 0.0, 0.0, 0.0
-    close = True
-    se_ref = se_res = 0.0
-    for i in range(n):
-        a, b, c = res[i], ref[i], fp64[i]
-        if close and abs(b - a) > tol + tol * abs(a):
-            close = False
-        se_ref += (c - b) * (c - b)
-        se_res += (c - a) * (c - a)
-    if close:
-        return True, 0.0, 0.0, 0.0
-    ref_err = (se_ref / n) ** 0.5
-    res_err = (se_res / n) ** 0.5
-    mult = 2.0
-    if larger and n <= 10:
-        mult = 10.0
-    elif larger and n <= 500:
-        mult = 8.0
-    elif (n < 1000 or tol >= 2e-2 or
-          (len(shape) == 4 and shape[-1] == shape[-2] == 1)):
-        mult = 3.0
-    return res_err <= mult * ref_err + tol / 10.0, res_err, ref_err, mult
+def dump(outputs, path):
+    if not os.path.isdir(path):
+        os.makedirs(path)
+    blob = open(os.path.join(path, "data.bin"), "wb")
+    index = []
+    for t in outputs:
+        a = array.array("f", t.tolist())
+        index.append([blob.tell(), list(t.shape), "float32"])
+        a.tofile(blob)
+    blob.close()
+    json.dump({"outputs": index}, open(os.path.join(path, "index.json"), "w"))
 
 
 def median(xs):
@@ -190,6 +163,7 @@ def main(argv):
         else 30
     warmup = int(argv[argv.index("--warmup") + 1]) if "--warmup" in argv \
         else 10
+    dump_dir = argv[argv.index("--dump") + 1] if "--dump" in argv else None
     idx = json.load(open(os.path.join(d, "index.json")))
     key = (idx["suite"], idx["model"])
     if key not in MODELS:
@@ -227,30 +201,16 @@ def main(argv):
         out = step()
         times.append((time.time() - t0) * 1e3)
     launches = (_metatensor.launch_count() - launches0) / float(repeat)
-    got = outputs_of(out)
-    if len(got) != len(idx["outputs"]):
-        sys.stderr.write("run_port: %d outputs, the reference has %d\n"
-                         % (len(got), len(idx["outputs"])))
-        return 4
-    ok, res_err, ref_err, mult = True, 0.0, 0.0, 0.0
-    for g, e, e64 in zip(got, idx["outputs"], idx["outputs_fp64"]):
-        want, _, _ = read(blob, e)
-        want64, wshape, _ = read(blob, e64)
-        o, r1, r0, m = same(flat(g), want, want64, wshape,
-                            idx["tolerance"], idx["cosine"],
-                            idx["larger_multiplier"])
-        ok = ok and o
-        res_err, ref_err, mult = max(res_err, r1), max(ref_err, r0), \
-            max(mult, m)
+    if dump_dir:
+        dump([o for o in outputs_of(out) if o.dtype.startswith("float")],
+             dump_dir)
     # a device allocation that failed fell back to the CPU: whatever was
     # timed is not the GPU run this row claims to be
     cpu = _metatensor.alloc_failed()
     print("port suite=%s model=%s batch=%s median_ms=%.3f min_ms=%.3f "
-          "first_ms=%.1f launches=%.1f rmse=%.3g torch_rmse=%.3g mult=%g "
-          "tol=%g pass=%d cpu_fallback=%d"
+          "first_ms=%.1f launches=%.1f cpu_fallback=%d"
           % (idx["suite"], idx["model"], idx["batch"], median(times),
-             min(times), first_ms, launches, res_err, ref_err, mult,
-             idx["tolerance"], int(ok), int(bool(cpu))))
+             min(times), first_ms, launches, int(bool(cpu))))
     return 3 if cpu else 0
 
 
