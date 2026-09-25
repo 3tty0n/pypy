@@ -36,11 +36,6 @@ RUNS=${SUITES_RUNS:-3}
 REPEAT=${SUITES_REPEAT:-30}
 JIT=${SUITES_JIT:-"--jit threshold=3,function_threshold=3,trace_eagerness=2,trace_limit=200000"}
 [ -x "$P" ] || { echo "run_suites.sh: no interpreter at $P" >&2; exit 1; }
-# A row kernel takes a whole row in one tile of at most RTENSOR_BLOCK
-# columns, and a wider row runs on the CPU; the suites reduce over vocabulary
-# rows of 30-50k (the HF suite's loss).  Rows up to 4096, the default, get
-# the same tile either way.
-export RTENSOR_BLOCK=${RTENSOR_BLOCK:-65536}
 [ -x "$SP" ] || { echo "run_suites.sh: no suite venv at $SP (setup_suites.sh)" >&2; exit 1; }
 MODELS=${SUITES_MODELS:-$("$P" -c "
 import sys; sys.argv = ['x']
