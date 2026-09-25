@@ -1,5 +1,5 @@
 from rpython.rlib.rfloat import formatd
-from rpython.metatensor.core import (ADD, ARITY, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, GATHER, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_MAXPOOL_NHWC, GA_ROTHALF, MAXR, MUL, RELU, RELUGRAD, SQRT, STORE_TYPE, SUB, SUM, config, gather_changes_shape, gather_dh, gather_heads, gather_kind, is_reduction, nvals)
+from rpython.metatensor.core import (ADD, ARITY, B_KEEP_NZ, B_KEEP_Z, B_LT, B_MAX, B_MIN, B_NE, B_POW, BINARY, U_NEG, U_SIGMOID, U_TANH, UNARY, bc_mode, binary_fn, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, GATHER, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_MAXPOOL_NHWC, GA_ROTHALF, MAXR, MUL, RELU, RELUGRAD, SQRT, STORE_TYPE, SUB, SUM, config, gather_changes_shape, gather_dh, gather_heads, gather_kind, is_reduction, nvals)
 
 
 def next_pow2(c):
@@ -43,17 +43,18 @@ def all_modes(kernel):
         if is_reduction(node.opcode):
             ma = 0
         elif ARITY[node.opcode] == 2:
-            if node.p == BC_R_ROW:
+            bc = bc_mode(node.opcode, node.p)
+            if bc == BC_R_ROW:
                 mb = 1
-            elif node.p == BC_R_SCALAR:
+            elif bc == BC_R_SCALAR:
                 mb = 2
-            elif node.p == BC_R_COL:
+            elif bc == BC_R_COL:
                 mb = 3
-            elif node.p == BC_L_ROW:
+            elif bc == BC_L_ROW:
                 ma = 1
-            elif node.p == BC_L_SCALAR:
+            elif bc == BC_L_SCALAR:
                 ma = 2
-            elif node.p == BC_L_COL:
+            elif bc == BC_L_COL:
                 ma = 3
         if not set_mode(modes, node.a, ma):
             return []
@@ -188,10 +189,10 @@ def to_ttir(kernel, name):
     return to_ttir_flat(kernel, name)
 
 def _elementwise(lines, node, v, T, I1):
-    return _ew(lines, node.opcode, '%%v%d' % v, '%%c%d' % v,
+    return _ew(lines, node.opcode, node.p, '%%v%d' % v, '%%c%d' % v,
                '%%v%d' % node.a, '%%v%d' % node.b, T, I1)
 
-def _ew(lines, opcode, dst, cmp, a, b, T, I1):
+def _ew(lines, opcode, p, dst, cmp, a, b, T, I1):
     if opcode == ADD:
         lines.append('    %s = arith.addf %s, %s : %s' % (dst, a, b, T))
     elif opcode == MUL:
@@ -216,6 +217,63 @@ def _ew(lines, opcode, dst, cmp, a, b, T, I1):
         lines.append('    %s = arith.cmpf oeq, %s, %s : %s' % (cmp, a, b, T))
         lines.append('    %s = arith.select %s, %%one, %%zero : %s, %s'
                      % (dst, cmp, I1, T))
+    elif opcode == UNARY:
+        return _unary(lines, p, dst, a, T)
+    elif opcode == BINARY:
+        return _binary(lines, binary_fn(p), dst, cmp, a, b, T, I1)
+    else:
+        return False
+    return True
+
+def _libdevice(T, name):
+    # f16 computes in f32, so the compute type picks the variant
+    if 'xf64>' in T:
+        return '__nv_' + name
+    return '__nv_' + name + 'f'
+
+_UNARY_OPS = ['', '', 'math.log', 'math.absf', 'math.sin', 'math.cos',
+              'math.erf', 'math.floor', 'arith.negf']
+
+def _unary(lines, fn, dst, a, T):
+    if fn == U_TANH:
+        # Triton lowers no math.tanh
+        lines.append('    %s = tt.extern_elementwise %s {libname = "", '
+                     'libpath = "", pure = true, symbol = "%s"} : (%s) -> %s'
+                     % (dst, a, _libdevice(T, 'tanh'), T, T))
+    elif fn == U_SIGMOID:
+        lines.append('    %s_n = arith.negf %s : %s' % (dst, a, T))
+        lines.append('    %s_e = math.exp %s_n : %s' % (dst, dst, T))
+        lines.append('    %s_d = arith.addf %s_e, %%one : %s' % (dst, dst, T))
+        lines.append('    %s = arith.divf %%one, %s_d : %s' % (dst, dst, T))
+    elif fn > U_SIGMOID and fn <= U_NEG:
+        lines.append('    %s = %s %s : %s' % (dst, _UNARY_OPS[fn], a, T))
+    else:
+        return False
+    return True
+
+_CMP = ['', '', '', 'olt', 'ole', 'ogt', 'oge', 'oeq', 'une']
+
+def _binary(lines, fn, dst, cmp, a, b, T, I1):
+    if fn == B_MAX:
+        lines.append('    %s = arith.maximumf %s, %s : %s' % (dst, a, b, T))
+    elif fn == B_MIN:
+        lines.append('    %s = arith.minimumf %s, %s : %s' % (dst, a, b, T))
+    elif fn == B_POW:
+        lines.append('    %s = tt.extern_elementwise %s, %s {libname = "", '
+                     'libpath = "", pure = true, symbol = "%s"} : '
+                     '(%s, %s) -> %s' % (dst, a, b, _libdevice(T, 'pow'),
+                                         T, T, T))
+    elif fn >= B_LT and fn <= B_NE:
+        lines.append('    %s = arith.cmpf %s, %s, %s : %s'
+                     % (cmp, _CMP[fn], a, b, T))
+        lines.append('    %s = arith.select %s, %%one, %%zero : %s, %s'
+                     % (dst, cmp, I1, T))
+    elif fn == B_KEEP_NZ or fn == B_KEEP_Z:
+        pred = 'une' if fn == B_KEEP_NZ else 'oeq'
+        lines.append('    %s = arith.cmpf %s, %s, %%zero : %s'
+                     % (cmp, pred, a, T))
+        lines.append('    %s = arith.select %s, %s, %%zero : %s, %s'
+                     % (dst, cmp, b, I1, T))
     else:
         return False
     return True
@@ -695,7 +753,8 @@ class Gathered(object):
         if node.b >= 0:
             b = self.val(node.b, idx)
         r = e.tmp()
-        if not _ew(e.lines, node.opcode, r, e.tmp(), a, b, self.T, self.I1):
+        if not _ew(e.lines, node.opcode, node.p, r, e.tmp(), a, b, self.T,
+                   self.I1):
             return ''
         return r
 

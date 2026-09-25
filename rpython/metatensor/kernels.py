@@ -4,7 +4,7 @@ from rpython.rlib.rmd5 import md5
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import os
-from rpython.metatensor.core import (GA_ROTHALF, gather_dh, gather_heads, gather_kind, init_drain, init_gather, init_lazy, ARITY, AXIS_ALL, F64, KERNEL, NO_CONSTS, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, SHAPEARRAY, SUM, config, is_reduction, param_slot, slot_param, slot_used)
+from rpython.metatensor.core import (BINARY, UNARY, GA_ROTHALF, gather_dh, gather_heads, gather_kind, init_drain, init_gather, init_lazy, ARITY, AXIS_ALL, F64, KERNEL, NO_CONSTS, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, SHAPEARRAY, SUM, config, is_reduction, param_slot, slot_param, slot_used)
 from rpython.metatensor.device import (_env, _here, gpu_enabled, profile, rt_cuda_load, rt_cuda_set_budget)
 from rpython.metatensor.ttir import (has_gather, input_modes, kernel_row_mode, out_modes, row_tile, row_warps, to_tile_ir, to_ttir, to_ttir_gather)
 
@@ -13,6 +13,8 @@ class SingleKernels(object):
         self.kernels = [_empty_kernel()
                         for i in range(NOPCODES * NPARAMS * NDTYPES)]
         self.done = [False] * NDTYPES
+        self.lazy = {}
+        self.none = _empty_kernel()
 
 def _empty_kernel():
     k = lltype.malloc(KERNEL)
@@ -32,8 +34,26 @@ def _empty_kernel():
 single_kernels = SingleKernels()
 
 def single_kernel(opcode, p, dtype):
+    if opcode == UNARY or opcode == BINARY:
+        return single_kernels.lazy.get(_lazy_key(opcode, p, dtype),
+                                       single_kernels.none)
     return single_kernels.kernels[(dtype * NOPCODES + opcode) * NPARAMS +
                                   param_slot(opcode, p)]
+
+def _lazy_key(opcode, p, dtype):
+    return (p * NOPCODES + opcode) * NDTYPES + dtype
+
+@jit.dont_look_inside
+def ensure_single(opcode, p, dtype):
+    """UNARY and BINARY have too many params to build them all at init, so
+    each is built the first time the interpreter runs it, never under an
+    oopspec; single_kernel only looks them up."""
+    key = _lazy_key(opcode, p, dtype)
+    if key in single_kernels.lazy:
+        return
+    right = 1 if ARITY[opcode] == 2 else -1
+    single_kernels.lazy[key] = build_kernel(ARITY[opcode], [opcode], [0],
+                                            [right], [p], dtype)
 
 def init_device():
     init_lazy()

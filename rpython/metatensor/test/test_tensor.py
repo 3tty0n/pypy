@@ -2335,3 +2335,290 @@ class TestGatherFusion(LLJitMixin):
         z = ops.gather(y, core.GA_HEADMERGE, 2, 3)
         assert [z.shape[0], z.shape[1]] == [4, 6]
         assert list(device.host(z))[:24] == [i * 1.0 for i in range(24)]
+
+
+def _ref_unary(fn, v):
+    if fn == core.U_TANH:
+        return math.tanh(v)
+    if fn == core.U_SIGMOID:
+        return 1.0 / (1.0 + math.exp(-v))
+    if fn == core.U_LOG:
+        if v < 0.0:
+            return float('nan')
+        return math.log(v) if v > 0.0 else float('-inf')
+    if fn == core.U_ABS:
+        return abs(v)
+    if fn == core.U_SIN:
+        return math.sin(v)
+    if fn == core.U_COS:
+        return math.cos(v)
+    if fn == core.U_ERF:
+        return math.erf(v)
+    if fn == core.U_FLOOR:
+        return math.floor(v)
+    return -v
+
+
+def _ref_binary(fn, x, y):
+    if fn == core.B_MAX:
+        return max(x, y)
+    if fn == core.B_MIN:
+        return min(x, y)
+    if fn == core.B_POW:
+        if x < 0.0 and y != math.floor(y):
+            return float('nan')
+        return math.pow(x, y)
+    if fn == core.B_KEEP_NZ:
+        return y if x != 0.0 else 0.0
+    if fn == core.B_KEEP_Z:
+        return y if x == 0.0 else 0.0
+    t = [x < y, x <= y, x > y, x >= y, x == y, x != y][fn - core.B_LT]
+    return 1.0 if t else 0.0
+
+
+def _close(got, want, tol):
+    if want != want:
+        return got != got
+    if abs(want) == float('inf'):
+        return got == want
+    return abs(got - want) <= tol * max(1.0, abs(want))
+
+
+_EW_TOL = {core.F64: 1e-13, core.F32: 2e-06, core.F16: 2e-03}
+
+
+class TestElementwiseMath(object):
+
+    def teardown_method(self, meth):
+        core.note_dtype(core.F64)
+
+    def _gpu_used(self, opcode, p, dt):
+        import os
+        if 'RTENSOR_CPU' not in os.environ:
+            assert kernels.single_kernel(opcode, p, dt).fn != 0
+
+    def test_unary_matches_math(self):
+        xs = [-3.0, -0.5, -0.0, 0.0, 0.25, 1.0, 2.5, 7.75]
+        for dt in [core.F64, core.F32, core.F16]:
+            kernels.init_dtype(dt)
+            x = from_list(xs, dt)
+            for fn in range(len(core.UNARY_NAMES)):
+                y = device.host(ops.unary(x, fn))
+                for i in range(len(xs)):
+                    want = _ref_unary(fn, xs[i])
+                    assert _close(y[i], want, _EW_TOL[dt]), (
+                        core.UNARY_NAMES[fn], dt, xs[i], y[i], want)
+                self._gpu_used(core.UNARY, fn, dt)
+
+    def test_binary_matches_math(self):
+        xs = [-2.0, -0.5, 0.0, 0.5, 1.0, 3.0]
+        ys = [3.0, -0.5, 1.0, 0.5, -2.0, 2.0]
+        for dt in [core.F64, core.F32]:
+            kernels.init_dtype(dt)
+            x = from_list(xs, dt)
+            y = from_list(ys, dt)
+            for fn in range(len(core.BINARY_NAMES)):
+                if fn == core.B_POW:
+                    continue
+                r = device.host(ops.binary(x, y, fn))
+                for i in range(len(xs)):
+                    want = _ref_binary(fn, xs[i], ys[i])
+                    assert _close(r[i], want, _EW_TOL[dt]), (
+                        core.BINARY_NAMES[fn], dt, xs[i], ys[i], r[i])
+                self._gpu_used(core.BINARY, core.NPARAMS * fn, dt)
+
+    def test_pow_tensor_and_scalar_exponents(self):
+        xs = [0.5, 1.0, 2.0, 3.5, 9.0, -2.0]
+        es = [2.0, 0.5, -1.0, 3.0, 0.5, 3.0]
+        for dt in [core.F64, core.F32]:
+            kernels.init_dtype(dt)
+            x = from_list(xs, dt)
+            r = device.host(ops.binary(x, from_list(es, dt), core.B_POW))
+            for i in range(len(xs)):
+                assert _close(r[i], math.pow(xs[i], es[i]), _EW_TOL[dt])
+            for e in [2.0, -0.5]:
+                r = device.host(ops.binary(x, runtime.scalar_of(e, dt),
+                                           core.B_POW))
+                for i in range(len(xs)):
+                    assert _close(r[i], _ref_binary(core.B_POW, xs[i], e),
+                                  _EW_TOL[dt])
+            self._gpu_used(core.BINARY, core.BC_R_SCALAR +
+                           core.NPARAMS * core.B_POW, dt)
+            # base on the left: 2 ** x
+            r = device.host(ops.binary(runtime.scalar_of(2.0, dt), x,
+                                       core.B_POW))
+            for i in range(len(xs)):
+                assert _close(r[i], math.pow(2.0, xs[i]), _EW_TOL[dt])
+
+    def test_binary_broadcast_row_and_column(self):
+        m = core.zeros([2, 3])
+        for i in range(6):
+            m.host[i] = i - 2.0
+        row = from_list([0.0, 1.0, -1.0])
+        col = core.column(2)
+        col.host[0] = 0.5
+        col.host[1] = -0.5
+        r = device.host(ops.binary(m, row, core.B_GT))
+        assert list(r)[:6] == [0.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+        r = device.host(ops.binary(row, m, core.B_MAX))
+        assert list(r)[:6] == [0.0, 1.0, 0.0, 1.0, 2.0, 3.0]
+        r = device.host(ops.binary(m, col, core.B_MIN))
+        assert list(r)[:6] == [-2.0, -1.0, 0.0, -0.5, -0.5, -0.5]
+
+    def test_where_is_a_select(self):
+        inf = float('inf')
+        nan = float('nan')
+        c = from_list([1.0, 0.0, 1.0, 0.0, -2.0])
+        a = from_list([1.0, inf, 2.0, nan, 3.0])
+        b = from_list([nan, 4.0, -inf, 5.0, inf])
+        r = device.host(ops.where(c, a, b))
+        assert list(r)[:5] == [1.0, 4.0, 2.0, 5.0, 3.0]
+        r = device.host(ops.where(c, a, runtime.scalar_of(-1.0, core.F64)))
+        assert list(r)[:5] == [1.0, -1.0, 2.0, -1.0, 3.0]
+
+    def test_cpu_matches_host_reference(self):
+        # the loops a failed launch falls back to
+        xs = [-3.0, -0.5, 0.0, 0.25, 1.0, 2.5]
+        x = from_list(xs)
+        for fn in range(len(core.UNARY_NAMES)):
+            y = device.host(runtime.eval_op_cpu(core.UNARY, x, core.NULLTENSOR,
+                                                fn))
+            for i in range(len(xs)):
+                assert _close(y[i], _ref_unary(fn, xs[i]), 1e-15)
+        y = from_list([1.0, 0.5, 2.0, -1.0, 2.0, 0.0])
+        for fn in range(len(core.BINARY_NAMES)):
+            r = device.host(runtime.eval_op_cpu(core.BINARY, x, y,
+                                                core.NPARAMS * fn))
+            for i in range(len(xs)):
+                assert _close(r[i], _ref_binary(fn, xs[i], y.host[i]), 1e-15)
+
+
+class TestElementwiseFusion(LLJitMixin):
+
+    def setup_method(self, meth):
+        core.policy.static = True
+        core.policy.seen = []
+
+    def teardown_method(self, meth):
+        import os
+        if 'RTENSOR_CPU' in os.environ:
+            return
+        for key, k in kernels.kernel_cache.kernels.items():
+            if ',12:' in key or ',13:' in key:
+                assert k.fn != 0, key
+
+    def test_tanh_sigmoid_chain_is_one_kernel(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'a', 'acc'])
+        xs = [-2.0, -0.5, 0.0, 0.75, 1.5, 3.0]
+        def f(n):
+            x = from_list(xs)
+            a = from_list([0.5, 1.0, 2.0, -1.0, 0.25, 1.0])
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, a=a, acc=acc)
+                y = ops.add(ops.unary(ops.mul(x, a), core.U_TANH),
+                            ops.unary(x, core.U_SIGMOID))
+                acc += ops.item(ops.sum(y))
+                n -= 1
+            return acc
+        av = [0.5, 1.0, 2.0, -1.0, 0.25, 1.0]
+        expect = sum([math.tanh(xs[i] * av[i]) + 1.0 / (1.0 + math.exp(-xs[i]))
+                      for i in range(6)])
+        before = set(kernels.kernel_cache.kernels)
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+        self.check_simple_loop(call_r=1)
+        assert len(set(kernels.kernel_cache.kernels) - before) == 1
+
+    def test_where_compare_pow_is_one_kernel(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'acc'])
+        xs = [-2.0, -0.5, 0.0, 0.75, 1.5, 3.0]
+        def f(n):
+            x = from_list(xs)
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, acc=acc)
+                m = ops.binary(x, runtime.scalar(0.0), core.B_GT)
+                sq = ops.binary(x, runtime.scalar(2.0), core.B_POW)
+                y = ops.where(m, sq, ops.unary(x, core.U_ABS))
+                acc += ops.item(ops.sum(ops.binary(y, x, core.B_MAX)))
+                n -= 1
+            return acc
+        expect = sum([max(v * v if v > 0.0 else abs(v), v) for v in xs])
+        before = set(kernels.kernel_cache.kernels)
+        res = self.meta_interp(f, [10])
+        assert abs(res - expect * 10) < 1e-9
+        self.check_simple_loop(call_r=1)
+        assert len(set(kernels.kernel_cache.kernels) - before) == 1
+
+
+def _ttir_cases():
+    from rpython.rtyper.lltypesystem import lltype
+    nold = core.GATHER + 1
+    gparams = [core.gather_param(core.GA_ROTHALF, 4, 1),
+               core.gather_param(core.GA_HEADSPLIT, 2, 3),
+               core.gather_param(core.GA_HEADMERGE, 2, 3)]
+    def params_of(op):
+        if core.is_reduction(op):
+            return [-1, 0, 1]
+        if op == core.GATHER:
+            return gparams
+        if core.ARITY[op] == 2:
+            return range(core.NPARAMS)
+        return [0]
+    def mk(ninputs, nodes, dt, n, cols, consts=(), outputs=()):
+        k = kernels.new_kernel(ninputs, len(nodes), dt)
+        for i, (op, a, b, p) in enumerate(nodes):
+            kernels.set_node(k, i, op, a, b, p)
+        k.n = n
+        k.cols = cols
+        if consts:
+            k.consts = lltype.malloc(core.HOSTARRAY, len(consts))
+            for i, c in enumerate(consts):
+                k.consts[i] = c
+        if outputs:
+            k.outputs = lltype.malloc(core.SHAPEARRAY, len(outputs))
+            for i, o in enumerate(outputs):
+                k.outputs[i] = o
+        return k
+    elem = [o for o in range(nold)
+            if not core.is_reduction(o) and o != core.GATHER]
+    for dt in range(3):
+        for n, cols in [(0, 0), (8192, 64), (100, 10), (0, 64)]:
+            for op in range(nold):
+                for p in params_of(op):
+                    b = 1 if core.ARITY[op] == 2 else -1
+                    yield mk(core.ARITY[op], [(op, 0, b, p)], dt, n, cols)
+            for op1 in elem:
+                for p1 in params_of(op1):
+                    b1 = 1 if core.ARITY[op1] == 2 else -1
+                    for op2 in range(nold):
+                        for p2 in params_of(op2):
+                            b2 = 2 if core.ARITY[op2] == 2 else -1
+                            yield mk(3, [(op1, 0, b1, p1), (op2, 3, b2, p2)],
+                                     dt, n, cols)
+            for op in elem:
+                for p in params_of(op):
+                    b = 1 if core.ARITY[op] == 2 else -1
+                    yield mk(2, [(op, 0, b, p), (core.MUL, 3, 2, 0),
+                                 (core.SUM, 4, -1, 1)], dt, n, cols,
+                             consts=[0.5])
+                    yield mk(2, [(op, 0, b, p), (core.ADD, 3, 1, 0)], dt, n,
+                             cols, consts=[1e-5], outputs=[3])
+
+
+def test_ttir_of_existing_opcodes_is_unchanged():
+    # The digest of the TTIR for 30,888 kernels over the opcodes that existed
+    # before UNARY and BINARY, taken before they were added: every cubin in
+    # the disk cache and every measurement made before stays valid.
+    import hashlib
+    from rpython.metatensor import ttir
+    h = hashlib.sha1()
+    count = 0
+    for k in _ttir_cases():
+        src = ttir.to_ttir(k, 'kname')
+        h.update('%s\t%s\n' % (kernels.kernel_key(k),
+                               hashlib.sha1(src).hexdigest()))
+        count += 1
+    assert count == 30888
+    assert h.hexdigest() == '7efc9909c53837e8f297e158e0e2a0e46e456df9'

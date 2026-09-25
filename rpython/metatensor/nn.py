@@ -115,6 +115,19 @@ class Tensor(object):
             r.node = SqrtNode(self, r)
         return r
 
+    def unary(self, fn):
+        return self._forward_only(ops.unary(self.t, fn), None)
+
+    def binary(self, other, fn):
+        return self._forward_only(ops.binary(self.t, other.t, fn), other)
+
+    def where(self, a, b):
+        r = Tensor(ops.where(self.t, a.t, b.t))
+        if self.requires_grad or a.requires_grad or b.requires_grad:
+            r.requires_grad = True
+            r.node = NoGradNode([self, a, b])
+        return r
+
     def max(self, axis=core.AXIS_ALL):
         if axis == 1 and ops.tensor_ndim(self.t) > 1:
             ops.cols_of(self.t)

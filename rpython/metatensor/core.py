@@ -44,12 +44,28 @@ EQMASK = 10
 # The param packs which one and its sizes (gather_param below), so the node
 # is fully described by (opcode, param) like every other node.
 GATHER = 11
-NOPCODES = 12
-ARITY = [2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 2, 1]
+# Elementwise math.  UNARY's param is the function, a U_* below.  BINARY's
+# param packs the function above the broadcast mode, p = bcast + NPARAMS * fn
+# with fn a B_*, so p % NPARAMS is the BC_* of any binary node and the kernel
+# key still names the code.
+UNARY, BINARY = 12, 13
+NOPCODES = 14
+ARITY = [2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 2, 1, 1, 2]
 NAMES = ['add', 'mul', 'relu', 'sum', 'relugrad',
-         'sub', 'div', 'exp', 'sqrt', 'maxr', 'eqmask', 'gather']
+         'sub', 'div', 'exp', 'sqrt', 'maxr', 'eqmask', 'gather',
+         'unary', 'binary']
 HAS_PARAM = [True, True, False, True, True,
-             True, True, False, False, True, True, True]
+             True, True, False, False, True, True, True, True, True]
+U_TANH, U_SIGMOID, U_LOG, U_ABS, U_SIN, U_COS, U_ERF, U_FLOOR, U_NEG = range(9)
+UNARY_NAMES = ['tanh', 'sigmoid', 'log', 'abs', 'sin', 'cos', 'erf', 'floor',
+               'neg']
+B_MAX, B_MIN, B_POW, B_LT, B_LE, B_GT, B_GE, B_EQ, B_NE = range(9)
+# keep(c, x): x where c != 0 (KEEP_NZ) or where c == 0 (KEEP_Z), else 0.  A
+# select, so an inf or NaN in the lanes it drops stays dropped; where(c, a, b)
+# is keep_nz(c, a) + keep_z(c, b).
+B_KEEP_NZ, B_KEEP_Z = 9, 10
+BINARY_NAMES = ['maximum', 'minimum', 'pow', 'lt', 'le', 'gt', 'ge', 'eq',
+                'ne', 'keep_nz', 'keep_z']
 # Hard ceiling on a fused kernel's input slots.  It is a compile-time
 # constant because the tensor.launch oopspec has that many tensor arguments;
 # how many of them the fusion pass is actually allowed to use is the runtime
@@ -134,6 +150,14 @@ def max_inputs():
 BC_NONE, BC_R_ROW, BC_R_SCALAR, BC_L_ROW, BC_L_SCALAR = 0, 1, 2, 3, 4
 BC_R_COL, BC_L_COL = 5, 6
 NPARAMS = 7
+
+def bc_mode(opcode, p):
+    if ARITY[opcode] != 2:
+        return BC_NONE
+    return p % NPARAMS
+
+def binary_fn(p):
+    return p // NPARAMS
 AXIS_ALL = -1
 NEG_INF = -INFINITY
 
@@ -227,7 +251,7 @@ def slot_param(opcode, slot):
     return slot
 
 def slot_used(opcode, slot):
-    if opcode == GATHER:
+    if opcode == GATHER or opcode == UNARY or opcode == BINARY:
         return False
     if is_reduction(opcode):
         return slot < 3

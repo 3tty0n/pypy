@@ -46,6 +46,24 @@ def _wrap(t):
     return W_Tensor(nn.Tensor(t))
 
 
+_UNARY_IDS = dict([(core.UNARY_NAMES[i], i)
+                   for i in range(len(core.UNARY_NAMES))])
+_BINARY_IDS = dict([(core.BINARY_NAMES[i], i)
+                    for i in range(len(core.BINARY_NAMES))])
+
+
+@jit.elidable
+def _lookup(ids, name):
+    return ids.get(name, -1)
+
+
+def _fn_id(space, ids, name):
+    fn = _lookup(ids, name)
+    if fn < 0:
+        raise oefmt(space.w_ValueError, "unknown function '%s'", name)
+    return jit.promote(fn)
+
+
 class W_Tensor(W_Root):
     _immutable_fields_ = ['tensor']
 
@@ -55,6 +73,15 @@ class W_Tensor(W_Root):
     def _other(self, space, w_other):
         other = space.interp_w(W_Tensor, w_other)
         return other.tensor
+
+    def _operand(self, space, w_other):
+        """A tensor, or a Python number as a cached scalar of this tensor's
+        dtype, which the fusion pass folds into the kernel body."""
+        if isinstance(w_other, W_Tensor):
+            return w_other.tensor
+        dtype = jit.promote(ops.tensor_dtype(self.tensor.t))
+        return nn.Tensor(runtime.scalar_of(
+            jit.promote(space.float_w(w_other)), dtype))
 
     def descr_add(self, space, w_other):
         try:
@@ -99,6 +126,31 @@ class W_Tensor(W_Root):
 
     def descr_sqrt(self, space):
         return W_Tensor(self.tensor.sqrt())
+
+    @unwrap_spec(name='text')
+    def descr_unary(self, space, name):
+        """name is one of core.UNARY_NAMES."""
+        fn = _fn_id(space, _UNARY_IDS, name)
+        return W_Tensor(self.tensor.unary(fn))
+
+    @unwrap_spec(name='text')
+    def descr_binary(self, space, name, w_other):
+        """name is one of core.BINARY_NAMES; comparisons give 1.0 or 0.0.
+        other may be a Python number."""
+        fn = _fn_id(space, _BINARY_IDS, name)
+        try:
+            return W_Tensor(self.tensor.binary(self._operand(space, w_other),
+                                               fn))
+        except ValueError:
+            raise _mismatch(space)
+
+    def descr_where(self, space, w_a, w_b):
+        """a where this tensor is nonzero, b elsewhere."""
+        try:
+            return W_Tensor(self.tensor.where(self._operand(space, w_a),
+                                              self._operand(space, w_b)))
+        except ValueError:
+            raise _mismatch(space)
 
     @unwrap_spec(axis=int)
     def descr_max(self, space, axis=-1):
@@ -459,6 +511,9 @@ W_Tensor.typedef = TypeDef(
     div=interp2app(W_Tensor.descr_div),
     exp=interp2app(W_Tensor.descr_exp),
     sqrt=interp2app(W_Tensor.descr_sqrt),
+    unary=interp2app(W_Tensor.descr_unary),
+    binary=interp2app(W_Tensor.descr_binary),
+    where=interp2app(W_Tensor.descr_where),
     max=interp2app(W_Tensor.descr_max),
     relu=interp2app(W_Tensor.descr_relu),
     softmax=interp2app(W_Tensor.descr_softmax),

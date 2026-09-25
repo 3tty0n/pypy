@@ -136,6 +136,36 @@ class AppTestTensor(object):
         assert m.max(1).sum().item() == 12.0
         assert m.max(0).sum().item() == 12.0
 
+    def test_unary_binary_where(self):
+        import _metatensor, math
+        xs = [-2.0, -0.5, 0.0, 0.5, 2.0]
+        x = _metatensor.tensor(xs)
+        y = x.unary('tanh').tolist()
+        assert max([abs(y[i] - math.tanh(xs[i])) for i in range(5)]) < 1e-15
+        y = x.unary('sigmoid').tolist()
+        assert abs(y[4] - 1.0 / (1.0 + math.exp(-2.0))) < 1e-15
+        assert x.unary('abs').tolist() == [2.0, 0.5, 0.0, 0.5, 2.0]
+        assert x.unary('neg').tolist() == [2.0, 0.5, -0.0, -0.5, -2.0]
+        assert x.binary('gt', 0.0).tolist() == [0.0, 0.0, 0.0, 1.0, 1.0]
+        assert x.binary('ne', x).tolist() == [0.0] * 5
+        assert x.binary('pow', 2.0).tolist() == [4.0, 0.25, 0.0, 0.25, 4.0]
+        assert x.binary('maximum', 0.25).tolist() == [0.25, 0.25, 0.25,
+                                                       0.5, 2.0]
+        m = _metatensor.tensor([[1.0, 2.0], [3.0, 4.0]])
+        row = _metatensor.tensor([2.0, 2.0])
+        assert m.binary('minimum', row).tolist() == [1.0, 2.0, 2.0, 2.0]
+        c = x.binary('gt', 0.0)
+        w = c.where(x.unary('log'), 0.0)
+        assert w.tolist() == [0.0, 0.0, 0.0, math.log(0.5), math.log(2.0)]
+        assert c.where(1.0, x).tolist() == [-2.0, -0.5, 0.0, 1.0, 1.0]
+        f = _metatensor.tensor(xs, dtype="float32")
+        assert f.unary('erf').dtype == "float32"
+        assert abs(f.unary('erf').tolist()[4] - math.erf(2.0)) < 1e-6
+        raises(ValueError, x.unary, 'tan')
+        raises(ValueError, x.binary, 'atan2', x)
+        raises(ValueError, x.binary, 'pow', f)
+        raises(ValueError, x.binary, 'pow', _metatensor.tensor([1.0, 2.0]))
+
     def test_matmul_transpose_b(self):
         import _metatensor
         x = _metatensor.tensor([[1.0, 2.0], [3.0, 4.0]])

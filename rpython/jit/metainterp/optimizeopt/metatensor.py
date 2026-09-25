@@ -116,9 +116,9 @@ class VTensorInfo(AbstractVirtualPtrInfo):
         return newop
 
     def big_arg(self):
-        if (self.param == core.BC_L_ROW or
-                self.param == core.BC_L_SCALAR or
-                self.param == core.BC_L_COL):
+        bc = core.bc_mode(self.opcode, self.param)
+        if (bc == core.BC_L_ROW or bc == core.BC_L_SCALAR or
+                bc == core.BC_L_COL):
             return 1
         return 0
 
@@ -294,7 +294,7 @@ class OptTensor(Optimization):
             # deferred read sees the operand as it was when it was built.
             self.force_live()
             return self.emit(op)
-        if EffectInfo.OS_TENSOR_ADD <= idx <= EffectInfo.OS_TENSOR_GATHER:
+        if EffectInfo.OS_TENSOR_ADD <= idx <= EffectInfo.OS_TENSOR_BINARY:
             opcode = idx - EffectInfo.OS_TENSOR_ADD
             nargs = core.ARITY[opcode]
             param = 0

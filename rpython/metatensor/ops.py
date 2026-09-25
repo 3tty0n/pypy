@@ -1,9 +1,9 @@
 from rpython.rlib import jit
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.rclass import OBJECTPTR
-from rpython.metatensor.core import (ADD, AXIS_ALL, GA_HEADSPLIT, GA_ROTHALF, GATHER, gather_knob, gather_param, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_NONE, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, MAXR, MUL, NDTYPES, NULLTENSOR, RELU, RELUGRAD, SHAPEARRAY, SQRT, SUB, SUM, TENSOR, TENSORARRAY, _shape2, cols, new_tensor, note_cols, note_dtype, note_size, policy)
+from rpython.metatensor.core import (ADD, B_KEEP_NZ, B_KEEP_Z, BINARY, NPARAMS, UNARY, AXIS_ALL, GA_HEADSPLIT, GA_ROTHALF, GATHER, gather_knob, gather_param, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_NONE, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, MAXR, MUL, NDTYPES, NULLTENSOR, RELU, RELUGRAD, SHAPEARRAY, SQRT, SUB, SUM, TENSOR, TENSORARRAY, _shape2, cols, new_tensor, note_cols, note_dtype, note_size, policy)
 from rpython.metatensor.device import (host)
-from rpython.metatensor.kernels import (ensure_gather)
+from rpython.metatensor.kernels import (ensure_gather, ensure_single)
 from rpython.metatensor import lazy
 from rpython.metatensor.runtime import (_make_ones, eval_op, head_merge, head_split, rot_half, ones, tensor_assign, tensor_matmul)
 
@@ -113,6 +113,14 @@ def tensor_maxr(a, axis):
 @jit.oopspec("tensor.eqmask(a, b, bcast)")
 def tensor_eqmask(a, b, bcast):
     return eval_op(EQMASK, a, b, bcast)
+
+@jit.oopspec("tensor.unary(a, fn)")
+def tensor_unary(a, fn):
+    return eval_op(UNARY, a, NULLTENSOR, fn)
+
+@jit.oopspec("tensor.binary(a, b, p)")
+def tensor_binary(a, b, p):
+    return eval_op(BINARY, a, b, p)
 
 @jit.oopspec("tensor.gather(a, p)")
 def tensor_gather(a, p):
@@ -265,6 +273,20 @@ def sqrt_p(a):
         return lazy.lazy_op(SQRT, a, NULLTENSOR, 0)
     return tensor_sqrt(a)
 
+def unary_p(a, fn):
+    if lazy.enabled():
+        return lazy.lazy_op(UNARY, a, NULLTENSOR, fn)
+    if not jit.we_are_jitted():
+        ensure_single(UNARY, fn, tensor_dtype(a))
+    return tensor_unary(a, fn)
+
+def binary_p(a, b, p):
+    if lazy.enabled():
+        return lazy.lazy_op(BINARY, a, b, p)
+    if not jit.we_are_jitted():
+        ensure_single(BINARY, p, tensor_dtype(a))
+    return tensor_binary(a, b, p)
+
 def sum_p(a, axis):
     if lazy.enabled():
         return lazy.lazy_op(SUM, a, NULLTENSOR, axis)
@@ -309,6 +331,16 @@ def exp(a):
 
 def sqrt(a):
     return sqrt_p(a)
+
+def unary(a, fn):
+    return unary_p(a, fn)
+
+def binary(a, b, fn):
+    return binary_p(a, b, bcast(a, b) + NPARAMS * fn)
+
+def where(c, a, b):
+    # a kept -0.0 comes out +0.0, from the add
+    return add(binary(c, a, B_KEEP_NZ), binary(c, b, B_KEEP_Z))
 
 def max(a, axis=AXIS_ALL):
     if axis == 1 and tensor_ndim(a) > 1:

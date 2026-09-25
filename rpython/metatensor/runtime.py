@@ -2,10 +2,11 @@ from rpython.rlib import jit
 from rpython.rlib.rarithmetic import intmask
 from rpython.rlib.rfloat import INFINITY
 from rpython.rlib.rfloat import NAN
+from rpython.rlib.rfloat import erf
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import math
-from rpython.metatensor.core import (ADD, ARITY, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GATHER, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, cols, config, gather_changes_shape, gather_shape, nbytes, new_tensor, nvals)
+from rpython.metatensor.core import (ADD, ARITY, B_GE, B_GT, B_KEEP_NZ, B_KEEP_Z, B_LE, B_LT, B_MAX, B_MIN, B_NE, B_POW, BINARY, U_ABS, U_COS, U_ERF, U_FLOOR, U_LOG, U_SIGMOID, U_SIN, U_TANH, UNARY, bc_mode, binary_fn, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GATHER, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, cols, config, gather_changes_shape, gather_shape, nbytes, new_tensor, nvals)
 from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, host, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_free, rt_cuda_launch, rt_cuda_reset, rt_cuda_warn_arity, rt_cuda_warn_cpu)
 from rpython.metatensor.kernels import (has_gather, needs_zero, row_tile, single_kernel)
 from rpython.metatensor.devops import (_make_ones, ones, col2chw, gather_op, head_merge, head_split, im2col, im2col_nhwc, maxpool2, maxpool2_nhwc, rot_half, rowgather, scalar, scalar_of, scalars, tensor_assign, tensor_bmm, tensor_matmul, tensor_write_rows)
@@ -41,6 +42,69 @@ def _div(x, y):
         return INFINITY if x > 0.0 else NEG_INF
     return x / y
 
+def _log(v):
+    if v < 0.0:
+        return NAN
+    if v == 0.0:
+        return NEG_INF
+    return math.log(v)
+
+def _unary(fn, v):
+    if fn == U_TANH:
+        return math.tanh(v)
+    if fn == U_SIGMOID:
+        return 1.0 / (1.0 + _exp(-v))
+    if fn == U_LOG:
+        return _log(v)
+    if fn == U_ABS:
+        return abs(v)
+    if fn == U_SIN or fn == U_COS:
+        if v - v != 0.0:
+            return NAN
+        return math.sin(v) if fn == U_SIN else math.cos(v)
+    if fn == U_ERF:
+        return erf(v)
+    if fn == U_FLOOR:
+        return math.floor(v)
+    return -v
+
+def _pow(x, y):
+    try:
+        return math.pow(x, y)
+    except ValueError:
+        return INFINITY if x == 0.0 else NAN
+    except OverflowError:
+        if x < 0.0 and math.fmod(y, 2.0) != 0.0:
+            return NEG_INF
+        return INFINITY
+
+def _binary(fn, x, y):
+    if fn == B_MAX or fn == B_MIN:
+        if x != x or y != y:
+            return NAN
+        if fn == B_MAX:
+            return x if x > y else y
+        return x if x < y else y
+    if fn == B_POW:
+        return _pow(x, y)
+    if fn == B_LT:
+        t = x < y
+    elif fn == B_LE:
+        t = x <= y
+    elif fn == B_GT:
+        t = x > y
+    elif fn == B_GE:
+        t = x >= y
+    elif fn == B_NE:
+        t = x != y
+    elif fn == B_KEEP_NZ:
+        return y if x != 0.0 else 0.0
+    elif fn == B_KEEP_Z:
+        return y if x == 0.0 else 0.0
+    else:
+        t = x == y
+    return 1.0 if t else 0.0
+
 def eval_op_cpu(opcode, a, b, p):
     if opcode == SUM or opcode == MAXR:
         return reduce_cpu(opcode, a, p)
@@ -55,9 +119,13 @@ def eval_op_cpu(opcode, a, b, p):
                 hr[i] = v if v > 0.0 else 0.0
             elif opcode == EXP:
                 hr[i] = _exp(v)
+            elif opcode == UNARY:
+                hr[i] = _unary(p, v)
             else:
                 hr[i] = _sqrt(v)
         return r
+    fn = binary_fn(p)
+    p = bc_mode(opcode, p)
     big = a
     if p == BC_L_ROW or p == BC_L_SCALAR or p == BC_L_COL:
         big = b
@@ -93,6 +161,8 @@ def eval_op_cpu(opcode, a, b, p):
             hr[i] = _div(ha[ia], hb[ib])
         elif opcode == EQMASK:
             hr[i] = 1.0 if ha[ia] == hb[ib] else 0.0
+        elif opcode == BINARY:
+            hr[i] = _binary(fn, ha[ia], hb[ib])
         else:
             hr[i] = hb[ib] if ha[ia] > 0.0 else 0.0
     return r
@@ -183,8 +253,8 @@ def result_shape(kernel, inputs, n, like, v=-1):
         node = kernel.nodes[v - nin]
         if node.opcode == GATHER and gather_changes_shape(node.p):
             return gather_shape(node.p, n, like)
-        if (ARITY[node.opcode] == 2 and (node.p == BC_L_ROW or
-                node.p == BC_L_SCALAR or node.p == BC_L_COL)):
+        bc = bc_mode(node.opcode, node.p)
+        if bc == BC_L_ROW or bc == BC_L_SCALAR or bc == BC_L_COL:
             v = node.b
         else:
             v = node.a
