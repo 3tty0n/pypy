@@ -251,6 +251,16 @@ def alloc_failed():
     """True if a device allocation has fallen back to the CPU."""
     return rt_cuda_alloc_failed() != 0
 
+class Fallbacks(object):
+    n = 0
+fallbacks = Fallbacks()
+
+def note_cpu_fallback():
+    """Called by every host loop that computes an op: counts the ones that
+    ran there although the GPU is on."""
+    if gpu_enabled():
+        fallbacks.n += 1
+
 class Profile(object):
     def __init__(self):
         self.enabled = False
@@ -266,7 +276,7 @@ def prof_begin():
 
 PROF_NAMES = ['fused', 'per-node', 'matmul', 'bmm', 'im2col', 'col2chw',
               'maxpool2', 'head_split', 'head_merge', 'assign', 'upload',
-              'download']
+              'download', 'strided', 'take', 'pool']
 
 def prof_end(kind, extra, t0):
     if not profile.enabled:

@@ -85,13 +85,13 @@ class W_Tensor(W_Root):
 
     def descr_add(self, space, w_other):
         try:
-            return W_Tensor(self.tensor.add(self._other(space, w_other)))
+            return W_Tensor(self.tensor.add(self._operand(space, w_other)))
         except ValueError:
             raise _mismatch(space)
 
     def descr_mul(self, space, w_other):
         try:
-            return W_Tensor(self.tensor.mul(self._other(space, w_other)))
+            return W_Tensor(self.tensor.mul(self._operand(space, w_other)))
         except ValueError:
             raise _mismatch(space)
 
@@ -111,13 +111,13 @@ class W_Tensor(W_Root):
 
     def descr_sub(self, space, w_other):
         try:
-            return W_Tensor(self.tensor.sub(self._other(space, w_other)))
+            return W_Tensor(self.tensor.sub(self._operand(space, w_other)))
         except ValueError:
             raise _mismatch(space)
 
     def descr_div(self, space, w_other):
         try:
-            return W_Tensor(self.tensor.div(self._other(space, w_other)))
+            return W_Tensor(self.tensor.div(self._operand(space, w_other)))
         except ValueError:
             raise _mismatch(space)
 
@@ -433,27 +433,232 @@ class W_Tensor(W_Root):
         return _wrap(runtime.maxpool2_nhwc(t, c, h, w, k, stride,
                                            pad))
 
-    @unwrap_spec(c=int, h=int, w=int, k=int, stride=int, pad=int)
+    @unwrap_spec(c=int, h=int, w=int, k=int, stride=int, pad=int,
+                 groups=int, kw=int, stride_w=int, pad_w=int, dilation=int,
+                 dilation_w=int)
     def descr_conv2d(self, space, w_weight, c, h, w, w_bias=None, k=3,
-                     stride=1, pad=1):
+                     stride=1, pad=1, groups=1, kw=0, stride_w=0, pad_w=-1,
+                     dilation=1, dilation_w=0):
+        """NCHW convolution as [n, o*oh*ow].  k, stride, pad and dilation
+        are the height's, and the width's too unless kw, stride_w, pad_w or
+        dilation_w say otherwise.  weight is [c*k*kw, o // groups]: the rows
+        of group g are its c // groups input channels by kernel row by kernel
+        column, so torch's [o, c // groups, k, kw] weight w goes in as
+        w.view(groups, o // groups, -1).transpose(1, 2).  groups == c
+        (depthwise) runs as one direct kernel, other groups as im2col and a
+        batched GEMM, one batch per group."""
         weight = self._other(space, w_weight).t
         t = self.tensor.t
         _ready(t)
         _ready(weight)
-        self._conv_check(space, c, h, w, k, pad, stride)
-        if (ops.tensor_ndim(weight) != 2 or
-                ops.tensor_shape(weight, 0) != c * k * k):
+        kh, sh, ph, dh = k, stride, pad, dilation
+        if kw <= 0:
+            kw = k
+        sw = stride_w if stride_w > 0 else stride
+        pw = pad_w if pad_w >= 0 else pad
+        dw = dilation_w if dilation_w > 0 else dilation
+        if (c <= 0 or h <= 0 or w <= 0 or kh <= 0 or kw <= 0 or sh <= 0 or
+                sw <= 0 or ph < 0 or pw < 0 or dh <= 0 or dw <= 0 or groups <= 0 or
+                c % groups != 0 or ops.tensor_size(t) % (c * h * w) != 0 or
+                core.conv_out(h, kh, sh, ph, dh) <= 0 or
+                core.conv_out(w, kw, sw, pw, dw) <= 0 or
+                ops.tensor_ndim(weight) != 2 or
+                ops.tensor_shape(weight, 0) != c * kh * kw):
+            raise _mismatch(space)
+        og = ops.tensor_shape(weight, 1)
+        o = og * groups
+        ohw = (core.conv_out(h, kh, sh, ph, dh) *
+               core.conv_out(w, kw, sw, pw, dw))
+        rows = ops.tensor_size(t) // (c * h * w)
+        bias = core.NULLTENSOR
+        if w_bias is not None and not space.is_none(w_bias):
+            bias = self._other(space, w_bias).t
+            _ready(bias)
+        if groups > 1 and groups == c:
+            if bias and (ops.tensor_size(bias) != o or
+                         ops.tensor_dtype(bias) != ops.tensor_dtype(t)):
+                raise _mismatch(space)
+            return _wrap(runtime.depthwise_conv2d(t, weight, bias, c, h, w,
+                                                  kh, kw, sh, sw, ph, pw, dh,
+                                                  dw, og))
+        cols = runtime.im2col2(t, c, h, w, kh, kw, sh, sw, ph, pw, dh, dw)
+        if groups == 1:
+            y = runtime.tensor_matmul(cols, weight, rows * ohw, o,
+                                      c * kh * kw, 0, 0, 1)
+        else:
+            inner = c // groups * kh * kw
+            y = runtime.tensor_bmm(cols, weight, groups, rows * ohw, og, inner,
+                                   0, 0, c * kh * kw, og, o, inner,
+                                   inner * og, og, rows * ohw * o, rows * ohw)
+        if bias:
+            y = ops.add_p(y, bias, core.BC_R_ROW)
+        return _wrap(runtime.col2chw(y, rows, ohw, o))
+
+    @unwrap_spec(c=int, h=int, w=int, k=int, stride=int, pad=int,
+                 output_padding=int, dilation=int, kw=int, stride_w=int,
+                 pad_w=int, output_padding_w=int, dilation_w=int)
+    def descr_conv_transpose2d(self, space, w_weight, c, h, w, w_bias=None,
+                               k=3, stride=1, pad=0, output_padding=0,
+                               dilation=1, kw=0, stride_w=0, pad_w=-1,
+                               output_padding_w=-1, dilation_w=0):
+        """NCHW transposed convolution as [n, o*oh*ow], the width's values
+        defaulting to the height's as in conv2d.  weight is [c*k*kw, o]:
+        torch's [c, o, k, kw] weight w as w.permute(0, 2, 3, 1).reshape(
+        c*k*kw, o).  No groups."""
+        weight = self._other(space, w_weight).t
+        t = self.tensor.t
+        _ready(t)
+        _ready(weight)
+        kh, sh, ph, dh, oph = k, stride, pad, dilation, output_padding
+        if kw <= 0:
+            kw = k
+        sw = stride_w if stride_w > 0 else stride
+        pw = pad_w if pad_w >= 0 else pad
+        dw = dilation_w if dilation_w > 0 else dilation
+        opw = output_padding_w if output_padding_w >= 0 else output_padding
+        oh = (h - 1) * sh - 2 * ph + dh * (kh - 1) + oph + 1
+        ow = (w - 1) * sw - 2 * pw + dw * (kw - 1) + opw + 1
+        if (c <= 0 or h <= 0 or w <= 0 or kh <= 0 or kw <= 0 or sh <= 0 or
+                sw <= 0 or ph < 0 or pw < 0 or dh <= 0 or dw <= 0 or
+                oph < 0 or opw < 0 or (oph >= sh and oph >= dh) or
+                (opw >= sw and opw >= dw) or oh <= 0 or ow <= 0 or
+                ops.tensor_size(t) % (c * h * w) != 0 or
+                ops.tensor_ndim(weight) != 2 or
+                ops.tensor_shape(weight, 0) != c * kh * kw):
             raise _mismatch(space)
         o = ops.tensor_shape(weight, 1)
-        ohw = ((h + 2 * pad - k) // stride + 1) * ((w + 2 * pad - k) //
-                                                   stride + 1)
         rows = ops.tensor_size(t) // (c * h * w)
-        y = runtime.tensor_matmul(runtime.im2col(t, c, h, w, k, pad, stride),
-                                  weight, rows * ohw, o, c * k * k, 0, 0, 1)
+        cols = runtime.im2col_t(t, c, h, w, kh, kw, sh, sw, ph, pw, dh, dw,
+                                oh, ow)
+        y = runtime.tensor_matmul(cols, weight, rows * oh * ow, o,
+                                  c * kh * kw, 0, 0, 1)
         if w_bias is not None and not space.is_none(w_bias):
-            y = ops.add_p(y, self._other(space, w_bias).t,
-                                   core.BC_R_ROW)
-        return _wrap(runtime.col2chw(y, rows, ohw, o))
+            bias = self._other(space, w_bias).t
+            _ready(bias)
+            y = ops.add_p(y, bias, core.BC_R_ROW)
+        return _wrap(runtime.col2chw(y, rows, oh * ow, o))
+
+    def _pool_check(self, space, c, h, w):
+        t = self.tensor.t
+        _ready(t)
+        if (c <= 0 or h <= 0 or w <= 0 or
+                ops.tensor_size(t) % (c * h * w) != 0):
+            raise _mismatch(space)
+        return t
+
+    @unwrap_spec(c=int, h=int, w=int, k=int, stride=int, pad=int,
+                 count_include_pad=bool, ceil_mode=bool, kw=int, stride_w=int,
+                 pad_w=int)
+    def descr_avg_pool2d(self, space, c, h, w, k=2, stride=0, pad=0,
+                         count_include_pad=True, ceil_mode=False, kw=0,
+                         stride_w=0, pad_w=-1):
+        """NCHW average pooling as [n, c*oh*ow].  stride defaults to the
+        kernel; the width takes the height's values unless kw, stride_w or
+        pad_w are given."""
+        t = self._pool_check(space, c, h, w)
+        if kw <= 0:
+            kw = k
+        sh = stride if stride > 0 else k
+        sw = stride_w if stride_w > 0 else (stride if stride > 0 else kw)
+        pw = pad_w if pad_w >= 0 else pad
+        if (k <= 0 or pad < 0 or pw < 0 or 2 * pad > k or 2 * pw > kw or
+                runtime.pool_out(h, k, sh, pad, ceil_mode) <= 0 or
+                runtime.pool_out(w, kw, sw, pw, ceil_mode) <= 0):
+            raise _mismatch(space)
+        return _wrap(runtime.avg_pool2d(t, c, h, w, k, kw, sh, sw, pad, pw,
+                                        count_include_pad, ceil_mode))
+
+    @unwrap_spec(c=int, h=int, w=int, oh=int, ow=int)
+    def descr_adaptive_avg_pool2d(self, space, c, h, w, oh, ow=0):
+        """NCHW adaptive average pooling to oh x ow (ow defaults to oh) as
+        [n, c*oh*ow]."""
+        t = self._pool_check(space, c, h, w)
+        if ow <= 0:
+            ow = oh
+        if oh <= 0:
+            raise _mismatch(space)
+        return _wrap(runtime.adaptive_avg_pool2d(t, c, h, w, oh, ow))
+
+    @unwrap_spec(offset=int)
+    def descr_strided(self, space, w_shape, w_strides, offset=0):
+        """A new contiguous tensor of the given shape whose element
+        (i0, i1, ..) is this tensor's flat element offset + sum(i_j *
+        strides[j]).  Strides may be 0 (expand, repeat) or negative; this is
+        permute, transpose, slice, select, narrow and expand, in one
+        launch."""
+        t = self.tensor.t
+        _ready(t)
+        shape = _ints_w(space, w_shape)
+        strides = _ints_w(space, w_strides)
+        if len(shape) != len(strides):
+            raise _mismatch(space)
+        lo = hi = offset
+        n = 1
+        for j in range(len(shape)):
+            if shape[j] < 0:
+                raise _mismatch(space)
+            n *= shape[j]
+            step = (shape[j] - 1) * strides[j]
+            if step < 0:
+                lo += step
+            else:
+                hi += step
+        if n > 0 and (lo < 0 or hi >= ops.tensor_size(t)):
+            raise _mismatch(space)
+        return _wrap(runtime.strided(t, shape, strides, offset))
+
+    @unwrap_spec(value=float)
+    def descr_pad(self, space, w_shape, w_pads, value=0.0):
+        """This tensor, contiguous with the given shape, padded with value:
+        pads = [before_0, after_0, before_1, after_1, ..] in dimension order,
+        one pair per dimension (negative pads crop)."""
+        t = self.tensor.t
+        _ready(t)
+        shape = _ints_w(space, w_shape)
+        pads = _ints_w(space, w_pads)
+        if len(pads) != 2 * len(shape):
+            raise _mismatch(space)
+        n = 1
+        for j in range(len(shape)):
+            if (shape[j] < 0 or
+                    shape[j] + pads[2 * j] + pads[2 * j + 1] < 0):
+                raise _mismatch(space)
+            n *= shape[j]
+        if n != ops.tensor_size(t):
+            raise _mismatch(space)
+        return _wrap(runtime.pad(t, shape, pads, value))
+
+    def _take(self, space, w_idx, outer, inner, per_row):
+        t = self.tensor.t
+        idx = self._other(space, w_idx).t
+        _ready(t)
+        _ready(idx)
+        n = ops.tensor_size(t)
+        m = ops.tensor_size(idx)
+        if (outer <= 0 or inner <= 0 or n % (outer * inner) != 0 or
+                ops.tensor_dtype(idx) != ops.tensor_dtype(t)):
+            raise _mismatch(space)
+        if not per_row:
+            return _wrap(runtime.take(t, idx, outer, m, inner, 0, 1, 0))
+        if m % (outer * inner) != 0:
+            raise _mismatch(space)
+        k = m // (outer * inner)
+        return _wrap(runtime.take(t, idx, outer, k, inner, k * inner, inner,
+                                  1))
+
+    @unwrap_spec(outer=int, inner=int)
+    def descr_gather(self, space, w_idx, outer, inner=1):
+        """torch.gather along the middle axis of this tensor as
+        [outer, d, inner]: idx is [outer, k, inner] (as floats of this dtype)
+        and the result [outer*k, inner].  An index outside [0, d) gives 0."""
+        return self._take(space, w_idx, outer, inner, True)
+
+    @unwrap_spec(outer=int, inner=int)
+    def descr_index_select(self, space, w_idx, outer=1, inner=1):
+        """index_select along the middle axis of this tensor as
+        [outer, d, inner] with idx a flat [k] (floats of this dtype); the
+        result is [outer*k, inner]."""
+        return self._take(space, w_idx, outer, inner, False)
 
     def descr_detach(self, space):
         return W_Tensor(nn.Tensor(self.tensor.t, self.tensor.requires_grad))
@@ -543,6 +748,13 @@ W_Tensor.typedef = TypeDef(
     maxpool2=interp2app(W_Tensor.descr_maxpool2),
     maxpool2_nhwc=interp2app(W_Tensor.descr_maxpool2_nhwc),
     conv2d=interp2app(W_Tensor.descr_conv2d),
+    conv_transpose2d=interp2app(W_Tensor.descr_conv_transpose2d),
+    avg_pool2d=interp2app(W_Tensor.descr_avg_pool2d),
+    adaptive_avg_pool2d=interp2app(W_Tensor.descr_adaptive_avg_pool2d),
+    strided=interp2app(W_Tensor.descr_strided),
+    pad=interp2app(W_Tensor.descr_pad),
+    gather=interp2app(W_Tensor.descr_gather),
+    index_select=interp2app(W_Tensor.descr_index_select),
     detach=interp2app(W_Tensor.descr_detach),
     force=interp2app(W_Tensor.descr_force),
     backward=interp2app(W_Tensor.descr_backward),
@@ -633,6 +845,26 @@ def zeros(space, w_shape, requires_grad=False, w_dtype=None):
     return W_Tensor(nn.Tensor(t, requires_grad))
 
 
+@unwrap_spec(outer=int)
+def cat(space, w_tensors, outer=1):
+    """Each tensor viewed as [outer, size // outer], joined along the second
+    axis into one [outer, sum of the widths]: torch.cat along dim d is
+    outer = prod(shape[:d]).  Up to 8 tensors take one launch."""
+    ts = []
+    for w_t in space.listview(w_tensors):
+        t = space.interp_w(W_Tensor, w_t).tensor.t
+        _ready(t)
+        ts.append(t)
+    if not ts or outer <= 0:
+        raise _mismatch(space)
+    dtype = ops.tensor_dtype(ts[0])
+    for t in ts:
+        if (ops.tensor_size(t) % outer != 0 or
+                ops.tensor_dtype(t) != dtype):
+            raise _mismatch(space)
+    return _wrap(runtime.cat(ts, outer))
+
+
 def kernel_count(space):
     return space.newint(kernels.counter.n)
 
@@ -680,3 +912,9 @@ def live_bytes(space):
 
 def alloc_failed(space):
     return space.newbool(device.alloc_failed())
+
+
+def cpu_fallbacks(space):
+    """How many ops ran in host loops although the GPU is on: a failed
+    compile, launch or allocation, or an op with no device kernel."""
+    return space.newint(device.fallbacks.n)

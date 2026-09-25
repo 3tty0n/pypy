@@ -7,6 +7,7 @@ class Module(MixedModule):
         'Tensor': 'interp_tensor.W_Tensor',
         '_tensor_flat': 'interp_tensor.tensor_flat',
         'zeros': 'interp_tensor.zeros',
+        'cat': 'interp_tensor.cat',
         'scalar': 'interp_tensor.scalar',
         'kernel_count': 'interp_tensor.kernel_count',
         'kernel_compile_count': 'interp_tensor.kernel_compile_count',
@@ -17,6 +18,7 @@ class Module(MixedModule):
         'mem_total': 'interp_tensor.mem_total',
         'live_bytes': 'interp_tensor.live_bytes',
         'alloc_failed': 'interp_tensor.alloc_failed',
+        'cpu_fallbacks': 'interp_tensor.cpu_fallbacks',
         'group': 'interp_group.new_group',  # [motion]
     }
 

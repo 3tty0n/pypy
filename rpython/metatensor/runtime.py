@@ -7,9 +7,9 @@ from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import math
 from rpython.metatensor.core import (ADD, ARITY, B_GE, B_GT, B_KEEP_NZ, B_KEEP_Z, B_LE, B_LT, B_MAX, B_MIN, B_NE, B_POW, BINARY, U_ABS, U_COS, U_ERF, U_FLOOR, U_LOG, U_SIGMOID, U_SIN, U_TANH, UNARY, bc_mode, binary_fn, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GATHER, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, cols, config, gather_changes_shape, gather_shape, nbytes, new_tensor, nvals)
-from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, host, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_free, rt_cuda_launch, rt_cuda_reset, rt_cuda_warn_arity, rt_cuda_warn_cpu)
+from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, host, note_cpu_fallback, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_free, rt_cuda_launch, rt_cuda_reset, rt_cuda_warn_arity, rt_cuda_warn_cpu)
 from rpython.metatensor.kernels import (has_gather, needs_zero, row_tile, single_kernel)
-from rpython.metatensor.devops import (_make_ones, ones, col2chw, gather_op, head_merge, head_split, im2col, im2col_nhwc, maxpool2, maxpool2_nhwc, rot_half, rowgather, scalar, scalar_of, scalars, tensor_assign, tensor_bmm, tensor_matmul, tensor_write_rows)
+from rpython.metatensor.devops import (_make_ones, ones, adaptive_avg_pool2d, avg_pool2d, cat, depthwise_conv2d, im2col2, im2col_t, pad, pool_out, strided, take, col2chw, gather_op, head_merge, head_split, im2col, im2col_nhwc, maxpool2, maxpool2_nhwc, rot_half, rowgather, scalar, scalar_of, scalars, tensor_assign, tensor_bmm, tensor_matmul, tensor_write_rows)
 
 def eval_op(opcode, a, b, p):
     if opcode == GATHER:
@@ -106,6 +106,7 @@ def _binary(fn, x, y):
     return 1.0 if t else 0.0
 
 def eval_op_cpu(opcode, a, b, p):
+    note_cpu_fallback()
     if opcode == SUM or opcode == MAXR:
         return reduce_cpu(opcode, a, p)
     ha = host(a)

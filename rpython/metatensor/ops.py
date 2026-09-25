@@ -2,7 +2,7 @@ from rpython.rlib import jit
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.rclass import OBJECTPTR
 from rpython.metatensor.core import (ADD, B_KEEP_NZ, B_KEEP_Z, BINARY, NPARAMS, UNARY, AXIS_ALL, GA_HEADSPLIT, GA_ROTHALF, GATHER, gather_knob, gather_param, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_NONE, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, MAXR, MUL, NDTYPES, NULLTENSOR, RELU, RELUGRAD, SHAPEARRAY, SQRT, SUB, SUM, TENSOR, TENSORARRAY, _shape2, cols, new_tensor, note_cols, note_dtype, note_size, policy)
-from rpython.metatensor.device import (host)
+from rpython.metatensor.device import (host, note_cpu_fallback)
 from rpython.metatensor.kernels import (ensure_gather, ensure_single)
 from rpython.metatensor import lazy
 from rpython.metatensor.runtime import (_make_ones, eval_op, head_merge, head_split, rot_half, ones, tensor_assign, tensor_matmul)
@@ -13,6 +13,7 @@ def astype(t, dtype):
     if t.dtype == dtype:
         return t
     note_dtype(dtype)
+    note_cpu_fallback()
     h = host(t)
     r = new_tensor(t.size, t.shape, dtype)
     for i in range(t.size):

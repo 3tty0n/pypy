@@ -302,6 +302,16 @@ GA_ROWS = 5
 GA_ROTHALF = 6
 GA_IM2COL_NHWC = 7
 GA_MAXPOOL_NHWC = 8
+# Standalone only, never GATHER node kinds.
+GA_STRIDED = 9
+GA_TAKE = 10
+GA_POOL = 11
+GA_IM2COL2 = 12
+GA_IM2COL_T = 13
+POOL_AVG, POOL_ADAPTIVE, POOL_DEPTHWISE = 0, 1, 2
+
+def conv_out(h, k, stride, pad, dil):
+    return (h + 2 * pad - dil * (k - 1) - 1) // stride + 1
 
 # kind in the low 4 bits, dh in the next 20, heads above.  rows is not stored:
 # it is size // (dh * heads), and leaving it out keeps one kernel per layout

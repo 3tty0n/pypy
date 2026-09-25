@@ -2622,3 +2622,394 @@ def test_ttir_of_existing_opcodes_is_unchanged():
         count += 1
     assert count == 30888
     assert h.hexdigest() == '7efc9909c53837e8f297e158e0e2a0e46e456df9'
+
+
+def _on_gpu(before):
+    import os
+    if 'RTENSOR_CPU' not in os.environ:
+        assert device.fallbacks.n == before
+
+
+def _vals(n, seed=1):
+    return [float((i * 7 + seed * 3) % 23 - 11) * 0.5 for i in range(n)]
+
+
+def _from(vals, shape, dt):
+    t = from_list(vals, dt)
+    if len(shape) > 1:
+        t = ops.reshape(t, shape)
+    return t
+
+
+_DM_TOL = {core.F64: 1e-12, core.F32: 1e-05, core.F16: 5e-03}
+
+
+def _prod(xs):
+    n = 1
+    for x in xs:
+        n *= x
+    return n
+
+
+def _coords(i, shape):
+    xs = []
+    for d in reversed(shape):
+        xs.append(i % d)
+        i //= d
+    return xs[::-1]
+
+
+def _ref_conv(x, wt, bias, n, c, h, w, o, g, kh, kw, sh, sw, ph, pw, dh, dw):
+    oh = (h + 2 * ph - dh * (kh - 1) - 1) // sh + 1
+    ow = (w + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+    cg = c // g
+    og = o // g
+    out = []
+    for b in range(n):
+        for oc in range(o):
+            gi = oc // og
+            for y in range(oh):
+                for z in range(ow):
+                    acc = bias[oc] if bias else 0.0
+                    for ci in range(cg):
+                        for a in range(kh):
+                            for e in range(kw):
+                                ih = y * sh - ph + a * dh
+                                iw = z * sw - pw + e * dw
+                                if 0 <= ih < h and 0 <= iw < w:
+                                    ch = gi * cg + ci
+                                    wv = wt[((gi * cg + ci) * kh * kw +
+                                             a * kw + e) * og + oc % og]
+                                    acc += x[((b * c + ch) * h + ih) * w +
+                                             iw] * wv
+                    out.append(acc)
+    return out
+
+
+class TestDataMovement(object):
+
+    def teardown_method(self, meth):
+        core.note_dtype(core.F64)
+
+    def _check(self, got, want, dt):
+        got = list(device.host(got))[:len(want)]
+        assert len(got) == len(want)
+        for i in range(len(want)):
+            assert _close(got[i], want[i], _DM_TOL[dt]), (i, got[i], want[i])
+
+    def test_strided_copy(self):
+        cases = [([2, 3, 4], [12, 4, 1], 0, [4, 2, 3], [1, 12, 4], 0),
+                 ([2, 3, 4], [12, 4, 1], 0, [2, 4], [12, 1], 4),
+                 ([6, 5], [5, 1], 0, [3, 5], [10, 1], 0),
+                 ([6, 5], [5, 1], 0, [6], [5], 3),
+                 ([6, 5], [5, 1], 0, [6, 5], [-5, 1], 25),
+                 ([3, 4], [4, 1], 0, [2, 3, 4], [0, 4, 1], 0),
+                 ([3, 4], [4, 1], 0, [3, 2, 4, 1], [4, 0, 1, 0], 0),
+                 ([2, 1, 3, 1, 2, 2], None, 0, [2, 2, 2, 1, 3, 1],
+                  [1, 2, 6, 1, 2, 1], 0)]
+        for dt in [core.F64, core.F32, core.F16]:
+            kernels.init_dtype(dt)
+            for src_shape, _, _, shape, strides, off in cases:
+                vals = _vals(_prod(src_shape))
+                x = _from(vals, src_shape, dt)
+                want = []
+                for i in range(_prod(shape)):
+                    xs = _coords(i, shape)
+                    want.append(vals[off + sum([a * b for a, b in
+                                                zip(xs, strides)])])
+                before = device.fallbacks.n
+                y = runtime.strided(x, shape, strides, off)
+                assert [y.shape[j] for j in range(len(shape))] == shape
+                self._check(y, want, dt)
+                _on_gpu(before)
+
+    def test_cat(self):
+        for dt in [core.F64, core.F32, core.F16]:
+            kernels.init_dtype(dt)
+            for outer, widths in [(1, [3, 5]), (2, [3, 1, 4]), (3, [2] * 11),
+                                  (4, [5])]:
+                parts = [_vals(outer * wk, seed=k)
+                         for k, wk in enumerate(widths)]
+                ts = [_from(p, [outer, len(p) // outer], dt) for p in parts]
+                want = []
+                for o in range(outer):
+                    for k, wk in enumerate(widths):
+                        want.extend(parts[k][o * wk:(o + 1) * wk])
+                before = device.fallbacks.n
+                y = runtime.cat(ts, outer)
+                assert [y.shape[0], y.shape[1]] == [outer, sum(widths)]
+                self._check(y, want, dt)
+                _on_gpu(before)
+
+    def test_pad(self):
+        cases = [([2, 3], [1, 2, 0, 1], 0.0),
+                 ([2, 3, 4], [0, 0, 1, 1, 2, 0], -1.5),
+                 ([4, 5], [-1, 1, 2, -2], 2.0),
+                 ([2, 2, 3, 3], [0, 0, 0, 0, 1, 1, 1, 1], float('-inf'))]
+        for dt in [core.F64, core.F32, core.F16]:
+            kernels.init_dtype(dt)
+            for shape, pads, value in cases:
+                vals = _vals(_prod(shape))
+                x = _from(vals, shape, dt)
+                oshape = [shape[j] + pads[2 * j] + pads[2 * j + 1]
+                          for j in range(len(shape))]
+                want = []
+                for i in range(_prod(oshape)):
+                    xs = [a - pads[2 * j] for j, a in
+                          enumerate(_coords(i, oshape))]
+                    if all([0 <= xs[j] < shape[j] for j in range(len(xs))]):
+                        k = 0
+                        for j in range(len(xs)):
+                            k = k * shape[j] + xs[j]
+                        want.append(vals[k])
+                    else:
+                        want.append(value)
+                before = device.fallbacks.n
+                self._check(runtime.pad(x, shape, pads, value), want, dt)
+                _on_gpu(before)
+
+    def test_gather_and_index_select(self):
+        for dt in [core.F64, core.F32, core.F16]:
+            kernels.init_dtype(dt)
+            vals = _vals(4 * 5)
+            x = _from(vals, [4, 5], dt)
+            idx = from_list([4.0, 0.0, 2.0, 3.0], dt)
+            before = device.fallbacks.n
+            y = runtime.take(x, idx, 4, 1, 1, 1, 1, 1)
+            self._check(y, [vals[r * 5 + [4, 0, 2, 3][r]] for r in range(4)],
+                        dt)
+            outer, d, inner = 2, 3, 4
+            vals = _vals(outer * d * inner)
+            x = _from(vals, [outer * d, inner], dt)
+            sel = [2.0, 0.0, 2.0, 1.0, 7.0]
+            y = runtime.take(x, from_list(sel, dt), outer, 5, inner, 0, 1, 0)
+            want = []
+            for o in range(outer):
+                for s in sel:
+                    for i in range(inner):
+                        want.append(vals[(o * d + int(s)) * inner + i]
+                                    if s < d else 0.0)
+            self._check(y, want, dt)
+            gi = [float((q * 5) % d) for q in range(outer * 2 * inner)]
+            y = runtime.take(x, from_list(gi, dt), outer, 2, inner, 2 * inner,
+                             inner, 1)
+            want = [vals[(q // (2 * inner) * d + int(gi[q])) * inner +
+                         q % inner] for q in range(len(gi))]
+            self._check(y, want, dt)
+            _on_gpu(before)
+
+    def test_avg_pool2d(self):
+        cases = [(1, 2, 5, 5, 2, 2, 2, 2, 0, 0, True, False),
+                 (2, 3, 7, 6, 3, 3, 2, 2, 1, 1, True, False),
+                 (2, 3, 7, 6, 3, 3, 2, 2, 1, 1, False, False),
+                 (1, 2, 6, 7, 3, 2, 2, 1, 1, 0, False, True),
+                 (1, 1, 5, 5, 2, 2, 2, 2, 0, 0, True, True)]
+        for dt in [core.F64, core.F32, core.F16]:
+            kernels.init_dtype(dt)
+            for n, c, h, w, kh, kw, sh, sw, ph, pw, incl, ceil in cases:
+                vals = _vals(n * c * h * w)
+                x = _from(vals, [n, c * h * w], dt)
+                oh = runtime.pool_out(h, kh, sh, ph, ceil)
+                ow = runtime.pool_out(w, kw, sw, pw, ceil)
+                want = []
+                for p in range(n * c):
+                    for y in range(oh):
+                        for z in range(ow):
+                            hs, ws = y * sh - ph, z * sw - pw
+                            he, we = min(hs + kh, h + ph), min(ws + kw, w + pw)
+                            cnt = (he - hs) * (we - ws)
+                            if not incl:
+                                cnt = ((min(he, h) - max(hs, 0)) *
+                                       (min(we, w) - max(ws, 0)))
+                            acc = 0.0
+                            for a in range(max(hs, 0), min(he, h)):
+                                for b in range(max(ws, 0), min(we, w)):
+                                    acc += vals[(p * h + a) * w + b]
+                            want.append(acc / cnt)
+                before = device.fallbacks.n
+                r = runtime.avg_pool2d(x, c, h, w, kh, kw, sh, sw, ph, pw,
+                                       incl, ceil)
+                assert [r.shape[0], r.shape[1]] == [n, c * oh * ow]
+                self._check(r, want, dt)
+                _on_gpu(before)
+
+    def test_adaptive_avg_pool2d(self):
+        for dt in [core.F64, core.F32, core.F16]:
+            kernels.init_dtype(dt)
+            for n, c, h, w, oh, ow in [(2, 3, 7, 7, 1, 1), (1, 2, 10, 9, 3, 4),
+                                       (1, 1, 5, 6, 7, 6)]:
+                vals = _vals(n * c * h * w)
+                x = _from(vals, [n, c * h * w], dt)
+                want = []
+                for p in range(n * c):
+                    for y in range(oh):
+                        for z in range(ow):
+                            hs = y * h // oh
+                            he = -(-(y + 1) * h // oh)
+                            ws = z * w // ow
+                            we = -(-(z + 1) * w // ow)
+                            acc = 0.0
+                            for a in range(hs, he):
+                                for b in range(ws, we):
+                                    acc += vals[(p * h + a) * w + b]
+                            want.append(acc / ((he - hs) * (we - ws)))
+                before = device.fallbacks.n
+                self._check(runtime.adaptive_avg_pool2d(x, c, h, w, oh, ow),
+                            want, dt)
+                _on_gpu(before)
+
+    def test_im2col2_matches_direct_convolution(self):
+        for dt in [core.F64, core.F32]:
+            kernels.init_dtype(dt)
+            for (n, c, h, w, o, kh, kw, sh, sw, ph, pw, dh, dw) in [
+                    (2, 3, 6, 7, 4, 3, 1, 1, 2, 1, 0, 1, 1),
+                    (1, 2, 1, 9, 3, 1, 3, 1, 1, 0, 1, 1, 2),
+                    (1, 2, 7, 7, 2, 3, 3, 2, 2, 2, 2, 2, 2)]:
+                vals = _vals(n * c * h * w)
+                wv = _vals(c * kh * kw * o, seed=5)
+                x = _from(vals, [n, c * h * w], dt)
+                wt = _from(wv, [c * kh * kw, o], dt)
+                oh = (h + 2 * ph - dh * (kh - 1) - 1) // sh + 1
+                ow = (w + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+                before = device.fallbacks.n
+                cols = runtime.im2col2(x, c, h, w, kh, kw, sh, sw, ph, pw, dh,
+                                       dw)
+                y = runtime.tensor_matmul(cols, wt, n * oh * ow, o,
+                                          c * kh * kw, 0, 0)
+                y = runtime.col2chw(y, n, oh * ow, o)
+                self._check(y, _ref_conv(vals, wv, None, n, c, h, w, o, 1, kh,
+                                         kw, sh, sw, ph, pw, dh, dw), dt)
+                _on_gpu(before)
+
+    def test_grouped_and_depthwise_conv(self):
+        for dt in [core.F64, core.F32, core.F16]:
+            kernels.init_dtype(dt)
+            for (n, c, h, w, o, g, kh, kw, s, p, d) in [
+                    (2, 4, 5, 5, 6, 2, 3, 3, 1, 1, 1),
+                    (1, 4, 6, 6, 4, 4, 3, 3, 2, 1, 1),
+                    (2, 3, 6, 5, 6, 3, 3, 2, 1, 1, 2),
+                    (1, 2, 5, 5, 2, 2, 5, 5, 1, 2, 1)]:
+                vals = _vals(n * c * h * w)
+                wv = _vals(c * kh * kw * (o // g), seed=4)
+                bv = _vals(o, seed=2)
+                x = _from(vals, [n, c * h * w], dt)
+                wt = _from(wv, [c * kh * kw, o // g], dt)
+                oh = (h + 2 * p - d * (kh - 1) - 1) // s + 1
+                ow = (w + 2 * p - d * (kw - 1) - 1) // s + 1
+                want = _ref_conv(vals, wv, bv, n, c, h, w, o, g, kh, kw, s, s,
+                                 p, p, d, d)
+                before = device.fallbacks.n
+                if g == c:
+                    y = runtime.depthwise_conv2d(x, wt, from_list(bv, dt), c,
+                                                 h, w, kh, kw, s, s, p, p, d,
+                                                 d, o // c)
+                else:
+                    cols = runtime.im2col2(x, c, h, w, kh, kw, s, s, p, p, d,
+                                           d)
+                    inner = c // g * kh * kw
+                    y = runtime.tensor_bmm(cols, wt, g, n * oh * ow, o // g,
+                                           inner, 0, 0, c * kh * kw, o // g,
+                                           o, inner, inner * (o // g), o // g,
+                                           n * oh * ow * o, n * oh * ow)
+                    y = ops.add_p(y, from_list(bv, dt), core.BC_R_ROW)
+                    y = runtime.col2chw(y, n, oh * ow, o)
+                tol = {core.F64: 1e-12, core.F32: 1e-4, core.F16: 0.1}[dt]
+                got = list(device.host(y))[:len(want)]
+                for i in range(len(want)):
+                    assert abs(got[i] - want[i]) <= tol * max(1.0,
+                                                              abs(want[i]))
+                _on_gpu(before)
+
+    def test_transposed_convolution(self):
+        for dt in [core.F64, core.F32]:
+            kernels.init_dtype(dt)
+            for (n, c, h, w, o, kh, kw, sh, sw, ph, pw, dh, dw, oph, opw) in [
+                    (2, 3, 4, 5, 2, 3, 3, 2, 2, 1, 1, 1, 1, 1, 0),
+                    (1, 2, 3, 3, 3, 2, 3, 1, 3, 0, 1, 2, 1, 0, 2),
+                    (1, 1, 1, 6, 2, 1, 4, 1, 2, 0, 1, 1, 1, 0, 1)]:
+                oh = (h - 1) * sh - 2 * ph + dh * (kh - 1) + oph + 1
+                ow = (w - 1) * sw - 2 * pw + dw * (kw - 1) + opw + 1
+                vals = _vals(n * c * h * w)
+                wv = _vals(c * kh * kw * o, seed=6)
+                want = [0.0] * (n * o * oh * ow)
+                for b in range(n):
+                    for ic in range(c):
+                        for iy in range(h):
+                            for ix in range(w):
+                                xv = vals[((b * c + ic) * h + iy) * w + ix]
+                                for a in range(kh):
+                                    for e in range(kw):
+                                        oy = iy * sh - ph + a * dh
+                                        ox = ix * sw - pw + e * dw
+                                        if 0 <= oy < oh and 0 <= ox < ow:
+                                            for oc in range(o):
+                                                want[((b * o + oc) * oh + oy) *
+                                                     ow + ox] += xv * wv[
+                                                    (ic * kh * kw + a * kw +
+                                                     e) * o + oc]
+                x = _from(vals, [n, c * h * w], dt)
+                wt = _from(wv, [c * kh * kw, o], dt)
+                before = device.fallbacks.n
+                cols = runtime.im2col_t(x, c, h, w, kh, kw, sh, sw, ph, pw,
+                                        dh, dw, oh, ow)
+                y = runtime.tensor_matmul(cols, wt, n * oh * ow, o,
+                                          c * kh * kw, 0, 0)
+                self._check(runtime.col2chw(y, n, oh * ow, o), want, dt)
+                _on_gpu(before)
+
+    def test_host_loops_match_the_kernels(self):
+        # the loops a failed launch falls back to, against the same
+        # references through the device
+        vals = _vals(2 * 3 * 5 * 4)
+        x = _from(vals, [2, 60], core.F64)
+        params = [1, 3, 4, 2, 3, 1, 20, 5, 0, 0, 0, 4, 2, 3]
+        a = runtime.strided(x, [4, 2, 3], [1, 20, 5], 0)
+        from rpython.metatensor import devops
+        b = devops.strided_cpu([x], [0], params, 0.0, a.shape)
+        assert list(device.host(a))[:24] == list(b.host)[:24]
+        p = devops._pool_params(core.POOL_AVG, 5, 4, 2, 2, 3, 2, 2, 2, 1, 0,
+                                1, 1, 1, 1, 0)
+        a = devops._pool(x, core.NULLTENSOR, core.NULLTENSOR, p, 6 * 4,
+                         core._shape2(2, 12))
+        b = devops.pool_cpu(x, core.NULLTENSOR, core.NULLTENSOR, p, 24,
+                            a.shape)
+        self._check(a, list(b.host)[:24], core.F64)
+
+
+class TestDataMovementJit(LLJitMixin):
+
+    def test_library_ops_in_a_loop(self):
+        driver = JitDriver(greens=[], reds=['n', 'x', 'w', 'acc'])
+        vals = _vals(2 * 3 * 4 * 4)
+
+        def f(n):
+            x = _load([2, 3 * 4 * 4], vals)
+            w = _load([6], [1.0, 0.0, 2.0, 1.0, 0.5, 0.25])
+            acc = 0.0
+            while n > 0:
+                driver.jit_merge_point(n=n, x=x, w=w, acc=acc)
+                h = ops.add(x, x)
+                t = runtime.strided(h, [2, 16, 3], [48, 1, 16], 0)
+                c = runtime.cat([t, x], 2)
+                p = runtime.pad(c, [2, 96], [0, 0, 1, 1], 1.0)
+                q = runtime.adaptive_avg_pool2d(x, 3, 4, 4, 2, 2)
+                acc += ops.item(ops.sum(ops.mul(p, p)))
+                acc += ops.item(ops.sum(q))
+                q = runtime.avg_pool2d(x, 3, 4, 4, 3, 3, 2, 2, 1, 1, False,
+                                       True)
+                acc += ops.item(ops.sum(q))
+                q = runtime.take(x, w, 2, 2, 1, 2, 1, 0)
+                acc += ops.item(ops.sum(q))
+                q = runtime.depthwise_conv2d(x, w, core.NULLTENSOR, 3, 4, 4,
+                                             1, 2, 1, 1, 0, 0, 1, 1, 1)
+                acc += ops.item(ops.sum(q))
+                q = runtime.im2col2(x, 3, 4, 4, 1, 2, 1, 1, 0, 1, 1, 2)
+                acc += ops.item(ops.sum(q))
+                q = runtime.im2col_t(x, 3, 4, 4, 2, 2, 2, 2, 0, 0, 1, 1, 8,
+                                     8)
+                acc += ops.item(ops.sum(q))
+                n -= 1
+            return acc
+        expect = f(3)
+        res = self.meta_interp(f, [3])
+        assert abs(res - expect) < 1e-9 * abs(expect)

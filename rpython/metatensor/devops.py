@@ -2,11 +2,12 @@ from rpython.rlib import jit
 from rpython.rlib.rarithmetic import intmask
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
-from rpython.metatensor.core import (NDTYPES, F16, GA_ROWS, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_ROTHALF, GA_MAXPOOL, GA_MAXPOOL_NHWC, HOSTARRAY, NEG_INF, NULLTENSOR, SHAPEARRAY, _shape2, cols, config, gather_kind, gather_shape, nbytes, new_tensor, policy)
-from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, gpu_enabled, host, prof_begin, prof_end, rt_cuda_alloc, rt_cuda_bmm2, rt_cuda_copy, rt_cuda_free, rt_cuda_launch, rt_cuda_matmul)
+from rpython.metatensor.core import (NDTYPES, F16, GA_IM2COL2, GA_IM2COL_T, GA_POOL, GA_STRIDED, GA_TAKE, POOL_ADAPTIVE, POOL_AVG, POOL_DEPTHWISE, conv_out, GA_ROWS, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_ROTHALF, GA_MAXPOOL, GA_MAXPOOL_NHWC, HOSTARRAY, NEG_INF, NULLTENSOR, SHAPEARRAY, _shape2, cols, config, gather_kind, gather_shape, nbytes, new_tensor, policy)
+from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, gpu_enabled, host, note_cpu_fallback, prof_begin, prof_end, rt_cuda_alloc, rt_cuda_bmm2, rt_cuda_copy, rt_cuda_free, rt_cuda_launch, rt_cuda_matmul)
 from rpython.metatensor.kernels import (gather_kernel, gather_params, lookup_gather)
 
 def matmul_cpu(a, b, rows, cols, inner, ta, tb):
+    note_cpu_fallback()
     ha = host(a)
     hb = host(b)
     shape = lltype.malloc(SHAPEARRAY, 2)
@@ -79,6 +80,7 @@ def _lds(rows, cols, inner, ta, tb, lda, ldb, ldc, sa, sb, sc):
 def bmm_cpu(a, b, batch, rows, cols, inner, ta, tb, lda, ldb, ldc,
             sa, sb, sc, outn, outrows, oa, ob, oc, nb2=1, sa2=0, sb2=0,
             sc2=0):
+    note_cpu_fallback()
     lda, ldb, ldc, sa, sb, sc = _lds(rows, cols, inner, ta, tb, lda, ldb,
                                      ldc, sa, sb, sc)
     ha = host(a)
@@ -249,6 +251,7 @@ def rowgather_gpu(table, idx, rows, cols):
 
 
 def rowgather_cpu(table, idx, rows, cols):
+    note_cpu_fallback()
     ht = host(table)
     hi = host(idx)
     r = new_tensor(rows * cols, _shape2(rows, cols), table.dtype)
@@ -270,6 +273,7 @@ def rowgather(table, idx, rows, cols):
 
 
 def im2col_cpu(x, n, c, h, w, k, pad, stride):
+    note_cpu_fallback()
     hx = host(x)
     oh = (h + 2 * pad - k) // stride + 1
     ow = (w + 2 * pad - k) // stride + 1
@@ -326,6 +330,7 @@ def im2col(x, c, h, w, k, pad, stride=1):
 
 
 def im2col_nhwc_cpu(x, n, c, h, w, k, pad, stride):
+    note_cpu_fallback()
     hx = host(x)
     oh = (h + 2 * pad - k) // stride + 1
     ow = (w + 2 * pad - k) // stride + 1
@@ -383,6 +388,7 @@ def im2col_nhwc(x, c, h, w, k, pad, stride=1):
 
 
 def maxpool2_nhwc_cpu(x, n, c, h, w, k, stride, pad):
+    note_cpu_fallback()
     hx = host(x)
     oh = (h + 2 * pad - k) // stride + 1
     ow = (w + 2 * pad - k) // stride + 1
@@ -447,6 +453,7 @@ def maxpool2_nhwc(x, c, h, w, k=2, stride=2, pad=0):
 
 
 def col2chw_cpu(y, n, hw, o):
+    note_cpu_fallback()
     hy = host(y)
     r = new_tensor(n * o * hw, _shape2(n, o * hw), y.dtype)
     hr = r.host
@@ -480,6 +487,7 @@ def col2chw(y, n, hw, o):
 
 
 def maxpool2_cpu(x, n, c, h, w, k, stride, pad):
+    note_cpu_fallback()
     hx = host(x)
     oh = (h + 2 * pad - k) // stride + 1
     ow = (w + 2 * pad - k) // stride + 1
@@ -539,7 +547,510 @@ def maxpool2(x, c, h, w, k=2, stride=2, pad=0):
     return r
 
 
+def _dptrs(srcs, offs):
+    """The device pointers of srcs, each moved on by offs[i] elements; []
+    if one of them cannot be put on the device."""
+    ptrs = []
+    for i in range(len(srcs)):
+        p = dev(srcs[i])
+        if p == 0:
+            return []
+        ptrs.append(p + offs[i] * nbytes(1, srcs[i].dtype))
+    return ptrs
+
+
+@jit.dont_look_inside
+def _launch(kernel, ptrs, outn, shape, dt):
+    if kernel.fn == 0 or not ptrs or outn <= 0:
+        return NULLTENSOR
+    nin = len(ptrs)
+    collect_if_needed(nbytes(outn, dt))
+    ins = lltype.malloc(SIGNEDARRAY, nin, flavor='raw')
+    outs = lltype.malloc(SIGNEDARRAY, 1, flavor='raw')
+    for i in range(nin):
+        ins[i] = ptrs[i]
+    outs[0] = rt_cuda_alloc(nbytes(outn, dt), 0)
+    ok = outs[0] != 0
+    if ok:
+        ok = rffi.cast(lltype.Signed, rt_cuda_launch(
+            kernel.fn, ins, rffi.cast(rffi.INT, nin), outn, outs,
+            rffi.cast(rffi.INT, 1), rffi.cast(rffi.INT, kernel.threads),
+            config.flat, rffi.cast(rffi.INT, kernel.shared),
+            rffi.cast(rffi.INT, kernel.nextra), 0)) != 0
+    result = NULLTENSOR
+    if ok:
+        result = device_tensor(outn, outs[0], shape, dt)
+    elif outs[0] != 0:
+        rt_cuda_free(outs[0], nbytes(outn, dt))
+    lltype.free(ins, flavor='raw')
+    lltype.free(outs, flavor='raw')
+    return result
+
+
+def _shape_of(dims):
+    shape = lltype.malloc(SHAPEARRAY, len(dims))
+    for i in range(len(dims)):
+        shape[i] = dims[i]
+    return shape
+
+
+def _numel(params):
+    n = 1
+    for j in range(params[1]):
+        n *= params[2 + j]
+    return n
+
+
+def strided_cpu(srcs, offs, params, fill, shape):
+    nsrc = params[0]
+    rank = params[1]
+    n = _numel(params)
+    if n > 0:
+        note_cpu_fallback()
+    hs = [host(srcs[s]) for s in range(nsrc)]
+    r = new_tensor(n, shape, srcs[0].dtype)
+    hr = r.host
+    for i in range(n):
+        v = fill
+        for s in range(nsrc):
+            base = 2 + rank + 3 * rank * s
+            rem = i
+            addr = offs[s]
+            ok = True
+            for j in range(rank - 1, -1, -1):
+                d = params[2 + j]
+                x = rem % d
+                rem = rem // d
+                if (x < params[base + rank + j] or
+                        x >= params[base + 2 * rank + j]):
+                    ok = False
+                    break
+                addr += x * params[base + j]
+            if ok:
+                assert addr >= 0
+                v = hs[s][addr]
+                break
+        hr[i] = v
+    return r
+
+
+@jit.dont_look_inside
+def strided_launch(srcs, offs, params, fill, shape):
+    """The GA_STRIDED kernel (see ttir.to_ttir_strided), source s read from
+    offs[s] elements into srcs[s]."""
+    n = _numel(params)
+    dt = srcs[0].dtype
+    if gpu_enabled() and n > 0:
+        r = _launch(gather_kernel(GA_STRIDED, params, dt, fill),
+                    _dptrs(srcs, offs), n, shape, dt)
+        if r:
+            return r
+    return strided_cpu(srcs, offs, params, fill, shape)
+
+
+def _coalesce(shape, strides):
+    """Drop unit dimensions and merge neighbours that are contiguous in the
+    source, so a permute or slice needs as few divisions as it can."""
+    ns = []
+    nt = []
+    for j in range(len(shape)):
+        if shape[j] == 1:
+            continue
+        k = len(ns) - 1
+        if k >= 0 and nt[k] == strides[j] * shape[j]:
+            ns[k] = ns[k] * shape[j]
+            nt[k] = strides[j]
+        else:
+            ns.append(shape[j])
+            nt.append(strides[j])
+    if not ns:
+        ns.append(1)
+        nt.append(0)
+    return ns, nt
+
+
+@jit.dont_look_inside
+def strided(x, shape, strides, offset):
+    """A new contiguous tensor of the given shape, element (i0, ..) of which
+    is x[offset + sum(i_j * strides[j])]; strides may be 0 or negative.
+    Callers check the bounds."""
+    t0 = prof_begin()
+    cs, ct = _coalesce(shape, strides)
+    rank = len(cs)
+    params = [1, rank]
+    params.extend(cs)
+    params.extend(ct)
+    params.extend([0] * rank)
+    params.extend(cs)
+    r = strided_launch([x], [offset], params, 0.0, _shape_of(shape))
+    prof_end(intmask(12), intmask(0), t0)
+    return r
+
+
+MAX_CAT = 8
+
+@jit.dont_look_inside
+def _cat_impl(ts, outer):
+    if len(ts) > MAX_CAT:
+        # ponytail: past the launcher's 8 inputs, groups are joined and then
+        # joined again, one extra pass; a strided store into the slots of one
+        # buffer would avoid it.
+        parts = []
+        i = 0
+        while i < len(ts):
+            parts.append(_cat_impl(ts[i:min(i + MAX_CAT, len(ts))], outer))
+            i += MAX_CAT
+        return _cat_impl(parts, outer)
+    total = 0
+    for i in range(len(ts)):
+        total += ts[i].size // outer
+    rank = 1 if outer == 1 else 2
+    params = [len(ts), rank]
+    if rank == 2:
+        params.append(outer)
+    params.append(total)
+    offs = []
+    c = 0
+    for i in range(len(ts)):
+        wk = ts[i].size // outer
+        if rank == 2:
+            params.extend([wk, 1, 0, c, outer, c + wk])
+        else:
+            params.extend([1, c, c + wk])
+        offs.append(-c)
+        c += wk
+    return strided_launch(ts, offs, params, 0.0, _shape2(outer, total))
+
+
+@jit.dont_look_inside
+def cat(ts, outer):
+    """Each of ts viewed as [outer, size // outer], joined along the second
+    axis into [outer, sum of the widths].  Callers check the sizes."""
+    t0 = prof_begin()
+    r = _cat_impl(ts, outer)
+    prof_end(intmask(12), intmask(len(ts)), t0)
+    return r
+
+
+@jit.dont_look_inside
+def pad(x, shape, pads, value):
+    """x as a contiguous tensor of the given shape, pads[2*j] and
+    pads[2*j+1] elements of value added before and after dimension j
+    (negative pads crop)."""
+    t0 = prof_begin()
+    rank = len(shape)
+    strides = [0] * rank
+    stride = 1
+    for j in range(rank - 1, -1, -1):
+        strides[j] = stride
+        stride *= shape[j]
+    oshape = []
+    off = 0
+    for j in range(rank):
+        oshape.append(shape[j] + pads[2 * j] + pads[2 * j + 1])
+        off -= pads[2 * j] * strides[j]
+    params = [1, rank]
+    params.extend(oshape)
+    params.extend(strides)
+    for j in range(rank):
+        params.append(pads[2 * j])
+    for j in range(rank):
+        params.append(pads[2 * j] + shape[j])
+    r = strided_launch([x], [off], params, value, _shape_of(oshape))
+    prof_end(intmask(12), intmask(1), t0)
+    return r
+
+
+def take_cpu(x, idx, params, outn, shape):
+    note_cpu_fallback()
+    d, k, inner, so, sj, si = (params[0], params[1], params[2], params[3],
+                               params[4], params[5])
+    hx = host(x)
+    hi = host(idx)
+    r = new_tensor(outn, shape, x.dtype)
+    hr = r.host
+    for i in range(outn):
+        xi = i % inner
+        q = i // inner
+        xj = q % k
+        xo = q // k
+        pos = xo * so + xj * sj + xi * si
+        assert pos >= 0
+        fv = hi[pos]
+        v = 0.0
+        if fv > -1.0 and fv < float(d):
+            src = (xo * d + int(fv)) * inner + xi
+            assert src >= 0
+            v = hx[src]
+        hr[i] = v
+    return r
+
+
+@jit.dont_look_inside
+def take(x, idx, outer, k, inner, so, sj, si):
+    """x as [outer, d, inner]; out[o, j, i] = x[o, idx[o*so + j*sj + i*si], i]
+    as [outer*k, inner], zero for an index outside [0, d).  so, sj, si =
+    k*inner, inner, 1 is torch.gather along the middle axis, 0, 1, 0 is
+    index_select."""
+    t0 = prof_begin()
+    d = x.size // (outer * inner)
+    params = [d, k, inner, so, sj, si]
+    outn = outer * k * inner
+    shape = _shape2(outer * k, inner)
+    r = NULLTENSOR
+    if gpu_enabled():
+        r = _launch(gather_kernel(GA_TAKE, params, x.dtype),
+                    _dptrs([x, idx], [0, 0]), outn, shape, x.dtype)
+    if not r:
+        r = take_cpu(x, idx, params, outn, shape)
+    prof_end(intmask(13), intmask(0), t0)
+    return r
+
+
+def pool_cpu(x, wt, bias, params, outn, shape):
+    note_cpu_fallback()
+    mode, h, w, oh, ow = params[0], params[1], params[2], params[3], params[4]
+    kh, kw, sh, sw = params[5], params[6], params[7], params[8]
+    ph, pw, dh, dw = params[9], params[10], params[11], params[12]
+    cout, mult, flags = params[13], params[14], params[15]
+    conv = mode == POOL_DEPTHWISE
+    hx = host(x)
+    hw = hx
+    hb = hx
+    if conv:
+        hw = host(wt)
+        if flags & 1:
+            hb = host(bias)
+    r = new_tensor(outn, shape, x.dtype)
+    hr = r.host
+    for i in range(outn):
+        owi = i % ow
+        t = i // ow
+        ohi = t % oh
+        plane = t // oh
+        oc = 0
+        wbase = 0
+        if conv:
+            oc = plane % cout
+            ci = oc // mult
+            plane = plane // cout * (cout // mult) + ci
+            wbase = ci * kh * kw * mult + oc % mult
+        cnt = 0
+        if mode == POOL_ADAPTIVE:
+            hs = ohi * h // oh
+            he = (ohi * h + h + oh - 1) // oh
+            ws = owi * w // ow
+            we = (owi * w + w + ow - 1) // ow
+            cnt = (he - hs) * (we - ws)
+        else:
+            hs = ohi * sh - ph
+            ws = owi * sw - pw
+            he = min(hs + kh, h + ph)
+            we = min(ws + kw, w + pw)
+            if flags & 1:
+                cnt = (he - hs) * (we - ws)
+            else:
+                cnt = (min(he, h) - max(hs, 0)) * (min(we, w) - max(ws, 0))
+        acc = 0.0
+        for a in range(kh):
+            ih = hs + a * dh
+            if ih < 0 or ih >= h or (mode == POOL_ADAPTIVE and ih >= he):
+                continue
+            for b in range(kw):
+                iw = ws + b * dw
+                if iw < 0 or iw >= w or (mode == POOL_ADAPTIVE and iw >= we):
+                    continue
+                idx = (plane * h + ih) * w + iw
+                assert idx >= 0
+                v = hx[idx]
+                if conv:
+                    v *= hw[wbase + (a * kw + b) * mult]
+                acc += v
+        if conv:
+            if flags & 1:
+                acc += hb[oc]
+        elif cnt > 0:
+            acc /= cnt
+        hr[i] = acc
+    return r
+
+
+@jit.dont_look_inside
+def _pool(x, wt, bias, params, outn, shape):
+    t0 = prof_begin()
+    r = NULLTENSOR
+    if gpu_enabled():
+        srcs = [x]
+        if params[0] == POOL_DEPTHWISE:
+            srcs.append(wt)
+            if params[15] & 1:
+                srcs.append(bias)
+        r = _launch(gather_kernel(GA_POOL, params, x.dtype),
+                    _dptrs(srcs, [0] * len(srcs)), outn, shape, x.dtype)
+    if not r:
+        r = pool_cpu(x, wt, bias, params, outn, shape)
+    prof_end(intmask(14), intmask(params[0]), t0)
+    return r
+
+
+def pool_out(h, k, stride, pad, ceil_mode):
+    if not ceil_mode:
+        return (h + 2 * pad - k) // stride + 1
+    o = (h + 2 * pad - k + stride - 1) // stride + 1
+    if (o - 1) * stride >= h + pad:
+        o -= 1
+    return o
+
+
+def adaptive_window(h, oh):
+    m = 0
+    for i in range(oh):
+        m = max(m, ((i + 1) * h + oh - 1) // oh - i * h // oh)
+    return m
+
+
+def _pool_params(mode, h, w, oh, ow, kh, kw, sh, sw, ph, pw, dh, dw, cout,
+                 mult, flags):
+    return [mode, h, w, oh, ow, kh, kw, sh, sw, ph, pw, dh, dw, cout, mult,
+            flags]
+
+
+@jit.dont_look_inside
+def avg_pool2d(x, c, h, w, kh, kw, sh, sw, ph, pw, include_pad, ceil_mode):
+    """NCHW average pooling as [n, c*oh*ow], PyTorch's divisor rules."""
+    n = x.size // (c * h * w)
+    oh = pool_out(h, kh, sh, ph, ceil_mode)
+    ow = pool_out(w, kw, sw, pw, ceil_mode)
+    params = _pool_params(POOL_AVG, h, w, oh, ow, kh, kw, sh, sw, ph, pw, 1,
+                          1, 1, 1, 1 if include_pad else 0)
+    return _pool(x, NULLTENSOR, NULLTENSOR, params, n * c * oh * ow,
+                 _shape2(n, c * oh * ow))
+
+
+@jit.dont_look_inside
+def adaptive_avg_pool2d(x, c, h, w, oh, ow):
+    """NCHW adaptive average pooling to oh x ow as [n, c*oh*ow], the windows
+    [floor(i*h/oh), ceil((i+1)*h/oh))."""
+    n = x.size // (c * h * w)
+    params = _pool_params(POOL_ADAPTIVE, h, w, oh, ow, adaptive_window(h, oh),
+                          adaptive_window(w, ow), 1, 1, 0, 0, 1, 1, 1, 1, 0)
+    return _pool(x, NULLTENSOR, NULLTENSOR, params, n * c * oh * ow,
+                 _shape2(n, c * oh * ow))
+
+
+@jit.dont_look_inside
+def depthwise_conv2d(x, wt, bias, c, h, w, kh, kw, sh, sw, ph, pw, dh, dw,
+                     mult):
+    """groups == c convolution in one pass over NCHW, weight [c*kh*kw, mult],
+    output channel ci*mult + m, as [n, c*mult*oh*ow]; bias may be null."""
+    n = x.size // (c * h * w)
+    oh = conv_out(h, kh, sh, ph, dh)
+    ow = conv_out(w, kw, sw, pw, dw)
+    params = _pool_params(POOL_DEPTHWISE, h, w, oh, ow, kh, kw, sh, sw, ph,
+                          pw, dh, dw, c * mult, mult, 1 if bias else 0)
+    return _pool(x, wt, bias, params, n * c * mult * oh * ow,
+                 _shape2(n, c * mult * oh * ow))
+
+
+def im2col2_cpu(x, n, c, h, w, kh, kw, sh, sw, ph, pw, dh, dw):
+    note_cpu_fallback()
+    hx = host(x)
+    oh = conv_out(h, kh, sh, ph, dh)
+    ow = conv_out(w, kw, sw, pw, dw)
+    ohw = oh * ow
+    kk = kh * kw
+    rows = n * ohw
+    cols = c * kk
+    r = new_tensor(rows * cols, _shape2(rows, cols), x.dtype)
+    hr = r.host
+    for i in range(rows * cols):
+        row = i // cols
+        col = i % cols
+        img = row // ohw
+        pos = row % ohw
+        rk = col % kk
+        ih = pos // ow * sh + rk // kw * dh - ph
+        iw = pos % ow * sw + rk % kw * dw - pw
+        v = 0.0
+        if ih >= 0 and ih < h and iw >= 0 and iw < w:
+            idx = ((img * c + col // kk) * h + ih) * w + iw
+            assert idx >= 0
+            v = hx[idx]
+        hr[i] = v
+    return r
+
+
+@jit.dont_look_inside
+def im2col2(x, c, h, w, kh, kw, sh, sw, ph, pw, dh, dw):
+    """im2col with a kh x kw kernel, per-axis stride, padding and dilation;
+    the square undilated case is im2col itself."""
+    if kh == kw and sh == sw and ph == pw and dh == 1 and dw == 1:
+        return im2col(x, c, h, w, kh, ph, sh)
+    t0 = prof_begin()
+    n = x.size // (c * h * w)
+    rows = n * conv_out(h, kh, sh, ph, dh) * conv_out(w, kw, sw, pw, dw)
+    cols = c * kh * kw
+    r = NULLTENSOR
+    if gpu_enabled():
+        params = [n, c, h, w, kh, kw, sh, sw, ph, pw, dh, dw]
+        r = gather_gpu(GA_IM2COL2, params, x, rows * cols,
+                       _shape2(rows, cols))
+    if not r:
+        r = im2col2_cpu(x, n, c, h, w, kh, kw, sh, sw, ph, pw, dh, dw)
+    prof_end(intmask(4), intmask(0), t0)
+    return r
+
+
+def im2col_t_cpu(x, n, c, h, w, kh, kw, sh, sw, ph, pw, dh, dw, oh, ow):
+    note_cpu_fallback()
+    hx = host(x)
+    ohw = oh * ow
+    kk = kh * kw
+    rows = n * ohw
+    cols = c * kk
+    r = new_tensor(rows * cols, _shape2(rows, cols), x.dtype)
+    hr = r.host
+    for i in range(rows * cols):
+        row = i // cols
+        col = i % cols
+        img = row // ohw
+        pos = row % ohw
+        rk = col % kk
+        ty = pos // ow + ph - rk // kw * dh
+        tx = pos % ow + pw - rk % kw * dw
+        v = 0.0
+        if (ty >= 0 and tx >= 0 and ty % sh == 0 and tx % sw == 0 and
+                ty // sh < h and tx // sw < w):
+            idx = ((img * c + col // kk) * h + ty // sh) * w + tx // sw
+            assert idx >= 0
+            v = hx[idx]
+        hr[i] = v
+    return r
+
+
+@jit.dont_look_inside
+def im2col_t(x, c, h, w, kh, kw, sh, sw, ph, pw, dh, dw, oh, ow):
+    """The im2col of a transposed convolution with an oh x ow output: row
+    (img, y, x), column (channel, a, b) is input pixel ((y + ph - a*dh) / sh,
+    (x + pw - b*dw) / sw) where that divides, 0 elsewhere."""
+    t0 = prof_begin()
+    n = x.size // (c * h * w)
+    rows = n * oh * ow
+    cols = c * kh * kw
+    r = NULLTENSOR
+    if gpu_enabled():
+        params = [n, c, h, w, kh, kw, sh, sw, ph, pw, dh, dw, oh, ow]
+        r = gather_gpu(GA_IM2COL_T, params, x, rows * cols,
+                       _shape2(rows, cols))
+    if not r:
+        r = im2col_t_cpu(x, n, c, h, w, kh, kw, sh, sw, ph, pw, dh, dw, oh,
+                         ow)
+    prof_end(intmask(4), intmask(0), t0)
+    return r
+
+
 def rot_half_cpu(x, dh):
+    note_cpu_fallback()
     hx = host(x)
     n = x.size
     half = dh // 2
@@ -571,6 +1082,7 @@ def rot_half(x, dh):
 
 
 def head_split_cpu(x, rows, dh, heads):
+    note_cpu_fallback()
     hx = host(x)
     r = new_tensor(rows * dh * heads, _shape2(heads * rows, dh), x.dtype)
     hr = r.host
@@ -584,6 +1096,7 @@ def head_split_cpu(x, rows, dh, heads):
 
 
 def head_merge_cpu(x, rows, dh, heads):
+    note_cpu_fallback()
     hx = host(x)
     r = new_tensor(rows * dh * heads, _shape2(rows, heads * dh), x.dtype)
     hr = r.host
@@ -647,6 +1160,7 @@ def _tensor_assign_impl(dst, src):
             if ok:
                 dst.host = lltype.nullptr(HOSTARRAY)
                 return dst
+    note_cpu_fallback()
     hdst = host(dst)
     hsrc = host(src)
     for i in range(dst.size):
@@ -670,6 +1184,7 @@ def tensor_write_rows(dst, src, row):
                 return dst
     # The host path is for a host-resident dst (RTENSOR_CPU).  A failed copy
     # into a device dst would leave the device copy stale.
+    note_cpu_fallback()
     hdst = host(dst)
     hsrc = host(src)
     for i in range(src.size):

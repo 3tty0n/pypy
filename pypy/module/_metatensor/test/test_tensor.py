@@ -499,3 +499,121 @@ class AppTestTensor(object):
     def test_alloc_failed(self):
         import _metatensor
         assert _metatensor.alloc_failed() is False
+
+    def test_cpu_fallbacks(self):
+        import _metatensor
+        n = _metatensor.cpu_fallbacks()
+        assert isinstance(n, int)
+        t = _metatensor.tensor([1.0, -2.0, 3.0])
+        t.unary('log').sum().item()
+        # host loops are not fallbacks when the GPU is off
+        assert _metatensor.cpu_fallbacks() == n
+
+    def test_number_operands(self):
+        import _metatensor
+        x = _metatensor.tensor([1.0, 2.0, 4.0], dtype="float32")
+        assert x.add(1).tolist() == [2.0, 3.0, 5.0]
+        assert (x + 0.5).tolist() == [1.5, 2.5, 4.5]
+        assert (x * 2).tolist() == [2.0, 4.0, 8.0]
+        assert x.mul(-1.0).dtype == "float32"
+        assert (x - 1).tolist() == [0.0, 1.0, 3.0]
+        assert x.sub(1.0).tolist() == [0.0, 1.0, 3.0]
+        assert (x / 2).tolist() == [0.5, 1.0, 2.0]
+        assert x.div(4.0).tolist() == [0.25, 0.5, 1.0]
+        assert x.binary('gt', 1.5).where(1, -1).tolist() == [-1.0, 1.0, 1.0]
+        raises(TypeError, x.add, "a")
+
+    def test_strided(self):
+        import _metatensor
+        x = _metatensor.tensor([float(i) for i in range(24)]).reshape([2, 3, 4])
+        t = x.strided([4, 2, 3], [1, 12, 4])
+        assert t.shape == (4, 2, 3)
+        assert t.tolist()[:6] == [0.0, 4.0, 8.0, 12.0, 16.0, 20.0]
+        assert x.strided([3], [4], 13).tolist() == [13.0, 17.0, 21.0]
+        assert x.strided([2, 2], [0, -1], 3).tolist() == [3.0, 2.0, 3.0, 2.0]
+        raises(ValueError, x.strided, [3], [12], 0)
+        raises(ValueError, x.strided, [2], [-1], 0)
+        raises(ValueError, x.strided, [2, 2], [1], 0)
+
+    def test_cat(self):
+        import _metatensor
+        a = _metatensor.tensor([[1.0, 2.0], [3.0, 4.0]])
+        b = _metatensor.tensor([[5.0], [6.0]])
+        r = _metatensor.cat([a, b], 2)
+        assert r.shape == (2, 3)
+        assert r.tolist() == [1.0, 2.0, 5.0, 3.0, 4.0, 6.0]
+        assert _metatensor.cat([a, b]).tolist() == [1.0, 2.0, 3.0, 4.0,
+                                                   5.0, 6.0]
+        many = _metatensor.cat([b] * 10, 2)
+        assert many.tolist() == [5.0] * 10 + [6.0] * 10
+        raises(ValueError, _metatensor.cat, [a, b], 3)
+        raises(ValueError, _metatensor.cat, [], 1)
+        raises(ValueError, _metatensor.cat,
+               [a, _metatensor.tensor([1.0, 2.0], dtype="float32")], 1)
+
+    def test_pad(self):
+        import _metatensor
+        x = _metatensor.tensor([[1.0, 2.0], [3.0, 4.0]])
+        r = x.pad([2, 2], [0, 1, 1, 0], -1.0)
+        assert r.shape == (3, 3)
+        assert r.tolist() == [-1.0, 1.0, 2.0, -1.0, 3.0, 4.0,
+                              -1.0, -1.0, -1.0]
+        assert x.pad([2, 2], [0, 0, -1, 0]).tolist() == [2.0, 4.0]
+        raises(ValueError, x.pad, [2, 2], [1, 1])
+        raises(ValueError, x.pad, [3], [1, 1])
+
+    def test_gather_index_select(self):
+        import _metatensor
+        x = _metatensor.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        r = x.gather(_metatensor.tensor([2.0, 0.0]), 2)
+        assert r.tolist() == [3.0, 4.0]
+        r = x.index_select(_metatensor.tensor([2.0, 0.0]), 2)
+        assert r.tolist() == [3.0, 1.0, 6.0, 4.0]
+        r = x.index_select(_metatensor.tensor([1.0]), 1, 3)
+        assert r.tolist() == [4.0, 5.0, 6.0]
+        raises(ValueError, x.gather, _metatensor.tensor([1.0, 0.0, 1.0]), 2)
+
+    def test_conv2d_groups(self):
+        import _metatensor
+        # two channels, depthwise 1x1 scaling and a grouped 1x1
+        x = _metatensor.tensor([[1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, 40.0]])
+        w = _metatensor.tensor([[2.0], [3.0]])
+        r = x.conv2d(w, 2, 2, 2, None, 1, 1, 0, groups=2)
+        assert r.tolist() == [2.0, 4.0, 6.0, 8.0, 30.0, 60.0, 90.0, 120.0]
+        w = _metatensor.tensor([[1.0, -1.0], [1.0, 1.0]])
+        r = x.conv2d(w, 2, 2, 2, _metatensor.tensor([0.5, 0.0, 0.0, 0.0]), 1,
+                     1, 0, groups=2)
+        assert r.tolist()[:8] == [1.5, 2.5, 3.5, 4.5, -1.0, -2.0, -3.0, -4.0]
+        # a 1x2 kernel with dilation over one row: conv1d
+        x = _metatensor.tensor([[1.0, 2.0, 3.0, 4.0, 5.0]])
+        w = _metatensor.tensor([[1.0], [10.0]])
+        r = x.conv2d(w, 1, 1, 5, None, 1, 1, 0, kw=2, dilation=2)
+        assert r.tolist() == [31.0, 42.0, 53.0]
+        raises(ValueError, x.conv2d, w, 1, 1, 5, None, 1, 1, 0, groups=2)
+
+    def test_conv_transpose2d(self):
+        import _metatensor
+        x = _metatensor.tensor([[1.0, 2.0, 3.0, 4.0]])
+        w = _metatensor.tensor([[1.0, 10.0]])
+        r = x.conv_transpose2d(w, 1, 2, 2, None, 1, 2)
+        assert r.shape == (1, 2 * 3 * 3)
+        assert r.tolist() == [1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 0.0, 4.0,
+                              10.0, 0.0, 20.0, 0.0, 0.0, 0.0, 30.0, 0.0, 40.0]
+        w = _metatensor.tensor([[1.0], [1.0]])
+        r = x.conv_transpose2d(w, 1, 1, 4, None, 1, 1, 0, kw=2)
+        assert r.tolist() == [1.0, 3.0, 5.0, 7.0, 4.0]
+        raises(ValueError, x.conv_transpose2d, w, 1, 1, 4, None, 1, 1, 0,
+               output_padding=1)
+
+    def test_avg_pools(self):
+        import _metatensor
+        x = _metatensor.tensor([[float(i) for i in range(16)]])
+        r = x.avg_pool2d(1, 4, 4, 2)
+        assert r.tolist() == [2.5, 4.5, 10.5, 12.5]
+        r = x.avg_pool2d(1, 4, 4, 3, 2, 1, count_include_pad=False)
+        assert r.tolist() == [2.5, 4.0, 8.5, 10.0]
+        r = x.adaptive_avg_pool2d(1, 4, 4, 1)
+        assert r.tolist() == [7.5]
+        r = x.adaptive_avg_pool2d(1, 4, 4, 3, 2)
+        assert r.tolist() == [2.5, 4.5, 6.5, 8.5, 10.5, 12.5]
+        raises(ValueError, x.avg_pool2d, 1, 4, 4, 2, 2, 2)

@@ -375,19 +375,21 @@ class GatherCache(object):
         self.kernels = {}
 gather_cache = GatherCache()
 
-def gather_key(op, params, dtype):
+def gather_key(op, params, dtype, fill=0.0):
     parts = ['g%d' % op]
     for i in range(len(params)):
         parts.append(str(params[i]))
     parts.append('d%d' % dtype)
+    if fill != 0.0:
+        parts.append('f' + formatd(fill, 'r', 0))
     return ','.join(parts)
 
 
-def gather_kernel(op, params, dtype):
-    key = gather_key(op, params, dtype)
+def gather_kernel(op, params, dtype, fill=0.0):
+    key = gather_key(op, params, dtype, fill)
     k = gather_cache.kernels.get(key, None)
     if k is None:
-        k = _gather_compile(op, params, dtype)
+        k = _gather_compile(op, params, dtype, fill)
         gather_cache.kernels[key] = k
     return k
 
@@ -417,17 +419,17 @@ def ensure_gather(p, n, dtype):
     return gather_kernel(gather_kind(p), gather_params(p, n), dtype).fn
 
 
-def _gather_compile(op, params, dtype):
+def _gather_compile(op, params, dtype, fill=0.0):
     if not gpu_enabled():
         return GatherKernel(0, 0, 0, 0)
     try:
-        return _gather_compile_gpu(op, params, dtype)
+        return _gather_compile_gpu(op, params, dtype, fill)
     except (OSError, ValueError, IndexError):
         return GatherKernel(0, 0, 0, 0)
 
-def _gather_compile_gpu(op, params, dtype):
+def _gather_compile_gpu(op, params, dtype, fill=0.0):
     name = 'rtensor_g%d' % counter.n
     counter.n += 1
-    src = to_ttir_gather(op, params, name, dtype)
+    src = to_ttir_gather(op, params, name, dtype, fill)
     fn, threads, shared, nextra = compile_ttir(src, name, config.num_warps)
     return GatherKernel(fn, threads, shared, nextra)

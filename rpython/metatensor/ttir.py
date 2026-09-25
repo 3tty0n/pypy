@@ -1,5 +1,5 @@
-from rpython.rlib.rfloat import formatd
-from rpython.metatensor.core import (ADD, ARITY, B_KEEP_NZ, B_KEEP_Z, B_LT, B_MAX, B_MIN, B_NE, B_POW, BINARY, U_NEG, U_SIGMOID, U_TANH, UNARY, bc_mode, binary_fn, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, GATHER, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_MAXPOOL_NHWC, GA_ROTHALF, MAXR, MUL, RELU, RELUGRAD, SQRT, STORE_TYPE, SUB, SUM, config, gather_changes_shape, gather_dh, gather_heads, gather_kind, is_reduction, nvals)
+from rpython.rlib.rfloat import INFINITY, formatd
+from rpython.metatensor.core import (ADD, ARITY, B_KEEP_NZ, B_KEEP_Z, B_LT, B_MAX, B_MIN, B_NE, B_POW, BINARY, U_NEG, U_SIGMOID, U_TANH, UNARY, bc_mode, binary_fn, GA_ROWS, AXIS_ALL, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, COMP_NEG_INF, COMP_TYPE, DIV, EQMASK, EXP, GATHER, GA_COL2CHW, GA_HEADMERGE, GA_HEADSPLIT, GA_IM2COL, GA_IM2COL_NHWC, GA_IM2COL2, GA_IM2COL_T, GA_MAXPOOL_NHWC, GA_POOL, GA_ROTHALF, GA_STRIDED, GA_TAKE, POOL_ADAPTIVE, POOL_AVG, POOL_DEPTHWISE, conv_out, MAXR, MUL, RELU, RELUGRAD, SQRT, STORE_TYPE, SUB, SUM, config, gather_changes_shape, gather_dh, gather_heads, gather_kind, is_reduction, nvals)
 
 
 def next_pow2(c):
@@ -1012,6 +1012,79 @@ def _gather_index(e, op, params, I64, I1):
                           _gmul(e, ih, w, I64), I64), iw, I64)
         srcs.append(_gbin(e, 'addi', _gmul(e, pix, c, I64), ci, I64))
         return srcs, ok
+    if op == GA_IM2COL2:
+        c, h, w, kh, kw = params[1], params[2], params[3], params[4], params[5]
+        sh, sw, ph, pw = params[6], params[7], params[8], params[9]
+        dh, dw = params[10], params[11]
+        hw = h * w
+        kk = kh * kw
+        ckk = c * kk
+        ow = conv_out(w, kw, sw, pw, dw)
+        ohw = conv_out(h, kh, sh, ph, dh) * ow
+        row = _gdiv(e, off, ckk, I64)
+        col = _gmod(e, off, ckk, I64)
+        img = _gdiv(e, row, ohw, I64)
+        pos = _gmod(e, row, ohw, I64)
+        ch = _gdiv(e, col, kk, I64)
+        rk = _gmod(e, col, kk, I64)
+        ih = _gaddc(e, _gbin(e, 'addi', _gmul(e, _gdiv(e, pos, ow, I64), sh,
+                                              I64),
+                             _gmul(e, _gdiv(e, rk, kw, I64), dh, I64), I64),
+                    -ph, I64)
+        iw = _gaddc(e, _gbin(e, 'addi', _gmul(e, _gmod(e, pos, ow, I64), sw,
+                                              I64),
+                             _gmul(e, _gmod(e, rk, kw, I64), dw, I64), I64),
+                    -pw, I64)
+        zero = _gconst(e, 0, I64)
+        ok = _gbin(e, 'andi',
+                   _gbin(e, 'andi', _gcmp(e, 'sge', ih, zero, I64),
+                         _gcmp(e, 'slt', ih, _gconst(e, h, I64), I64), I1),
+                   _gbin(e, 'andi', _gcmp(e, 'sge', iw, zero, I64),
+                         _gcmp(e, 'slt', iw, _gconst(e, w, I64), I64), I1), I1)
+        base = _gbin(e, 'addi', _gmul(e, img, c * hw, I64),
+                     _gmul(e, ch, hw, I64), I64)
+        srcs.append(_gbin(e, 'addi', base,
+                          _gbin(e, 'addi', _gmul(e, ih, w, I64), iw, I64),
+                          I64))
+        return srcs, ok
+    if op == GA_IM2COL_T:
+        c, h, w, kh, kw = params[1], params[2], params[3], params[4], params[5]
+        sh, sw, ph, pw = params[6], params[7], params[8], params[9]
+        dh, dw, oh, ow = params[10], params[11], params[12], params[13]
+        hw = h * w
+        kk = kh * kw
+        ckk = c * kk
+        row = _gdiv(e, off, ckk, I64)
+        col = _gmod(e, off, ckk, I64)
+        img = _gdiv(e, row, oh * ow, I64)
+        pos = _gmod(e, row, oh * ow, I64)
+        ch = _gdiv(e, col, kk, I64)
+        rk = _gmod(e, col, kk, I64)
+        ty = _gaddc(e, _gbin(e, 'subi', _gdiv(e, pos, ow, I64),
+                             _gmul(e, _gdiv(e, rk, kw, I64), dh, I64), I64),
+                    ph, I64)
+        tx = _gaddc(e, _gbin(e, 'subi', _gmod(e, pos, ow, I64),
+                             _gmul(e, _gmod(e, rk, kw, I64), dw, I64), I64),
+                    pw, I64)
+        iy = _gdiv(e, ty, sh, I64)
+        ix = _gdiv(e, tx, sw, I64)
+        zero = _gconst(e, 0, I64)
+        ok = _gbin(e, 'andi',
+                   _gbin(e, 'andi', _gcmp(e, 'sge', ty, zero, I64),
+                         _gcmp(e, 'slt', iy, _gconst(e, h, I64), I64), I1),
+                   _gbin(e, 'andi', _gcmp(e, 'sge', tx, zero, I64),
+                         _gcmp(e, 'slt', ix, _gconst(e, w, I64), I64), I1), I1)
+        ok = _gbin(e, 'andi', ok,
+                   _gbin(e, 'andi',
+                         _gcmp(e, 'eq', _gmod(e, ty, sh, I64), zero, I64),
+                         _gcmp(e, 'eq', _gmod(e, tx, sw, I64), zero, I64),
+                         I1), I1)
+        base = _gbin(e, 'addi', _gmul(e, img, c * hw, I64),
+                     _gmul(e, ch, hw, I64), I64)
+        srcs.append(_gbin(e, 'addi', base,
+                          _gbin(e, 'addi', _gmul(e, iy, w, I64), ix, I64),
+                          I64))
+        return srcs, ok
     if op == GA_MAXPOOL_NHWC:
         n, c, h, w, k, stride, pad = (params[0], params[1], params[2],
                                       params[3], params[4], params[5],
@@ -1119,9 +1192,15 @@ def to_ttir_rowgather(params, name, dtype):
     e.add('}')
     return '\n'.join(e.lines) + '\n'
 
-def to_ttir_gather(op, params, name, dtype):
+def to_ttir_gather(op, params, name, dtype, fill=0.0):
     if op == GA_ROWS:
         return to_ttir_rowgather(params, name, dtype)
+    if op == GA_STRIDED:
+        return to_ttir_strided(params, fill, name, dtype)
+    if op == GA_TAKE:
+        return to_ttir_take(params, name, dtype)
+    if op == GA_POOL:
+        return to_ttir_pool(params, name, dtype)
     BLOCK = config.flat
     S = STORE_TYPE[dtype]
     C = COMP_TYPE[dtype]
@@ -1168,3 +1247,346 @@ def to_ttir_gather(op, params, name, dtype):
     e.add('  }')
     e.add('}')
     return '\n'.join(e.lines) + '\n'
+
+
+def _float_text(v, C):
+    wide = C == 'f64'
+    if v != v:
+        return '0x7FF8000000000000' if wide else '0x7FC00000'
+    if v == INFINITY:
+        return '0x7FF0000000000000' if wide else '0x7F800000'
+    if v == -INFINITY:
+        return '0xFFF0000000000000' if wide else '0xFF800000'
+    return _fliteral(v)
+
+
+def _sconst(e, v, ty):
+    r = e.tmp()
+    e.add('    %s = arith.constant %d : %s' % (r, v, ty))
+    return r
+
+
+def _splat(e, v, ty, tty):
+    r = e.tmp()
+    e.add('    %s = tt.splat %s : %s -> %s' % (r, v, ty, tty))
+    return r
+
+
+def _load(e, ptr, idx, mask, S, P, IX):
+    p = _splat(e, ptr, '!tt.ptr<%s>' % S, P)
+    q = e.tmp()
+    e.add('    %s = tt.addptr %s, %s : %s, %s' % (q, p, idx, P, IX))
+    v = e.tmp()
+    e.add('    %s = tt.load %s, %s, %%zero : %s' % (v, q, mask, P))
+    return v
+
+
+def _ext(e, v, T, TC, half):
+    if not half:
+        return v
+    r = e.tmp()
+    e.add('    %s = arith.extf %s : %s to %s' % (r, v, T, TC))
+    return r
+
+
+def _and(e, a, b, I1):
+    if not a:
+        return b
+    return _gbin(e, 'andi', a, b, I1)
+
+
+def _store(e, v, S, P, I32):
+    e.add('    %%pout = tt.splat %%out : !tt.ptr<%s> -> %s' % (S, P))
+    e.add('    %%qout = tt.addptr %%pout, %%offs : %s, %s' % (P, I32))
+    e.add('    tt.store %%qout, %s, %%mask : %s' % (v, P))
+    e.add('    tt.return')
+    e.add('  }')
+    e.add('}')
+    return '\n'.join(e.lines) + '\n'
+
+
+def _header(e, name, ins, S):
+    args = []
+    for i in range(len(ins)):
+        args.append('%%%s: !tt.ptr<%s>' % (ins[i], S))
+    e.add('module {')
+    e.add('  tt.func public @%s(%s, %%out: !tt.ptr<%s>, %%n: i64, %%c: i64) '
+          'attributes {noinline = false} {' % (name, ', '.join(args), S))
+
+
+def strided_fits_i32(params):
+    nsrc = params[0]
+    rank = params[1]
+    n = 1
+    for j in range(rank):
+        n *= params[2 + j]
+    if n >= 1 << 31:
+        return False
+    for s in range(nsrc):
+        base = 2 + rank + 3 * rank * s
+        ext = 0
+        for j in range(rank):
+            ext += (params[2 + j] - 1) * abs(params[base + j])
+        if ext >= 1 << 31:
+            return False
+    return True
+
+
+def _coord(e, index, shape, j, off, IX):
+    if not index[j]:
+        inner = 1
+        for q in range(j + 1, len(shape)):
+            inner *= shape[q]
+        v = off
+        if inner != 1:
+            v = _gdiv(e, v, inner, IX)
+        if j > 0:
+            v = _gmod(e, v, shape[j], IX)
+        index[j] = v
+    return index[j]
+
+
+def to_ttir_strided(params, fill, name, dtype):
+    """params = [nsrc, rank, shape..., then per source strides..., lo...,
+    hi...].  Element i of the output, at coordinates x, is source s at
+    sum(x[j] * stride[j]) for the first s with lo <= x < hi in every
+    dimension, fill if there is none.  Each source's base offset is in its
+    pointer."""
+    BLOCK = config.flat
+    S = STORE_TYPE[dtype]
+    C = COMP_TYPE[dtype]
+    T, TS, P, I32, I64, I1 = _tile_types(BLOCK, S, S)
+    nsrc = params[0]
+    rank = params[1]
+    shape = []
+    for j in range(rank):
+        shape.append(params[2 + j])
+    IX, off = I64, '%offs64'
+    if strided_fits_i32(params):
+        IX, off = I32, '%offs'
+    e = Emitter()
+    ins = []
+    for s in range(nsrc):
+        ins.append('in%d' % s)
+    _header(e, name, ins, S)
+    e.add('    %%zero = arith.constant dense<0.0> : %s' % T)
+    _flat_prologue(e.lines, BLOCK, I32, I64)
+    index = [''] * rank
+    vals = []
+    oks = []
+    for s in range(nsrc):
+        base = 2 + rank + 3 * rank * s
+        addr = ''
+        ok = ''
+        for j in range(rank):
+            st = params[base + j]
+            lo = params[base + rank + j]
+            hi = params[base + 2 * rank + j]
+            if st != 0:
+                x = _coord(e, index, shape, j, off, IX)
+                if st != 1:
+                    x = _gmul(e, x, st, IX)
+                addr = _gbin(e, 'addi', addr, x, IX) if addr else x
+            if lo > 0:
+                ok = _and(e, ok, _gcmp(e, 'sge', _coord(e, index, shape, j,
+                                                        off, IX),
+                                       _gconst(e, lo, IX), IX), I1)
+            if hi < shape[j]:
+                ok = _and(e, ok, _gcmp(e, 'slt', _coord(e, index, shape, j,
+                                                        off, IX),
+                                       _gconst(e, hi, IX), IX), I1)
+        if not addr:
+            addr = _gconst(e, 0, IX)
+        mask = _and(e, ok, '%mask', I1)
+        vals.append(_load(e, '%%in%d' % s, addr, mask, S, P, IX))
+        oks.append(ok)
+    acc = '%zero'
+    if fill != 0.0:
+        TC = 'tensor<%dx%s>' % (BLOCK, C)
+        e.add('    %%fillc = arith.constant dense<%s> : %s'
+              % (_float_text(fill, C), TC))
+        acc = '%fillc'
+        if S != C:
+            e.add('    %%fill = arith.truncf %%fillc : %s to %s' % (TC, T))
+            acc = '%fill'
+    for s in range(nsrc - 1, -1, -1):
+        if oks[s]:
+            r = e.tmp()
+            e.add('    %s = arith.select %s, %s, %s : %s, %s'
+                  % (r, oks[s], vals[s], acc, I1, T))
+            acc = r
+        else:
+            acc = vals[s]
+    return _store(e, acc, S, P, I32)
+
+
+def to_ttir_take(params, name, dtype):
+    """out[o, j, i] = in[o, idx[o*so + j*sj + i*si], i] over in as
+    [outer, d, inner], zero where the index is out of range."""
+    d, k, inner, so, sj, si = (params[0], params[1], params[2], params[3],
+                               params[4], params[5])
+    BLOCK = config.flat
+    S = STORE_TYPE[dtype]
+    C = COMP_TYPE[dtype]
+    T, TS, P, I32, I64, I1 = _tile_types(BLOCK, S, S)
+    TC = 'tensor<%dx%s>' % (BLOCK, C)
+    e = Emitter()
+    _header(e, name, ['in', 'idx'], S)
+    e.add('    %%zero = arith.constant dense<0.0> : %s' % T)
+    _flat_prologue(e.lines, BLOCK, I32, I64)
+    off = '%offs64'
+    xi = _gmod(e, off, inner, I64)
+    q = _gdiv(e, off, inner, I64)
+    xj = _gmod(e, q, k, I64)
+    xo = _gdiv(e, q, k, I64)
+    pos = _gconst(e, 0, I64)
+    if so:
+        pos = _gbin(e, 'addi', pos, _gmul(e, xo, so, I64), I64)
+    if sj:
+        pos = _gbin(e, 'addi', pos, _gmul(e, xj, sj, I64), I64)
+    if si:
+        pos = _gbin(e, 'addi', pos, _gmul(e, xi, si, I64), I64)
+    iv = _ext(e, _load(e, '%idx', pos, '%mask', S, P, I64), T, TC, S != C)
+    ii = e.tmp()
+    e.add('    %s = arith.fptosi %s : %s to %s' % (ii, iv, TC, I64))
+    ok = _gbin(e, 'andi', _gcmp(e, 'sge', ii, _gconst(e, 0, I64), I64),
+               _gcmp(e, 'slt', ii, _gconst(e, d, I64), I64), I1)
+    src = _gbin(e, 'addi', _gmul(e, _gbin(e, 'addi', _gmul(e, xo, d, I64), ii,
+                                          I64), inner, I64), xi, I64)
+    v = _load(e, '%in', src, _gbin(e, 'andi', '%mask', ok, I1), S, P, I64)
+    return _store(e, v, S, P, I32)
+
+
+def to_ttir_pool(params, name, dtype):
+    """Average, adaptive average and depthwise convolution over NCHW planes:
+    each output element sums a window of its plane in an scf.for.
+
+    params = [mode, h, w, oh, ow, kh, kw, sh, sw, ph, pw, dh, dw, cout,
+    mult, flags]: cout and mult (output channels, outputs per input channel)
+    are for depthwise, whose weight is [cin, kh*kw, mult] and whose flags
+    bit 0 says there is a bias; for average pooling that bit is
+    count_include_pad.  Adaptive windows come from oh/ow alone, kh and kw are
+    the largest of them."""
+    mode, h, w, oh, ow = params[0], params[1], params[2], params[3], params[4]
+    kh, kw, sh, sw = params[5], params[6], params[7], params[8]
+    ph, pw, dh, dw = params[9], params[10], params[11], params[12]
+    cout, mult, flags = params[13], params[14], params[15]
+    BLOCK = config.flat
+    S = STORE_TYPE[dtype]
+    C = COMP_TYPE[dtype]
+    half = S != C
+    T, TS, P, I32, I64, I1 = _tile_types(BLOCK, S, S)
+    TC = 'tensor<%dx%s>' % (BLOCK, C)
+    X = I64
+    conv = mode == POOL_DEPTHWISE
+    bias = conv and (flags & 1) != 0
+    ins = ['in']
+    if conv:
+        ins.append('wt')
+        if bias:
+            ins.append('bias')
+    e = Emitter()
+    _header(e, name, ins, S)
+    e.add('    %%zero = arith.constant dense<0.0> : %s' % T)
+    e.add('    %%zc = arith.constant dense<0.0> : %s' % TC)
+    _flat_prologue(e.lines, BLOCK, I32, I64)
+    off = '%offs64'
+    owi = _gmod(e, off, ow, X)
+    t = _gdiv(e, off, ow, X)
+    ohi = _gmod(e, t, oh, X)
+    plane = _gdiv(e, t, oh, X)
+    oc = ''
+    wbase = ''
+    if conv:
+        oc = _gmod(e, plane, cout, X)
+        ci = oc
+        if mult > 1:
+            ci = _gdiv(e, oc, mult, X)
+        plane = _gbin(e, 'addi', _gmul(e, _gdiv(e, plane, cout, X),
+                                       cout // mult, X), ci, X)
+        wbase = _gmul(e, ci, kh * kw * mult, X)
+        if mult > 1:
+            wbase = _gbin(e, 'addi', wbase, _gmod(e, oc, mult, X), X)
+    base = _gmul(e, plane, h * w, X)
+    cnt = ''
+    if mode == POOL_ADAPTIVE:
+        hs = _gdiv(e, _gmul(e, ohi, h, X), oh, X)
+        he = _gdiv(e, _gaddc(e, _gmul(e, ohi, h, X), h + oh - 1, X), oh, X)
+        ws = _gdiv(e, _gmul(e, owi, w, X), ow, X)
+        we = _gdiv(e, _gaddc(e, _gmul(e, owi, w, X), w + ow - 1, X), ow, X)
+        cnt = _gbin(e, 'muli', _gbin(e, 'subi', he, hs, X),
+                    _gbin(e, 'subi', we, ws, X), X)
+    else:
+        hs = _gaddc(e, _gmul(e, ohi, sh, X), -ph, X)
+        ws = _gaddc(e, _gmul(e, owi, sw, X), -pw, X)
+        he = we = ''
+        if mode == POOL_AVG:
+            he = _gbin(e, 'minsi', _gaddc(e, hs, kh, X),
+                       _gconst(e, h + ph, X), X)
+            we = _gbin(e, 'minsi', _gaddc(e, ws, kw, X),
+                       _gconst(e, w + pw, X), X)
+            if flags & 1:
+                lh, lw, uh, uw = hs, ws, he, we
+            else:
+                zero = _gconst(e, 0, X)
+                lh = _gbin(e, 'maxsi', hs, zero, X)
+                lw = _gbin(e, 'maxsi', ws, zero, X)
+                uh = _gbin(e, 'minsi', he, _gconst(e, h, X), X)
+                uw = _gbin(e, 'minsi', we, _gconst(e, w, X), X)
+            cnt = _gbin(e, 'muli', _gbin(e, 'subi', uh, lh, X),
+                        _gbin(e, 'subi', uw, lw, X), X)
+    lb = _sconst(e, 0, 'i32')
+    ub = _sconst(e, kh * kw, 'i32')
+    step = _sconst(e, 1, 'i32')
+    res = e.tmp()
+    iv = e.tmp()
+    acc = e.tmp()
+    e.add('    %s = scf.for %s = %s to %s step %s iter_args(%s = %%zc) -> '
+          '(%s) : i32 {' % (res, iv, lb, ub, step, acc, TC))
+    a = _gbin(e, 'divsi', iv, _sconst(e, kw, 'i32'), 'i32')
+    b = _gbin(e, 'remsi', iv, _sconst(e, kw, 'i32'), 'i32')
+    a = _gbin(e, 'muli', a, _sconst(e, dh, 'i32'), 'i32')
+    b = _gbin(e, 'muli', b, _sconst(e, dw, 'i32'), 'i32')
+    a64 = e.tmp()
+    e.add('    %s = arith.extsi %s : i32 to i64' % (a64, a))
+    b64 = e.tmp()
+    e.add('    %s = arith.extsi %s : i32 to i64' % (b64, b))
+    ih = _gbin(e, 'addi', hs, _splat(e, a64, 'i64', X), X)
+    iw = _gbin(e, 'addi', ws, _splat(e, b64, 'i64', X), X)
+    if mode == POOL_ADAPTIVE:
+        ok = _gbin(e, 'andi', _gcmp(e, 'slt', ih, he, X),
+                   _gcmp(e, 'slt', iw, we, X), I1)
+    else:
+        zero = _gconst(e, 0, X)
+        ok = _gbin(e, 'andi',
+                   _gbin(e, 'andi', _gcmp(e, 'sge', ih, zero, X),
+                         _gcmp(e, 'slt', ih, _gconst(e, h, X), X), I1),
+                   _gbin(e, 'andi', _gcmp(e, 'sge', iw, zero, X),
+                         _gcmp(e, 'slt', iw, _gconst(e, w, X), X), I1), I1)
+    src = _gbin(e, 'addi', base, _gbin(e, 'addi', _gmul(e, ih, w, X), iw, X),
+                X)
+    v = _ext(e, _load(e, '%in', src, _gbin(e, 'andi', '%mask', ok, I1), S, P,
+                      X), T, TC, half)
+    if conv:
+        r = _gbin(e, 'muli', iv, _sconst(e, mult, 'i32'), 'i32')
+        r64 = e.tmp()
+        e.add('    %s = arith.extsi %s : i32 to i64' % (r64, r))
+        wi = _gbin(e, 'addi', wbase, _splat(e, r64, 'i64', X), X)
+        wv = _ext(e, _load(e, '%wt', wi, '%mask', S, P, X), T, TC, half)
+        v = _gbin(e, 'mulf', v, wv, TC)
+    nxt = _gbin(e, 'addf', acc, v, TC)
+    e.add('      scf.yield %s : %s' % (nxt, TC))
+    e.add('    }')
+    out = res
+    if cnt:
+        cf = e.tmp()
+        e.add('    %s = arith.sitofp %s : %s to %s' % (cf, cnt, X, TC))
+        out = _gbin(e, 'divf', out, cf, TC)
+    if bias:
+        bv = _ext(e, _load(e, '%bias', oc, '%mask', S, P, X), T, TC, half)
+        out = _gbin(e, 'addf', out, bv, TC)
+    if half:
+        r = e.tmp()
+        e.add('    %s = arith.truncf %s : %s to %s' % (r, out, TC, T))
+        out = r
+    return _store(e, out, S, P, I32)
