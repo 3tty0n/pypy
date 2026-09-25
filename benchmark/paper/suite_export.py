@@ -49,6 +49,7 @@ def config_of(model):
         return None
     d = cfg.to_dict()
     d["_attn_implementation"] = getattr(cfg, "_attn_implementation", None)
+    d["attribute_map"] = dict(getattr(type(cfg), "attribute_map", {}))
     return json.loads(json.dumps(d, default=str))
 
 

@@ -105,7 +105,7 @@ SPECS = {
         out="transformers/activations.py"),
     "transformers.pytorch_utils": dict(
         module="transformers.pytorch_utils", package="transformers",
-        keep=["apply_chunking_to_forward"],
+        keep=["apply_chunking_to_forward", "Conv1D"],
         prelude={"inspect": INSPECT_SIGNATURE},
         out="transformers/pytorch_utils.py"),
     "transformers.modeling_layers": dict(
@@ -129,6 +129,50 @@ SPECS = {
               "DistilBertForMaskedLM"],
         free_ok={"create_sinusoidal_embeddings":
                  "read by resize_position_embeddings only"},
+    ),
+    "hf_bert": dict(
+        module="transformers.models.bert.modeling_bert",
+        package="transformers",
+        keep=["logger", "BertEmbeddings", "eager_attention_forward",
+              "BertSelfAttention", "BertCrossAttention", "BertSelfOutput",
+              "BertAttention", "BertIntermediate", "BertOutput", "BertLayer",
+              "BertEncoder", "BertPooler", "BertPredictionHeadTransform",
+              "BertLMPredictionHead", "BertOnlyMLMHead",
+              "BertPreTrainedModel", "BertModel", "BertForMaskedLM"],
+    ),
+    "torchbench_eos_pytorch": dict(
+        module="torchbenchmark.models.pyhpc_equation_of_state.eos_pytorch",
+        package="torchbenchmark", keep=["gsw_dHdT"],
+    ),
+    "torchbench_pyhpc_equation_of_state": dict(
+        module="torchbenchmark.models.pyhpc_equation_of_state",
+        package="torchbenchmark", keep=["EquationOfState"],
+    ),
+    "hf_xlm_roberta": dict(
+        module="transformers.models.xlm_roberta.modeling_xlm_roberta",
+        package="transformers",
+        keep=["logger", "XLMRobertaEmbeddings", "eager_attention_forward",
+              "XLMRobertaSelfAttention", "XLMRobertaCrossAttention",
+              "XLMRobertaSelfOutput", "XLMRobertaAttention",
+              "XLMRobertaIntermediate", "XLMRobertaOutput", "XLMRobertaLayer",
+              "XLMRobertaLMHead", "XLMRobertaPreTrainedModel",
+              "XLMRobertaEncoder", "XLMRobertaPooler", "XLMRobertaModel",
+              "XLMRobertaForMaskedLM"],
+    ),
+    "hf_albert": dict(
+        module="transformers.models.albert.modeling_albert",
+        package="transformers",
+        keep=["logger", "AlbertEmbeddings", "eager_attention_forward",
+              "AlbertAttention", "AlbertLayer", "AlbertLayerGroup",
+              "AlbertTransformer", "AlbertPreTrainedModel", "AlbertModel",
+              "AlbertMLMHead", "AlbertForMaskedLM"],
+    ),
+    "hf_gpt2": dict(
+        module="transformers.models.gpt2.modeling_gpt2",
+        package="transformers",
+        keep=["logger", "eager_attention_forward", "GPT2Attention",
+              "GPT2MLP", "GPT2Block", "GPT2PreTrainedModel", "GPT2Model",
+              "GPT2LMHeadModel"],
     ),
     "torchvision_resnet": dict(
         module="torchvision.models.resnet", package="torchvision",
@@ -359,9 +403,10 @@ def used_names(tree):
     return out
 
 
-def imports(tree, module, used, supplied):
-    """Upstream's top-level imports, absolute, restricted to used names."""
-    pkg = module.split(".")
+def imports(tree, module, used, supplied, is_package, ported):
+    """Upstream's top-level imports, absolute, restricted to used names; an
+    import of a module that has a port of its own imports the port."""
+    pkg = module.split(".") + ([""] if is_package else [])
     out = []
     for n in tree.body:
         if isinstance(n, ast.Import):
@@ -379,8 +424,16 @@ def imports(tree, module, used, supplied):
                                 ([n.module] if n.module else []))
             names = [a for a in n.names if (a.asname or a.name) in used
                      and (a.asname or a.name) not in supplied]
-            if names:
-                out.append(ast.ImportFrom(base, names, 0))
+            rest = []
+            for a in names:
+                full = base + "." + a.name
+                if full in ported:
+                    out.append(ast.Import([ast.alias(ported[full],
+                                                     a.asname or a.name)]))
+                else:
+                    rest.append(a)
+            if rest:
+                out.append(ast.ImportFrom(base, rest, 0))
     return out
 
 
@@ -403,7 +456,10 @@ def port(name):
     kept = Py2(spec.get("drop_calls", {}), typing_names).visit(kept)
     prelude = spec.get("prelude", {})
     supplied = {k.rsplit(".", 1)[-1] for k in prelude}
-    imps = imports(tree, spec["module"], used_names(kept), supplied)
+    ported = dict((v["module"], k) for k, v in SPECS.items()
+                   if "out" not in v)
+    imps = imports(tree, spec["module"], used_names(kept), supplied,
+                   path.endswith("__init__.py"), ported)
     kept.body = imps + kept.body
     ast.fix_missing_locations(kept)
     free = (set(free_names(kept)) - set(spec.get("free_ok", {})) -

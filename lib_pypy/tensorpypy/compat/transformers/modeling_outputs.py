@@ -8,15 +8,15 @@ class ModelOutput(object):
     _fields = ()
 
     def __init__(self, *args, **kwargs):
-        for f in self._fields:
-            setattr(self, f, None)
-        for f, v in zip(self._fields, args):
-            setattr(self, f, v)
-        for k, v in kwargs.items():
+        # each field written exactly once: writing an attribute a second time
+        # flips the JIT's per-attribute "ever mutated" assumption and throws
+        # away every trace that relied on it
+        for k in kwargs:
             if k not in self._fields:
                 raise TypeError("%s has no field %s"
                                 % (type(self).__name__, k))
-            setattr(self, k, v)
+        for i, f in enumerate(self._fields):
+            setattr(self, f, args[i] if i < len(args) else kwargs.get(f))
 
     def keys(self):
         return [f for f in self._fields if getattr(self, f) is not None]

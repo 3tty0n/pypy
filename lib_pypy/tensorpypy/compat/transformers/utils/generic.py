@@ -46,3 +46,18 @@ def merge_with_config_defaults(func):
                     del self.config.is_causal
         return func(self, *args, **kwargs)
     return wrapper
+
+
+class maybe_autocast(object):
+    """torch.autocast when enabled; the dashboard's float32 eval runs with
+    it disabled, and so this does nothing."""
+
+    def __init__(self, *args, **kwargs):
+        if kwargs.get("enabled", False):
+            raise NotImplementedError("autocast")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False

@@ -51,6 +51,19 @@ def hf(module, cls):
     return build
 
 
+def lennard_jones():
+    # TorchBench's Model.__init__ builds this Sequential inline
+    nn = torch.nn
+    return nn.Sequential(nn.Linear(1, 16), nn.Tanh(), nn.Linear(16, 16),
+                         nn.Tanh(), nn.Linear(16, 16), nn.Tanh(),
+                         nn.Linear(16, 16), nn.Tanh(), nn.Linear(16, 1))
+
+
+def pyhpc_eos():
+    import torchbench_pyhpc_equation_of_state as m
+    return m.EquationOfState()
+
+
 def alexnet():
     import torchvision_alexnet as m
     return m.AlexNet()
@@ -69,6 +82,15 @@ def vgg(cfg):
 MODELS = {
     ("torchbench", "hf_DistilBert"): hf("hf_distilbert",
                                         "DistilBertForMaskedLM"),
+    ("torchbench", "hf_Bert"): hf("hf_bert", "BertForMaskedLM"),
+    ("torchbench", "hf_Bert_large"): hf("hf_bert", "BertForMaskedLM"),
+    ("torchbench", "lennard_jones"): lennard_jones,
+    ("torchbench", "pyhpc_equation_of_state"): pyhpc_eos,
+    ("torchbench", "hf_Roberta_base"): hf("hf_xlm_roberta",
+                                          "XLMRobertaForMaskedLM"),
+    ("torchbench", "hf_Albert"): hf("hf_albert", "AlbertForMaskedLM"),
+    ("torchbench", "hf_GPT2"): hf("hf_gpt2", "GPT2LMHeadModel"),
+    ("torchbench", "hf_GPT2_large"): hf("hf_gpt2", "GPT2LMHeadModel"),
     ("torchbench", "alexnet"): alexnet,
     ("torchbench", "phlippe_resnet"): phlippe_resnet,
     ("torchbench", "vgg16"): vgg("D"),

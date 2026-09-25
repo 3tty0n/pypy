@@ -8,12 +8,12 @@ def relu(x, inplace=False):
 
 def gelu(x, approximate="none"):
     if approximate == "tanh":
-        return Tensor(x.raw.gelu(), x.shape, x.perm)
-    return Tensor(x.raw.gelu_erf(), x.shape, x.perm)
+        return Tensor(x.raw.gelu(), x.shape, x.perm, col=x.col)
+    return Tensor(x.raw.gelu_erf(), x.shape, x.perm, col=x.col)
 
 
 def silu(x, inplace=False):
-    return Tensor(x.raw.silu(), x.shape, x.perm)
+    return Tensor(x.raw.silu(), x.shape, x.perm, col=x.col)
 
 
 def hardswish(x, inplace=False):
@@ -79,17 +79,18 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
     apply next makes it dense without a copy."""
     import math
     for t in (query, key, value):
-        if t.perm != _BSHD:
+        if not torch._same(t.perm, _BSHD):
             raise NotImplementedError(
                 "attention over a %s layout" % (t.perm,))
     b, h, s, d = query.shape
-    if key.shape != query.shape or value.shape != query.shape:
+    if not (torch._same(key.shape, query.shape) and
+            torch._same(value.shape, query.shape)):
         raise NotImplementedError("attention with k/v shaped %s, q %s"
                                   % (list(key.shape), list(query.shape)))
-    q = query.raw.reshape([b * s, h * d])
-    k = key.raw.reshape([b * s, h * d])
-    v = value.raw.reshape([b * s, h * d])
-    scores = Tensor(q.attn_scores(k, h, h * d, 0, 0, b), (b, h, s, s))
+    q, qo = _rows(query, b * s, h * d)
+    k, ko = _rows(key, b * s, h * d)
+    v, vo = _rows(value, b * s, h * d)
+    scores = Tensor(q.attn_scores(k, h, h * d, qo, ko, b), (b, h, s, s))
     scores = scores * (scale if scale is not None else 1.0 / math.sqrt(d))
     if is_causal:
         scores = scores + _causal(s, query.dtype)
@@ -98,9 +99,21 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
             raise NotImplementedError("boolean attention mask")
         scores = scores + attn_mask
     p = scores.softmax(-1)
-    ctx = p.dense().raw.reshape([b * h * s, s]).attn_context(v, h, h * d, 0,
+    ctx = p.dense().raw.reshape([b * h * s, s]).attn_context(v, h, h * d, vo,
                                                              b)
     return Tensor(ctx, (b, h, s, d), _BSHD)
+
+
+def _rows(t, rows, width):
+    """t's storage as the [rows, ld] matrix the attention kernels read, and
+    the column its heads start at: a dense projection, or a window of a
+    packed one."""
+    if t.col is None:
+        return t.raw.reshape([rows, width]), 0
+    off, ld, ndw = t.col
+    if ndw != 2:
+        raise NotImplementedError("attention over a window of %d dims" % ndw)
+    return t.raw.reshape([rows, ld]), off
 
 
 _causal_masks = {}

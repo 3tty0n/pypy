@@ -19,6 +19,11 @@ Two refinements of that picture:
          reading q/k/v as [B, S, H, D] storage viewed [B, H, S, D]) take it
          as is; every other op asks for dense() and gets NotImplementedError
          if the permutation would need a copy the engine does not have.
+  col    split() along the last dim does not copy either: each piece is a
+         window of columns (offset, row stride, and how many trailing
+         logical dims the window spans) into the same [rows, ld] storage.
+         view() may regroup the window's dims, transpose may reorder them,
+         and attention reads q/k/v straight out of a packed projection.
   host   integer tensors (token ids, positions, masks) are host lists: they
          are index data, a few thousand elements computed from shapes and
          inputs, and uploading them only where they index device memory
@@ -27,6 +32,7 @@ Two refinements of that picture:
 import _metatensor
 
 _float, _int = float, int
+_all, _any, _abs, _max, _min, _sum = all, any, abs, max, min, sum
 
 float32 = "float32"
 float64 = "float64"
@@ -59,16 +65,12 @@ class backends(object):
         benchmark = False
 
 
-_scalars = {}
-
-
 def _scalar(v, dtype):
-    key = (v, dtype)
-    t = _scalars.get(key)
-    if t is None:
-        t = _metatensor.scalar(v, dtype)
-        _scalars[key] = t
-    return t
+    # _metatensor.scalar promotes the value, so the trace sees a constant
+    # and the fusion pass writes it into the kernel as a literal; a cache
+    # here would hand the trace a dict lookup instead, and every constant
+    # would take one of the fused kernel's few input slots
+    return _metatensor.scalar(v, dtype)
 
 
 def _numel(shape):
@@ -88,11 +90,15 @@ class Size(tuple):
 
 
 class Tensor(object):
-    __slots__ = ("raw", "shape", "perm", "host", "_index")
+    __slots__ = ("raw", "shape", "perm", "host", "_index", "col")
 
-    def __init__(self, raw, shape, perm=None, host=None):
+    def __init__(self, raw, shape, perm=None, host=None, col=None):
         self.raw = raw
-        self.shape = Size(shape)
+        self.col = col
+        # a plain tuple: comparing two Size (tuple subclass) instances is a
+        # user-level __eq__ the JIT leaves as a residual call, and a residual
+        # call that may force ends every fused region still open
+        self.shape = shape if type(shape) is tuple else tuple(shape)
         self.perm = perm
         self.host = host
         self._index = None
@@ -114,6 +120,9 @@ class Tensor(object):
 
     def dense(self):
         """This tensor with its elements contiguous in logical order."""
+        if self.col is not None:
+            raise NotImplementedError("materialising a column window %s"
+                                      % (self.col,))
         if self.perm is None:
             return self
         raise NotImplementedError("materialising permutation %s of %s"
@@ -136,7 +145,7 @@ class Tensor(object):
 
     def size(self, d=None):
         if d is None:
-            return self.shape
+            return Size(self.shape)
         return self.shape[_norm_dim(d, len(self.shape))]
 
     def numel(self):
@@ -166,9 +175,44 @@ class Tensor(object):
                              % (shape, n))
         if self.host is not None:
             return Tensor(None, tuple(shape), host=self.host)
+        if self.col is not None and self.perm is None:
+            return self._window_view(tuple(shape))
         return Tensor(self.dense().raw, tuple(shape))
 
     reshape = view
+
+    def _window_view(self, shape):
+        # the rows (every dim before the window) must stay the rows; the
+        # window's own dims may be regrouped
+        off, ld, ndw = self.col
+        rows = _numel(self.shape[:len(self.shape) - ndw])
+        acc, k = 1, len(shape)
+        while k > 0 and acc < self.numel() // rows:
+            k -= 1
+            acc *= shape[k]
+        if acc != self.numel() // rows or _numel(shape[:k]) != rows:
+            raise NotImplementedError("view %s of a column window over %s"
+                                      % (list(shape), list(self.shape)))
+        return Tensor(self.raw, shape, col=(off, ld, len(shape) - k))
+
+    def split(self, split_size, dim=0):
+        nd = len(self.shape)
+        dim = _norm_dim(dim, nd)
+        if self.host is not None or dim != nd - 1 or self.perm is not None \
+                or self.col is not None:
+            raise NotImplementedError("split along dim %d of %s"
+                                      % (dim, list(self.shape)))
+        ld = self.shape[-1]
+        sizes = [split_size] * (ld // split_size) if isinstance(
+            split_size, _int) else list(split_size)
+        if _sum(sizes) != ld:
+            raise ValueError("split sizes %s for %d" % (sizes, ld))
+        out, off = [], 0
+        for w in sizes:
+            out.append(Tensor(self.raw, self.shape[:-1] + (w,),
+                              col=(off, ld, 1)))
+            off += w
+        return tuple(out)
 
     def transpose(self, a, b):
         nd = len(self.shape)
@@ -187,16 +231,16 @@ class Tensor(object):
         base = self.perm or tuple(range(nd))
         perm = tuple(base[d] for d in order)
         shape = tuple(self.shape[d] for d in order)
-        if perm == tuple(range(nd)):
+        if _same(perm, tuple(range(nd))):
             perm = None
-        return Tensor(self.raw, shape, perm)
+        return Tensor(self.raw, shape, perm, col=self.col)
 
     def expand(self, *shape):
         if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
             shape = tuple(shape[0])
         cur = (1,) * (len(shape) - len(self.shape)) + tuple(self.shape)
         out = tuple(c if s == -1 else s for s, c in zip(shape, cur))
-        if out == cur:
+        if _same(out, cur):
             return self.view(out)
         if self.host is not None:
             return _host_expand(self, cur, out)
@@ -208,8 +252,26 @@ class Tensor(object):
     def __getitem__(self, idx):
         if self.host is not None:
             return _host_getitem(self, idx)
-        raise NotImplementedError("indexing a device tensor with %r"
-                                  % (idx,))
+        # indexing that selects everything is a view: full slices, None
+        # (a new dim of 1) and a trailing Ellipsis
+        items = idx if isinstance(idx, tuple) else (idx,)
+        shape, d = [], 0
+        for it in items:
+            if it is None:
+                shape.append(1)
+            elif it is Ellipsis:
+                shape.extend(self.shape[d:])
+                d = len(self.shape)
+            elif isinstance(it, slice) and d < len(self.shape) and \
+                    it.indices(self.shape[d]) == (0, self.shape[d], 1):
+                shape.append(self.shape[d])
+                d += 1
+            else:
+                raise NotImplementedError("indexing a device tensor with %r"
+                                          % (idx,))
+        shape.extend(self.shape[d:])
+        return self.view(tuple(shape)) if len(shape) != len(self.shape) \
+            else self
 
     def flatten(self, start_dim=0, end_dim=-1):
         nd = len(self.shape)
@@ -267,27 +329,92 @@ class Tensor(object):
         return Tensor(self.raw.force(), self.shape)
 
     # -- elementwise ------------------------------------------------------
+    # The common cases - two tensors laid out alike, or a tensor and a
+    # number - go straight to the engine from the operator itself.  Every
+    # Python call the tracer inlines costs frame bookkeeping in the trace,
+    # and a long elementwise expression (pyhpc's equation of state is ~300
+    # of them) has to fit in one trace for the fusion pass to see it whole.
     def __add__(self, other):
+        if self.host is None:
+            if type(other) is Tensor:
+                if other.host is None and (
+                        other.shape is self.shape or
+                        _same(self.shape, other.shape)) and (
+                        other.perm is self.perm or
+                        _same(self.perm, other.perm)) and (
+                        other.col is self.col or
+                        _same(self.col, other.col)):
+                    return Tensor(self.raw.add(other.raw), self.shape,
+                                  self.perm, col=self.col)
+            elif type(other) is _float or type(other) is _int:
+                return Tensor(self.raw.add(_num(other, self)), self.shape,
+                              self.perm, col=self.col)
         return _binary(self, other, "add")
 
     __radd__ = __add__
     __iadd__ = __add__
 
     def __mul__(self, other):
+        if self.host is None:
+            if type(other) is Tensor:
+                if other.host is None and (
+                        other.shape is self.shape or
+                        _same(self.shape, other.shape)) and (
+                        other.perm is self.perm or
+                        _same(self.perm, other.perm)) and (
+                        other.col is self.col or
+                        _same(self.col, other.col)):
+                    return Tensor(self.raw.mul(other.raw), self.shape,
+                                  self.perm, col=self.col)
+            elif type(other) is _float or type(other) is _int:
+                return Tensor(self.raw.mul(_num(other, self)), self.shape,
+                              self.perm, col=self.col)
         return _binary(self, other, "mul")
 
     __rmul__ = __mul__
     __imul__ = __mul__
 
     def __sub__(self, other):
+        if self.host is None:
+            if type(other) is Tensor:
+                if other.host is None and (
+                        other.shape is self.shape or
+                        _same(self.shape, other.shape)) and (
+                        other.perm is self.perm or
+                        _same(self.perm, other.perm)) and (
+                        other.col is self.col or
+                        _same(self.col, other.col)):
+                    return Tensor(self.raw.sub(other.raw), self.shape,
+                                  self.perm, col=self.col)
+            elif type(other) is _float or type(other) is _int:
+                return Tensor(self.raw.sub(_num(other, self)), self.shape,
+                              self.perm, col=self.col)
         return _binary(self, other, "sub")
 
     __isub__ = __sub__
 
     def __rsub__(self, other):
+        if self.host is None and (type(other) is _float or
+                                  type(other) is _int):
+            return Tensor(_num(other, self).sub(self.raw), self.shape,
+                          self.perm, col=self.col)
         return _binary(_as_tensor(other, self.dtype), self, "sub")
 
     def __div__(self, other):
+        if self.host is None:
+            if type(other) is Tensor:
+                if other.host is None and (
+                        other.shape is self.shape or
+                        _same(self.shape, other.shape)) and (
+                        other.perm is self.perm or
+                        _same(self.perm, other.perm)) and (
+                        other.col is self.col or
+                        _same(self.col, other.col)):
+                    return Tensor(self.raw.div(other.raw), self.shape,
+                                  self.perm, col=self.col)
+            elif type(other) is _float or type(other) is _int:
+                return Tensor(self.raw.div(_num(other, self)), self.shape,
+                              self.perm, col=self.col)
         return _binary(self, other, "div")
 
     __truediv__ = __div__
@@ -295,12 +422,16 @@ class Tensor(object):
     __idiv__ = __div__
 
     def __rdiv__(self, other):
+        if self.host is None and (type(other) is _float or
+                                  type(other) is _int):
+            return Tensor(_num(other, self).div(self.raw), self.shape,
+                          self.perm, col=self.col)
         return _binary(_as_tensor(other, self.dtype), self, "div")
 
     __rtruediv__ = __rdiv__
 
     def __neg__(self):
-        return _binary(self, -1.0, "mul")
+        return self * -1.0
 
     def add(self, other, alpha=1):
         if alpha != 1:
@@ -315,15 +446,135 @@ class Tensor(object):
     mul_ = mul
 
     def relu(self):
-        return Tensor(self.raw.relu(), self.shape, self.perm)
+        return Tensor(self.raw.relu(), self.shape, self.perm, col=self.col)
 
     relu_ = relu
 
     def exp(self):
-        return Tensor(self.raw.exp(), self.shape, self.perm)
+        return Tensor(self.raw.exp(), self.shape, self.perm, col=self.col)
+
+    def _unary(self, name):
+        return Tensor(self.raw.unary(name), self.shape, self.perm,
+                      col=self.col)
+
+    def tanh(self):
+        return self._unary("tanh")
+
+    def sigmoid(self):
+        return self._unary("sigmoid")
+
+    def log(self):
+        return self._unary("log")
+
+    def abs(self):
+        return self._unary("abs")
+
+    __abs__ = abs
+
+    def sin(self):
+        return self._unary("sin")
+
+    def cos(self):
+        return self._unary("cos")
+
+    def erf(self):
+        return self._unary("erf")
+
+    def floor(self):
+        return self._unary("floor")
+
+    def rsqrt(self):
+        return 1.0 / self.sqrt()
+
+    def reciprocal(self):
+        return 1.0 / self
+
+    def __pow__(self, other):
+        return _binary(self, other, "pow")
+
+    def __rpow__(self, other):
+        return _binary(_as_tensor(other, self.dtype), self, "pow")
+
+    pow = __pow__
+
+    def maximum(self, other):
+        return _binary(self, other, "maximum")
+
+    def minimum(self, other):
+        return _binary(self, other, "minimum")
+
+    def __lt__(self, other):
+        return _binary(self, other, "lt")
+
+    def __le__(self, other):
+        return _binary(self, other, "le")
+
+    def __gt__(self, other):
+        return _binary(self, other, "gt")
+
+    def __ge__(self, other):
+        return _binary(self, other, "ge")
+
+    def eq(self, other):
+        return _binary(self, other, "eq")
+
+    def ne(self, other):
+        return _binary(self, other, "ne")
+
+    __eq__ = eq
+    __ne__ = ne
+    __hash__ = object.__hash__
+
+    # -- index-tensor reductions and casts ----------------------------------
+    def _host_only(self, what):
+        if self.host is None:
+            raise NotImplementedError("%s of a device tensor" % what)
+
+    def all(self):
+        self._host_only("all")
+        return _all(self.host)
+
+    def any(self):
+        self._host_only("any")
+        return _any(self.host)
+
+    def cumsum(self, dim, dtype=None):
+        self._host_only("cumsum")
+        nd = len(self.shape)
+        dim = _norm_dim(dim, nd)
+        st = _strides(self.shape)
+        out = list(self.host)
+        n = self.shape[dim]
+        for flat in range(len(out)):
+            if (flat // st[dim]) % n:
+                out[flat] += out[flat - st[dim]]
+        return _host(out, self.shape)
+
+    def long(self):
+        if self.host is None:
+            raise NotImplementedError("long() of a device tensor")
+        return self
+
+    int = long
+
+    def type_as(self, other):
+        if self.host is not None and other.host is not None:
+            return self
+        raise NotImplementedError("type_as across host and device")
+
+    def clamp(self, min=None, max=None):
+        x = self
+        if min is not None:
+            x = x.maximum(min)
+        if max is not None:
+            x = x.minimum(max)
+        return x
+
+    clamp_min = lambda self, v: self.clamp(min=v)
+    clamp_max = lambda self, v: self.clamp(max=v)
 
     def sqrt(self):
-        return Tensor(self.raw.sqrt(), self.shape, self.perm)
+        return Tensor(self.raw.sqrt(), self.shape, self.perm, col=self.col)
 
     def mean(self, dim=None, keepdim=False):
         if dim is None:
@@ -347,6 +598,24 @@ class Tensor(object):
         return matmul(self, other)
 
     __matmul__ = matmul
+
+
+def _num(v, like):
+    return _metatensor.scalar(_float(v), like.raw.dtype)
+
+
+def _same(p, q):
+    """p == q for two shapes or permutations, as an element loop: the tracer
+    unrolls it into int compares, where tuple == would be a residual call
+    that may force, and a forcing call closes every open fused region."""
+    if p is q:
+        return True
+    if p is None or q is None or len(p) != len(q):
+        return False
+    for i in range(len(p)):
+        if p[i] != q[i]:
+            return False
+    return True
 
 
 def _dims(dim):
@@ -388,15 +657,38 @@ def _as_tensor(v, dtype):
 
 
 def _broadcast_shape(a, b):
-    n = max(len(a), len(b))
+    n = _max(len(a), len(b))
     a = (1,) * (n - len(a)) + tuple(a)
     b = (1,) * (n - len(b)) + tuple(b)
     out = []
     for x, y in zip(a, b):
         if x != y and x != 1 and y != 1:
             raise ValueError("shapes %s and %s do not broadcast" % (a, b))
-        out.append(max(x, y))
+        out.append(_max(x, y))
     return tuple(out), a, b
+
+
+class _engine(object):
+    """The engine call behind each binary op name.  _apply looks the name up
+    as a class attribute, which the JIT folds for a constant name; a string
+    comparison or a dict lookup would stay in every trace."""
+    add = staticmethod(lambda x, y: x.add(y))
+    mul = staticmethod(lambda x, y: x.mul(y))
+    sub = staticmethod(lambda x, y: x.sub(y))
+    div = staticmethod(lambda x, y: x.div(y))
+    pow = staticmethod(lambda x, y: x.binary("pow", y))
+    maximum = staticmethod(lambda x, y: x.binary("maximum", y))
+    minimum = staticmethod(lambda x, y: x.binary("minimum", y))
+    lt = staticmethod(lambda x, y: x.binary("lt", y))
+    le = staticmethod(lambda x, y: x.binary("le", y))
+    gt = staticmethod(lambda x, y: x.binary("gt", y))
+    ge = staticmethod(lambda x, y: x.binary("ge", y))
+    eq = staticmethod(lambda x, y: x.binary("eq", y))
+    ne = staticmethod(lambda x, y: x.binary("ne", y))
+
+
+def _apply(x, op, y):
+    return getattr(_engine, op)(x, y)
 
 
 def _binary(a, b, op):
@@ -404,18 +696,19 @@ def _binary(a, b, op):
         if a.host is not None:
             return _host_binary(a, b, op)
         s = _scalar(_float(b), a.dtype)
-        return Tensor(getattr(a.raw, op)(s), a.shape, a.perm)
+        return Tensor(_apply(a.raw, op, s), a.shape, a.perm, col=a.col)
     if not isinstance(a, Tensor):
         a = _as_tensor(a, b.dtype)
     if a.host is not None or b.host is not None:
         return _host_binary(a, b, op)
-    if a.shape == b.shape and a.perm == b.perm:
+    if _same(a.shape, b.shape) and _same(a.perm, b.perm) and \
+            _same(a.col, b.col):
         # elementwise ops do not care how the elements are laid out, only
         # that both operands lay them out the same way
-        return Tensor(getattr(a.raw, op)(b.raw), a.shape, a.perm)
+        return Tensor(_apply(a.raw, op, b.raw), a.shape, a.perm, col=a.col)
     a, b = a.dense(), b.dense()
-    if a.shape == b.shape:
-        return Tensor(getattr(a.raw, op)(b.raw), a.shape)
+    if _same(a.shape, b.shape):
+        return Tensor(_apply(a.raw, op, b.raw), a.shape)
     shape, pa, pb = _broadcast_shape(a.shape, b.shape)
     big, small, flip = (a, b, False)
     ps = pb
@@ -454,23 +747,10 @@ def _binary(a, b, op):
         else:
             raise NotImplementedError(
                 "broadcast %s against %s" % (list(ps), list(shape)))
-    if flip:
-        if op in ("add", "mul"):
-            r = getattr(bt, op)(st)
-        else:
-            return _binary_flipped(small, big, op, shape)
-    else:
-        r = getattr(bt, op)(st)
+    # the engine broadcasts either operand (its BC_L_* modes), so the
+    # operands go in their own order
+    r = _apply(st, op, bt) if flip else _apply(bt, op, st)
     return Tensor(r, shape)
-
-
-def _binary_flipped(small, big, op, shape):
-    # small - big == -(big - small); small / big == 1 / (big / small)
-    if op == "sub":
-        return -_binary(big, small, "sub")
-    if op == "div":
-        return 1.0 / _binary(big, small, "div")
-    raise NotImplementedError(op)
 
 
 def matmul(a, b):
@@ -481,13 +761,166 @@ def matmul(a, b):
                                   % len(b.shape))
     n = a.shape[-1]
     rows = a.numel() // n
-    r = a.raw.reshape([rows, n]).matmul(b.raw.reshape([n, b.shape[1]]), False,
-                                      backends.cuda.matmul.allow_tf32)
+    r = _as2d(a, rows, n).matmul(_as2d(b, n, b.shape[1]), False,
+                                 backends.cuda.matmul.allow_tf32)
     return Tensor(r, a.shape[:-1] + (b.shape[1],))
+
+
+def _as2d(x, rows, cols):
+    """x's storage as [rows, cols], without a new view when it already is
+    one: a view of a weight not yet on the device uploads a copy of its own,
+    and the weight, never uploaded itself, is copied again next time."""
+    if len(x.shape) == 2 and x.shape[0] == rows:
+        return x.raw
+    return x.raw.reshape([rows, cols])
 
 
 def relu(x, inplace=False):
     return x.relu()
+
+
+def addmm(bias, a, b, beta=1, alpha=1):
+    """bias + a @ b, for b in [in, out] as GPT-2's Conv1D keeps it."""
+    if beta != 1 or alpha != 1:
+        raise NotImplementedError("addmm with beta/alpha")
+    return matmul(a, b) + bias
+
+
+def empty(*shape, **kw):
+    return zeros(*shape, **kw)
+
+
+def tanh(x):
+    return x.tanh()
+
+
+def sigmoid(x):
+    return x.sigmoid()
+
+
+def log(x):
+    return x.log()
+
+
+def exp(x):
+    return x.exp()
+
+
+def sqrt(x):
+    return x.sqrt()
+
+
+def abs(x):
+    return x.abs()
+
+
+def sin(x):
+    return x.sin()
+
+
+def cos(x):
+    return x.cos()
+
+
+def rsqrt(x):
+    return x.rsqrt()
+
+
+def reciprocal(x):
+    return x.reciprocal()
+
+
+def pow(x, y):
+    return x ** y if isinstance(x, Tensor) else _as_tensor(x, y.dtype) ** y
+
+
+def maximum(a, b):
+    return a.maximum(b)
+
+
+def minimum(a, b):
+    return a.minimum(b)
+
+
+def clamp(x, min=None, max=None):
+    return x.clamp(min, max)
+
+
+def where(cond, a, b):
+    if not isinstance(a, Tensor) and not isinstance(b, Tensor):
+        raise NotImplementedError("where with two scalars")
+    dt = a.dtype if isinstance(a, Tensor) else b.dtype
+    a = _as_tensor(a, dt)
+    b = _as_tensor(b, dt)
+    shape = _broadcast_shape(cond.shape,
+                             _broadcast_shape(a.shape, b.shape)[0])[0]
+    for t in (cond, a, b):
+        if not (_same(t.shape, shape) or t.shape == ()) or \
+                t.perm is not None:
+            raise NotImplementedError("where over %s, %s, %s"
+                                      % (list(cond.shape), list(a.shape),
+                                         list(b.shape)))
+    return Tensor(cond.raw.where(a.raw, b.raw), shape)
+
+
+def cumsum(x, dim, dtype=None):
+    return x.cumsum(dim, dtype)
+
+
+def all(x):
+    return x.all()
+
+
+def any(x):
+    return x.any()
+
+
+def eq(a, b):
+    return a.eq(b)
+
+
+def ne(a, b):
+    return a.ne(b)
+
+
+def lt(a, b):
+    return a < b
+
+
+def gt(a, b):
+    return a > b
+
+
+def le(a, b):
+    return a <= b
+
+
+def ge(a, b):
+    return a >= b
+
+
+def mul(a, b):
+    return a * b
+
+
+def sub(a, b):
+    return a - b
+
+
+def div(a, b):
+    return a / b
+
+
+def ones_like(x, dtype=None):
+    return zeros_like(x, dtype) + 1.0
+
+
+def zeros_like(x, dtype=None):
+    return zeros(*x.shape, dtype=dtype or x.dtype)
+
+
+def empty_like(x, dtype=None):
+    return zeros_like(x, dtype)
 
 
 def flatten(x, start_dim=0, end_dim=-1):
@@ -506,16 +939,47 @@ def softmax(x, dim=-1):
     return x.softmax(dim)
 
 
+_shapes = {}
+
+
+def canonical_shape(shape):
+    """One tuple object per distinct shape, so the elementwise fast path can
+    compare shapes by identity: ops hand their operand's shape object on."""
+    shape = tuple(shape)
+    return _shapes.setdefault(shape, shape)
+
+
 def from_flat(values, shape, dtype):
     return Tensor(_metatensor._tensor_flat(values, list(shape) or [1], False,
-                                           dtype), tuple(shape))
+                                           dtype), canonical_shape(shape))
 
 
 def zeros(*shape, **kw):
     if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
         shape = tuple(shape[0])
     dtype = kw.get("dtype") or float32
+    if _is_int_dtype(dtype):
+        return _host([0] * _numel(shape), shape)
     return Tensor(_metatensor.zeros(list(shape), False, dtype), shape)
+
+
+def gather(x, dim, index):
+    """torch.gather; index tensors only (the embedding-side lookups upstream
+    runs on its integer buffers)."""
+    if x.host is None or index.host is None:
+        raise NotImplementedError("gather on device tensors")
+    nd = len(x.shape)
+    dim = _norm_dim(dim, nd)
+    xs, ist = _strides(x.shape), _strides(index.shape)
+    out = []
+    for flat in range(index.numel()):
+        pos, rem = [], flat
+        for s in ist:
+            pos.append(rem // s)
+            rem %= s
+        pos[dim] = index.host[flat]
+        out.append(x.host[sum(p * s for p, s in zip(pos, xs))])
+    return _host(out, index.shape)
 
 
 # -- index tensors on the host ---------------------------------------------
@@ -550,7 +1014,7 @@ def _host_getitem(x, idx):
             continue
         if isinstance(it, slice):
             start, stop, step = it.indices(shape[d])
-            n = max(0, (stop - start + (step - (1 if step > 0 else -1)))
+            n = _max(0, (stop - start + (step - (1 if step > 0 else -1)))
                     // step)
             axes.append((start, step, n, src[d]))
             out_shape.append(n)
@@ -591,6 +1055,10 @@ def _host_expand(x, cur, out):
 _HOST_OPS = {
     "add": lambda p, q: p + q, "sub": lambda p, q: p - q,
     "mul": lambda p, q: p * q, "div": lambda p, q: p / _float(q),
+    "lt": lambda p, q: _int(p < q), "le": lambda p, q: _int(p <= q),
+    "gt": lambda p, q: _int(p > q), "ge": lambda p, q: _int(p >= q),
+    "eq": lambda p, q: _int(p == q), "ne": lambda p, q: _int(p != q),
+    "maximum": _max, "minimum": _min, "pow": lambda p, q: p ** q,
 }
 
 
@@ -635,7 +1103,7 @@ def tensor(data, dtype=None, device=None):
         return out
     shape, vals = shape_of(data), flat_of(data, [])
     if dtype is None:
-        dtype = float32 if any(isinstance(v, _float) for v in vals) \
+        dtype = float32 if _any(isinstance(v, _float) for v in vals) \
             else int64
     if _is_int_dtype(dtype):
         return _host([_int(v) for v in vals], shape)

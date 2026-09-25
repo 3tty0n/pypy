@@ -21,3 +21,15 @@ def capture_outputs(func=None, tie_last_hidden_states=True):
     if func is not None:
         return wrapped_fn(func)
     return wrapped_fn
+
+
+class OutputRecorder(object):
+    """Declares which submodule outputs capture_outputs may record; only
+    read when outputs are requested."""
+
+    def __init__(self, target_class, index=0, layer_name=None,
+                 class_name=None):
+        self.target_class = target_class
+        self.index = index
+        self.layer_name = layer_name
+        self.class_name = class_name

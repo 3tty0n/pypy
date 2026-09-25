@@ -2,6 +2,7 @@ import logging as _logging
 
 from transformers.utils import import_utils
 from transformers.utils.import_utils import is_torch_greater_or_equal  # noqa
+from transformers.utils.generic import can_return_tuple  # noqa
 
 
 class logging(object):

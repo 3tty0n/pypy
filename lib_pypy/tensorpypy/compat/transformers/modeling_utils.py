@@ -34,6 +34,10 @@ class PreTrainedModel(nn.Module):
     def post_init(self):
         pass
 
+    def warn_if_padding_and_no_attention_mask(self, input_ids,
+                                              attention_mask):
+        """A warning upstream; no effect on what is computed."""
+
     @property
     def dtype(self):
         return "float32"
