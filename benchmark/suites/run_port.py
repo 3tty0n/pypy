@@ -30,10 +30,26 @@ import _metatensor  # noqa: E402
 import torch  # noqa: E402
 
 
-def resnet(block, layers):
+def resnet(block, layers, **kw):
     def build():
         import torchvision_resnet as m
-        return m.ResNet(getattr(m, block), layers)
+        return m.ResNet(getattr(m, block), layers, **kw)
+    return build
+
+
+def tv(module, cls, *args, **kw):
+    def build():
+        import importlib
+        m = importlib.import_module(module)
+        return getattr(m, cls)(*args, **kw)
+    return build
+
+
+def mobilenet_v3(arch):
+    def build():
+        import torchvision_mobilenetv3 as m
+        setting, last = m._mobilenet_v3_conf(arch)
+        return m.MobileNetV3(setting, last)
     return build
 
 
@@ -104,6 +120,19 @@ MODELS = {
     ("torchbench", "resnet18"): resnet("BasicBlock", [2, 2, 2, 2]),
     ("torchbench", "resnet50"): resnet("Bottleneck", [3, 4, 6, 3]),
     ("torchbench", "resnet152"): resnet("Bottleneck", [3, 8, 36, 3]),
+    ("torchbench", "resnext50_32x4d"): resnet("Bottleneck", [3, 4, 6, 3],
+                                              groups=32, width_per_group=4),
+    ("torchbench", "squeezenet1_1"): tv("torchvision_squeezenet",
+                                        "SqueezeNet", "1_1"),
+    ("torchbench", "mobilenet_v2"): tv("torchvision_mobilenetv2",
+                                       "MobileNetV2"),
+    ("torchbench", "mobilenet_v3_large"): mobilenet_v3("mobilenet_v3_large"),
+    ("torchbench", "mnasnet1_0"): tv("torchvision_mnasnet", "MNASNet", 1.0),
+    ("torchbench", "densenet121"): tv("torchvision_densenet", "DenseNet", 32,
+                                      (6, 12, 24, 16), 64),
+    ("torchbench", "shufflenet_v2_x1_0"): tv(
+        "torchvision_shufflenetv2", "ShuffleNetV2", [4, 8, 4],
+        [24, 116, 232, 464, 1024]),
 }
 
 TYPECODE = {"float32": "f", "float64": "d", "int64": "l", "int32": "i"}
@@ -195,6 +224,8 @@ def main(argv):
     for i in range(warmup):
         out = step()
     launches0 = _metatensor.launch_count()
+    cpu0 = _metatensor.cpu_fallbacks() if hasattr(_metatensor,
+                                                  "cpu_fallbacks") else 0
     times = []
     for i in range(repeat):
         t0 = time.time()
@@ -204,9 +235,11 @@ def main(argv):
     if dump_dir:
         dump([o for o in outputs_of(out) if o.dtype.startswith("float")],
              dump_dir)
-    # a device allocation that failed fell back to the CPU: whatever was
-    # timed is not the GPU run this row claims to be
-    cpu = _metatensor.alloc_failed()
+    # an allocation that failed, or any op computed by a host loop, means
+    # what was timed is not the GPU run this row claims to be
+    cpu = _metatensor.alloc_failed() or (
+        hasattr(_metatensor, "cpu_fallbacks") and
+        _metatensor.cpu_fallbacks() > cpu0)
     print("port suite=%s model=%s batch=%s median_ms=%.3f min_ms=%.3f "
           "first_ms=%.1f launches=%.1f cpu_fallback=%d"
           % (idx["suite"], idx["model"], idx["batch"], median(times),

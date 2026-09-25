@@ -16,16 +16,43 @@ def silu(x, inplace=False):
     return Tensor(x.raw.silu(), x.shape, x.perm, col=x.col)
 
 
-def hardswish(x, inplace=False):
-    raise NotImplementedError("hardswish")
-
-
 def hardtanh(x, min_val=-1.0, max_val=1.0, inplace=False):
-    raise NotImplementedError("hardtanh")
+    return x.clamp(min_val, max_val)
+
+
+def relu6(x, inplace=False):
+    return x.clamp(0.0, 6.0)
+
+
+def hardsigmoid(x, inplace=False):
+    return (x + 3.0).clamp(0.0, 6.0) / 6.0
+
+
+def hardswish(x, inplace=False):
+    return x * (x + 3.0).clamp(0.0, 6.0) / 6.0
+
+
+def sigmoid(x):
+    return x.sigmoid()
+
+
+def tanh(x):
+    return x.tanh()
 
 
 def leaky_relu(x, negative_slope=0.01, inplace=False):
-    raise NotImplementedError("leaky_relu")
+    return torch.where(x > 0.0, x, x * negative_slope)
+
+
+def elu(x, alpha=1.0, inplace=False):
+    return torch.where(x > 0.0, x, (x.exp() - 1.0) * alpha)
+
+
+def max_pool2d(x, kernel_size, stride=None, padding=0, dilation=1,
+               ceil_mode=False, return_indices=False):
+    from torch.nn import MaxPool2d
+    return MaxPool2d(kernel_size, stride, padding, dilation, return_indices,
+                     ceil_mode)(x)
 
 
 def log_softmax(x, dim=-1, dtype=None):
@@ -52,16 +79,48 @@ def cross_entropy(input, target, weight=None, size_average=None,
         raise NotImplementedError("cross_entropy with device targets")
     n, v = input.shape
     logp = log_softmax(input, -1)
-    idx, keep = [], 0
-    for i, t in enumerate(target.host):
-        if t != ignore_index:
-            idx.append(i * v + t)
-            keep += 1
+    # an ignored row gathers index -1, which the kernel reads as 0
+    idx = [t if t != ignore_index else -1 for t in target.host]
+    keep = len([t for t in target.host if t != ignore_index])
     if keep == 0:
         return torch.from_flat([float("nan")], (), input.dtype)
-    ix = torch._host(idx, (keep,))
-    picked = logp.raw.reshape([n * v, 1]).take(ix.index_tensor(input.dtype))
+    ix = torch._host(idx, (n, 1))
+    picked = logp.dense().raw.gather(ix.index_tensor(input.dtype), n, 1)
     return Tensor(picked.sum(), ()) * (-1.0 / keep)
+
+
+def pad(x, pad, mode="constant", value=0.0):
+    """Constant padding of the last len(pad) // 2 dims (torch's order: last
+    dim first); index tensors (the loss's shifted labels) on the host."""
+    if mode != "constant":
+        raise NotImplementedError("%s padding" % mode)
+    if not x.is_host:
+        x = x.dense()
+        nd = len(x.shape)
+        pads = [0] * (2 * nd)
+        for k in range(len(pad) // 2):
+            d = nd - 1 - k
+            pads[2 * d], pads[2 * d + 1] = pad[2 * k], pad[2 * k + 1]
+        shape = tuple(x.shape[d] + pads[2 * d] + pads[2 * d + 1]
+                      for d in range(nd))
+        return Tensor(x.raw.pad(list(x.shape), pads, float(value)), shape)
+    shape = list(x.shape)
+    vals = x.host
+    for k in range(len(pad) // 2):
+        before, after = pad[2 * k], pad[2 * k + 1]
+        d = len(shape) - 1 - k
+        inner = torch._numel(shape[d + 1:])
+        outer = torch._numel(shape[:d])
+        n = shape[d]
+        out = []
+        for o in range(outer):
+            base = o * n * inner
+            out.extend([value] * (before * inner))
+            out.extend(vals[base:base + n * inner])
+            out.extend([value] * (after * inner))
+        vals = out
+        shape[d] = n + before + after
+    return torch._host(vals, shape)
 
 
 def linear(x, weight, bias=None):
@@ -161,14 +220,71 @@ def _causal(s, dtype):
 
 def adaptive_avg_pool2d(x, output_size):
     n, c, h, w = x.shape
-    oh, ow = output_size
+    if not isinstance(output_size, (tuple, list)):
+        output_size = (output_size, output_size)
+    oh = h if output_size[0] is None else output_size[0]
+    ow = w if output_size[1] is None else output_size[1]
     if (oh, ow) == (h, w):
         return x
-    if (oh, ow) == (1, 1):
-        y = x.raw.reshape([n * c, h * w]).sum(1)
-        return Tensor(y, (n, c, 1, 1)) * (1.0 / (h * w))
-    raise NotImplementedError("adaptive average pool %s -> %s"
-                              % ((h, w), (oh, ow)))
+    y = x.dense().raw.adaptive_avg_pool2d(c, h, w, oh, ow)
+    return Tensor(y, (n, c, oh, ow))
+
+
+def _pair(v):
+    return tuple(v) if isinstance(v, (tuple, list)) else (v, v)
+
+
+def avg_pool2d(x, kernel_size, stride=None, padding=0, ceil_mode=False,
+               count_include_pad=True, divisor_override=None):
+    n, c, h, w = x.shape
+    (kh, kw) = _pair(kernel_size)
+    (sh, sw) = _pair(stride if stride not in (None, []) else kernel_size)
+    (ph, pw) = _pair(padding)
+    y = x.dense().raw.avg_pool2d(c, h, w, kh, sh, ph, count_include_pad,
+                                 ceil_mode, kw, sw, pw)
+    rnd = (lambda a, b: -(-a // b)) if ceil_mode else (lambda a, b: a // b)
+    oh = rnd(h + 2 * ph - kh, sh) + 1
+    ow = rnd(w + 2 * pw - kw, sw) + 1
+    if ceil_mode:
+        if (oh - 1) * sh >= h + ph:
+            oh -= 1
+        if (ow - 1) * sw >= w + pw:
+            ow -= 1
+    return Tensor(y, (n, c, oh, ow))
+
+
+def _host_permute(x, order):
+    """A permutation of a parameter, done once on the host at load time."""
+    shape = x.shape
+    st = torch._strides(shape)
+    v = x.tolist()
+    nshape = [shape[d] for d in order]
+    nst = [st[d] for d in order]
+    out = []
+
+    def walk(level, off):
+        if level == len(nshape):
+            out.append(v[off])
+            return
+        for i in range(nshape[level]):
+            walk(level + 1, off + i * nst[level])
+    walk(0, 0)
+    return torch.from_flat(out, nshape, x.dtype)
+
+
+def _group_filter(w, groups):
+    o = w.shape[0]
+    per = w.numel() // o
+    g = groups
+    # [g, O/g, per] -> [g, per, O/g] -> [g*per, O/g]
+    return _matrix(_host_permute(w.view(g, o // g, per), (0, 2, 1)),
+                   g * per, o // g)
+
+
+def _matrix(x, rows, cols):
+    """x with its storage itself [rows, cols], as the engine's convolution
+    and matmul kernels check it."""
+    return Tensor(x.raw.reshape([rows, cols]), (rows, cols))
 
 
 def softmax(x, dim=-1, dtype=None):
@@ -180,9 +296,4 @@ def dropout(x, p=0.5, training=False, inplace=False):
 
 
 def _transpose2(x):
-    """A 2-D transpose, done once on the host: only parameters at load time
-    come through here."""
-    r, c = x.shape
-    v = x.tolist()
-    flat = [v[i * c + j] for j in range(c) for i in range(r)]
-    return torch.from_flat(flat, (c, r), x.dtype)
+    return _host_permute(x, (1, 0))

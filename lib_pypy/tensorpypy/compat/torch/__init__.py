@@ -119,14 +119,13 @@ class Tensor(object):
         return self.host is not None
 
     def dense(self):
-        """This tensor with its elements contiguous in logical order."""
-        if self.col is not None:
-            raise NotImplementedError("materialising a column window %s"
-                                      % (self.col,))
-        if self.perm is None:
+        """This tensor with its elements contiguous in logical order: itself,
+        or one strided copy when it is a permutation or a column window."""
+        if self.perm is None and self.col is None:
             return self
-        raise NotImplementedError("materialising permutation %s of %s"
-                                  % (self.perm, list(self.physical_shape())))
+        st, off = _layout(self)
+        return Tensor(self.raw.strided(list(self.shape), st, off),
+                      self.shape)
 
     def physical_shape(self):
         if self.perm is None:
@@ -198,13 +197,19 @@ class Tensor(object):
     def split(self, split_size, dim=0):
         nd = len(self.shape)
         dim = _norm_dim(dim, nd)
+        n = self.shape[dim]
+        sizes = [split_size] * ((n + split_size - 1) // split_size) \
+            if isinstance(split_size, _int) else list(split_size)
+        if isinstance(split_size, _int) and _sum(sizes) != n:
+            sizes[-1] = n - split_size * (len(sizes) - 1)
         if self.host is not None or dim != nd - 1 or self.perm is not None \
                 or self.col is not None:
-            raise NotImplementedError("split along dim %d of %s"
-                                      % (dim, list(self.shape)))
+            out, start = [], 0
+            for w in sizes:
+                out.append(self.narrow(dim, start, w))
+                start += w
+            return tuple(out)
         ld = self.shape[-1]
-        sizes = [split_size] * (ld // split_size) if isinstance(
-            split_size, _int) else list(split_size)
         if _sum(sizes) != ld:
             raise ValueError("split sizes %s for %d" % (sizes, ld))
         out, off = [], 0
@@ -244,7 +249,41 @@ class Tensor(object):
             return self.view(out)
         if self.host is not None:
             return _host_expand(self, cur, out)
-        raise NotImplementedError("expand %s -> %s" % (list(cur), list(out)))
+        x = self.view(cur)
+        st, off = _layout(x)
+        st = [0 if c == 1 and o != 1 else s_ for s_, c, o in
+              zip(st, cur, out)]
+        return Tensor(x.raw.strided(list(out), st, off), out)
+
+    def repeat(self, *reps):
+        if len(reps) == 1 and isinstance(reps[0], (tuple, list)):
+            reps = tuple(reps[0])
+        cur = (1,) * (len(reps) - len(self.shape)) + tuple(self.shape)
+        # repeat = expand over a new dim before each, then merge the pairs
+        inter = []
+        for r, c in zip(reps, cur):
+            inter.extend([r, c])
+        x = self.view(tuple(v for c in cur for v in (1, c)))
+        return x.expand(tuple(inter)).view(
+            tuple(r * c for r, c in zip(reps, cur)))
+
+    def chunk(self, chunks, dim=0):
+        n = self.shape[_norm_dim(dim, len(self.shape))]
+        size = (n + chunks - 1) // chunks
+        return self.split(size, dim)
+
+    def unbind(self, dim=0):
+        dim = _norm_dim(dim, len(self.shape))
+        return tuple(self.select(dim, i) for i in range(self.shape[dim]))
+
+    def select(self, dim, i):
+        idx = [slice(None)] * _norm_dim(dim, len(self.shape)) + [i]
+        return self[tuple(idx)]
+
+    def narrow(self, dim, start, length):
+        idx = [slice(None)] * _norm_dim(dim, len(self.shape)) + \
+            [slice(start, start + length)]
+        return self[tuple(idx)]
 
     def expand_as(self, other):
         return self.expand(other.shape)
@@ -252,26 +291,7 @@ class Tensor(object):
     def __getitem__(self, idx):
         if self.host is not None:
             return _host_getitem(self, idx)
-        # indexing that selects everything is a view: full slices, None
-        # (a new dim of 1) and a trailing Ellipsis
-        items = idx if isinstance(idx, tuple) else (idx,)
-        shape, d = [], 0
-        for it in items:
-            if it is None:
-                shape.append(1)
-            elif it is Ellipsis:
-                shape.extend(self.shape[d:])
-                d = len(self.shape)
-            elif isinstance(it, slice) and d < len(self.shape) and \
-                    it.indices(self.shape[d]) == (0, self.shape[d], 1):
-                shape.append(self.shape[d])
-                d += 1
-            else:
-                raise NotImplementedError("indexing a device tensor with %r"
-                                          % (idx,))
-        shape.extend(self.shape[d:])
-        return self.view(tuple(shape)) if len(shape) != len(self.shape) \
-            else self
+        return _device_getitem(self, idx)
 
     def flatten(self, start_dim=0, end_dim=-1):
         nd = len(self.shape)
@@ -347,7 +367,7 @@ class Tensor(object):
                     return Tensor(self.raw.add(other.raw), self.shape,
                                   self.perm, col=self.col)
             elif type(other) is _float or type(other) is _int:
-                return Tensor(self.raw.add(_num(other, self)), self.shape,
+                return Tensor(self.raw.add(_float(other)), self.shape,
                               self.perm, col=self.col)
         return _binary(self, other, "add")
 
@@ -367,7 +387,7 @@ class Tensor(object):
                     return Tensor(self.raw.mul(other.raw), self.shape,
                                   self.perm, col=self.col)
             elif type(other) is _float or type(other) is _int:
-                return Tensor(self.raw.mul(_num(other, self)), self.shape,
+                return Tensor(self.raw.mul(_float(other)), self.shape,
                               self.perm, col=self.col)
         return _binary(self, other, "mul")
 
@@ -387,7 +407,7 @@ class Tensor(object):
                     return Tensor(self.raw.sub(other.raw), self.shape,
                                   self.perm, col=self.col)
             elif type(other) is _float or type(other) is _int:
-                return Tensor(self.raw.sub(_num(other, self)), self.shape,
+                return Tensor(self.raw.sub(_float(other)), self.shape,
                               self.perm, col=self.col)
         return _binary(self, other, "sub")
 
@@ -396,7 +416,8 @@ class Tensor(object):
     def __rsub__(self, other):
         if self.host is None and (type(other) is _float or
                                   type(other) is _int):
-            return Tensor(_num(other, self).sub(self.raw), self.shape,
+            # c - x == (-x) + c exactly
+            return Tensor(self.raw.mul(-1.0).add(_float(other)), self.shape,
                           self.perm, col=self.col)
         return _binary(_as_tensor(other, self.dtype), self, "sub")
 
@@ -413,7 +434,7 @@ class Tensor(object):
                     return Tensor(self.raw.div(other.raw), self.shape,
                                   self.perm, col=self.col)
             elif type(other) is _float or type(other) is _int:
-                return Tensor(self.raw.div(_num(other, self)), self.shape,
+                return Tensor(self.raw.div(_float(other)), self.shape,
                               self.perm, col=self.col)
         return _binary(self, other, "div")
 
@@ -600,6 +621,124 @@ class Tensor(object):
     __matmul__ = matmul
 
 
+def _layout(t):
+    """Element strides of t's logical dims in its storage, and the offset of
+    its first element."""
+    base = t.physical_shape()
+    nd = len(base)
+    if t.col is None:
+        st, off = _strides(base), 0
+    else:
+        off, ld, ndw = t.col
+        st = [0] * nd
+        acc = 1
+        for d in range(nd - 1, nd - ndw - 1, -1):
+            st[d] = acc
+            acc *= base[d]
+        acc = ld
+        for d in range(nd - ndw - 1, -1, -1):
+            st[d] = acc
+            acc *= base[d]
+    if t.perm is not None:
+        st = [st[p] for p in t.perm]
+    return list(st), off
+
+
+def _device_getitem(x, idx):
+    """Basic indexing (ints, slices with steps, None, Ellipsis) of a device
+    tensor: one strided copy, or x itself when nothing is selected away."""
+    items = idx if isinstance(idx, tuple) else (idx,)
+    if _any(isinstance(it, Tensor) or isinstance(it, list) for it in items):
+        return _advanced_getitem(x, items)
+    nd = len(x.shape)
+    if Ellipsis in items:
+        i = items.index(Ellipsis)
+        fill = nd - (len(items) - 1 - items.count(None))
+        items = items[:i] + (slice(None),) * fill + items[i + 1:]
+    st, off = _layout(x)
+    shape, strides, d, identity = [], [], 0, True
+    for it in items:
+        if it is None:
+            shape.append(1)
+            strides.append(0)
+            continue
+        if isinstance(it, slice):
+            start, stop, step = it.indices(x.shape[d])
+            n = _max(0, (stop - start + (step - (1 if step > 0 else -1)))
+                     // step)
+            if (start, n, step) != (0, x.shape[d], 1):
+                identity = False
+            off += start * st[d]
+            shape.append(n)
+            strides.append(st[d] * step)
+        else:
+            i = _int(it)
+            i = i + x.shape[d] if i < 0 else i
+            if not 0 <= i < x.shape[d]:
+                raise IndexError("index %d out of range for %d" % (i, x.shape[d]))
+            off += i * st[d]
+            identity = False
+        d += 1
+    shape.extend(x.shape[d:])
+    strides.extend(st[d:])
+    if identity:
+        return x.view(tuple(shape)) if len(shape) != nd else x
+    return Tensor(x.raw.strided(shape, strides, off), tuple(shape))
+
+
+def _advanced_getitem(x, items):
+    """x[:, ..., idx] with one index tensor on a leading or trailing axis:
+    index_select."""
+    pos = [i for i, it in enumerate(items) if not isinstance(it, slice)]
+    if len(pos) != 1 or _any(it != slice(None) for i, it in enumerate(items)
+                              if i != pos[0]):
+        raise NotImplementedError("advanced indexing %r" % (items,))
+    d = pos[0]
+    ix = items[d]
+    if isinstance(ix, list):
+        ix = tensor(ix)
+    return index_select(x, d, ix)
+
+
+def index_select(x, dim, index):
+    x = x.dense()
+    dim = _norm_dim(dim, len(x.shape))
+    outer = _numel(x.shape[:dim])
+    inner = _numel(x.shape[dim + 1:])
+    r = x.raw.index_select(index.index_tensor(x.dtype), outer, inner)
+    return Tensor(r, x.shape[:dim] + tuple(index.shape) + x.shape[dim + 1:])
+
+
+def cat(tensors, dim=0):
+    tensors = [t for t in tensors if t.numel() > 0] or list(tensors[:1])
+    if _all(t.host is not None for t in tensors):
+        dim = _norm_dim(dim, len(tensors[0].shape))
+        outer = _numel(tensors[0].shape[:dim])
+        vals = []
+        for o in range(outer):
+            for t in tensors:
+                w = t.numel() // outer
+                vals.extend(t.host[o * w:(o + 1) * w])
+        shape = list(tensors[0].shape)
+        shape[dim] = _sum(t.shape[dim] for t in tensors)
+        return _host(vals, shape)
+    tensors = [t.dense() for t in tensors]
+    dim = _norm_dim(dim, len(tensors[0].shape))
+    outer = _numel(tensors[0].shape[:dim])
+    shape = list(tensors[0].shape)
+    shape[dim] = _sum(t.shape[dim] for t in tensors)
+    return Tensor(_metatensor.cat([t.raw for t in tensors], outer),
+                  tuple(shape))
+
+
+concat = concatenate = cat
+
+
+def stack(tensors, dim=0):
+    dim = _norm_dim(dim, len(tensors[0].shape) + 1)
+    return cat([t.unsqueeze(dim) for t in tensors], dim)
+
+
 def _num(v, like):
     return _metatensor.scalar(_float(v), like.raw.dtype)
 
@@ -695,8 +834,8 @@ def _binary(a, b, op):
     if not isinstance(b, Tensor):
         if a.host is not None:
             return _host_binary(a, b, op)
-        s = _scalar(_float(b), a.dtype)
-        return Tensor(_apply(a.raw, op, s), a.shape, a.perm, col=a.col)
+        return Tensor(_apply(a.raw, op, _float(b)), a.shape, a.perm,
+                      col=a.col)
     if not isinstance(a, Tensor):
         a = _as_tensor(a, b.dtype)
     if a.host is not None or b.host is not None:
@@ -923,6 +1062,14 @@ def empty_like(x, dtype=None):
     return zeros_like(x, dtype)
 
 
+def transpose(x, a, b):
+    return x.transpose(a, b)
+
+
+def permute(x, dims):
+    return x.permute(*dims)
+
+
 def flatten(x, start_dim=0, end_dim=-1):
     return x.flatten(start_dim, end_dim)
 
@@ -964,8 +1111,19 @@ def zeros(*shape, **kw):
 
 
 def gather(x, dim, index):
-    """torch.gather; index tensors only (the embedding-side lookups upstream
-    runs on its integer buffers)."""
+    """torch.gather.  On index tensors it runs on the host (the embedding-
+    side lookups upstream does on its integer buffers); a device source
+    with index data gathers along dim in one kernel."""
+    if x.host is None and index.host is not None:
+        x = x.dense()
+        nd = len(x.shape)
+        dim = _norm_dim(dim, nd)
+        if _any(index.shape[i] != x.shape[i] for i in range(nd) if i != dim):
+            raise NotImplementedError("gather with a smaller index")
+        outer = _numel(x.shape[:dim])
+        inner = _numel(x.shape[dim + 1:])
+        r = x.raw.gather(index.index_tensor(x.dtype), outer, inner)
+        return Tensor(r, tuple(index.shape))
     if x.host is None or index.host is None:
         raise NotImplementedError("gather on device tensors")
     nd = len(x.shape)
@@ -1127,6 +1285,20 @@ class jit(object):
     @staticmethod
     def is_scripting():
         return False
+
+    @staticmethod
+    def unused(fn):
+        return fn
+
+    @staticmethod
+    def _overload_method(fn):
+        # upstream declares typed overloads for TorchScript and then the
+        # real method under the same name, which is the one a class keeps
+        return fn
+
+    @staticmethod
+    def ignore(fn=None, **kw):
+        return fn if fn is not None else (lambda f: f)
 
 
 class no_grad(object):

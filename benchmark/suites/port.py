@@ -21,6 +21,8 @@ rewrites, restricted to the definitions the model needs:
   - (*a, b) and [*a, b] become tuple(a) + (b,) and list(a) + [b], and
     f(*a, b) becomes f(*(tuple(a) + (b,)))
   - `raise X from Y` becomes `raise X`
+  - an import from a standard-library module that Python 2 names
+    differently (collections.abc) imports from the Python 2 name
   - every port starts with `from __future__ import absolute_import,
     division, print_function`, so / and imports mean what they meant
 
@@ -108,6 +110,24 @@ SPECS = {
         keep=["apply_chunking_to_forward", "Conv1D"],
         prelude={"inspect": INSPECT_SIGNATURE},
         out="transformers/pytorch_utils.py"),
+    "transformers.loss.loss_utils": dict(
+        module="transformers.loss.loss_utils", package="transformers",
+        keep=["fixed_cross_entropy", "ForCausalLMLoss", "ForMaskedLMLoss",
+              "ForSequenceClassificationLoss", "ForQuestionAnsweringLoss",
+              "ForTokenClassification"],
+        out="transformers/loss/loss_utils.py"),
+    "torchvision.utils": dict(
+        module="torchvision.utils", package="torchvision",
+        keep=["_make_ntuple"], out="torchvision/utils.py"),
+    "torchvision.models._utils": dict(
+        module="torchvision.models._utils", package="torchvision",
+        keep=["_make_divisible"], out="torchvision/models/_utils.py"),
+    "torchvision.ops.misc": dict(
+        module="torchvision.ops.misc", package="torchvision",
+        keep=["ConvNormActivation", "Conv2dNormActivation",
+              "SqueezeExcitation"],
+        drop_calls={"_log_api_usage_once": "usage telemetry, no numerics"},
+        out="torchvision/ops/misc.py"),
     "transformers.modeling_layers": dict(
         module="transformers.modeling_layers", package="transformers",
         keep=["logger", "GradientCheckpointingLayer"],
@@ -184,6 +204,29 @@ SPECS = {
         keep=["ResNetBlock", "ResNetModel"],
         prelude={"types.SimpleNamespace": SIMPLE_NAMESPACE},
     ),
+    "torchvision_squeezenet": dict(
+        module="torchvision.models.squeezenet", package="torchvision",
+        keep=["Fire", "SqueezeNet"], drop_calls={"_log_api_usage_once": "usage telemetry, no numerics"}),
+    "torchvision_mobilenetv2": dict(
+        module="torchvision.models.mobilenetv2", package="torchvision",
+        keep=["InvertedResidual", "MobileNetV2"], drop_calls={"_log_api_usage_once": "usage telemetry, no numerics"}),
+    "torchvision_mobilenetv3": dict(
+        module="torchvision.models.mobilenetv3", package="torchvision",
+        keep=["InvertedResidualConfig", "InvertedResidual", "MobileNetV3",
+              "_mobilenet_v3_conf"], drop_calls={"_log_api_usage_once": "usage telemetry, no numerics"}),
+    "torchvision_mnasnet": dict(
+        module="torchvision.models.mnasnet", package="torchvision",
+        keep=["_BN_MOMENTUM", "_InvertedResidual", "_stack",
+              "_round_to_multiple_of", "_get_depths", "MNASNet"],
+        drop_calls={"_log_api_usage_once": "usage telemetry, no numerics"}),
+    "torchvision_densenet": dict(
+        module="torchvision.models.densenet", package="torchvision",
+        keep=["_DenseLayer", "_DenseBlock", "_Transition", "DenseNet"],
+        drop_calls={"_log_api_usage_once": "usage telemetry, no numerics"}),
+    "torchvision_shufflenetv2": dict(
+        module="torchvision.models.shufflenetv2", package="torchvision",
+        keep=["channel_shuffle", "InvertedResidual", "ShuffleNetV2"],
+        drop_calls={"_log_api_usage_once": "usage telemetry, no numerics"}),
     "torchvision_alexnet": dict(
         module="torchvision.models.alexnet", package="torchvision",
         keep=["AlexNet"],
@@ -403,6 +446,11 @@ def used_names(tree):
     return out
 
 
+# standard-library modules that moved between Python 2 and 3; an import of
+# the Python 3 name imports the Python 2 one
+PY2_MODULES = {"collections.abc": "collections"}
+
+
 def imports(tree, module, used, supplied, is_package, ported):
     """Upstream's top-level imports, absolute, restricted to used names; an
     import of a module that has a port of its own imports the port."""
@@ -418,7 +466,7 @@ def imports(tree, module, used, supplied, is_package, ported):
         elif isinstance(n, ast.ImportFrom):
             if n.module == "__future__":
                 continue
-            base = n.module or ""
+            base = PY2_MODULES.get(n.module, n.module or "")
             if n.level:
                 base = ".".join(pkg[:len(pkg) - n.level] +
                                 ([n.module] if n.module else []))
