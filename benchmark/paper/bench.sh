@@ -50,6 +50,13 @@ commands:
                          eager/compile/compile-ro, same token stream required,
                          into \$OUT/decode.tsv (DECODE_PYPY=... for a binary
                          with decode_scores)
+  suites                 the PyTorch 2 benchmark suites (TorchBench,
+                         HuggingFace, TIMM) as the inductor dashboard runs
+                         them: each ported model's upstream source against
+                         torch eager/inductor/inductor+cudagraphs through the
+                         dashboard's timed() and accuracy check, into
+                         \$OUT/suites.tsv (setup_suites.sh first; SUITES_MODELS,
+                         SUITES_RUNS, SUITES_REPEAT, SUITES_PYPY)
   transition             what a fused value costs to carry across a guard:
                          keeping its descriptor against draining it to
                          canonical form and re-recording, one binary and one
@@ -186,6 +193,9 @@ run_cmd() {
       ;;
     decode)
       bash "$HERE/run_decode.sh" "$@"
+      ;;
+    suites)
+      bash "$HERE/run_suites.sh" "$@"
       ;;
     transition)
       bash "$HERE/run_transition.sh" "$@"

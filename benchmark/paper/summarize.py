@@ -534,6 +534,46 @@ def main(out_dir):
                 col("kernels", "%.0f")))
         lines.append("")
 
+    suites = read_tsv(os.path.join(out_dir, "suites.tsv"))
+    if suites:
+        # ours is a failed row - no time - unless every run passed the
+        # dashboard's accuracy check with nothing falling back to the CPU
+        lines.append("## PyTorch 2 benchmark suites, as the inductor dashboard "
+                     "runs them (median ms per forward, median over "
+                     "processes)\n")
+        lines.append("| suite | model | batch | ours | torch eager | inductor "
+                     "| inductor+cg | ours/inductor | ours/best | launches | "
+                     "accuracy |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+        g = collections.OrderedDict()
+        for r in suites:
+            g.setdefault((r["suite"], r["model"]), {}).setdefault(
+                r["system"], []).append(r)
+        for (suite, model), systems in g.items():
+            ours = systems.get("ours", [])
+            good = [x for x in ours if x.get("pass") == "1" and
+                    x.get("cpu_fallback") == "0"]
+            t = lambda sysname: med([x["median_ms"] for x in
+                                     systems.get(sysname, [])
+                                     if x.get("median_ms")])
+            o = med([x["median_ms"] for x in good]) if ours and \
+                len(good) == len(ours) else None
+            ind, cg, eager = t("torch-inductor"), t("torch-inductor-cg"), \
+                t("torch-eager")
+            best = min([v for v in (eager, ind, cg) if v is not None] or
+                       [None]) if any((eager, ind, cg)) else None
+            batch = (ours or systems.get("torch-eager", [{}]))[0].get("batch",
+                                                                       "")
+            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | "
+                         "%s |" % (
+                suite, model, batch, fmt(o, "%.3f"), fmt(eager, "%.3f"),
+                fmt(ind, "%.3f"), fmt(cg, "%.3f"),
+                fmt(o / ind if o and ind else None, "%.2fx"),
+                fmt(o / best if o and best else None, "%.2fx"),
+                fmt(med([x["launches"] for x in good]), "%.0f"),
+                "%d/%d" % (len(good), len(ours))))
+        lines.append("")
+
     text = "\n".join(lines) + "\n"
     out_path = os.path.join(out_dir, "summary.md")
     with open(out_path, "w") as f:

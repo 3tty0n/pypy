@@ -28,10 +28,40 @@ def leaky_relu(x, negative_slope=0.01, inplace=False):
     raise NotImplementedError("leaky_relu")
 
 
+def log_softmax(x, dim=-1, dtype=None):
+    x = x.dense()
+    nd = len(x.shape)
+    if (dim + nd if dim < 0 else dim) != nd - 1:
+        raise NotImplementedError("log_softmax over dim %d" % dim)
+    m = x.amax(-1, keepdim=True)
+    z = x - m
+    return z - z.exp().sum(-1, keepdim=True).log()
+
+
 def cross_entropy(input, target, weight=None, size_average=None,
                   ignore_index=-100, reduce=None, reduction="mean",
                   label_smoothing=0.0):
-    raise NotImplementedError("cross_entropy")
+    """log_softmax then nll_loss, as torch composes them.  The targets are
+    index data on the host, so picking each row's target log-probability is
+    a row gather from the flattened [N*V, 1] log-probabilities at indices
+    i*V + t_i; rows whose target is ignore_index are left out of the sum and
+    of the count, as nll_loss leaves them out."""
+    if weight is not None or label_smoothing or reduction != "mean":
+        raise NotImplementedError("cross_entropy options")
+    if not target.is_host:
+        raise NotImplementedError("cross_entropy with device targets")
+    n, v = input.shape
+    logp = log_softmax(input, -1)
+    idx, keep = [], 0
+    for i, t in enumerate(target.host):
+        if t != ignore_index:
+            idx.append(i * v + t)
+            keep += 1
+    if keep == 0:
+        return torch.from_flat([float("nan")], (), input.dtype)
+    ix = torch._host(idx, (keep,))
+    picked = logp.raw.reshape([n * v, 1]).take(ix.index_tensor(input.dtype))
+    return Tensor(picked.sum(), ()) * (-1.0 / keep)
 
 
 def linear(x, weight, bias=None):

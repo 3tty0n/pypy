@@ -91,6 +91,12 @@ MODELS = {
     ("torchbench", "hf_Albert"): hf("hf_albert", "AlbertForMaskedLM"),
     ("torchbench", "hf_GPT2"): hf("hf_gpt2", "GPT2LMHeadModel"),
     ("torchbench", "hf_GPT2_large"): hf("hf_gpt2", "GPT2LMHeadModel"),
+    ("huggingface", "BertForMaskedLM"): hf("hf_bert", "BertForMaskedLM"),
+    ("huggingface", "DistilBertForMaskedLM"): hf("hf_distilbert",
+                                                "DistilBertForMaskedLM"),
+    ("huggingface", "AlbertForMaskedLM"): hf("hf_albert",
+                                            "AlbertForMaskedLM"),
+    ("huggingface", "DistillGPT2"): hf("hf_gpt2", "GPT2LMHeadModel"),
     ("torchbench", "alexnet"): alexnet,
     ("torchbench", "phlippe_resnet"): phlippe_resnet,
     ("torchbench", "vgg16"): vgg("D"),
@@ -139,16 +145,28 @@ def same(res, ref, fp64, shape, tol, cosine, larger):
     """torch._dynamo.utils.same() for one float32 tensor: allclose at tol,
     else the fp64 check - res's RMSE against the float64 forward may be at
     most `multiplier` times eager torch's own plus tol/10.  Returns
-    (pass, res_rmse, ref_rmse, multiplier)."""
+    (pass, res_rmse, ref_rmse, multiplier).  One pass over the three
+    sequences, so a 250M-element output costs no more memory than itself."""
     n = len(ref)
     if cosine:
-        num = sum(a * b for a, b in zip(res, ref))
-        den = (sum(a * a for a in res) * sum(b * b for b in ref)) ** 0.5
-        return num / (den or 1.0) >= 0.99, 0.0, 0.0, 0.0
-    if all(abs(a - b) <= tol + tol * abs(a) for a, b in zip(res, ref)):
+        num = den_g = den_w = 0.0
+        for i in range(n):
+            num += res[i] * ref[i]
+            den_g += res[i] * res[i]
+            den_w += ref[i] * ref[i]
+        return num / ((den_g * den_w) ** 0.5 or 1.0) >= 0.99, 0.0, 0.0, 0.0
+    close = True
+    se_ref = se_res = 0.0
+    for i in range(n):
+        a, b, c = res[i], ref[i], fp64[i]
+        if close and abs(b - a) > tol + tol * abs(a):
+            close = False
+        se_ref += (c - b) * (c - b)
+        se_res += (c - a) * (c - a)
+    if close:
         return True, 0.0, 0.0, 0.0
-    ref_err = (sum((a - b) ** 2 for a, b in zip(fp64, ref)) / n) ** 0.5
-    res_err = (sum((a - b) ** 2 for a, b in zip(fp64, res)) / n) ** 0.5
+    ref_err = (se_ref / n) ** 0.5
+    res_err = (se_res / n) ** 0.5
     mult = 2.0
     if larger and n <= 10:
         mult = 10.0
@@ -218,7 +236,7 @@ def main(argv):
     for g, e, e64 in zip(got, idx["outputs"], idx["outputs_fp64"]):
         want, _, _ = read(blob, e)
         want64, wshape, _ = read(blob, e64)
-        o, r1, r0, m = same(flat(g), list(want), list(want64), wshape,
+        o, r1, r0, m = same(flat(g), want, want64, wshape,
                             idx["tolerance"], idx["cosine"],
                             idx["larger_multiplier"])
         ok = ok and o
