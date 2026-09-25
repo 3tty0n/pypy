@@ -121,6 +121,9 @@ class Sequential(Module):
 
 
 class ModuleList(Sequential):
+    def __init__(self, modules=None):
+        self._mods = list(modules or [])
+
     def forward(self, *a):
         raise NotImplementedError("ModuleList is not callable")
 
@@ -170,6 +173,80 @@ class LeakyReLU(Module):
 
     def forward(self, x):
         return F.leaky_relu(x, self.negative_slope)
+
+
+class Embedding(Module):
+    def __init__(self, num_embeddings, embedding_dim, padding_idx=None,
+                 max_norm=None, norm_type=2.0, scale_grad_by_freq=False,
+                 sparse=False, _weight=None, _freeze=False, device=None,
+                 dtype=None):
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.padding_idx = padding_idx
+        self.weight = Parameter(num_embeddings, embedding_dim)
+
+    def forward(self, idx):
+        return F.embedding(idx, self.weight)
+
+
+class LayerNorm(Module):
+    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True,
+                 bias=True, device=None, dtype=None):
+        if isinstance(normalized_shape, int):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
+        self.eps = eps
+        self.weight = Parameter(*self.normalized_shape)
+        self.bias = Parameter(*self.normalized_shape) if bias else None
+
+    def forward(self, x):
+        return F.layer_norm(x, self.normalized_shape, self.weight, self.bias,
+                            self.eps)
+
+
+class SiLU(Module):
+    def __init__(self, inplace=False):
+        pass
+
+    def forward(self, x):
+        return F.silu(x)
+
+
+class Hardswish(Module):
+    def __init__(self, inplace=False):
+        pass
+
+    def forward(self, x):
+        return F.hardswish(x)
+
+
+class ReLU6(Module):
+    def __init__(self, inplace=False):
+        pass
+
+    def forward(self, x):
+        return F.hardtanh(x, 0.0, 6.0)
+
+
+class PReLU(Module):
+    def __init__(self, num_parameters=1, init=0.25):
+        self.weight = Parameter(num_parameters)
+
+    def forward(self, x):
+        raise NotImplementedError("PReLU")
+
+
+class CrossEntropyLoss(Module):
+    def __init__(self, weight=None, size_average=None, ignore_index=-100,
+                 reduce=None, reduction="mean", label_smoothing=0.0):
+        self.ignore_index = ignore_index
+        self.reduction = reduction
+        self.label_smoothing = label_smoothing
+
+    def forward(self, input, target):
+        return F.cross_entropy(input, target, ignore_index=self.ignore_index,
+                               reduction=self.reduction,
+                               label_smoothing=self.label_smoothing)
 
 
 class Linear(Module):
@@ -227,8 +304,8 @@ class Conv2d(Module):
 
     def forward(self, x):
         n, c, h, w = x.shape
-        b = self.bias.t if isinstance(self.bias, Tensor) else None
-        y = x.t.conv2d(self.filter.t, c, h, w, b, self.k, self.s, self.p)
+        b = self.bias.raw if isinstance(self.bias, Tensor) else None
+        y = x.raw.conv2d(self.filter.raw, c, h, w, b, self.k, self.s, self.p)
         oh = (h + 2 * self.p - self.k) // self.s + 1
         ow = (w + 2 * self.p - self.k) // self.s + 1
         return Tensor(y, (n, self.out_channels, oh, ow))
@@ -271,7 +348,7 @@ class BatchNorm2d(Module):
     def forward(self, x):
         n, c, h, w = x.shape
         scale, shift = self._per_row(n)
-        y = x.t.reshape([n * c, h * w]).mul(scale.t).add(shift.t)
+        y = x.raw.reshape([n * c, h * w]).mul(scale.raw).add(shift.raw)
         return Tensor(y, x.shape)
 
 
@@ -289,7 +366,7 @@ class MaxPool2d(Module):
         k = _square("kernel", self.kernel_size)
         s = _square("stride", self.stride)
         p = _square("padding", self.padding)
-        y = x.t.maxpool2(c, h, w, k, s, p)
+        y = x.raw.maxpool2(c, h, w, k, s, p)
         return Tensor(y, (n, c, (h + 2 * p - k) // s + 1,
                           (w + 2 * p - k) // s + 1))
 

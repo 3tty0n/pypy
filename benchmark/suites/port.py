@@ -15,7 +15,18 @@ rewrites, restricted to the definitions the model needs:
   - typing.cast(T, v) becomes v (it is the identity at run time)
   - only the SPEC's `keep` top-level definitions (functions, classes,
     assignments) are emitted, in upstream order
-  - imports are replaced by the port header's (torch, torch.nn as nn, ...)
+  - upstream's imports are kept, relative ones made absolute, and filtered
+    to the names the kept code still uses; `torch` and `transformers`
+    resolve to the packages in lib_pypy/tensorpypy/compat
+  - (*a, b) and [*a, b] become tuple(a) + (b,) and list(a) + [b], and
+    f(*a, b) becomes f(*(tuple(a) + (b,)))
+  - `raise X from Y` becomes `raise X`
+  - every port starts with `from __future__ import absolute_import,
+    division, print_function`, so / and imports mean what they meant
+
+Constructs Python 2 has no rewrite for here (keyword-only parameters after
+*args, {**d}, :=, nonlocal, yield from, async, match)
+stop the port with an error rather than pass through.
 
 Anything beyond syntax is listed in the SPEC as an explicit exception, each
 with its reason: `drop_calls` removes statements that call a named function
@@ -33,6 +44,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "ports")
+COMPAT = os.path.join(HERE, "..", "..", "lib_pypy", "tensorpypy", "compat")
 TORCHBENCH = os.environ.get("TORCHBENCH", os.path.expanduser(
     "~/src/github.com/pytorch/benchmark"))
 sys.path.append(TORCHBENCH)
@@ -43,17 +55,81 @@ class SimpleNamespace(object):
         self.__dict__.update(kw)
 """
 
-HEADER_IMPORTS = """\
-import math
-from functools import partial
+FUTURE = "from __future__ import absolute_import, division, print_function\n"
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch import Tensor
+HF_ACT_KEEP = ["logger", "GELUTanh", "PytorchGELUTanh", "NewGELUActivation",
+               "GELUActivation", "SiLUActivation", "FastGELUActivation",
+               "QuickGELUActivation", "ClippedGELUActivation",
+               "AccurateGELUActivation", "MishActivation",
+               "LinearActivation", "LaplaceActivation",
+               "ReLUSquaredActivation", "SqrtSoftplusActivation",
+               "ClassInstantier", "XIELUActivation", "ACT2CLS", "ACT2FN",
+               "get_activation", "gelu"]
+
+INSPECT_SIGNATURE = """\
+class _Signature(object):
+    def __init__(self, parameters):
+        self.parameters = parameters
+
+
+class inspect(object):
+    \"\"\"inspect.signature(f).parameters, counted as Python 3 counts them:
+    a bound method's self is not a parameter.  Memoised per function, as
+    a signature never changes.\"\"\"
+    _memo = {}
+
+    @staticmethod
+    def signature(f):
+        fn = getattr(f, "__func__", f)
+        bound = getattr(f, "__self__", None) is not None
+        key = (fn, bound)
+        sig = inspect._memo.get(key)
+        if sig is None:
+            import inspect as _inspect
+            spec = _inspect.getargspec(fn)
+            names = list(spec.args)[1 if bound else 0:]
+            if spec.varargs:
+                names.append(spec.varargs)
+            if spec.keywords:
+                names.append(spec.keywords)
+            sig = inspect._memo[key] = _Signature(tuple(names))
+        return sig
 """
 
 SPECS = {
+    # transformers' own infrastructure the modeling files call, ported into
+    # the compat transformers package next to the hand-written stand-ins
+    "transformers.activations": dict(
+        module="transformers.activations", package="transformers",
+        keep=HF_ACT_KEEP,
+        out="transformers/activations.py"),
+    "transformers.pytorch_utils": dict(
+        module="transformers.pytorch_utils", package="transformers",
+        keep=["apply_chunking_to_forward"],
+        prelude={"inspect": INSPECT_SIGNATURE},
+        out="transformers/pytorch_utils.py"),
+    "transformers.modeling_layers": dict(
+        module="transformers.modeling_layers", package="transformers",
+        keep=["logger", "GradientCheckpointingLayer"],
+        out="transformers/modeling_layers.py"),
+    "transformers.integrations.sdpa_attention": dict(
+        module="transformers.integrations.sdpa_attention",
+        package="transformers",
+        keep=["logger", "_is_torch_greater_or_equal_than_2_5",
+              "_is_torch_greater_or_equal_than_2_8", "_is_torch_xpu_available",
+              "_is_torch_npu_available", "repeat_kv", "use_gqa_in_sdpa",
+              "sdpa_attention_forward"],
+        out="transformers/integrations/sdpa_attention.py"),
+    "hf_distilbert": dict(
+        module="transformers.models.distilbert.modeling_distilbert",
+        package="transformers",
+        keep=["logger", "Embeddings", "eager_attention_forward",
+              "DistilBertSelfAttention", "FFN", "TransformerBlock",
+              "Transformer", "DistilBertPreTrainedModel", "DistilBertModel",
+              "DistilBertForMaskedLM"],
+        free_ok={"create_sinusoidal_embeddings":
+                 "read by resize_position_embeddings only"},
+    ),
     "torchvision_resnet": dict(
         module="torchvision.models.resnet", package="torchvision",
         keep=["conv3x3", "conv1x1", "BasicBlock", "Bottleneck", "ResNet"],
@@ -75,6 +151,14 @@ SPECS = {
         drop_calls={"_log_api_usage_once": "usage telemetry, no numerics"},
     ),
 }
+
+
+def _tuple(elts):
+    return ast.Tuple(list(elts), ast.Load())
+
+
+def _list(elts):
+    return ast.List(list(elts), ast.Load())
 
 
 class Py2(ast.NodeTransformer):
@@ -139,8 +223,64 @@ class Py2(ast.NodeTransformer):
         self.generic_visit(node)
         return node
 
+    def _starred_seq(self, node, make):
+        if not any(isinstance(e, ast.Starred) for e in node.elts):
+            return node
+        parts, run = [], []
+        for e in node.elts:
+            if isinstance(e, ast.Starred):
+                if run:
+                    parts.append(make(run))
+                    run = []
+                conv = "tuple" if make is _tuple else "list"
+                parts.append(ast.Call(ast.Name(conv, ast.Load()),
+                                      [e.value], []))
+            else:
+                run.append(e)
+        if run:
+            parts.append(make(run))
+        out = parts[0]
+        for p in parts[1:]:
+            out = ast.BinOp(out, ast.Add(), p)
+        return ast.copy_location(out, node)
+
+    def visit_Tuple(self, node):
+        self.generic_visit(node)
+        if isinstance(node.ctx, ast.Load):
+            return self._starred_seq(node, _tuple)
+        return node
+
+    def visit_List(self, node):
+        self.generic_visit(node)
+        if isinstance(node.ctx, ast.Load):
+            return self._starred_seq(node, _list)
+        return node
+
+    def visit_Raise(self, node):
+        self.generic_visit(node)
+        node.cause = None
+        return node
+
+    def visit_Dict(self, node):
+        if any(k is None for k in node.keys):
+            raise NotImplementedError("{**d} display")
+        self.generic_visit(node)
+        return node
+
+    def _refuse(self, node):
+        raise NotImplementedError("%s at line %d" % (
+            type(node).__name__, node.lineno))
+
+    visit_NamedExpr = visit_Nonlocal = visit_YieldFrom = _refuse
+    visit_AsyncFunctionDef = visit_Await = visit_Match = _refuse
+
     def visit_Call(self, node):
         self.generic_visit(node)
+        stars = [a for a in node.args if isinstance(a, ast.Starred)]
+        if len(stars) > 1 or (stars and node.args[-1] is not stars[0]):
+            # f(*a, b) -> f(*(tuple(a) + (b,)))
+            seq = self._starred_seq(ast.Tuple(node.args, ast.Load()), _tuple)
+            node.args = [ast.Starred(seq, ast.Load())]
         f = node.func
         if (isinstance(f, ast.Name) and f.id == "cast" and
                 "cast" in self.typing_names and len(node.args) == 2):
@@ -188,6 +328,62 @@ def version(package):
     return importlib.import_module(package).__version__
 
 
+PY2_BUILTINS = set(dir(__builtins__)) - {"print"} | {
+    "unicode", "long", "xrange", "basestring", "reduce", "__name__",
+    "__file__", "__doc__"}
+
+
+def free_names(tree):
+    """Names the code reads that nothing in it binds and Python has not
+    built in: each is a NameError waiting for the line that reads it."""
+    bound, read = set(), set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name):
+            (read if isinstance(n.ctx, ast.Load) else bound).add(n.id)
+        elif isinstance(n, (ast.FunctionDef, ast.ClassDef)):
+            bound.add(n.name)
+        elif isinstance(n, ast.arg):
+            bound.add(n.arg)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            bound |= {(a.asname or a.name).split(".")[0] for a in n.names}
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            bound.add(n.name)
+    return sorted(read - bound - PY2_BUILTINS)
+
+
+def used_names(tree):
+    out = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name):
+            out.add(n.id)
+    return out
+
+
+def imports(tree, module, used, supplied):
+    """Upstream's top-level imports, absolute, restricted to used names."""
+    pkg = module.split(".")
+    out = []
+    for n in tree.body:
+        if isinstance(n, ast.Import):
+            names = [a for a in n.names
+                     if (a.asname or a.name.split(".")[0]) in used
+                     and (a.asname or a.name) not in supplied]
+            if names:
+                out.append(ast.Import(names))
+        elif isinstance(n, ast.ImportFrom):
+            if n.module == "__future__":
+                continue
+            base = n.module or ""
+            if n.level:
+                base = ".".join(pkg[:len(pkg) - n.level] +
+                                ([n.module] if n.module else []))
+            names = [a for a in n.names if (a.asname or a.name) in used
+                     and (a.asname or a.name) not in supplied]
+            if names:
+                out.append(ast.ImportFrom(base, names, 0))
+    return out
+
+
 def port(name):
     spec = SPECS[name]
     mod = importlib.import_module(spec["module"])
@@ -203,30 +399,54 @@ def port(name):
     for n in tree.body:
         if isinstance(n, ast.ImportFrom) and n.module == "typing":
             typing_names |= {a.asname or a.name for a in n.names}
-    tree.body = body
-    tree = Py2(spec.get("drop_calls", {}), typing_names).visit(tree)
-    ast.fix_missing_locations(tree)
+    kept = ast.Module(body=body, type_ignores=[])
+    kept = Py2(spec.get("drop_calls", {}), typing_names).visit(kept)
+    prelude = spec.get("prelude", {})
+    supplied = {k.rsplit(".", 1)[-1] for k in prelude}
+    imps = imports(tree, spec["module"], used_names(kept), supplied)
+    kept.body = imps + kept.body
+    ast.fix_missing_locations(kept)
+    free = (set(free_names(kept)) - set(spec.get("free_ok", {})) -
+            {k.rsplit(".", 1)[-1] for k in spec.get("prelude", {})})
+    if free:
+        raise SystemExit("%s: free names %s (keep them, or list them in "
+                         "free_ok with the reason they are never read)"
+                         % (name, sorted(free)))
     exceptions = "".join("#   dropped calls to %s: %s\n" % kv
                          for kv in sorted(spec.get("drop_calls", {}).items()))
-    prelude = spec.get("prelude", {})
     exceptions += "".join("#   %s supplied for Python 2\n" % k
                           for k in sorted(prelude))
+    exceptions += "".join("#   %s left unbound: %s\n" % kv
+                          for kv in sorted(spec.get("free_ok", {}).items()))
     header = (
+        "# -*- coding: utf-8 -*-\n"
         "# Generated by benchmark/suites/port.py from %s\n"
         "# (%s %s, source sha256 %s).  Do not edit; change the spec.\n"
         "# Kept: %s\n%s"
         % (spec["module"], spec["package"], version(spec["package"]),
            hashlib.sha256(src.encode()).hexdigest()[:16],
            ", ".join(spec["keep"]), exceptions))
-    return (header + HEADER_IMPORTS + "".join(
-        "\n\n" + prelude[k] for k in sorted(prelude)) + "\n\n" +
-        ast.unparse(tree) + "\n")
+    text = ast.unparse(kept)
+    if prelude:
+        # after the imports, before the first kept definition
+        split = len(ast.unparse(ast.Module(body=imps, type_ignores=[])))
+        text = (text[:split] + "".join("\n\n" + prelude[k]
+                                       for k in sorted(prelude)) +
+                text[split:])
+    return header + FUTURE + text + "\n"
+
+
+def destination(name):
+    spec = SPECS[name]
+    if "out" in spec:
+        return os.path.join(COMPAT, spec["out"])
+    return os.path.join(OUT, name + ".py")
 
 
 def write(name):
-    os.makedirs(OUT, exist_ok=True)
     text = port(name)
-    dst = os.path.join(OUT, name + ".py")
+    dst = destination(name)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
     open(dst, "w").write(text)
     py2 = os.environ.get("PYTHON2", "python2")
     r = subprocess.run([py2, "-c", "import sys; compile(open(sys.argv[1])"
@@ -245,7 +465,7 @@ def main(argv):
     elif argv[1:2] == ["--check"]:
         bad = 0
         for n in SPECS:
-            dst = os.path.join(OUT, n + ".py")
+            dst = destination(n)
             if not os.path.exists(dst) or open(dst).read() != port(n):
                 print("stale: %s" % dst)
                 bad += 1

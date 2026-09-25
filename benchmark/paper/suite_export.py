@@ -42,6 +42,16 @@ def revision(path):
         return ""
 
 
+def config_of(model):
+    """A transformers model's config as the dict its constructor reads."""
+    cfg = getattr(model, "config", None)
+    if cfg is None or not hasattr(cfg, "to_dict"):
+        return None
+    d = cfg.to_dict()
+    d["_attn_implementation"] = getattr(cfg, "_attn_implementation", None)
+    return json.loads(json.dumps(d, default=str))
+
+
 def main(argv):
     import torch
     from torch.utils._pytree import tree_flatten
@@ -90,6 +100,7 @@ def main(argv):
                "torch": torch.__version__, "source": revision(src),
                "params": params, "inputs": pos, "kwargs": kw,
                "outputs": outs, "outputs_fp64": outs64,
+               "config": config_of(model),
                "tolerance": tol, "cosine": bool(cosine),
                "larger_multiplier": bool(larger)},
               open(os.path.join(out, "index.json"), "w"), indent=1,

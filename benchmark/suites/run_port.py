@@ -41,6 +41,16 @@ def phlippe_resnet():
     return m.ResNetModel()
 
 
+def hf(module, cls):
+    def build(config):
+        import importlib
+        from transformers.configuration_utils import PreTrainedConfig
+        m = importlib.import_module(module)
+        return getattr(m, cls)(PreTrainedConfig(**config))
+    build.wants_config = True
+    return build
+
+
 def alexnet():
     import torchvision_alexnet as m
     return m.AlexNet()
@@ -57,6 +67,8 @@ def vgg(cfg):
 # (torchvision.models.resnet18() is _resnet(BasicBlock, [2, 2, 2, 2]),
 # vgg16() is _vgg("D", False, ...), ...)
 MODELS = {
+    ("torchbench", "hf_DistilBert"): hf("hf_distilbert",
+                                        "DistilBertForMaskedLM"),
     ("torchbench", "alexnet"): alexnet,
     ("torchbench", "phlippe_resnet"): phlippe_resnet,
     ("torchbench", "vgg16"): vgg("D"),
@@ -81,10 +93,20 @@ def read(blob, entry):
     return a, shape, dtype
 
 
-def tensor(blob, entry, dtype=None):
+def tensor(blob, entry):
     a, shape, dt = read(blob, entry)
-    dt = dtype or (dt if dt in ("float32", "float64") else "float32")
+    if dt in ("int64", "int32"):
+        return torch.tensor([int(x) for x in a], dtype=torch.int64).view(
+            *shape) if shape else torch.tensor(int(a[0]))
     return torch.from_flat([float(x) for x in a], shape, dt)
+
+
+def outputs_of(out):
+    if isinstance(out, torch.Tensor):
+        return [out]
+    if hasattr(out, "to_tuple"):
+        out = out.to_tuple()
+    return [o for o in out if isinstance(o, torch.Tensor)]
 
 
 def flat(x):
@@ -136,7 +158,9 @@ def main(argv):
     # benchmarks/dynamo/common.py sets this for every run
     torch.backends.cuda.matmul.allow_tf32 = True
     blob = open(os.path.join(d, "data.bin"), "rb")
-    model = MODELS[key]()
+    build = MODELS[key]
+    model = build(idx["config"]) if getattr(build, "wants_config", False) \
+        else build()
     sd = {}
     for name, entry in idx["params"].items():
         if entry[2] in ("float32", "float64", "float16"):
@@ -144,27 +168,40 @@ def main(argv):
     model.load_state_dict(sd)
     model.eval()
     args = [tensor(blob, e) for e in idx["inputs"]]
-    want, _, _ = read(blob, idx["outputs"][0])
-    want64, wshape, _ = read(blob, idx["outputs_fp64"][0])
+    kwargs = dict((k, tensor(blob, e)) for k, e in idx["kwargs"].items())
+
+    def step():
+        out = model(*args, **kwargs)
+        outputs_of(out)[0].sum().item()
+        return out
 
     t0 = time.time()
-    out = model(*args)
-    out.sum().item()
+    out = step()
     first_ms = (time.time() - t0) * 1e3
     for i in range(warmup):
-        out = model(*args)
-        out.sum().item()
+        out = step()
     launches0 = _metatensor.launch_count()
     times = []
     for i in range(repeat):
         t0 = time.time()
-        out = model(*args)
-        out.sum().item()
+        out = step()
         times.append((time.time() - t0) * 1e3)
     launches = (_metatensor.launch_count() - launches0) / float(repeat)
-    ok, res_err, ref_err, mult = same(
-        flat(out), list(want), list(want64), wshape, idx["tolerance"],
-        idx["cosine"], idx["larger_multiplier"])
+    got = outputs_of(out)
+    if len(got) != len(idx["outputs"]):
+        sys.stderr.write("run_port: %d outputs, the reference has %d\n"
+                         % (len(got), len(idx["outputs"])))
+        return 4
+    ok, res_err, ref_err, mult = True, 0.0, 0.0, 0.0
+    for g, e, e64 in zip(got, idx["outputs"], idx["outputs_fp64"]):
+        want, _, _ = read(blob, e)
+        want64, wshape, _ = read(blob, e64)
+        o, r1, r0, m = same(flat(g), list(want), list(want64), wshape,
+                            idx["tolerance"], idx["cosine"],
+                            idx["larger_multiplier"])
+        ok = ok and o
+        res_err, ref_err, mult = max(res_err, r1), max(ref_err, r0), \
+            max(mult, m)
     # a device allocation that failed fell back to the CPU: whatever was
     # timed is not the GPU run this row claims to be
     cpu = _metatensor.alloc_failed()
