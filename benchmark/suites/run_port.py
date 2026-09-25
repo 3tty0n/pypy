@@ -81,6 +81,31 @@ def pyhpc_eos():
     return m.EquationOfState()
 
 
+def nanogpt():
+    import torchbench_nanogpt as m
+    return m.GPT(m.GPTConfig())
+
+
+def dcgan():
+    import torchbench_dcgan as m
+
+    class _Bench(object):
+        device = "cuda"
+    return m.Discriminator(m.DCGAN(_Bench()))
+
+
+def bert_pytorch(idx):
+    import torchbench_bert_pytorch as m
+    a = idx["attrs"]
+    vocab = idx["params"]["bert.embedding.token.weight"][1][0]
+    bert = m.BERT(vocab, hidden=a["bert.hidden"], n_layers=a["bert.n_layers"],
+                  attn_heads=a["bert.attn_heads"])
+    return m.BERTLM(bert, vocab)
+
+
+bert_pytorch.wants_index = True
+
+
 def alexnet():
     import torchvision_alexnet as m
     return m.AlexNet()
@@ -90,6 +115,28 @@ def vgg(cfg):
     def build():
         import torchvision_vgg as m
         return m.VGG(m.make_layers(m.cfgs[cfg], batch_norm=False))
+    return build
+
+
+def timm_model(module, name, pretrained=True):
+    """timm.create_model as the TIMM runner's _download_model and
+    TorchBench's TimmModel call it, after importing the ported file that
+    registers the entrypoint (upstream's timm.models imports them all).
+    TorchBench builds vovnet39a and vit_giant_patch14_224 without
+    pretrained weights; either way the tensors come from the export."""
+    def build():
+        import importlib
+        import timm
+        importlib.import_module(module)
+        kw = dict(in_chans=3, scriptable=False, num_classes=None,
+                  pretrained=pretrained)
+        try:
+            return timm.create_model(name, drop_rate=0.0, drop_path_rate=None,
+                                     drop_block_rate=None, **kw)
+        except TypeError as e:
+            if "unexpected keyword argument" not in str(e):
+                raise
+            return timm.create_model(name, **kw)
     return build
 
 
@@ -103,6 +150,11 @@ MODELS = {
     ("torchbench", "hf_Bert_large"): hf("hf_bert", "BertForMaskedLM"),
     ("torchbench", "lennard_jones"): lennard_jones,
     ("torchbench", "pyhpc_equation_of_state"): pyhpc_eos,
+    ("torchbench", "pyhpc_isoneutral_mixing"): tv(
+        "torchbench_pyhpc_isoneutral_mixing", "IsoneutralMixing"),
+    ("torchbench", "pyhpc_turbulent_kinetic_energy"): tv(
+        "torchbench_pyhpc_turbulent_kinetic_energy",
+        "TurbulentKineticEnergy"),
     ("torchbench", "hf_Roberta_base"): hf("hf_xlm_roberta",
                                           "XLMRobertaForMaskedLM"),
     ("torchbench", "hf_Albert"): hf("hf_albert", "AlbertForMaskedLM"),
@@ -114,6 +166,26 @@ MODELS = {
     ("huggingface", "AlbertForMaskedLM"): hf("hf_albert",
                                             "AlbertForMaskedLM"),
     ("huggingface", "DistillGPT2"): hf("hf_gpt2", "GPT2LMHeadModel"),
+    ("huggingface", 'ElectraForCausalLM'): hf('hf_electra', 'ElectraForCausalLM'),
+    ("huggingface", 'RobertaForCausalLM'): hf('hf_roberta', 'RobertaForCausalLM'),
+    ("huggingface", 'MegatronBertForCausalLM'): hf('hf_megatron_bert', 'MegatronBertForCausalLM'),
+    ("huggingface", 'LayoutLMForMaskedLM'): hf('hf_layoutlm', 'LayoutLMForMaskedLM'),
+    ("huggingface", 'BartForCausalLM'): hf('hf_bart', 'BartForCausalLM'),
+    ("huggingface", 'MBartForCausalLM'): hf('hf_mbart', 'MBartForCausalLM'),
+    ("huggingface", 'PLBartForCausalLM'): hf('hf_plbart', 'PLBartForCausalLM'),
+    ("huggingface", 'BlenderbotForCausalLM'): hf('hf_blenderbot', 'BlenderbotForCausalLM'),
+    ("huggingface", 'TrOCRForCausalLM'): hf('hf_trocr', 'TrOCRForCausalLM'),
+    ("huggingface", 'OPTForCausalLM'): hf('hf_opt', 'OPTForCausalLM'),
+    ("huggingface", 'XGLMForCausalLM'): hf('hf_xglm', 'XGLMForCausalLM'),
+    ("huggingface", 'GPTNeoForCausalLM'): hf('hf_gpt_neo', 'GPTNeoForCausalLM'),
+    ("huggingface", 'GPTNeoForSequenceClassification'): hf('hf_gpt_neo', 'GPTNeoForSequenceClassification'),
+    ("huggingface", 'GPT2ForSequenceClassification'): hf('hf_gpt2', 'GPT2ForSequenceClassification'),
+    ("huggingface", 'Qwen/Qwen3-0.6B'): hf('hf_qwen3', 'Qwen3ForCausalLM'),
+    ("torchbench", "nanogpt"): nanogpt,
+    ("torchbench", "dcgan"): dcgan,
+    ("torchbench", "phlippe_densenet"): tv("torchbench_phlippe_densenet",
+                                           "DenseNet"),
+    ("torchbench", "BERT_pytorch"): bert_pytorch,
     ("torchbench", "alexnet"): alexnet,
     ("torchbench", "phlippe_resnet"): phlippe_resnet,
     ("torchbench", "vgg16"): vgg("D"),
@@ -134,6 +206,52 @@ MODELS = {
         "torchvision_shufflenetv2", "ShuffleNetV2", [4, 8, 4],
         [24, 116, 232, 464, 1024]),
 }
+
+MODELS.update({
+    ("timm", "deit_tiny_patch16_224.fb_in1k"): timm_model(
+        "timm_deit", "deit_tiny_patch16_224.fb_in1k"),
+    ("timm", "deit_base_distilled_patch16_224"): timm_model(
+        "timm_deit", "deit_base_distilled_patch16_224"),
+    ("timm", "vit_base_patch16_siglip_256"): timm_model(
+        "timm.models.vision_transformer", "vit_base_patch16_siglip_256"),
+    ("timm", "vit_base_patch14_dinov2.lvd142m"): timm_model(
+        "timm.models.vision_transformer", "vit_base_patch14_dinov2.lvd142m"),
+    ("timm", "beit_base_patch16_224"): timm_model(
+        "timm_beit", "beit_base_patch16_224"),
+    ("timm", "repvgg_a2"): timm_model("timm.models.byobnet", "repvgg_a2"),
+    ("timm", "mobilenetv2_100"): timm_model(
+        "timm_efficientnet", "mobilenetv2_100"),
+    ("timm", "mobilenetv3_large_100"): timm_model(
+        "timm_mobilenetv3", "mobilenetv3_large_100"),
+    ("timm", "tf_efficientnet_b0"): timm_model(
+        "timm_efficientnet", "tf_efficientnet_b0"),
+    ("timm", "ghostnet_100"): timm_model("timm_ghostnet", "ghostnet_100"),
+    ("timm", "inception_v3"): timm_model("timm_inception_v3",
+                                         "inception_v3"),
+    ("timm", "adv_inception_v3"): timm_model("timm_inception_v3",
+                                             "adv_inception_v3"),
+    ("timm", "convnextv2_nano.fcmae_ft_in22k_in1k"): timm_model(
+        "timm_convnext", "convnextv2_nano.fcmae_ft_in22k_in1k"),
+    ("timm", "visformer_small"): timm_model("timm_visformer",
+                                            "visformer_small"),
+    ("timm", "dm_nfnet_f0"): timm_model("timm_nfnet", "dm_nfnet_f0"),
+    ("timm", "nfnet_l0"): timm_model("timm_nfnet", "nfnet_l0"),
+    ("timm", "mobilevit_s"): timm_model("timm_mobilevit", "mobilevit_s"),
+    ("timm", "swin_base_patch4_window7_224"): timm_model(
+        "timm_swin_transformer", "swin_base_patch4_window7_224"),
+    ("torchbench", "timm_vision_transformer"): timm_model(
+        "timm.models.vision_transformer", "vit_small_patch16_224"),
+    ("torchbench", "timm_vision_transformer_large"): timm_model(
+        "timm.models.vision_transformer", "vit_giant_patch14_224",
+        pretrained=False),
+    ("torchbench", "timm_regnet"): timm_model("timm_regnet", "regnety_120"),
+    ("torchbench", "timm_resnest"): timm_model("timm_resnest", "resnest14d"),
+    ("torchbench", "timm_vovnet"): timm_model("timm_vovnet", "vovnet39a",
+                                              pretrained=False),
+    ("torchbench", "timm_efficientnet"): timm_model("timm_efficientnet",
+                                                    "efficientnet_b0"),
+    ("torchbench", "timm_nfnet"): timm_model("timm_nfnet", "dm_nfnet_f0"),
+})
 
 TYPECODE = {"float32": "f", "float64": "d", "int64": "l", "int32": "i"}
 
@@ -202,8 +320,12 @@ def main(argv):
     torch.backends.cuda.matmul.allow_tf32 = True
     blob = open(os.path.join(d, "data.bin"), "rb")
     build = MODELS[key]
-    model = build(idx["config"]) if getattr(build, "wants_config", False) \
-        else build()
+    if getattr(build, "wants_index", False):
+        model = build(idx)
+    elif getattr(build, "wants_config", False):
+        model = build(idx["config"])
+    else:
+        model = build()
     sd = {}
     for name, entry in idx["params"].items():
         if entry[2] in ("float32", "float64", "float16"):
@@ -226,6 +348,7 @@ def main(argv):
     launches0 = _metatensor.launch_count()
     cpu0 = _metatensor.cpu_fallbacks() if hasattr(_metatensor,
                                                   "cpu_fallbacks") else 0
+    host0 = torch.host_writes()
     times = []
     for i in range(repeat):
         t0 = time.time()
@@ -239,7 +362,7 @@ def main(argv):
     # what was timed is not the GPU run this row claims to be
     cpu = _metatensor.alloc_failed() or (
         hasattr(_metatensor, "cpu_fallbacks") and
-        _metatensor.cpu_fallbacks() > cpu0)
+        _metatensor.cpu_fallbacks() > cpu0) or torch.host_writes() > host0
     print("port suite=%s model=%s batch=%s median_ms=%.3f min_ms=%.3f "
           "first_ms=%.1f launches=%.1f cpu_fallback=%d"
           % (idx["suite"], idx["model"], idx["batch"], median(times),

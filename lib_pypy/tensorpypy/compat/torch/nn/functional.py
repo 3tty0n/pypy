@@ -167,19 +167,34 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
     [B, H, S, D] view of [B, S, H, D] storage: the transpose(1, 2) callers
     apply next makes it dense without a copy."""
     import math
+    dense = torch._all(t.perm is None and t.col is None and len(t.shape) == 4
+                       for t in (query, key, value))
     for t in (query, key, value):
-        if not torch._same(t.perm, _BSHD):
+        if not dense and not torch._same(t.perm, _BSHD):
             raise NotImplementedError(
                 "attention over a %s layout" % (t.perm,))
     b, h, s, d = query.shape
+    if torch._same(key.shape, value.shape) and len(key.shape) == 4 and \
+            key.shape[0] == b and key.shape[1] == h and key.shape[3] == d \
+            and key.shape[2] != s and not is_causal:
+        scores = torch.matmul(query, key.transpose(-2, -1)) * (
+            scale if scale is not None else 1.0 / math.sqrt(d))
+        if attn_mask is not None:
+            scores = scores + attn_mask
+        return torch.matmul(scores.softmax(-1), value)
     if not (torch._same(key.shape, query.shape) and
             torch._same(value.shape, query.shape)):
         raise NotImplementedError("attention with k/v shaped %s, q %s"
                                   % (list(key.shape), list(query.shape)))
-    q, qo = _rows(query, b * s, h * d)
-    k, ko = _rows(key, b * s, h * d)
-    v, vo = _rows(value, b * s, h * d)
-    scores = Tensor(q.attn_scores(k, h, h * d, qo, ko, b), (b, h, s, s))
+    if b > 1 and b * h * s * s > _SCORES_MAX:
+        return _attention_by_batch(query, key, value, attn_mask, is_causal,
+                                   scale)
+    rows, ld, hh, bb = (b * h * s, d, 1, b * h) if dense else \
+        (b * s, h * d, h, b)
+    q, qo = _rows(query, rows, ld)
+    k, ko = _rows(key, rows, ld)
+    v, vo = _rows(value, rows, ld)
+    scores = Tensor(q.attn_scores(k, hh, ld, qo, ko, bb), (b, h, s, s))
     scores = scores * (scale if scale is not None else 1.0 / math.sqrt(d))
     if is_causal:
         scores = scores + _causal(s, query.dtype)
@@ -188,9 +203,26 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
             raise NotImplementedError("boolean attention mask")
         scores = scores + attn_mask
     p = scores.softmax(-1)
-    ctx = p.dense().raw.reshape([b * h * s, s]).attn_context(v, h, h * d, vo,
-                                                             b)
-    return Tensor(ctx, (b, h, s, d), _BSHD)
+    ctx = p.dense().raw.reshape([b * h * s, s]).attn_context(v, hh, ld, vo,
+                                                             bb)
+    return Tensor(ctx, (b, h, s, d), None if dense else _BSHD)
+
+
+_SCORES_MAX = 1 << 28
+
+
+def _attention_by_batch(query, key, value, attn_mask, is_causal, scale):
+    b, h, s, d = query.shape
+    step = max(1, _SCORES_MAX // (h * s * s))
+    out = []
+    for i in range(0, b, step):
+        m = attn_mask
+        if m is not None and len(m.shape) == 4 and m.shape[0] == b:
+            m = m[i:i + step]
+        out.append(scaled_dot_product_attention(
+            query[i:i + step], key[i:i + step], value[i:i + step], m,
+            is_causal=is_causal, scale=scale))
+    return torch.cat(out, 0)
 
 
 def _rows(t, rows, width):
@@ -297,3 +329,77 @@ def dropout(x, p=0.5, training=False, inplace=False):
 
 def _transpose2(x):
     return _host_permute(x, (1, 0))
+
+
+import math  # noqa: E402
+
+_bn_rows = {}
+
+
+def batch_norm(x, running_mean, running_var, weight=None, bias=None,
+               training=False, momentum=0.1, eps=1e-5):
+    """Eval batch norm, x * scale + shift per channel with scale and shift
+    from the running statistics, over the [N*C, H*W] view as BatchNorm2d
+    runs it.  The per-row vectors are made on the host once per set of
+    statistics and batch size; the statistics are the checkpoint's."""
+    if training or running_mean is None:
+        return _batch_norm_stats(x, running_mean, running_var, weight, bias,
+                                 eps)
+    n, c = x.shape[0], x.shape[1]
+    key = (id(running_var), n)
+    r = _bn_rows.get(key)
+    if r is None:
+        v = running_var.tolist()
+        m = running_mean.tolist()
+        g = weight.tolist() if weight is not None else [1.0] * c
+        b = bias.tolist() if bias is not None else [0.0] * c
+        scale = [g[i] / math.sqrt(v[i] + eps) for i in range(c)]
+        shift = [b[i] - m[i] * scale[i] for i in range(c)]
+        r = (torch.from_flat(scale * n, [n * c, 1], x.dtype),
+             torch.from_flat(shift * n, [n * c, 1], x.dtype), running_var)
+        _bn_rows[key] = r
+    y = x.dense().raw.reshape([n * c, x.numel() // (n * c)]).mul(
+        r[0].raw).add(r[1].raw)
+    return Tensor(y, x.shape)
+
+
+def _batch_norm_stats(x, running_mean, running_var, weight, bias, eps):
+    """Batch norm over the batch's own statistics, for a batch of one
+    ([1, C, *]: per channel over the rest, the biased variance, as torch
+    normalises in training mode): weight standardisation reads a filter
+    this way.  Running statistics to update, or a larger batch (a
+    reduction across the batch dim), raise NotImplementedError."""
+    if running_mean is not None or running_var is not None or \
+            x.shape[0] != 1:
+        raise NotImplementedError("batch_norm with batch statistics over %s"
+                                  % (list(x.shape),))
+    c = x.shape[1]
+    x2 = x.dense().view(c, x.numel() // c)
+    d = x2 - x2.mean(-1, keepdim=True)
+    y = d * ((d * d).mean(-1, keepdim=True) + eps).rsqrt()
+    if weight is not None:
+        y = y * weight.view(c, 1)
+    if bias is not None:
+        y = y + bias.view(c, 1)
+    return y.view(x.shape)
+
+
+def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    """F.conv2d with a weight the forward computes (a standardised filter):
+    the [C/g*kh*kw, O/g] per-group matrix the engine's convolution reads is
+    one device transpose of it per call, where nn.Conv2d makes it once at
+    load time."""
+    if isinstance(padding, str):
+        raise NotImplementedError("padding=%r" % padding)
+    o, cg, kh, kw = weight.shape
+    per = cg * kh * kw
+    filt = weight.view(groups, o // groups, per).permute(0, 2, 1).dense()
+    n, c, h, w = x.shape
+    (sh, sw), (ph, pw), (dh, dw) = _pair(stride), _pair(padding), \
+        _pair(dilation)
+    y = x.dense().raw.conv2d(filt.raw.reshape([groups * per, o // groups]),
+                             c, h, w, bias.raw if bias is not None else None,
+                             kh, sh, ph, groups, kw, sw, pw, dh, dw)
+    oh = (h + 2 * ph - dh * (kh - 1) - 1) // sh + 1
+    ow = (w + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+    return Tensor(y, (n, o, oh, ow))

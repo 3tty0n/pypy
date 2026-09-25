@@ -22,6 +22,28 @@ class Parameter(object):
     def __init__(self, *shape):
         self.shape = shape
 
+    @property
+    def data(self):
+        return self
+
+    def size(self, d=None):
+        return self.shape if d is None else self.shape[d]
+
+    def numel(self):
+        return torch._numel(self.shape)
+
+    def __getitem__(self, i):
+        if not isinstance(i, int):
+            raise NotImplementedError("Parameter placeholder indexed %r"
+                                      % (i,))
+        return Parameter(*self.shape[1:])
+
+    def _init_op(self, *args, **kwargs):
+        return self
+
+    mul_ = div_ = add_ = zero_ = fill_ = copy_ = normal_ = uniform_ = \
+        _init_op
+
 
 class Module(object):
     training = False
@@ -57,6 +79,24 @@ class Module(object):
         for m in self.children():
             for x in m.modules():
                 yield x
+
+    def named_modules(self, memo=None, prefix='', remove_duplicate=True):
+        if memo is None:
+            memo = set()
+        if remove_duplicate and id(self) in memo:
+            return
+        memo.add(id(self))
+        yield prefix, self
+        for name, m in self.named_children():
+            sub = prefix + ('.' if prefix else '') + name
+            for x in m.named_modules(memo, sub, remove_duplicate):
+                yield x
+
+    def apply(self, fn):
+        for m in self.children():
+            m.apply(fn)
+        fn(self)
+        return self
 
     def _child(self, name):
         return getattr(self, name)
@@ -121,6 +161,12 @@ class Sequential(Module):
 
     def _child(self, name):
         return self._mods[self._names.index(name)]
+
+    def __getattr__(self, name):
+        if not name.startswith("_") and name in self.__dict__.get(
+                "_names", ()):
+            return self._child(name)
+        raise AttributeError(name)
 
     def named_children(self):
         return iter(zip(self._names, self._mods))
@@ -216,6 +262,14 @@ class GELU(Module):
 class Tanh(Module):
     def forward(self, x):
         return x.tanh()
+
+
+class Softmax(Module):
+    def __init__(self, dim=None):
+        self.dim = dim
+
+    def forward(self, x):
+        return x.softmax(self.dim)
 
 
 class Sigmoid(Module):
@@ -381,6 +435,9 @@ class Conv2d(Module):
                                 *self.kernel_size)
         self.bias = Parameter(out_channels) if bias else None
 
+    def reset_parameters(self):
+        pass
+
     def _prepare(self):
         if self.padding_mode != "zeros":
             raise NotImplementedError("%s padding" % self.padding_mode)
@@ -478,6 +535,9 @@ class BatchNorm2d(Module):
                  track_running_stats=True, device=None, dtype=None):
         self.num_features = num_features
         self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = track_running_stats
         self.weight = Parameter(num_features)
         self.bias = Parameter(num_features)
         self._rows = {}
@@ -597,3 +657,13 @@ class GroupNorm(Module):
 
     def forward(self, x):
         raise NotImplementedError("GroupNorm")
+
+
+class BatchNorm1d(Module):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True,
+                 track_running_stats=True, device=None, dtype=None):
+        self.weight = Parameter(num_features)
+        self.bias = Parameter(num_features)
+
+    def forward(self, x):
+        raise NotImplementedError("BatchNorm1d")

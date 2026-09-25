@@ -2,7 +2,7 @@
 port that builds one has left the measured path."""
 
 
-class Cache(object):
+class Cache(object):  # noqa: E302
     def __init__(self, *args, **kwargs):
         raise NotImplementedError("%s: KV cache" % type(self).__name__)
 

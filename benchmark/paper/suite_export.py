@@ -17,6 +17,8 @@ index.json:
   inputs  [[byte offset, shape, dtype], ...]   positional, in call order
   kwargs  {name: [byte offset, shape, dtype]}
   config  a transformers model's config, as its constructor reads it
+  attrs   the plain scalar attributes of the model and its direct children
+          (a model built from parsed arguments records them there)
 
 The outputs are not stored: suite_check.py recomputes the eager and float64
 references through the runner and judges the port's outputs with the
@@ -51,6 +53,18 @@ def config_of(model):
     return json.loads(json.dumps(d, default=str))
 
 
+def attrs_of(model):
+    out = {}
+    for name, m in model.named_modules():
+        if name.count(".") > 0:
+            continue
+        for k, v in vars(m).items():
+            if not k.startswith("_") and isinstance(v, (bool, int, float,
+                                                        str)):
+                out[(name + "." if name else "") + k] = v
+    return out
+
+
 def main(argv):
     import torch
     suite, name, out = argv[1], argv[2], os.path.abspath(argv[3])
@@ -83,7 +97,7 @@ def main(argv):
     json.dump({"suite": suite, "model": name, "batch": batch,
                "torch": torch.__version__, "source": revision(src),
                "params": params, "inputs": pos, "kwargs": kw,
-               "config": config_of(model)},
+               "config": config_of(model), "attrs": attrs_of(model)},
               open(os.path.join(out, "index.json"), "w"), indent=1,
               sort_keys=True)
     print("wrote %s: %d params, %d inputs, %.1f MB" % (
