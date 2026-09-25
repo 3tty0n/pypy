@@ -294,6 +294,31 @@ def _emit_consts(lines, kernel, nreal, T):
     return True
 
 
+def _row_reductions(kernel, modes, half):
+    """Which values are row reductions, or [] if the chain has a reduction
+    row mode cannot run."""
+    nodes = kernel.nodes
+    nin = nvals(kernel)
+    last = len(nodes) - 1
+    isred = [False] * (nin + len(nodes))
+    for k in range(len(nodes)):
+        node = nodes[k]
+        if not is_reduction(node.opcode):
+            continue
+        if node.p == 1:
+            if k != last and modes[nin + k] != 3:
+                return []
+        elif node.p == AXIS_ALL:
+            if k != last or node.opcode != SUM or half:
+                return []
+        else:
+            return []
+        isred[nin + k] = True
+    for k in range(len(kernel.outputs)):
+        if isred[kernel.outputs[k]]:
+            return []
+    return isred
+
 def to_ttir_row(kernel, name, modes):
     nodes = kernel.nodes
     nreal = kernel.ninputs
@@ -307,23 +332,9 @@ def to_ttir_row(kernel, name, modes):
     C = COMP_TYPE[dt]
     half = S != C
     T, TS, P, I32, I64, I1 = _tile_types(BLOCK, S, C)
-    isred = [False] * (nin + len(nodes))
-    for k in range(len(nodes)):
-        node = nodes[k]
-        if not is_reduction(node.opcode):
-            continue
-        if node.p == 1:
-            if k != last and modes[nin + k] != 3:
-                return ''
-        elif node.p == AXIS_ALL:
-            if k != last or node.opcode != SUM or half:
-                return ''
-        else:
-            return ''
-        isred[nin + k] = True
-    for k in range(len(kernel.outputs)):
-        if isred[kernel.outputs[k]]:
-            return ''
+    isred = _row_reductions(kernel, modes, half)
+    if not isred:
+        return ''
     omodes = out_modes(kernel)
     if len(omodes) != len(kernel.outputs):
         return ''
@@ -449,6 +460,307 @@ def to_ttir_row(kernel, name, modes):
         lines.append('    tt.store %%qo%d, %s, %%mask : %s'
                      % (k, _trunc(lines, 'sx%d' % k, kernel.outputs[k], half,
                                   T, TS), P))
+    lines.append('    tt.return')
+    lines.append('  }')
+    lines.append('}')
+    return '\n'.join(lines) + '\n'
+
+def _cone(kernel, glob, need, v):
+    if v < 0 or glob[v] or need[v]:
+        return
+    need[v] = True
+    nin = nvals(kernel)
+    if v >= nin:
+        node = kernel.nodes[v - nin]
+        _cone(kernel, glob, need, node.a)
+        _cone(kernel, glob, need, node.b)
+
+
+def _tname(glob, v, ph):
+    if v < 0:
+        return ''
+    if glob[v]:
+        return '%%v%d' % v
+    return '%%w%d_%d' % (v, ph)
+
+
+def _tile_reduce(lines, v, mask, val, init, combine, T, C, I1):
+    lines.append('    %%rm%d = arith.select %s, %s, %s : %s, %s'
+                 % (v, mask, val, init, I1, T))
+    lines.append('    %%rs%d = "tt.reduce"(%%rm%d) <{axis = 0 : i32}> ({'
+                 % (v, v))
+    lines.append('    ^bb0(%%x%d: %s, %%y%d: %s):' % (v, C, v, C))
+    lines.append('      %%rr%d = arith.%s %%x%d, %%y%d : %s'
+                 % (v, combine, v, v, C))
+    lines.append('      tt.reduce.return %%rr%d : %s' % (v, C))
+    lines.append('    }) : (%s) -> %s' % (T, C))
+
+
+def _online_pairs(kernel, walks):
+    """pair[ph] is the value of a sum of exp(y - m) that can share walk
+    ph, the row max m of y (softmax, log-sum-exp), or -1."""
+    nodes = kernel.nodes
+    nin = nvals(kernel)
+    last = len(nodes) - 1
+    pair = [-1] * len(walks)
+    for ph in range(len(walks) - 1):
+        k = walks[ph]
+        k2 = walks[ph + 1]
+        m = nodes[k]
+        sm = nodes[k2]
+        if (m.opcode != MAXR or sm.opcode != SUM or sm.p != 1 or
+                k2 == last or sm.a < nin):
+            continue
+        e = nodes[sm.a - nin]
+        if e.opcode != EXP or e.a < nin:
+            continue
+        d = nodes[e.a - nin]
+        if (d.opcode == SUB and d.p == BC_R_COL and d.a == m.a and
+                d.b == nin + k and (ph == 0 or pair[ph - 1] < 0)):
+            pair[ph] = nin + k2
+    return pair
+
+
+def to_ttir_row_tiled(kernel, name, modes):
+    """Row mode for rows wider than one tile.  One program still takes one
+    row, but walks it a tile at a time: once per row reduction, carrying the
+    partial result, and once more for the stores (the last reduction's walk
+    when the chain ends in one).  Each walk recomputes the elementwise values
+    it needs from the inputs and the reductions already done."""
+    nodes = kernel.nodes
+    nreal = kernel.ninputs
+    nin = nvals(kernel)
+    last = len(nodes) - 1
+    if last < 0:
+        return ''
+    BLOCK = config.wide
+    dt = kernel.dtype
+    S = STORE_TYPE[dt]
+    C = COMP_TYPE[dt]
+    half = S != C
+    T, TS, P, I32, I64, I1 = _tile_types(BLOCK, S, C)
+    isred = _row_reductions(kernel, modes, half)
+    if not isred:
+        return ''
+    omodes = out_modes(kernel)
+    if len(omodes) != len(kernel.outputs):
+        return ''
+    params = ['%%in%d: !tt.ptr<%s>' % (i, S) for i in range(nreal)]
+    params.append('%%out: !tt.ptr<%s>' % S)
+    for k in range(len(kernel.outputs)):
+        params.append('%%out%d: !tt.ptr<%s>' % (k, S))
+    lines = ['module {',
+             '  tt.func public @%s(%s, %%n: i64, %%c: i64) '
+             'attributes {noinline = false} {' % (name, ', '.join(params)),
+             '    %%zero = arith.constant dense<0.0> : %s' % T,
+             '    %%one = arith.constant dense<1.0> : %s' % T,
+             '    %%ninf = arith.constant dense<%s> : %s' % (COMP_NEG_INF[dt],
+                                                          T),
+             '    %pid = tt.get_program_id x : i32',
+             '    %rowi = arith.extsi %pid : i32 to i64',
+             '    %%range = tt.make_range {end = %d : i32, start = 0 : i32} '
+             ': %s' % (BLOCK, I32),
+             '    %%ar = arith.extsi %%range : %s to %s' % (I32, I64),
+             '    %%cs = tt.splat %%c : i64 -> %s' % I64,
+             '    %base = arith.muli %rowi, %c : i64',
+             '    %%bases = tt.splat %%base : i64 -> %s' % I64,
+             '    %c32 = arith.trunci %c : i64 to i32',
+             '    %tlo = arith.constant 0 : i32',
+             '    %%tb = arith.constant %d : i32' % BLOCK,
+             '    %%sone = arith.constant 1.0 : %s' % C]
+    if half:
+        lines.append('    %%zeros = arith.constant dense<0.0> : %s' % TS)
+    if not _emit_consts(lines, kernel, nreal, T):
+        return ''
+    glob = [False] * (nin + len(nodes))
+    for i in range(nreal, nin):
+        glob[i] = True
+    for i in range(nreal):
+        if modes[i] == 2 or modes[i] == 3:
+            glob[i] = True
+            src = '%%in%d' % i
+            if modes[i] == 3:
+                lines.append('    %%sp%d = tt.addptr %%in%d, %%pid : '
+                             '!tt.ptr<%s>, i32' % (i, i, S))
+                src = '%%sp%d' % i
+            lines.append('    %%sv%d = tt.load %s : !tt.ptr<%s>' % (i, src, S))
+            sv = '%%sv%d' % i
+            if half:
+                lines.append('    %%se%d = arith.extf %s : %s to %s'
+                             % (i, sv, S, C))
+                sv = '%%se%d' % i
+            lines.append('    %%v%d = tt.splat %s : %s -> %s' % (i, sv, C, T))
+        else:
+            lines.append('    %%p%d = tt.splat %%in%d : !tt.ptr<%s> -> %s'
+                         % (i, i, S, P))
+    if not isred[nin + last]:
+        lines.append('    %%po = tt.splat %%out : !tt.ptr<%s> -> %s' % (S, P))
+    for k in range(len(kernel.outputs)):
+        lines.append('    %%po%d = tt.splat %%out%d : !tt.ptr<%s> -> %s'
+                     % (k, k, S, P))
+        if omodes[k] == 2:
+            lines.append('    %%zo%d = arith.constant dense<0> : %s' % (k, I64))
+        elif omodes[k] == 3:
+            lines.append('    %%ro%d = tt.splat %%rowi : i64 -> %s' % (k, I64))
+    walks = []
+    for k in range(len(nodes)):
+        if isred[nin + k]:
+            walks.append(k)
+    if not isred[nin + last]:
+        walks.append(last)
+    pair = _online_pairs(kernel, walks)
+    for ph in range(len(walks)):
+        if ph > 0 and pair[ph - 1] >= 0:
+            continue
+        k = walks[ph]
+        v = nin + k
+        node = nodes[k]
+        red = isred[v]
+        final = k == last
+        need = [False] * (nin + len(nodes))
+        _cone(kernel, glob, need, node.a if red else v)
+        if final:
+            for j in range(len(kernel.outputs)):
+                _cone(kernel, glob, need, kernel.outputs[j])
+        maxr = red and node.opcode == MAXR
+        v2 = pair[ph]
+        if v2 >= 0:
+            lines.append('    %%ri%d = arith.constant %s : %s'
+                         % (v, COMP_NEG_INF[dt], C))
+            lines.append('    %%ri%d = arith.constant 0.0 : %s' % (v2, C))
+            lines.append('    %%r%d:2 = scf.for %%t%d = %%tlo to %%c32 step '
+                         '%%tb iter_args(%%a%d = %%ri%d, %%a%d = %%ri%d) -> '
+                         '(%s, %s) : i32 {' % (v, ph, v, v, v2, v2, C, C))
+        elif red:
+            init = COMP_NEG_INF[dt] if maxr else '0.0'
+            lines.append('    %%ri%d = arith.constant %s : %s' % (v, init, C))
+            lines.append('    %%r%d = scf.for %%t%d = %%tlo to %%c32 step %%tb '
+                         'iter_args(%%a%d = %%ri%d) -> (%s) : i32 {'
+                         % (v, ph, v, v, C))
+        else:
+            lines.append('    scf.for %%t%d = %%tlo to %%c32 step %%tb : i32 {'
+                         % ph)
+        lines.append('    %%t64_%d = arith.extsi %%t%d : i32 to i64' % (ph, ph))
+        lines.append('    %%ts_%d = tt.splat %%t64_%d : i64 -> %s'
+                     % (ph, ph, I64))
+        col = '%%col_%d' % ph
+        lines.append('    %s = arith.addi %%ar, %%ts_%d : %s' % (col, ph, I64))
+        mask = '%%m_%d' % ph
+        lines.append('    %s = arith.cmpi slt, %s, %%cs : %s'
+                     % (mask, col, I64))
+        offs = '%%o_%d' % ph
+        lines.append('    %s = arith.addi %%bases, %s : %s' % (offs, col, I64))
+        for i in range(nreal):
+            if not need[i]:
+                continue
+            q = '%%q%d_%d' % (i, ph)
+            lines.append('    %s = tt.addptr %%p%d, %s : %s, %s'
+                         % (q, i, col if modes[i] == 1 else offs, P, I64))
+            dst = _tname(glob, i, ph)
+            if half:
+                lines.append('    %%rv%d_%d = tt.load %s, %s, %%zeros : %s'
+                             % (i, ph, q, mask, P))
+                lines.append('    %s = arith.extf %%rv%d_%d : %s to %s'
+                             % (dst, i, ph, TS, T))
+            else:
+                lines.append('    %s = tt.load %s, %s, %%zero : %s'
+                             % (dst, q, mask, P))
+        for j in range(len(nodes)):
+            w = nin + j
+            if not need[w]:
+                continue
+            nj = nodes[j]
+            if not _ew(lines, nj.opcode, nj.p, _tname(glob, w, ph),
+                       '%%c%d_%d' % (w, ph), _tname(glob, nj.a, ph),
+                       _tname(glob, nj.b, ph), T, I1):
+                return ''
+        if final:
+            for j in range(len(kernel.outputs)):
+                ooffs = offs
+                if omodes[j] == 1:
+                    ooffs = col
+                elif omodes[j] == 2:
+                    ooffs = '%%zo%d' % j
+                elif omodes[j] == 3:
+                    ooffs = '%%ro%d' % j
+                val = _tname(glob, kernel.outputs[j], ph)
+                if half:
+                    lines.append('    %%sx%d_%d = arith.truncf %s : %s to %s'
+                                 % (j, ph, val, T, TS))
+                    val = '%%sx%d_%d' % (j, ph)
+                lines.append('    %%qo%d_%d = tt.addptr %%po%d, %s : %s, %s'
+                             % (j, ph, j, ooffs, P, I64))
+                lines.append('    tt.store %%qo%d_%d, %s, %s : %s'
+                             % (j, ph, val, mask, P))
+        if not red:
+            val = _tname(glob, v, ph)
+            if half:
+                lines.append('    %%so_%d = arith.truncf %s : %s to %s'
+                             % (ph, val, T, TS))
+                val = '%%so_%d' % ph
+            lines.append('    %%qo_%d = tt.addptr %%po, %s : %s, %s'
+                         % (ph, offs, P, I64))
+            lines.append('    tt.store %%qo_%d, %s, %s : %s'
+                         % (ph, val, mask, P))
+            lines.append('    }')
+            continue
+        y = _tname(glob, node.a, ph)
+        combine = 'maximumf' if maxr else 'addf'
+        _tile_reduce(lines, v, mask, y, '%ninf' if maxr else '%zero',
+                     combine, T, C, I1)
+        if v2 >= 0:
+            lines.append('    %%mn%d = arith.maximumf %%a%d, %%rs%d : %s'
+                         % (v, v, v, C))
+            lines.append('    %%eq%d = arith.cmpf oeq, %%a%d, %%mn%d : %s'
+                         % (v, v, v, C))
+            lines.append('    %%dd%d = arith.subf %%a%d, %%mn%d : %s'
+                         % (v, v, v, C))
+            lines.append('    %%xe%d = math.exp %%dd%d : %s' % (v, v, C))
+            lines.append('    %%al%d = arith.select %%eq%d, %%sone, %%xe%d : '
+                         '%s' % (v, v, v, C))
+            lines.append('    %%ms%d = tt.splat %%mn%d : %s -> %s'
+                         % (v, v, C, T))
+            lines.append('    %%sb%d = arith.subf %s, %%ms%d : %s'
+                         % (v, y, v, T))
+            lines.append('    %%ex%d = math.exp %%sb%d : %s' % (v, v, T))
+            _tile_reduce(lines, v2, mask, '%%ex%d' % v, '%zero', 'addf', T,
+                         C, I1)
+            lines.append('    %%sc%d = arith.mulf %%a%d, %%al%d : %s'
+                         % (v2, v2, v, C))
+            lines.append('    %%ac%d = arith.addf %%sc%d, %%rs%d : %s'
+                         % (v2, v2, v2, C))
+            lines.append('    scf.yield %%mn%d, %%ac%d : %s, %s'
+                         % (v, v2, C, C))
+            lines.append('    }')
+            glob[v] = True
+            glob[v2] = True
+            lines.append('    %%v%d = tt.splat %%r%d#0 : %s -> %s'
+                         % (v, v, C, T))
+            lines.append('    %%v%d = tt.splat %%r%d#1 : %s -> %s'
+                         % (v2, v, C, T))
+            continue
+        lines.append('    %%ac%d = arith.%s %%a%d, %%rs%d : %s'
+                     % (v, combine, v, v, C))
+        lines.append('    scf.yield %%ac%d : %s' % (v, C))
+        lines.append('    }')
+        glob[v] = True
+        lines.append('    %%v%d = tt.splat %%r%d : %s -> %s' % (v, v, C, T))
+        if not final:
+            continue
+        sv = '%%r%d' % v
+        if half:
+            lines.append('    %%rt%d = arith.truncf %s : %s to %s'
+                         % (v, sv, C, S))
+            sv = '%%rt%d' % v
+        if node.p == 1:
+            lines.append('    %%pr = tt.addptr %%out, %%pid : !tt.ptr<%s>, i32'
+                         % S)
+            lines.append('    tt.store %%pr, %s : !tt.ptr<%s>' % (sv, S))
+        else:
+            lines.append('    %true = arith.constant true')
+            lines.append('    %%o = tt.atomic_rmw fadd, acq_rel, gpu, %%out, '
+                         '%s, %%true : (!tt.ptr<%s>, %s, i1) -> %s'
+                         % (sv, S, S, S))
     lines.append('    tt.return')
     lines.append('  }')
     lines.append('}')

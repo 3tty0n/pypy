@@ -2552,6 +2552,65 @@ class TestElementwiseFusion(LLJitMixin):
         assert len(set(kernels.kernel_cache.kernels) - before) == 1
 
 
+def _mk_kernel(ninputs, nodes, dt, n, cols, consts=(), outputs=()):
+    from rpython.rtyper.lltypesystem import lltype
+    k = kernels.new_kernel(ninputs, len(nodes), dt)
+    for i, (op, a, b, p) in enumerate(nodes):
+        kernels.set_node(k, i, op, a, b, p)
+    k.n = n
+    k.cols = cols
+    if consts:
+        k.consts = lltype.malloc(core.HOSTARRAY, len(consts))
+        for i, c in enumerate(consts):
+            k.consts[i] = c
+    if outputs:
+        k.outputs = lltype.malloc(core.SHAPEARRAY, len(outputs))
+        for i, o in enumerate(outputs):
+            k.outputs[i] = o
+    return k
+
+
+def _row_chains():
+    S, M, B = core.SUM, core.MAXR, core.BINARY
+    softmax = (1, [(M, 0, -1, 1), (core.SUB, 0, 1, core.BC_R_COL),
+                   (core.EXP, 2, -1, 0), (S, 3, -1, 1),
+                   (core.DIV, 3, 4, core.BC_R_COL)], (), ())
+    logsoftmax = (1, [(M, 0, -1, 1), (core.SUB, 0, 1, core.BC_R_COL),
+                      (core.EXP, 2, -1, 0), (S, 3, -1, 1),
+                      (core.UNARY, 4, -1, core.U_LOG),
+                      (core.SUB, 2, 5, core.BC_R_COL)], (), ())
+    layernorm = (3, [(S, 0, -1, 1), (core.MUL, 5, 3, core.BC_R_SCALAR),
+                     (core.SUB, 0, 6, core.BC_R_COL), (core.MUL, 7, 7, 0),
+                     (S, 8, -1, 1), (core.MUL, 9, 3, core.BC_R_SCALAR),
+                     (core.ADD, 10, 4, core.BC_R_SCALAR), (core.SQRT, 11, -1, 0),
+                     (core.DIV, 7, 12, core.BC_R_COL),
+                     (core.MUL, 13, 1, core.BC_R_ROW),
+                     (core.ADD, 14, 2, core.BC_R_ROW)], (1e-3, 1e-5), ())
+    rowsum_out = (2, [(core.MUL, 0, 1, core.BC_R_ROW),
+                      (B, 2, 0, core.NPARAMS * core.B_MAX), (S, 3, -1, 1)],
+                  (), (2,))
+    gelu_sum = (1, [(core.UNARY, 0, -1, core.U_TANH), (core.MUL, 1, 0, 0),
+                    (S, 2, -1, core.AXIS_ALL)], (), (1,))
+    return [softmax, logsoftmax, layernorm, rowsum_out, gelu_sum]
+
+
+def _ttir_cases_rows():
+    for dt in range(3):
+        for n, cols in [(0, 0), (8192, 64), (100, 10), (0, 64), (0, 3000),
+                        (65536, 30522), (0, 9000)]:
+            for ninputs, nodes, consts, outputs in _row_chains():
+                yield _mk_kernel(ninputs, nodes, dt, n, cols, consts,
+                                 outputs)
+            for fn in range(len(core.UNARY_NAMES)):
+                yield _mk_kernel(1, [(core.UNARY, 0, -1, fn),
+                                     (core.MAXR, 1, -1, 1)], dt, n, cols)
+            for fn in range(len(core.BINARY_NAMES)):
+                for bc in range(core.NPARAMS):
+                    yield _mk_kernel(2, [(core.BINARY, 0, 1,
+                                          bc + core.NPARAMS * fn),
+                                         (core.SUM, 2, -1, 1)], dt, n, cols)
+
+
 def _ttir_cases():
     from rpython.rtyper.lltypesystem import lltype
     nold = core.GATHER + 1
@@ -3013,3 +3072,209 @@ class TestDataMovementJit(LLJitMixin):
         expect = f(3)
         res = self.meta_interp(f, [3])
         assert abs(res - expect) < 1e-9 * abs(expect)
+
+
+def test_ttir_of_row_kernels_is_unchanged():
+    import hashlib
+    from rpython.metatensor import ttir
+    h = hashlib.sha1()
+    count = 0
+    for k in _ttir_cases_rows():
+        src = ttir.to_ttir(k, 'kname')
+        h.update('%s\t%s\n' % (kernels.kernel_key(k),
+                                hashlib.sha1(src).hexdigest()))
+        count += 1
+    assert count == 1911
+    assert h.hexdigest() == 'e65b24147ed48b1c2345d8013ff678cd3d7f3439'
+
+
+def _ref_rows(name, vals, rows, cols, gamma=None, beta=None):
+    out = []
+    extra = []
+    for r in range(rows):
+        x = vals[r * cols:(r + 1) * cols]
+        if name == 'softmax' or name == 'logsoftmax':
+            m = max(x)
+            s = sum([math.exp(v - m) for v in x])
+            if name == 'softmax':
+                out.extend([math.exp(v - m) / s for v in x])
+            else:
+                out.extend([v - m - math.log(s) for v in x])
+        elif name == 'layernorm':
+            mean = sum(x) * 1e-3
+            d = [v - mean for v in x]
+            sd = math.sqrt(sum([v * v for v in d]) * 1e-3 + 1e-5)
+            out.extend([d[j] / sd * gamma[j] + beta[j] for j in range(cols)])
+        else:
+            prod = [x[j] * gamma[j] for j in range(cols)]
+            extra.extend(prod)
+            out.append(sum([max(p, v) for p, v in zip(prod, x)]))
+    return out, extra
+
+
+class TestWideRows(object):
+
+    def teardown_method(self, meth):
+        core.note_dtype(core.F64)
+
+    def _gpu(self):
+        import os
+        return 'RTENSOR_CPU' not in os.environ
+
+    def test_fused_chains_on_rows_wider_than_a_tile(self):
+        names = ['softmax', 'logsoftmax', 'layernorm', 'rowsum_out']
+        chains = _row_chains()
+        rows = 3
+        for dt in [core.F64, core.F32, core.F16]:
+            kernels.init_dtype(dt)
+            tol = {core.F64: 1e-9, core.F32: 1e-4, core.F16: 3e-2}[dt]
+            for cols, static in [(9000, False), (9000, True), (4097, True),
+                                 (300, False)]:
+                vals = [((i * 37) % 101 - 50) * 0.02 for i in range(rows * cols)]
+                gamma = [1.0 + (j % 7) * 0.1 for j in range(cols)]
+                beta = [(j % 5) * 0.01 for j in range(cols)]
+                x = _from(vals, [rows, cols], dt)
+                g = from_list(gamma, dt)
+                b = from_list(beta, dt)
+                for ci in range(len(names)):
+                    ninputs, nodes, consts, outputs = chains[ci]
+                    k = _mk_kernel(ninputs, nodes, dt, 0,
+                                   cols if static else 0, consts, outputs)
+                    kernels.compile_or_reuse(k)
+                    before = device.unfused_count()
+                    cpu = device.fallbacks.n
+                    r = runtime.launch(k, x, g, b)
+                    want, extra = _ref_rows(names[ci], vals, rows, cols,
+                                            gamma, beta)
+                    got = list(device.host(r))[:len(want)]
+                    for i in range(len(want)):
+                        assert abs(got[i] - want[i]) <= tol * max(
+                            1.0, abs(want[i]) * (100 if ci == 3 else 1)), (
+                            names[ci], dt, cols, i, got[i], want[i])
+                    if extra:
+                        e = list(device.host(r.extra[0]))
+                        for i in range(len(extra)):
+                            assert abs(e[i] - extra[i]) <= tol * max(
+                                1.0, abs(extra[i]))
+                    if self._gpu():
+                        assert device.unfused_count() == before
+                        assert device.fallbacks.n == cpu
+                        if cols > core.config.block:
+                            assert k.wfn != 0
+
+    def test_eager_row_reductions_on_wide_rows(self):
+        rows, cols = 2, 10000
+        vals = [((i * 13) % 97) * 0.5 for i in range(rows * cols)]
+        for dt in [core.F64, core.F32]:
+            kernels.init_dtype(dt)
+            x = _from(vals, [rows, cols], dt)
+            cpu = device.fallbacks.n
+            s = list(device.host(ops.sum(x, 1)))
+            m = list(device.host(ops.max(x, 1)))
+            for r in range(rows):
+                row = vals[r * cols:(r + 1) * cols]
+                assert abs(s[r] - sum(row)) <= 1e-5 * sum(row)
+                assert m[r] == max(row)
+            if self._gpu():
+                assert device.fallbacks.n == cpu
+
+
+def _half(bits):
+    e = (bits >> 10) & 31
+    m = bits & 1023
+    v = (1.0 + m / 1024.0) * 2.0 ** (e - 15) if e else m / 1024.0 * 2.0 ** -14
+    return -v if bits & 32768 else v
+
+
+class TestFallbackAccounting(object):
+
+    def teardown_method(self, meth):
+        core.note_dtype(core.F64)
+
+    def test_refused_fused_kernel_counts_and_uses_cached_scalars(self):
+        import os
+        k = _mk_kernel(1, [(core.MUL, 0, 1, core.BC_R_SCALAR),
+                           (core.ADD, 2, 1, core.BC_R_SCALAR)],
+                       core.F64, 3, 0, (2.5,))
+        kernels.compile_or_reuse(k)
+        k.n = 5
+        x = from_list([1.0, 2.0, 3.0, 4.0])
+        before = device.unfused_count()
+        r = runtime.launch(k, x, core.NULLTENSOR, core.NULLTENSOR)
+        assert list(device.host(r))[:4] == [5.0, 7.5, 10.0, 12.5]
+        if 'RTENSOR_CPU' not in os.environ:
+            assert device.unfused_count() == before + 1
+            assert runtime.scalar_of(2.5, core.F64).dptr != 0
+        else:
+            assert device.unfused_count() == before
+
+    def test_views_of_a_host_tensor_share_one_upload(self):
+        import os
+        t = from_list([float(i) for i in range(6)])
+        a = ops.reshape(t, [2, 3])
+        b = ops.reshape(t, [3, 2])
+        if 'RTENSOR_CPU' not in os.environ:
+            assert t.dptr != 0
+            assert a.dptr == t.dptr and b.dptr == t.dptr
+        assert list(device.host(ops.add(a, a)))[:6] == [
+            2.0 * i for i in range(6)]
+
+    def test_dump_writes_raw_elements(self, tmpdir):
+        import os, struct
+        vals = [1.5, -2.25, 3.0, 65504.0, 0.0]
+        fmt = {core.F64: 'd', core.F32: 'f', core.F16: 'e'}
+        for dt in [core.F64, core.F32, core.F16]:
+            kernels.init_dtype(dt)
+            for on_device in [False, True]:
+                t = from_list(vals, dt)
+                if on_device:
+                    t = ops.add(t, runtime.scalar_of(0.0, dt))
+                path = str(tmpdir.join('d%d%d' % (dt, on_device)))
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0644)
+                assert device.dump(t, fd)
+                os.close(fd)
+                data = open(path, 'rb').read()
+                if fmt[dt] == 'e':
+                    got = [_half(b) for b in struct.unpack(
+                        '<%dH' % len(vals), data)]
+                else:
+                    got = list(struct.unpack('<%d%s' % (len(vals), fmt[dt]),
+                                             data))
+                assert got == vals
+
+
+class TestCrossAttention(object):
+
+    def test_scores_and_context_with_another_key_length(self):
+        heads, dh, rows, krows, seqs = 2, 3, 4, 5, 2
+        d = heads * dh
+        qv = [((i * 7) % 11 - 5) * 0.1 for i in range(seqs * rows * d)]
+        kv = [((i * 5) % 13 - 6) * 0.1 for i in range(seqs * krows * d)]
+        q = nn.Tensor(_from(qv, [seqs * rows, d], core.F64))
+        k = nn.Tensor(_from(kv, [seqs * krows, d], core.F64))
+        s = q.attn_scores(k, heads, rows, dh, seqs=seqs, krows=krows)
+        got = list(device.host(s.t))
+        want = []
+        for sq in range(seqs):
+            for h in range(heads):
+                for i in range(rows):
+                    for j in range(krows):
+                        want.append(sum(
+                            [qv[(sq * rows + i) * d + h * dh + e] *
+                             kv[(sq * krows + j) * d + h * dh + e]
+                             for e in range(dh)]))
+        assert [s.t.shape[0], s.t.shape[1]] == [seqs * heads * rows, krows]
+        for i in range(len(want)):
+            assert abs(got[i] - want[i]) < 1e-12
+        c = s.attn_context(k, heads, rows, dh, seqs=seqs, krows=krows)
+        got = list(device.host(c.t))
+        for sq in range(seqs):
+            for i in range(rows):
+                for h in range(heads):
+                    for e in range(dh):
+                        w = sum([want[((sq * heads + h) * rows + i) * krows +
+                                      j] *
+                                 kv[(sq * krows + j) * d + h * dh + e]
+                                 for j in range(krows)])
+                        assert abs(got[(sq * rows + i) * d + h * dh + e] -
+                                   w) < 1e-12

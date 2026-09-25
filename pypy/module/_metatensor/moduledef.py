@@ -19,6 +19,7 @@ class Module(MixedModule):
         'live_bytes': 'interp_tensor.live_bytes',
         'alloc_failed': 'interp_tensor.alloc_failed',
         'cpu_fallbacks': 'interp_tensor.cpu_fallbacks',
+        'unfused_fallbacks': 'interp_tensor.unfused_fallbacks',
         'group': 'interp_group.new_group',  # [motion]
     }
 

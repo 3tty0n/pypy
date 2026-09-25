@@ -2,7 +2,7 @@ from rpython.rlib import jit
 from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.rclass import OBJECTPTR
 from rpython.metatensor.core import (ADD, B_KEEP_NZ, B_KEEP_Z, BINARY, NPARAMS, UNARY, AXIS_ALL, GA_HEADSPLIT, GA_ROTHALF, GATHER, gather_knob, gather_param, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_NONE, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, MAXR, MUL, NDTYPES, NULLTENSOR, RELU, RELUGRAD, SHAPEARRAY, SQRT, SUB, SUM, TENSOR, TENSORARRAY, _shape2, cols, new_tensor, note_cols, note_dtype, note_size, policy)
-from rpython.metatensor.device import (host, note_cpu_fallback)
+from rpython.metatensor.device import (dev, host, note_cpu_fallback)
 from rpython.metatensor.kernels import (ensure_gather, ensure_single)
 from rpython.metatensor import lazy
 from rpython.metatensor.runtime import (_make_ones, eval_op, head_merge, head_split, rot_half, ones, tensor_assign, tensor_matmul)
@@ -35,6 +35,8 @@ def reshape(a, shape_list):
 def view(a, shape):
     if lazy.enabled():
         lazy.force(a)
+    if a.dptr == 0 and a.host:
+        dev(a)
     r = lltype.malloc(TENSOR)
     r.size = a.size
     r.shape = shape

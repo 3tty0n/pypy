@@ -288,13 +288,12 @@ def _launch(kernel, leaves):
             r = runtime.launch_gpu(kernel, leaves)
             if r:
                 return r
+    device.note_unfused(kernel.fn, runtime.refusal(kernel, leaves))
     values = []
     for i in range(len(leaves)):
         values.append(leaves[i])
     for j in range(len(kernel.consts)):
-        c = core.new_tensor(1, lltype.nullptr(SHAPEARRAY), kernel.dtype)
-        c.host[0] = kernel.consts[j]
-        values.append(c)
+        values.append(runtime.cached_scalar(kernel.consts[j], kernel.dtype))
     nodes = kernel.nodes
     for i in range(len(nodes)):
         node = nodes[i]

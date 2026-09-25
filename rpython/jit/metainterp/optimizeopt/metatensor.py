@@ -66,6 +66,7 @@ class VTensorInfo(AbstractVirtualPtrInfo):
             kernel.consts[i] = _const_value(consts[i])
         kernel.nodes = lltype.malloc(core.NODEARRAY, len(opcodes))
         kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
+        kernel.wfn = kernel.wthreads = kernel.wshared = kernel.wnextra = 0
         kernel.rowmode = 0
         kernel.nouts = 0
         kernel.n = n

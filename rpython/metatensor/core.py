@@ -180,7 +180,11 @@ KERNEL = lltype.GcStruct('TENSOR_KERNEL', ('ninputs', lltype.Signed),
                          ('outmodes', lltype.Signed),
                          ('nouts', lltype.Signed),
                          ('consts', lltype.Ptr(HOSTARRAY)),
-                         ('outputs', lltype.Ptr(SHAPEARRAY)))
+                         ('outputs', lltype.Ptr(SHAPEARRAY)),
+                         ('wfn', lltype.Signed),
+                         ('wthreads', lltype.Signed),
+                         ('wshared', lltype.Signed),
+                         ('wnextra', lltype.Signed))
 KERNELPTR = lltype.Ptr(KERNEL)
 NO_CONSTS = lltype.malloc(HOSTARRAY, 0, immortal=True)
 
@@ -292,6 +296,8 @@ def note_cols(c):
 
 class Config(object):
     block = 4096
+    wide = 8192
+    wide_warps = 16
     flat = 4096
     num_warps = 8
     cc = None

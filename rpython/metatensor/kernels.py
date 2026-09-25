@@ -6,7 +6,7 @@ from rpython.rtyper.lltypesystem import rffi
 import os
 from rpython.metatensor.core import (BINARY, UNARY, GA_ROTHALF, gather_dh, gather_heads, gather_kind, init_drain, init_gather, init_lazy, ARITY, AXIS_ALL, F64, KERNEL, NO_CONSTS, NDTYPES, NODEARRAY, NOPCODES, NPARAMS, SHAPEARRAY, SUM, config, is_reduction, param_slot, slot_param, slot_used)
 from rpython.metatensor.device import (_env, _here, gpu_enabled, profile, rt_cuda_load, rt_cuda_set_budget)
-from rpython.metatensor.ttir import (has_gather, input_modes, kernel_row_mode, out_modes, row_tile, row_warps, to_tile_ir, to_ttir, to_ttir_gather)
+from rpython.metatensor.ttir import (all_modes, has_gather, input_modes, kernel_row_mode, out_modes, row_tile, row_warps, to_tile_ir, to_ttir, to_ttir_gather, to_ttir_row_tiled)
 
 class SingleKernels(object):
     def __init__(self):
@@ -21,6 +21,7 @@ def _empty_kernel():
     k.ninputs = 0
     k.nodes = lltype.malloc(NODEARRAY, 0)
     k.fn = k.sumroot = k.threads = k.shared = k.nextra = 0
+    k.wfn = k.wthreads = k.wshared = k.wnextra = 0
     k.rowmode = 0
     k.nouts = 0
     k.n = 0
@@ -108,6 +109,7 @@ def new_kernel(ninputs, nnodes, dtype=F64):
     kernel.ninputs = ninputs
     kernel.nodes = lltype.malloc(NODEARRAY, nnodes)
     kernel.fn = kernel.sumroot = kernel.threads = kernel.shared = kernel.nextra = 0
+    kernel.wfn = kernel.wthreads = kernel.wshared = kernel.wnextra = 0
     kernel.rowmode = 0
     kernel.nouts = 0
     kernel.n = 0
@@ -172,6 +174,17 @@ def compile_or_reuse(kernel):
         kernel.modes = cached.modes
         kernel.outmodes = cached.outmodes
         kernel.nouts = cached.nouts
+        kernel.wfn = cached.wfn
+        kernel.wthreads = cached.wthreads
+        kernel.wshared = cached.wshared
+        kernel.wnextra = cached.wnextra
+        if kernel.wfn == 0 and kernel.fn != 0 and wants_wide(kernel):
+            compile_wide(kernel, 'rtensor_k%d_w' % counter.n)
+            counter.n += 1
+            cached.wfn = kernel.wfn
+            cached.wthreads = kernel.wthreads
+            cached.wshared = kernel.wshared
+            cached.wnextra = kernel.wnextra
         return kernel
     finish_kernel(kernel)
     cache_kernel(key, kernel)
@@ -349,7 +362,29 @@ def _compile_gpu(kernel):
     kernel.threads = threads
     kernel.shared = shared
     kernel.nextra = nextra
+    compile_wide(kernel, name + '_w')
     return fn
+
+def wants_wide(kernel):
+    return kernel.rowmode and (kernel.cols <= 0 or kernel.cols > config.block)
+
+def compile_wide(kernel, name):
+    """The tiled variant launch_gpu takes for rows wider than kernel.fn's
+    tile, for a row kernel whose rows can be."""
+    if kernel.wfn != 0 or not wants_wide(kernel):
+        return
+    src = to_ttir_row_tiled(kernel, name, all_modes(kernel))
+    if not src:
+        return
+    try:
+        fn, threads, shared, nextra = compile_ttir(src, name,
+                                                   config.wide_warps)
+    except (OSError, ValueError, IndexError):
+        return
+    kernel.wfn = fn
+    kernel.wthreads = threads
+    kernel.wshared = shared
+    kernel.wnextra = nextra
 
 def needs_zero(kernel):
     if not kernel.sumroot:

@@ -3,7 +3,11 @@ os.environ.setdefault('RTENSOR_CPU', '1')
 
 
 class AppTestTensor(object):
-    spaceconfig = dict(usemodules=['_metatensor'])
+    spaceconfig = dict(usemodules=['_metatensor', 'struct'])
+
+    def setup_class(cls):
+        from rpython.tool.udir import udir
+        cls.w_tmpfile = cls.space.wrap(str(udir.join('metatensor_tofile')))
 
     def test_construct(self):
         import _metatensor
@@ -617,3 +621,36 @@ class AppTestTensor(object):
         r = x.adaptive_avg_pool2d(1, 4, 4, 3, 2)
         assert r.tolist() == [2.5, 4.5, 6.5, 8.5, 10.5, 12.5]
         raises(ValueError, x.avg_pool2d, 1, 4, 4, 2, 2, 2)
+
+    def test_unfused_fallbacks(self):
+        import _metatensor
+        n = _metatensor.unfused_fallbacks()
+        assert isinstance(n, int)
+        x = _metatensor.tensor([1.0, 2.0])
+        assert (x * 2.0 + 1.0).tolist() == [3.0, 5.0]
+        assert _metatensor.unfused_fallbacks() == n
+
+    def test_tofile(self):
+        import _metatensor, struct, os
+        path = self.tmpfile
+        x = _metatensor.tensor([1.5, -2.0, 4.0], dtype="float32")
+        x.tofile(path)
+        data = open(path, 'rb').read()
+        assert struct.unpack('<3f', data) == (1.5, -2.0, 4.0)
+        y = _metatensor.tensor([[1.0, 2.0], [3.0, 4.0]]).reshape([4])
+        y.tofile(path)
+        assert struct.unpack('<4d', open(path, 'rb').read()) == (
+            1.0, 2.0, 3.0, 4.0)
+        raises(OSError, x.tofile, '/nonexistent-dir/x')
+
+    def test_cross_attention(self):
+        import _metatensor
+        q = _metatensor.tensor([[1.0], [2.0]])
+        k = _metatensor.tensor([[1.0], [10.0], [100.0]])
+        s = q.attn_scores(k, 1)
+        assert s.shape == (2, 3)
+        assert s.tolist() == [1.0, 10.0, 100.0, 2.0, 20.0, 200.0]
+        c = s.attn_context(k, 1)
+        assert c.shape == (2, 1)
+        assert c.tolist() == [10101.0, 20202.0]
+        raises(ValueError, q.attn_scores, k, 1, -1, 0, 0, 2)

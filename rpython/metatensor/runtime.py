@@ -7,9 +7,9 @@ from rpython.rtyper.lltypesystem import lltype
 from rpython.rtyper.lltypesystem import rffi
 import math
 from rpython.metatensor.core import (ADD, ARITY, B_GE, B_GT, B_KEEP_NZ, B_KEEP_Z, B_LE, B_LT, B_MAX, B_MIN, B_NE, B_POW, BINARY, U_ABS, U_COS, U_ERF, U_FLOOR, U_LOG, U_SIGMOID, U_SIN, U_TANH, UNARY, bc_mode, binary_fn, BC_L_COL, BC_L_ROW, BC_L_SCALAR, BC_R_COL, BC_R_ROW, BC_R_SCALAR, DIV, EQMASK, EXP, GATHER, MAXR, MUL, NDTYPES, NEG_INF, NULLTENSOR, RELU, SHAPEARRAY, SUB, SUM, TENSORARRAY, _shape1, cols, config, gather_changes_shape, gather_shape, nbytes, new_tensor, nvals)
-from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, host, note_cpu_fallback, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_free, rt_cuda_launch, rt_cuda_reset, rt_cuda_warn_arity, rt_cuda_warn_cpu)
+from rpython.metatensor.device import (SIGNEDARRAY, collect_if_needed, dev, device_tensor, host, note_cpu_fallback, note_unfused, prof_begin, prof_end, profile_report, rt_cuda_alloc, rt_cuda_free, rt_cuda_launch, rt_cuda_reset, rt_cuda_warn_arity, rt_cuda_warn_cpu, rt_cuda_warn_unfused)
 from rpython.metatensor.kernels import (has_gather, needs_zero, row_tile, single_kernel)
-from rpython.metatensor.devops import (_make_ones, ones, adaptive_avg_pool2d, avg_pool2d, cat, depthwise_conv2d, im2col2, im2col_t, pad, pool_out, strided, take, col2chw, gather_op, head_merge, head_split, im2col, im2col_nhwc, maxpool2, maxpool2_nhwc, rot_half, rowgather, scalar, scalar_of, scalars, tensor_assign, tensor_bmm, tensor_matmul, tensor_write_rows)
+from rpython.metatensor.devops import (_make_ones, ones, adaptive_avg_pool2d, avg_pool2d, cat, depthwise_conv2d, im2col2, im2col_t, pad, pool_out, strided, take, col2chw, gather_op, head_merge, head_split, im2col, im2col_nhwc, maxpool2, maxpool2_nhwc, rot_half, rowgather, scalar, scalar_of, cached_scalar, scalars, tensor_assign, tensor_bmm, tensor_matmul, tensor_write_rows)
 
 def eval_op(opcode, a, b, p):
     if opcode == GATHER:
@@ -263,6 +263,35 @@ def result_shape(kernel, inputs, n, like, v=-1):
         return inputs[v].shape
     return like
 
+def refusal(kernel, inputs):
+    """Why kernel did not launch on inputs as one kernel, an index into
+    the reasons rt_cuda_note_unfused prints."""
+    if kernel.fn == 0:
+        return 1
+    big = 0
+    for k in range(len(inputs)):
+        if inputs[k].size > inputs[big].size:
+            big = k
+    n = inputs[big].size
+    c = cols(inputs[big])
+    if kernel.n != 0 and kernel.n != n:
+        return 2
+    if kernel.nouts != 1 + len(kernel.outputs):
+        return 3
+    for k in range(len(inputs)):
+        if inputs[k].dtype != kernel.dtype:
+            return 4
+    if kernel.rowmode:
+        if c <= 0 or n % c != 0:
+            return 5
+        if kernel.cols > 0 and c != kernel.cols:
+            return 6
+        if c > row_tile(kernel) and kernel.wfn == 0:
+            return 7
+    if not modes_fit(kernel, inputs, n, c):
+        return 8
+    return 9
+
 def launch_gpu(kernel, inputs):
     nin = len(inputs)
     dt = kernel.dtype
@@ -280,11 +309,22 @@ def launch_gpu(kernel, inputs):
     outlen = n
     shape = inputs[big].shape
     elems = config.flat
+    fn = kernel.fn
+    threads = kernel.threads
+    shared = kernel.shared
+    nextra = kernel.nextra
     if kernel.rowmode:
-        if c <= 0 or c > row_tile(kernel) or n % c != 0:
+        if c <= 0 or n % c != 0:
             return NULLTENSOR
         if kernel.cols > 0 and c != kernel.cols:
             return NULLTENSOR
+        if c > row_tile(kernel):
+            if kernel.wfn == 0:
+                return NULLTENSOR
+            fn = kernel.wfn
+            threads = kernel.wthreads
+            shared = kernel.wshared
+            nextra = kernel.wnextra
         elems = c
     if not modes_fit(kernel, inputs, n, c):
         return NULLTENSOR
@@ -323,11 +363,11 @@ def launch_gpu(kernel, inputs):
             ok = False
     if ok:
         ok = rffi.cast(lltype.Signed, rt_cuda_launch(
-            kernel.fn, dptrs, rffi.cast(rffi.INT, nin), n,
+            fn, dptrs, rffi.cast(rffi.INT, nin), n,
             outs, rffi.cast(rffi.INT, nout),
-            rffi.cast(rffi.INT, kernel.threads), elems,
-            rffi.cast(rffi.INT, kernel.shared),
-            rffi.cast(rffi.INT, kernel.nextra), c)) != 0
+            rffi.cast(rffi.INT, threads), elems,
+            rffi.cast(rffi.INT, shared),
+            rffi.cast(rffi.INT, nextra), c)) != 0
     result = NULLTENSOR
     if not ok:
         # An allocation or the launch failed part way through.  Nothing owns
@@ -382,13 +422,12 @@ def launch(kernel, a, b, c, d=NULLTENSOR, e=NULLTENSOR, f=NULLTENSOR,
         if r:
             prof_end(intmask(0), intmask(kernel.fn % 1000000000), t0)
             return r
+    note_unfused(kernel.fn, refusal(kernel, values))
     if kernel.fn != 0:
-        rt_cuda_warn_cpu(kernel.fn)
+        rt_cuda_warn_unfused(kernel.fn)
     t0 = prof_begin()
     for j in range(len(kernel.consts)):
-        c = new_tensor(1, lltype.nullptr(SHAPEARRAY), kernel.dtype)
-        c.host[0] = kernel.consts[j]
-        values.append(c)
+        values.append(cached_scalar(kernel.consts[j], kernel.dtype))
     nodes = kernel.nodes
     for i in range(len(nodes)):
         node = nodes[i]

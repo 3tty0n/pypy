@@ -173,7 +173,7 @@ class Tensor(object):
             node, needs)
 
     def attn_scores(self, k, heads, rows, dh, lda=0, ldb=0, oa=0, ob=0,
-                    seqs=1):
+                    seqs=1, krows=0):
         _ready(self.t)
         _ready(k.t)
         """seqs > 1: the rows are a folded batch of `seqs` independent
@@ -182,8 +182,11 @@ class Tensor(object):
         outer batch level of tensor_bmm: the head stride stays dh inside a
         sequence, and a sequence is rows*lda elements further on.  The result
         is [seqs*heads*rows, rows], sequence-major, which is the layout a mask
-        tiled once per sequence already has."""
+        tiled once per sequence already has.  krows > 0 is a key of another
+        length (cross-attention): k has seqs*krows rows and the result is
+        [seqs*heads*rows, krows]; inference only."""
         d = heads * dh
+        kr = krows if krows > 0 else rows
         if lda <= 0:
             lda = d
         if ldb <= 0:
@@ -192,12 +195,12 @@ class Tensor(object):
         needs = self.requires_grad or k.requires_grad
         if needs:
             node = AttnScoresNode(self, k, heads, rows, dh, lda, ldb, oa, ob,
-                                  seqs)
+                                  seqs, kr)
         return self._wrap(runtime.tensor_bmm(
-            self.t, k.t, heads, rows, rows, dh, 0, 1, lda, ldb, rows,
-            dh, dh, rows * rows, seqs * heads * rows * rows,
+            self.t, k.t, heads, rows, kr, dh, 0, 1, lda, ldb, kr,
+            dh, dh, rows * kr, seqs * heads * rows * kr,
             seqs * heads * rows, oa, ob, 0, 0,
-            seqs, rows * lda, rows * ldb, heads * rows * rows), node, needs)
+            seqs, rows * lda, kr * ldb, heads * rows * kr), node, needs)
 
     def decode_scores(self, k, heads, qrows, krows, dh, lda, ldb, oa, ob):
         """attn_scores with qrows query rows against the first krows rows of
@@ -226,23 +229,26 @@ class Tensor(object):
         runtime.tensor_write_rows(self.t, src.t, row)
         return self
 
-    def attn_context(self, v, heads, rows, dh, ldb=0, ob=0, seqs=1):
+    def attn_context(self, v, heads, rows, dh, ldb=0, ob=0, seqs=1, krows=0):
         _ready(self.t)
         _ready(v.t)
         """The mirror of attn_scores: probabilities [seqs*heads*rows, rows]
         against v, back to [seqs*rows, d] with the heads merged into the row
-        again and the sequences still folded into the rows."""
+        again and the sequences still folded into the rows.  krows > 0: the
+        probabilities are [seqs*heads*rows, krows] against seqs*krows rows of
+        v."""
         d = heads * dh
+        kr = krows if krows > 0 else rows
         if ldb <= 0:
             ldb = d
         node = None
         needs = self.requires_grad or v.requires_grad
         if needs:
-            node = AttnContextNode(self, v, heads, rows, dh, ldb, ob, seqs)
+            node = AttnContextNode(self, v, heads, rows, dh, ldb, ob, seqs, kr)
         return self._wrap(runtime.tensor_bmm(
-            self.t, v.t, heads, rows, dh, rows, 0, 0, rows, ldb, d,
-            rows * rows, dh, dh, seqs * rows * d, seqs * rows, 0, ob, 0, 0,
-            seqs, heads * rows * rows, rows * ldb, rows * d), node, needs)
+            self.t, v.t, heads, rows, dh, kr, 0, 0, kr, ldb, d,
+            rows * kr, dh, dh, seqs * rows * d, seqs * rows, 0, ob, 0, 0,
+            seqs, heads * rows * kr, kr * ldb, rows * d), node, needs)
 
     def rot_half(self, dh):
         _ready(self.t)
@@ -652,7 +658,8 @@ class BmmNode(Node):
 
 
 class AttnScoresNode(Node):
-    def __init__(self, q, k, heads, rows, dh, lda, ldb, oa, ob, seqs=1):
+    def __init__(self, q, k, heads, rows, dh, lda, ldb, oa, ob, seqs=1,
+                 krows=0):
         inputs = [q]
         inputs.append(k)
         Node.__init__(self, inputs)
@@ -664,11 +671,14 @@ class AttnScoresNode(Node):
         self.oa = oa
         self.ob = ob
         self.seqs = seqs
+        self.krows = krows if krows > 0 else rows
 
     def apply(self, g):
         # The folded-batch form is an inference path; its backward would need
         # the same outer batch level threaded through _bmm_slice_grad.  Refuse
         # it rather than return a gradient that is silently wrong.
+        if self.krows != self.rows:
+            raise ValueError("attn_scores backward needs krows == rows")
         if self.seqs != 1:
             raise ValueError("attn_scores backward does not support a folded "
                              "batch of sequences (seqs > 1)")
@@ -691,7 +701,7 @@ class AttnScoresNode(Node):
 
 
 class AttnContextNode(Node):
-    def __init__(self, p, v, heads, rows, dh, ldb, ob, seqs=1):
+    def __init__(self, p, v, heads, rows, dh, ldb, ob, seqs=1, krows=0):
         inputs = [p]
         inputs.append(v)
         Node.__init__(self, inputs)
@@ -701,8 +711,11 @@ class AttnContextNode(Node):
         self.ldb = ldb
         self.ob = ob
         self.seqs = seqs
+        self.krows = krows if krows > 0 else rows
 
     def apply(self, g):
+        if self.krows != self.rows:
+            raise ValueError("attn_context backward needs krows == rows")
         if self.seqs != 1:
             raise ValueError("attn_context backward does not support a "
                              "folded batch of sequences (seqs > 1)")

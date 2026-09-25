@@ -1,10 +1,11 @@
+import os
 from rpython.metatensor import core, device, kernels, lazy, nn, ops, runtime
 from rpython.metatensor.nn import _ready
 from rpython.rlib import jit
 from pypy.interpreter.baseobjspace import W_Root
 from pypy.interpreter.typedef import TypeDef, GetSetProperty
 from pypy.interpreter.gateway import interp2app, unwrap_spec
-from pypy.interpreter.error import oefmt
+from pypy.interpreter.error import oefmt, wrap_oserror
 
 
 def _floats_w(space, w_list):
@@ -239,7 +240,9 @@ class W_Tensor(W_Root):
         """seqs > 1 says the rows are a folded batch: seqs independent
         sequences stacked down the rows, each of shape[0] // seqs rows.
         Attention then runs per sequence and the result is
-        [seqs*heads*rows, rows], sequence-major."""
+        [seqs*heads*rows, krows], sequence-major, where krows is other's
+        rows per sequence: the same as rows, or another length for
+        cross-attention (inference only)."""
         t = self.tensor.t
         other = self._other(space, w_other)
         if (heads <= 0 or seqs <= 0 or ops.tensor_ndim(t) != 2 or
@@ -251,35 +254,40 @@ class W_Tensor(W_Root):
         rows = total // seqs
         lda = ops.tensor_shape(t, 1)
         ldb = ops.tensor_shape(other.t, 1)
+        ktotal = ops.tensor_shape(other.t, 0)
         d = lda if dcols <= 0 else dcols
         if (d % heads != 0 or off_a < 0 or off_b < 0 or
                 off_a + d > lda or off_b + d > ldb or
-                ops.tensor_shape(other.t, 0) != total or
+                ktotal <= 0 or ktotal % seqs != 0 or
                 ops.tensor_dtype(other.t) != ops.tensor_dtype(t)):
             raise _mismatch(space)
         return W_Tensor(self.tensor.attn_scores(
-            other, heads, rows, d // heads, lda, ldb, off_a, off_b, seqs))
+            other, heads, rows, d // heads, lda, ldb, off_a, off_b, seqs,
+            ktotal // seqs))
 
     @unwrap_spec(heads=int, dcols=int, off_b=int, seqs=int)
     def descr_attn_context(self, space, w_other, heads, dcols=-1, off_b=0,
                            seqs=1):
-        """The mirror of attn_scores: [seqs*heads*rows, rows] probabilities
-        against [seqs*rows, ldb] values, back to [seqs*rows, d]."""
+        """The mirror of attn_scores: [seqs*heads*rows, krows]
+        probabilities against [seqs*krows, ldb] values, back to
+        [seqs*rows, d]."""
         t = self.tensor.t
         other = self._other(space, w_other)
         if (heads <= 0 or seqs <= 0 or ops.tensor_ndim(t) != 2 or
                 ops.tensor_ndim(other.t) != 2):
             raise _mismatch(space)
-        rows = ops.tensor_shape(t, 1)
+        krows = ops.tensor_shape(t, 1)
         ldb = ops.tensor_shape(other.t, 1)
         d = ldb if dcols <= 0 else dcols
-        if (ops.tensor_shape(t, 0) != seqs * heads * rows or d % heads != 0 or
+        qtotal = ops.tensor_shape(t, 0)
+        if (qtotal % (seqs * heads) != 0 or d % heads != 0 or
                 off_b < 0 or off_b + d > ldb or
-                ops.tensor_shape(other.t, 0) != seqs * rows or
+                ops.tensor_shape(other.t, 0) != seqs * krows or
                 ops.tensor_dtype(other.t) != ops.tensor_dtype(t)):
             raise _mismatch(space)
         return W_Tensor(self.tensor.attn_context(
-            other, heads, rows, d // heads, ldb, off_b, seqs))
+            other, heads, qtotal // (seqs * heads), d // heads, ldb, off_b,
+            seqs, krows))
 
     @unwrap_spec(heads=int, krows=int, dcols=int, off_a=int, off_b=int)
     def descr_decode_scores(self, space, w_cache, heads, krows, dcols,
@@ -385,6 +393,20 @@ class W_Tensor(W_Root):
         h = device.host(t)
         n = ops.tensor_size(t)
         return space.newlist([space.newfloat(h[i]) for i in range(n)])
+
+    @unwrap_spec(path='fsencode')
+    def descr_tofile(self, space, path):
+        """Write the elements to path as raw little-endian bytes of this
+        tensor's dtype, as numpy's tofile does, without a host copy."""
+        t = ops.tensor_force(self.tensor.t)
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0644)
+        except OSError as e:
+            raise wrap_oserror(space, e, path)
+        ok = device.dump(t, fd)
+        os.close(fd)
+        if not ok:
+            raise oefmt(space.w_IOError, "tofile: writing %s failed", path)
 
     def descr_take(self, space, w_idx):
         t = self.tensor.t
@@ -742,6 +764,7 @@ W_Tensor.typedef = TypeDef(
     head_merge=interp2app(W_Tensor.descr_head_merge),
     bmm=interp2app(W_Tensor.descr_bmm),
     take=interp2app(W_Tensor.descr_take),
+    tofile=interp2app(W_Tensor.descr_tofile),
     tolist=interp2app(W_Tensor.descr_tolist),
     im2col=interp2app(W_Tensor.descr_im2col),
     im2col_nhwc=interp2app(W_Tensor.descr_im2col_nhwc),
@@ -918,3 +941,10 @@ def cpu_fallbacks(space):
     """How many ops ran in host loops although the GPU is on: a failed
     compile, launch or allocation, or an op with no device kernel."""
     return space.newint(device.fallbacks.n)
+
+
+def unfused_fallbacks(space):
+    """How many times a fused kernel did not launch as one (a failed compile,
+    launch or allocation, or a row or size it was not built for) and its ops
+    ran one kernel each, while the GPU is on."""
+    return space.newint(device.unfused_count())

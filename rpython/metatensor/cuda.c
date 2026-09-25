@@ -5,6 +5,7 @@
 #include <time.h>
 #include <dlfcn.h>
 #include <stdint.h>
+#include <unistd.h>
 
 #ifndef RPY_EXPORTED
 #  define RPY_EXPORTED extern __attribute__((visibility("default")))
@@ -419,7 +420,18 @@ RPY_EXPORTED void rt_cuda_warn_cpu(long fn)
     static int warned;
     if (!warned) {
         warned = 1;
-        fprintf(stderr, "metatensor: kernel %s has GPU code but ran on the CPU\n",
+        fprintf(stderr, "metatensor: kernel %s did not launch; the op ran on "
+                        "the CPU (cpu_fallbacks())\n", rt_name_of(fn));
+    }
+}
+
+RPY_EXPORTED void rt_cuda_warn_unfused(long fn)
+{
+    static int warned;
+    if (!warned) {
+        warned = 1;
+        fprintf(stderr, "metatensor: fused kernel %s did not launch; its ops "
+                        "ran one kernel each (unfused_fallbacks())\n",
                 rt_name_of(fn));
     }
 }
@@ -430,7 +442,7 @@ RPY_EXPORTED void rt_cuda_warn_arity(long compiled, long launched)
     if (!warned) {
         warned = 1;
         fprintf(stderr, "metatensor: kernel compiled for %ld outputs but "
-                        "launched with %ld, running on the CPU instead\n",
+                        "launched with %ld, running its ops one at a time\n",
                 compiled, launched);
     }
 }
@@ -438,6 +450,30 @@ RPY_EXPORTED void rt_cuda_warn_arity(long compiled, long launched)
 RPY_EXPORTED long rt_cuda_launch_count(void)
 {
     return launches;
+}
+
+static long unfused;
+
+static const char *unfused_why[] = {
+    "?", "no compiled kernel", "size differs from the static size",
+    "output arity differs", "dtype differs", "rows do not divide the size",
+    "row width differs from the static width", "row wider than the tile",
+    "an input is too small for its broadcast", "allocation or launch failed"};
+
+RPY_EXPORTED void rt_cuda_note_unfused(long fn, long why)
+{
+    static int dbg = -1;
+    unfused++;
+    if (dbg < 0) dbg = getenv("RTENSOR_DEBUG_UNFUSED") != NULL;
+    if (dbg)
+        fprintf(stderr, "metatensor: fused kernel %s ran unfused: %s\n",
+                fn ? rt_name_of(fn) : "-",
+                unfused_why[why >= 0 && why < 10 ? why : 0]);
+}
+
+RPY_EXPORTED long rt_cuda_unfused_count(void)
+{
+    return unfused;
 }
 
 /* ==== host <-> device transfers ==== */
@@ -482,6 +518,44 @@ RPY_EXPORTED int rt_cuda_download(long dptr, double *host, long n, long dtype)
             for (i = 0; i < n; i++) host[i] = rt_h2f(((unsigned short *)staging)[i]);
     }
     free(staging);
+    return ok;
+}
+
+RPY_EXPORTED int rt_dump(long dptr, double *host, long n, long dtype, long fd)
+{
+    size_t esz = dtype == 0 ? 8 : (dtype == 1 ? 4 : 2);
+    long chunk = 1L << 24, i, j, m;
+    char *buf, *p;
+    ssize_t w;
+    size_t left;
+    int ok = 1;
+    if (dptr && !rt_init()) return 0;
+    buf = malloc(chunk * esz);
+    if (!buf) return 0;
+    for (i = 0; ok && i < n; i += chunk) {
+        m = n - i < chunk ? n - i : chunk;
+        if (dptr) {
+            ok = cuMemcpyDtoH(buf, (CUdeviceptr)(dptr + i * esz), m * esz) ==
+                 CUDA_SUCCESS;
+        } else if (dtype == 0) {
+            memcpy(buf, host + i, m * esz);
+        } else {
+            for (j = 0; j < m; j++) {
+                if (dtype == 1)
+                    ((float *)buf)[j] = (float)host[i + j];
+                else
+                    ((unsigned short *)buf)[j] = rt_f2h(host[i + j]);
+            }
+        }
+        p = buf;
+        left = m * esz;
+        while (ok && left > 0) {
+            w = write((int)fd, p, left);
+            if (w <= 0) ok = 0;
+            else { p += w; left -= w; }
+        }
+    }
+    free(buf);
     return ok;
 }
 

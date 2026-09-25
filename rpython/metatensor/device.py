@@ -1,4 +1,4 @@
-from rpython.rlib import rgc
+from rpython.rlib import jit, rgc
 from rpython.rlib.rarithmetic import intmask
 from rpython.rtyper.annlowlevel import cast_instance_to_base_ptr
 from rpython.rtyper.rclass import OBJECTPTR
@@ -71,9 +71,11 @@ RPY_EXTERN int rt_cuda_available(void);
 RPY_EXTERN long rt_cuda_load(const char *ptx, const char *name);
 RPY_EXTERN long rt_cuda_alloc(long nbytes, long zero);
 RPY_EXTERN void rt_cuda_warn_cpu(long fn);
+RPY_EXTERN void rt_cuda_warn_unfused(long fn);
 RPY_EXTERN void rt_cuda_warn_arity(long compiled, long launched);
 RPY_EXTERN long rt_cuda_upload(double *host, long n, long dtype);
 RPY_EXTERN int rt_cuda_download(long dptr, double *host, long n, long dtype);
+RPY_EXTERN int rt_dump(long dptr, double *host, long n, long dtype, long fd);
 RPY_EXTERN void rt_cuda_reset(void);
 RPY_EXTERN void rt_cuda_free(long dptr, long nbytes);
 RPY_EXTERN int rt_cuda_copy(long dst, long src, long nbytes);
@@ -81,6 +83,8 @@ RPY_EXTERN void rt_cuda_set_budget(long bytes);
 RPY_EXTERN long rt_cuda_mem_total(void);
 RPY_EXTERN long rt_cuda_live_bytes(void);
 RPY_EXTERN long rt_cuda_launch_count(void);
+RPY_EXTERN void rt_cuda_note_unfused(long fn, long why);
+RPY_EXTERN long rt_cuda_unfused_count(void);
 RPY_EXTERN long rt_cuda_alloc_failed(void);
 RPY_EXTERN int rt_cuda_needs_gc(long nbytes);
 RPY_EXTERN int rt_cuda_has_free(long nbytes);
@@ -121,6 +125,9 @@ rt_cuda_warn_arity = rffi.llexternal('rt_cuda_warn_arity',
                                      [lltype.Signed, lltype.Signed],
                                      lltype.Void, compilation_info=eci,
                                      releasegil=False)
+rt_cuda_warn_unfused = rffi.llexternal('rt_cuda_warn_unfused',
+                                       [lltype.Signed], lltype.Void,
+                                       compilation_info=eci, releasegil=False)
 rt_cuda_warn_cpu = rffi.llexternal('rt_cuda_warn_cpu', [lltype.Signed],
                                    lltype.Void, compilation_info=eci,
                                    releasegil=False)
@@ -198,6 +205,31 @@ def _download_impl(dptr, hostarray, dtype=F64):
         hostarray[i] = buf[i]
     lltype.free(buf, flavor='raw')
 
+rt_dump = rffi.llexternal('rt_dump', [lltype.Signed, rffi.DOUBLEP,
+                                      lltype.Signed, lltype.Signed,
+                                      lltype.Signed],
+                          rffi.INT, compilation_info=eci, releasegil=True)
+
+@jit.dont_look_inside
+def dump(t, fd):
+    """t's elements as raw little-endian bytes of its dtype into fd, without
+    a host copy of a device tensor; False if a copy or write failed."""
+    if t.dptr != 0:
+        return rffi.cast(lltype.Signed, rt_dump(
+            t.dptr, lltype.nullptr(rffi.DOUBLEP.TO), t.size, t.dtype, fd)) != 0
+    chunk = 1 << 20
+    buf = lltype.malloc(DOUBLEARRAY, chunk, flavor='raw')
+    ok = True
+    i = 0
+    while ok and i < t.size:
+        m = min(chunk, t.size - i)
+        for j in range(m):
+            buf[j] = t.host[i + j]
+        ok = rffi.cast(lltype.Signed, rt_dump(0, buf, m, t.dtype, fd)) != 0
+        i += m
+    lltype.free(buf, flavor='raw')
+    return ok
+
 def download(dptr, hostarray, dtype=F64):
     t0 = prof_begin()
     _download_impl(dptr, hostarray, dtype)
@@ -229,6 +261,13 @@ rt_cuda_has_free = rffi.llexternal('rt_cuda_has_free', [lltype.Signed], rffi.INT
 rt_cuda_launch_count = rffi.llexternal('rt_cuda_launch_count', [],
                                        lltype.Signed, compilation_info=eci,
                                        releasegil=False)
+rt_cuda_note_unfused = rffi.llexternal('rt_cuda_note_unfused',
+                                       [lltype.Signed, lltype.Signed],
+                                       lltype.Void, compilation_info=eci,
+                                       releasegil=False)
+rt_cuda_unfused_count = rffi.llexternal('rt_cuda_unfused_count', [],
+                                        lltype.Signed, compilation_info=eci,
+                                        releasegil=False)
 
 rt_cuda_alloc_failed = rffi.llexternal('rt_cuda_alloc_failed', [],
                                        lltype.Signed, compilation_info=eci,
@@ -254,6 +293,16 @@ def alloc_failed():
 class Fallbacks(object):
     n = 0
 fallbacks = Fallbacks()
+
+def note_unfused(fn, why):
+    """A fused kernel that did not run as one: its nodes go one by one.
+    Counted in C, because the launcher that calls this is annotated late;
+    RTENSOR_DEBUG_UNFUSED=1 prints why (runtime.refusal)."""
+    if gpu_enabled():
+        rt_cuda_note_unfused(fn, why)
+
+def unfused_count():
+    return rt_cuda_unfused_count()
 
 def note_cpu_fallback():
     """Called by every host loop that computes an op: counts the ones that
