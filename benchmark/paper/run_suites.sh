@@ -53,7 +53,7 @@ mkdir -p "$EXPORTS"
 progress_init suites $(( $(echo $MODELS | wc -w) * RUNS ))
 for sm in $MODELS; do
   suite=${sm%%/*} model=${sm#*/}
-  X="$EXPORTS/${suite}_$model"
+  X="$EXPORTS/${suite}_${model//\//_}"
   if [ ! -f "$X/index.json" ]; then
     "$SP" "$HERE/suite_export.py" "$suite" "$model" "$X" > "$X.log" 2>&1 || {
       echo "run_suites.sh: export of $sm failed: $(tail -1 "$X.log")" >&2
