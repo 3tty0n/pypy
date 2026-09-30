@@ -285,19 +285,19 @@ class TestEncodeDecode(object):
     def test_liveness_encoding(self):
         res = encode_liveness({})
         assert res == ''
-        res = encode_liveness({'\x00'})
+        res = encode_liveness(['\x00'])
         assert res == '\x01'
-        res = encode_liveness({'\x01'})
+        res = encode_liveness(['\x01'])
         assert res == '\x02'
-        res = encode_liveness({'\x02'})
+        res = encode_liveness(['\x02'])
         assert res == '\x04'
-        res = encode_liveness({'\x03'})
+        res = encode_liveness(['\x03'])
         assert res == '\x08'
-        res = encode_liveness({'\x01', '\x02'})
+        res = encode_liveness(['\x01', '\x02'])
         assert res == '\x06'
-        res = encode_liveness({'\x08'})
+        res = encode_liveness(['\x08'])
         assert res == '\x00\x01'
-        res = encode_liveness({'\x01', '\x09'})
+        res = encode_liveness(['\x01', '\x09'])
         assert res == '\x02\x02'
 
     def test_liveness_iterator(self):
@@ -308,7 +308,7 @@ class TestEncodeDecode(object):
     @example({0, 9})
     @given(strategies.sets(strategies.integers(min_value=0, max_value=255), min_size=1))
     def test_encode_decode_liveness(self, live):
-        live_chars = [chr(i) for i in live]
+        live_chars = [chr(i) for i in sorted(live)]
         res = encode_liveness(live_chars)
         l = list(LivenessIterator(0, len(live), res))
         s = set(l)
@@ -319,9 +319,9 @@ class TestEncodeDecode(object):
            strategies.sets(strategies.integers(min_value=0, max_value=255)),
            strategies.sets(strategies.integers(min_value=0, max_value=255)))
     def test_encode_decode_liveness_3(self, live_i, live_r, live_f):
-        live_i_chars = [chr(i) for i in live_i]
-        live_r_chars = [chr(i) for i in live_r]
-        live_f_chars = [chr(i) for i in live_f]
+        live_i_chars = [chr(i) for i in sorted(live_i)]
+        live_r_chars = [chr(i) for i in sorted(live_r)]
+        live_f_chars = [chr(i) for i in sorted(live_f)]
         all_liveness = encode_liveness(live_i_chars) + encode_liveness(live_r_chars) + encode_liveness(live_f_chars)
         offset = 0
         length_i = len(live_i)

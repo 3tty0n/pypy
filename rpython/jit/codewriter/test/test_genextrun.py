@@ -38,6 +38,37 @@ def test_arith_matches_blackhole():
     assert bh.registers_i[3] == 39
 
 
+def test_ref_return_matches_blackhole(_gcptr_cases):
+    ssarepr = SSARepr("test")
+    r0 = Register('ref', 0)
+    ssarepr.insns = [('ref_return', r0)]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'ref': 1})
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+
+    for value in _gcptr_cases:
+        bh = getblackholeinterp(assembler.insns)
+        bh.setposition(jitcode, 0)
+        bh.setarg_r(0, value)
+        assert jit_run(bh) == -1
+        assert bh._final_result_anytype() == _blackhole_result(
+            assembler, jitcode, value)
+
+
+def test_void_return_matches_blackhole():
+    ssarepr = SSARepr("test")
+    ssarepr.insns = [('void_return',)]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={})
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+
+    bh = getblackholeinterp(assembler.insns)
+    bh.setposition(jitcode, 0)
+    assert jit_run(bh) == -1
+    assert bh._final_result_anytype() == _blackhole_result(
+        assembler, jitcode)
+
+
 def _branch_jitcode():
     ssarepr = SSARepr("test")
     i0, i1, i2 = [Register('int', i) for i in range(3)]
@@ -53,11 +84,17 @@ def _branch_jitcode():
     return assembler, ssarepr, jitcode
 
 
-def _blackhole_result(assembler, jitcode, a, b):
+def _blackhole_result(assembler, jitcode, *args):
+    def _set_blackhole_arg(bh, index, value):
+        if lltype.typeOf(value) is lltype.Signed:
+            bh.setarg_i(index, value)
+        else:
+            bh.setarg_r(index, value)
+
     bh = getblackholeinterp(assembler.insns)
     bh.setposition(jitcode, 0)
-    bh.setarg_i(0, a)
-    bh.setarg_i(1, b)
+    for index, value in enumerate(args):
+        _set_blackhole_arg(bh, index, value)
     bh.run()
     return bh._final_result_anytype()
 
@@ -75,11 +112,12 @@ def test_goto_if_not_matches_blackhole():
             assembler, jitcode, a, b)
 
 
-def _fused_branch_jitcode():
+def _fused_branch_jitcode(comp_op):
+    assert comp_op in ('lt', 'eq', 'gt'), "comp_op must be one of 'lt', 'eq', or 'gt'"
     ssarepr = SSARepr("test")
     i0, i1 = [Register('int', i) for i in range(2)]
     ssarepr.insns = [
-        ('goto_if_not_int_lt', i0, i1, TLabel('nope')),
+        ('goto_if_not_int_'+comp_op, i0, i1, TLabel('nope')),
         ('int_return', i0),
         (Label('nope'),),
         ('int_return', i1),
@@ -89,10 +127,25 @@ def _fused_branch_jitcode():
     return assembler, ssarepr, jitcode
 
 
-def test_goto_if_not_int_lt_matches_blackhole():
-    assembler, ssarepr, jitcode = _fused_branch_jitcode()
+@py.test.fixture
+def _fused_branch_cases():
+    return [(1, 2), (2, 1), (3, 3), (0, 0),
+            (-2, 0), (0, -3), (-3, -2), (-1, -1)]
+
+
+@py.test.fixture
+def _gcptr_cases():
+    # TODO: Is this right?
+    from rpython.rtyper.lltypesystem import llmemory
+    X = lltype.GcStruct('X')
+    return [lltype.cast_opaque_ptr(llmemory.GCREF, value)
+            for value in [lltype.nullptr(X), lltype.malloc(X)]]
+
+
+def assert_fused_branch_matches_blackhole(comp_op, _fused_branch_cases):
+    assembler, ssarepr, jitcode = _fused_branch_jitcode(comp_op)
     jit_run = _run_function(assembler, ssarepr, jitcode)
-    for a, b in [(1, 2), (2, 1), (3, 3)]:
+    for a, b in _fused_branch_cases:
         bh = getblackholeinterp(assembler.insns)
         bh.setposition(jitcode, 0)
         bh.setarg_i(0, a)
@@ -100,6 +153,96 @@ def test_goto_if_not_int_lt_matches_blackhole():
         assert jit_run(bh) == -1
         assert bh._final_result_anytype() == _blackhole_result(
             assembler, jitcode, a, b)
+
+def test_goto_if_not_int_lt_matches_blackhole(_fused_branch_cases):
+    assert_fused_branch_matches_blackhole('lt', _fused_branch_cases)
+
+def test_goto_if_not_int_eq_matches_blackhole(_fused_branch_cases):
+    assert_fused_branch_matches_blackhole('eq', _fused_branch_cases)
+
+def test_goto_if_not_int_gt_matches_blackhole(_fused_branch_cases):
+    assert_fused_branch_matches_blackhole('gt', _fused_branch_cases)
+
+def test_goto_if_not_int_is_true_matches_blackhole():
+    ssarepr = SSARepr("test")
+    i0 = Register('int', 0)
+    ssarepr.insns = [
+        ('goto_if_not_int_is_true', i0, TLabel('nope')),
+        ('int_return', i0),
+        (Label('nope'),),
+        ('int_return', Constant(-1, lltype.Signed)),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 1})
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    for a in [0, 1, -1, 42]:
+        bh = getblackholeinterp(assembler.insns)
+        bh.setposition(jitcode, 0)
+        bh.setarg_i(0, a)
+        assert jit_run(bh) == -1
+        assert bh._final_result_anytype() == _blackhole_result(
+            assembler, jitcode, a)
+
+def test_goto_if_not_int_is_zero_matches_blackhole():
+    ssarepr = SSARepr("test")
+    i0 = Register('int', 0)
+    ssarepr.insns = [
+        ('goto_if_not_int_is_zero', i0, TLabel('nope')),
+        ('int_return', i0),
+        (Label('nope'),),
+        ('int_return', Constant(-1, lltype.Signed)),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 1})
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    for a in [0, 1, -1, 42]:
+        bh = getblackholeinterp(assembler.insns)
+        bh.setposition(jitcode, 0)
+        bh.setarg_i(0, a)
+        assert jit_run(bh) == -1
+        assert bh._final_result_anytype() == _blackhole_result(
+            assembler, jitcode, a)
+
+
+def test_goto_if_not_ptr_iszero_matches_blackhole(_gcptr_cases):
+    ssarepr = SSARepr("test")
+    r0 = Register('ref', 0)
+    ssarepr.insns = [
+        ('goto_if_not_ptr_iszero', r0, TLabel('nope')),
+        ('int_return', Constant(1, lltype.Signed)),
+        (Label('nope'),),
+        ('int_return', Constant(-1, lltype.Signed)),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'ref': 1})
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    for a in _gcptr_cases:
+        bh = getblackholeinterp(assembler.insns)
+        bh.setposition(jitcode, 0)
+        bh.setarg_r(0, a)
+        assert jit_run(bh) == -1
+        assert bh._final_result_anytype() == _blackhole_result(
+            assembler, jitcode, a)
+
+def test_goto_if_not_ptr_nonzero_matches_blackhole(_gcptr_cases):
+    ssarepr = SSARepr("test")
+    r0 = Register('ref', 0)
+    ssarepr.insns = [
+        ('goto_if_not_ptr_nonzero', r0, TLabel('nope')),
+        ('int_return', Constant(1, lltype.Signed)),
+        (Label('nope'),),
+        ('int_return', Constant(-1, lltype.Signed)),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'ref': 1})
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    for a in _gcptr_cases:
+        bh = getblackholeinterp(assembler.insns)
+        bh.setposition(jitcode, 0)
+        bh.setarg_r(0, a)
+        assert jit_run(bh) == -1
+        assert bh._final_result_anytype() == _blackhole_result(
+            assembler, jitcode, a)
 
 
 def _ovf_jitcode():

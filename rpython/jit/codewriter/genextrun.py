@@ -141,6 +141,52 @@ class RunModeGenerator(GenExtension):
                 "    pc = %s" % self._decode_label(position + 2),
                 "continue"]
 
+    def emit_run_goto_if_not_int_eq(self):
+        position = self.pc + 1
+        a = self._run_arg(self.argcodes[0], position)
+        b = self._run_arg(self.argcodes[1], position + 1)
+        if self.argcodes[2] != 'L':
+            raise RunModeUnsupported(self.name)
+        return ["if %s == %s:" % (a, b),
+                "    pc = %s" % self.pc_to_nextpc[self.pc],
+                "else:",
+                "    pc = %s" % self._decode_label(position + 2),
+                "continue"]
+
+    def emit_run_goto_if_not_int_gt(self):
+        position = self.pc + 1
+        a = self._run_arg(self.argcodes[0], position)
+        b = self._run_arg(self.argcodes[1], position + 1)
+        if self.argcodes[2] != 'L':
+            raise RunModeUnsupported(self.name)
+        return ["if %s > %s:" % (a, b),
+                "    pc = %s" % self.pc_to_nextpc[self.pc],
+                "else:",
+                "    pc = %s" % self._decode_label(position + 2),
+                "continue"]
+
+    def emit_run_goto_if_not_int_is_true(self):
+        position = self.pc + 1
+        a = self._run_arg(self.argcodes[0], position)
+        if self.argcodes[1] != 'L':
+            raise RunModeUnsupported(self.name)
+        return ["if %s:" % a,
+                "    pc = %s" % self.pc_to_nextpc[self.pc],
+                "else:",
+                "    pc = %s" % self._decode_label(position + 1),
+                "continue"]
+
+    def emit_run_goto_if_not_int_is_zero(self):
+        position = self.pc + 1
+        a = self._run_arg(self.argcodes[0], position)
+        if self.argcodes[1] != 'L':
+            raise RunModeUnsupported(self.name)
+        return ["if %s == 0:" % a,
+                "    pc = %s" % self.pc_to_nextpc[self.pc],
+                "else:",
+                "    pc = %s" % self._decode_label(position + 1),
+                "continue"]
+
     def emit_run_int_add_jump_if_ovf(self):
         position = self.pc + 1
         if self.argcodes[0] != 'L':
@@ -165,22 +211,50 @@ class RunModeGenerator(GenExtension):
                 "pc = %s" % self.pc_to_nextpc[self.pc],
                 "continue"]
 
+
+    def emit_run_goto_if_not_ptr_iszero(self):
+        position = self.pc + 1
+        a = self._run_arg(self.argcodes[0], position)
+        if self.argcodes[1] != 'L':
+            raise RunModeUnsupported(self.name)
+        return ["if not %s:" % a,
+                "    pc = %s" % self.pc_to_nextpc[self.pc],
+                "else:",
+                "    pc = %s" % self._decode_label(position + 1),
+                "continue"]
+
+    def emit_run_goto_if_not_ptr_nonzero(self):
+        position = self.pc + 1
+        a = self._run_arg(self.argcodes[0], position)
+        if self.argcodes[1] != 'L':
+            raise RunModeUnsupported(self.name)
+        return ["if %s:" % a,
+                "    pc = %s" % self.pc_to_nextpc[self.pc],
+                "else:",
+                "    pc = %s" % self._decode_label(position + 1),
+                "continue"]
+
+    def emit_run_ref_return(self):
+        value = self._run_arg(self.argcodes[0], self.pc + 1)
+        return ["bh.tmpreg_r = %s" % value,
+                "bh._return_type = 'r'",
+                "return -1"]
+
+    def emit_run_void_return(self):
+        return ["bh._return_type = 'v'",
+                "return -1"]
+
+
     emit_run_fallback = _todo("fallback")
 
-    emit_run_catch_exception = _todo("catch_exception")
-    emit_run_goto_if_exception_mismatch = _todo("goto_if_exception_mismatch")
-    emit_run_goto_if_not_int_eq = _todo("goto_if_not_int_eq")
-    emit_run_goto_if_not_int_gt = _todo("goto_if_not_int_gt")
-    emit_run_goto_if_not_int_is_true = _todo("goto_if_not_int_is_true")
-    emit_run_goto_if_not_int_is_zero = _todo("goto_if_not_int_is_zero")
-    emit_run_goto_if_not_ptr_iszero = _todo("goto_if_not_ptr_iszero")
-    emit_run_goto_if_not_ptr_nonzero = _todo("goto_if_not_ptr_nonzero")
-    emit_run_switch = _todo("switch")
-
-    emit_run_ref_return = _todo("ref_return")
-    emit_run_void_return = _todo("void_return")
+    # TODO: How to implement exceptions?
     emit_run_raise = _todo("raise")
     emit_run_reraise = _todo("reraise")
+    emit_run_catch_exception = _todo("catch_exception")
+    emit_run_goto_if_exception_mismatch = _todo("goto_if_exception_mismatch")
+
+    # TODO: How to implement switch?
+    emit_run_switch = _todo("switch")
 
     emit_run_getfield_gc_i = _todo("getfield_gc_i")
     emit_run_getfield_gc_i_pure = _todo("getfield_gc_i_pure")
