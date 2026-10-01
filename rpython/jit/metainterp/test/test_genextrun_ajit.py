@@ -2,7 +2,7 @@ import py
 
 from rpython.rlib.jit import JitDriver
 from rpython.jit.codewriter.genextrun import RunModeGenerator
-from rpython.jit.metainterp import blackhole
+from rpython.jit.metainterp import blackhole, jitexc
 from rpython.jit.metainterp.test.support import LLJitMixin
 from rpython.jit.metainterp.warmspot import get_stats
 
@@ -51,24 +51,47 @@ def _mainjitcode():
 
 class TestRunModeAjit(LLJitMixin):
 
-    @py.test.mark.xfail(strict=True, raises=NotImplementedError,
-                        reason="run mode lacks -live-, jit_merge_point "
-                               "and residual_call_ir_i")
-    def test_loop_jitcode_runs(self):
+    def _generate_loop_jit_run(self):
         assert self.meta_interp(simple_loop, [10]) == simple_loop(10)
         metainterp_sd, assembler, jitcode = _mainjitcode()
         gen = RunModeGenerator(assembler, jitcode._ssarepr, jitcode)
-        jit_run = gen.generate_run()
+        return metainterp_sd, jitcode, gen.generate_run()
+
+    def _new_bh(self, metainterp_sd, jitcode, position, n, res):
         bh = metainterp_sd.blackholeinterpbuilder.acquire_interp()
-        bh.setposition(jitcode, 0)
-        bh.setarg_i(0, 10)
-        pc = jit_run(bh)
-        if pc == -1:
-            assert bh._final_result_anytype() == simple_loop(10)
-        else:
-            name = metainterp_sd.opcode_names[ord(jitcode.code[pc])]
-            assert getattr(RunModeGenerator, "emit_run_" + name.split("/")[0],
-                           None) is not None
+        bh.nextblackholeinterp = None
+        bh.setposition(jitcode, position)
+        bh.setarg_i(0, n)
+        bh.setarg_i(1, res)
+        return bh
+
+    def _pc_of(self, jitcode, opname):
+        ssarepr = jitcode._ssarepr
+        index = [i for i, insn in enumerate(ssarepr.insns)
+                 if insn[0] == opname][0]
+        return ssarepr._insns_pos[index]
+
+    def test_loop_jitcode_runs(self):
+        metainterp_sd, jitcode, jit_run = self._generate_loop_jit_run()
+        bh = self._new_bh(metainterp_sd, jitcode, 0, 10, 0)
+        with py.test.raises(jitexc.ContinueRunningNormally) as excinfo:
+            jit_run(bh)
+        assert excinfo.value.red_int == [10, 0]
+
+    def test_resume_mid_iteration_stops_at_the_merge_point(self):
+        metainterp_sd, jitcode, jit_run = self._generate_loop_jit_run()
+        start = self._pc_of(jitcode, 'int_add')
+        bh = self._new_bh(metainterp_sd, jitcode, start, 10, 0)
+        with py.test.raises(jitexc.ContinueRunningNormally) as excinfo:
+            jit_run(bh)
+        assert excinfo.value.red_int == [9, 10]
+
+    def test_resume_in_the_last_iteration_returns(self):
+        metainterp_sd, jitcode, jit_run = self._generate_loop_jit_run()
+        start = self._pc_of(jitcode, 'int_add')
+        bh = self._new_bh(metainterp_sd, jitcode, start, 1, 41)
+        assert jit_run(bh) == -1
+        assert bh._final_result_anytype() == 42
 
     def _run_guard_loop(self):
         counter = []
