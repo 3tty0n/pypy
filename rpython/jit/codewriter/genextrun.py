@@ -1,9 +1,10 @@
 import py
 
 from rpython.jit.codewriter.genextension import GenExtension
+from rpython.jit.codewriter.liveness import OFFSET_SIZE
 from rpython.rlib.rarithmetic import ovfcheck
 from rpython.jit.metainterp.blackhole import (
-    BlackholeInterpreter, plain_int, signedord)
+    LeaveFrame, BlackholeInterpreter, plain_int, signedord)
 
 
 class RunModeUnsupported(Exception):
@@ -17,7 +18,6 @@ def _todo(name):
 
 
 class RunModeGenerator(GenExtension):
-    pass
 
     def generate_run(self):
         self._scan_pcs()
@@ -49,7 +49,8 @@ class RunModeGenerator(GenExtension):
         for line in self.code:
             source.append(" " * 8 + line)
         self.jitcode._genext_run_source = "\n".join(source)
-        d = {"plain_int": plain_int, "ovfcheck": ovfcheck}
+        d = {"plain_int": plain_int, "ovfcheck": ovfcheck,
+             "LeaveFrame": LeaveFrame}
         d.update(self.globals)
         exec py.code.Source(self.jitcode._genext_run_source).compile() in d
         return d["jit_run"]
@@ -80,6 +81,23 @@ class RunModeGenerator(GenExtension):
         if argcode in ('i', 'r', 'f'):
             return "bh.registers_%s[%s]" % (argcode, ord(code[position]))
         raise RunModeUnsupported(self.name)
+
+    def _run_list(self, argcode, position):
+        code = self.jitcode.code
+        length = ord(code[position])
+        regs = ["bh.registers_%s[%d]" % (
+            argcode.lower(), ord(code[position+1+i])) for i in range(length)]
+        return "[%s]" % ", ".join(regs), position + 1 + length
+
+    def _run_portal_args(self):
+        position = self.pc + 1
+        args = [self._run_arg(self.argcodes[0], position)]
+        position += 1
+        for argcode in self.argcodes[1:7]:
+            assert argcode in 'IRF'
+            text, position = self._run_list(argcode, position)
+            args.append(text)
+        return args, position
 
     def emit_run_default(self):
         func = self._bhimpl()
@@ -286,19 +304,75 @@ class RunModeGenerator(GenExtension):
     emit_run_residual_call_r_i = _todo("residual_call_r_i")
     emit_run_residual_call_r_r = _todo("residual_call_r_r")
     emit_run_residual_call_ir_i = _todo("residual_call_ir_i")
-    emit_run_recursive_call_i = _todo("recursive_call_i")
-    emit_run_inline_call_r_i = _todo("inline_call_r_i")
-    emit_run_inline_call_r_r = _todo("inline_call_r_r")
-    emit_run_inline_call_r_v = _todo("inline_call_r_v")
-    emit_run_inline_call_ir_i = _todo("inline_call_ir_i")
-    emit_run_inline_call_ir_r = _todo("inline_call_ir_r")
-    emit_run_inline_call_ir_v = _todo("inline_call_ir_v")
+
+    def _make_emit_recursive_call(restype):
+        def emit(self):
+            args, position = self._run_portal_args()
+            nextpc = self.pc_to_nextpc[self.pc]
+            # Naive approach: call blackhole implementations
+            call = "bh.bhimpl_recursive_call_%s(%s)" % (
+                restype, ", ".join(args))
+            lines = ["bh.position = %d" % nextpc]
+            if restype == 'v':
+                lines.append(call)
+            else:
+                if restype == 'i':
+                    call = "plain_int(%s)" % call
+                result = ord(self.jitcode.code[position])
+                lines.append("bh.resisters_%s[%d] = %s" % (restype, result, call))
+            lines += ["pc = %d" % nextpc, "continue"]
+            return lines
+        return emit
+
+    emit_run_recursive_call_i = _make_emit_recursive_call("i")
+    emit_run_recursive_call_f = _make_emit_recursive_call("f")
+    emit_run_recursive_call_r = _make_emit_recursive_call("r")
+    emit_run_recursive_call_v = _make_emit_recursive_call("v")
+
+    def _make_emit_inline_call(argtypes, restype):
+        def emit(self):
+            args, position = self._run_portal_args()
+            nextpc = self.pc_to_nextpc[self.pc]
+            call = "bh.bhimpl_inline_call_%s_%s(%s)" % (
+                argtypes, restype, ", ".join(args))
+
+            lines = ["bh.position = %d" % nextpc]
+            if restype == 'v':
+                lines.append(call)
+            else:
+                if restype == 'i':
+                    call = "plain_int(%s)" % call
+                result = ord(self.jitcode.code[position])
+                lines.append("bh.resisters_%s[%d] = %s" % (restype, result, call))
+            lines += ["pc = %d" % nextpc, "continue"]
+            return lines
+        return emit
+
+    emit_run_inline_call_r_i = _make_emit_inline_call("r", "i")
+    emit_run_inline_call_r_r = _make_emit_inline_call("r", "r")
+    emit_run_inline_call_r_v = _make_emit_inline_call("r", "v")
+
+    emit_run_inline_call_ir_i = _make_emit_inline_call("ir", "i")
+    emit_run_inline_call_ir_r = _make_emit_inline_call("ir", "r")
+    emit_run_inline_call_ir_v = _make_emit_inline_call("ir", "v")
 
     emit_run_guard_class = _todo("guard_class")
     emit_run_guard_nonnull = _todo("guard_nonnull")
 
-    emit_run_live = _todo("-live-")
-    emit_run_jit_merge_point = _todo("jit_merge_point")
+    def emit_run_live(self):
+        return ["pc = %d" % (self.pc + OFFSET_SIZE)]
+
+    def _emit_run_portal_point(name):
+        def emit(self):
+            args, _ = self._run_portal_args()
+            return ["bh.position = %d" % self.pc_to_nextpc[self.pc],
+                    "try:",
+                    "    bh.bhimpl_%s(%s)" % (name, ", ".join(args)),
+                    "except LeaveFrame:",
+                    "    return -1"]
+        return emit
+
+    emit_run_jit_merge_point = _emit_run_portal_point("jit_merge_point")
     emit_run_pe_bailout_point = _todo("pe_bailout_point")
 
 

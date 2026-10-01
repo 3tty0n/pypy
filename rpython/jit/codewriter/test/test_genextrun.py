@@ -300,6 +300,17 @@ def test_strlen_uses_cpu():
     assert jit_run(bh) == -1
     assert bh._final_result_anytype() == 5
 
+def test_recursive_call():
+    # TODO
+    pass
+
+def test_inline_call():
+    # TODO
+    pass
+
+def test_portal_point():
+    # TODO
+    pass
 
 @py.test.mark.xfail(strict=True, raises=NotImplementedError,
                     reason="run mode lacks -live-, ref_return, "
