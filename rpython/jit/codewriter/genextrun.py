@@ -353,6 +353,9 @@ class RunModeGenerator(GenExtension):
     # TODO: How to implement switch?
     emit_run_switch = _todo("switch")
 
+    emit_run_new = _todo("new")
+    emit_run_new_array_clear = _todo("new_array_clear")
+    emit_run_new_with_vtable = _todo("new_with_vtable")
     emit_run_getfield_gc_i = _todo("getfield_gc_i")
     emit_run_getfield_gc_i_pure = _todo("getfield_gc_i_pure")
     emit_run_getfield_gc_r = _todo("getfield_gc_r")
@@ -372,9 +375,6 @@ class RunModeGenerator(GenExtension):
     emit_run_setarrayitem_gc = _todo("setarrayitem_gc")
     emit_run_setarrayitem_gc_r = _todo("setarrayitem_gc_r")
     emit_run_setarrayitem_vable_r = _todo("setarrayitem_vable_r")
-    emit_run_new = _todo("new")
-    emit_run_new_array_clear = _todo("new_array_clear")
-    emit_run_new_with_vtable = _todo("new_with_vtable")
     emit_run_newstr = _todo("newstr")
     emit_run_strgetitem = _todo("strgetitem")
     emit_run_strsetitem = _todo("strsetitem")

@@ -3,9 +3,11 @@ from rpython.flowspace.model import Constant
 from rpython.rtyper.lltypesystem import lltype
 
 from rpython.jit.codewriter.assembler import Assembler
-from rpython.jit.codewriter.flatten import SSARepr, Register, Label, TLabel
+from rpython.jit.codewriter.flatten import (
+    SSARepr, Register, Label, TLabel, ListOfKind)
 from rpython.jit.codewriter.genextension import GenExtension
 from rpython.jit.codewriter.genextrun import generate_run_function
+from rpython.jit.metainterp import jitexc
 from rpython.jit.metainterp.test.test_blackhole import getblackholeinterp
 
 
@@ -922,8 +924,31 @@ def test_inline_call():
     pass
 
 def test_portal_point():
-    # TODO
-    pass
+    # TODO: @Yusuke: Check this
+    ssarepr = SSARepr("test")
+    i0 = Register('int', 0)
+    ssarepr.insns = [
+        ('jit_merge_point', Constant(7, lltype.Signed),
+         ListOfKind('int', []), ListOfKind('ref', []),
+         ListOfKind('float', []), ListOfKind('int', [i0]),
+         ListOfKind('ref', []), ListOfKind('float', [])),
+        ]
+    assembler = Assembler()
+    jitcode = assembler.assemble(ssarepr, num_regs={'int': 1})
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+
+    bh = getblackholeinterp(assembler.insns)
+    bh.nextblackholeinterp = None
+    bh.setposition(jitcode, 0)
+    bh.setarg_i(0, 42)
+    exc = py.test.raises(jitexc.ContinueRunningNormally, jit_run, bh)
+    assert exc.value.green_int == []
+    assert exc.value.green_ref == []
+    assert exc.value.green_float == []
+    assert exc.value.red_int == [42]
+    assert exc.value.red_ref == []
+    assert exc.value.red_float == []
+    assert bh.position == len(jitcode.code)
 
 @py.test.mark.xfail(strict=True, raises=NotImplementedError,
                    reason="run mode lacks -live-, ref_return, "
