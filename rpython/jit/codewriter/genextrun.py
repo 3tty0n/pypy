@@ -2,6 +2,7 @@ import py
 
 from rpython.jit.codewriter.genextension import (
     GenExtension, _int_as_str, _float_as_str)
+from rpython.jit.codewriter.flatten import Label, Register
 from rpython.rlib.rarithmetic import ovfcheck
 from rpython.rtyper.lltypesystem import lltype
 from rpython.jit.metainterp.blackhole import (
@@ -10,6 +11,15 @@ from rpython.jit.metainterp.blackhole import (
 
 class RunModeUnsupported(Exception):
     pass
+
+
+FOLDABLE_OPS = frozenset([
+    'int_copy', 'int_neg', 'int_invert', 'int_is_zero', 'int_is_true',
+    'int_add', 'int_sub', 'int_mul', 'int_and', 'int_or', 'int_xor',
+    'int_lt', 'int_le', 'int_eq', 'int_ne', 'int_gt', 'int_ge',
+])
+
+KIND = {'int': 'i', 'ref': 'r', 'float': 'f'}
 
 
 def _todo(name):
@@ -27,10 +37,17 @@ class RunModeGenerator(GenExtension):
         self._scan_pcs()
         self.used_regs = set()       # (kind, index) loaded into locals
         self.written_regs = set()    # (kind, index) stored back on exit
+        block_starts = set(self.ssarepr._insns_pos[index]
+                           for index, insn in enumerate(self.ssarepr.insns)
+                           if isinstance(insn[0], Label))
+        facts = {}
         self.code = []
         prefix = ""
         for pc in sorted(self.pc_to_insn):
             self._select_pc(pc)
+            if pc in block_starts:
+                facts = {}
+            self.consts = facts
             meth = getattr(self, "emit_run_" + self.name, None)
             try:
                 if meth is None:
@@ -43,6 +60,7 @@ class RunModeGenerator(GenExtension):
             for line in lines:
                 self.code.append("    " + line)
             prefix = "el"
+            facts = self._transfer(facts)
         self.code.append("else:")
         self.code.append("    return pc")
         source = ["def jit_run(bh): # %s" % self.jitcode.name,
@@ -75,6 +93,59 @@ class RunModeGenerator(GenExtension):
         instruction = self.insns[ord(self.jitcode.code[pc])]
         self.name, self.argcodes = instruction.split("/")
 
+    # generation-time constant propagation over int registers
+    def _transfer(self, consts):
+        """The constants known after the current instruction: its result
+        register is dropped, or recorded if _fold() evaluated it.  Callers
+        reset them at every label, so they never cross a basic block"""
+        out = dict(consts)
+        if '->' in self.insn:
+            res = self.insn[self.insn.index('->') + 1]
+            if isinstance(res, Register):
+                out.pop((KIND[res.kind], res.index), None)
+        folded = self._fold()
+        if folded is not None:
+            index, value = folded
+            out[('i', index)] = value
+        return out
+
+    def _fold(self):
+        """If the current instruction is a foldable int operation whose
+        operands are all known, return (result register, result value)"""
+        if self.name not in FOLDABLE_OPS:
+            return None
+        func = self._bhimpl()
+        if func.resulttype != 'i':
+            return None
+        position = self.pc + 1
+        values = []
+        for argtype in func.argtypes:
+            if argtype != 'i':
+                return None
+            value = self._run_value(self.argcodes[len(values)], position)
+            if value is None:
+                return None
+            values.append(value)
+            position += 1
+        result = int(func(*values))
+        return ord(self.jitcode.code[position]), result
+
+    def _run_value(self, argcode, position):
+        """The int value of an operand if known at generation time"""
+        code = self.jitcode.code
+        if argcode == 'c':
+            return signedord(code[position])
+        if argcode != 'i':
+            return None
+        index = ord(code[position])
+        jc = self.jitcode
+        if index >= jc.num_regs_i():
+            value = jc.constants_i[index - jc.num_regs_i()]
+            if isinstance(value, (int, long)):
+                return int(value)
+            return None
+        return self.consts.get(('i', index))
+
     def _scan_pcs(self):
         from rpython.jit.codewriter.flatten import Label
         for index, insn in enumerate(self.ssarepr.insns):
@@ -103,14 +174,17 @@ class RunModeGenerator(GenExtension):
         raise RunModeUnsupported(self.name)
 
     def _run_reg(self, kind, index):
-        """Source for reading a register: a literal for a jitcode constant
-        (these sit at index >= num_regs_X), else its local"""
+        """Source for reading a register: a literal if its value is known
+        (jitcode constants sit at index >= num_regs_X. self.consts holds
+        the proven ones), else its local"""
         jc = self.jitcode
         if kind == 'i':
             if index >= jc.num_regs_i():
                 value = jc.constants_i[index - jc.num_regs_i()]
                 return _int_as_str(value, lltype.typeOf(value),
                                    self._add_global)
+            if ('i', index) in self.consts:
+                return str(self.consts[('i', index)])
         elif kind == 'r':
             if index >= jc.num_regs_r():
                 return self._add_global(jc.constants_r[index - jc.num_regs_r()])
@@ -159,14 +233,19 @@ class RunModeGenerator(GenExtension):
         restype = func.resulttype
         if restype not in (None, 'i', 'r', 'f'):
             raise RunModeUnsupported(self.name)
-        call = "%s(%s)" % (self._add_global(func), ", ".join(args))
-        if restype is None:
-            lines = [call]
+        folded = self._fold()
+        if folded is not None:
+            index, value = folded
+            lines = ["%s = %s" % (self._run_dest('i', index), value)]
         else:
-            if restype == 'i':
-                call = "plain_int(%s)" % call
-            dest = self._run_dest(restype, ord(code[position]))
-            lines = ["%s = %s" % (dest, call)]
+            call = "%s(%s)" % (self._add_global(func), ", ".join(args))
+            if restype is None:
+                lines = [call]
+            else:
+                if restype == 'i':
+                    call = "plain_int(%s)" % call
+                dest = self._run_dest(restype, ord(code[position]))
+                lines = ["%s = %s" % (dest, call)]
         lines.append("pc = %s" % self.pc_to_nextpc[self.pc])
         lines.append("continue")
         return lines
@@ -174,20 +253,28 @@ class RunModeGenerator(GenExtension):
     def emit_run_goto(self):
         return ["pc = %s" % self._decode_label(self.pc + 1), "continue"]
 
-    def _emit_branch(self, nargs, cond):
+    def _emit_branch(self, nargs, cond, test=None):
         position = self.pc + 1
         if self.argcodes[nargs] != 'L':
             raise RunModeUnsupported(self.name)
+        label = self._decode_label(position + nargs)
+        nextpc = self.pc_to_nextpc[self.pc]
+        if test is not None:
+            values = [self._run_value(self.argcodes[i], position + i)
+                      for i in range(nargs)]
+            if None not in values:
+                target = nextpc if test(*values) else label
+                return ["pc = %s" % target, "continue"]
         args = [self._run_arg(self.argcodes[i], position + i)
                 for i in range(nargs)]
         return ["if %s:" % cond(*args),
-                "    pc = %s" % self.pc_to_nextpc[self.pc],
+                "    pc = %s" % nextpc,
                 "else:",
-                "    pc = %s" % self._decode_label(position + nargs),
+                "    pc = %s" % label,
                 "continue"]
 
     def emit_run_goto_if_not(self):
-        return self._emit_branch(1, lambda a: a)
+        return self._emit_branch(1, lambda a: a, lambda a: bool(a))
 
     def emit_run_int_return(self):
         value = self._run_arg(self.argcodes[0], self.pc + 1)
@@ -196,19 +283,23 @@ class RunModeGenerator(GenExtension):
                 "return -1"]
 
     def emit_run_goto_if_not_int_lt(self):
-        return self._emit_branch(2, lambda a, b: "%s < %s" % (a, b))
+        return self._emit_branch(2, lambda a, b: "%s < %s" % (a, b),
+                                 lambda a, b: a < b)
 
     def emit_run_goto_if_not_int_eq(self):
-        return self._emit_branch(2, lambda a, b: "%s == %s" % (a, b))
+        return self._emit_branch(2, lambda a, b: "%s == %s" % (a, b),
+                                 lambda a, b: a == b)
 
     def emit_run_goto_if_not_int_gt(self):
-        return self._emit_branch(2, lambda a, b: "%s > %s" % (a, b))
+        return self._emit_branch(2, lambda a, b: "%s > %s" % (a, b),
+                                 lambda a, b: a > b)
 
     def emit_run_goto_if_not_int_is_true(self):
-        return self._emit_branch(1, lambda a: a)
+        return self._emit_branch(1, lambda a: a, lambda a: a != 0)
 
     def emit_run_goto_if_not_int_is_zero(self):
-        return self._emit_branch(1, lambda a: "%s == 0" % a)
+        return self._emit_branch(1, lambda a: "%s == 0" % a,
+                                 lambda a: a == 0)
 
     def emit_run_int_add_jump_if_ovf(self):
         position = self.pc + 1

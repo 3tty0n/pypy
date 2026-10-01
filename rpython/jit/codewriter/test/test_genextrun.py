@@ -1,4 +1,3 @@
-
 import py
 from rpython.flowspace.model import Constant
 from rpython.rtyper.lltypesystem import lltype
@@ -336,7 +335,18 @@ def test_strlen_uses_cpu():
     assert bh._final_result_anytype() == 5
 
 # ----------
-# registers kept in Python locals
+# registers kept in Python locals, and generation-time constant propagation
+
+def _loop_body(jitcode):
+    """The part of the generated source that runs inside the dispatch loop"""
+    lines = jitcode._genext_run_source.split("\n")
+    start = [i for i, l in enumerate(lines) if l.strip() == "while 1:"][0]
+    end = len(lines)
+    for i, l in enumerate(lines):
+        if l.strip() == "finally:":
+            end = i
+    return "\n".join(lines[start + 1:end])
+
 
 def _assemble(insns, **num_regs):
     ssarepr = SSARepr("test")
@@ -463,7 +473,7 @@ def test_loop_with_locals_matches_blackhole():
     try:
         while 1:
             if pc == 0: # int_copy
-                i1 = plain_int(glob0(0))
+                i1 = 0
                 pc = 3
                 continue
             elif pc == 3: # goto_if_not_int_gt
@@ -473,11 +483,11 @@ def test_loop_with_locals_matches_blackhole():
                     pc = 19
                 continue
             elif pc == 8: # int_add
-                i1 = plain_int(glob1(i1, i0))
+                i1 = plain_int(glob0(i1, i0))
                 pc = 12
                 continue
             elif pc == 12: # int_sub
-                i0 = plain_int(glob2(i0, 1))
+                i0 = plain_int(glob1(i0, 1))
                 pc = 16
                 continue
             elif pc == 16: # goto
@@ -494,6 +504,38 @@ def test_loop_with_locals_matches_blackhole():
         bh.registers_i[1] = i1"""
 
 
+def test_loop_carried_register_is_not_treated_as_constant():
+    assembler, ssarepr, jitcode = _sum_loop_jitcode()
+    _run_function(assembler, ssarepr, jitcode)
+    body = _loop_body(jitcode).strip()
+    assert body == """if pc == 0: # int_copy
+                i1 = 0
+                pc = 3
+                continue
+            elif pc == 3: # goto_if_not_int_gt
+                if i0 > 0:
+                    pc = 8
+                else:
+                    pc = 19
+                continue
+            elif pc == 8: # int_add
+                i1 = plain_int(glob0(i1, i0))
+                pc = 12
+                continue
+            elif pc == 12: # int_sub
+                i0 = plain_int(glob1(i0, 1))
+                pc = 16
+                continue
+            elif pc == 16: # goto
+                pc = 3
+                continue
+            elif pc == 19: # int_return
+                bh.tmpreg_i = i1
+                bh._return_type = 'i'
+                return -1
+            else:
+                return pc"""
+
 def _const_chain_jitcode():
     i0, i1 = Register('int', 0), Register('int', 1)
     return _assemble([
@@ -501,6 +543,291 @@ def _const_chain_jitcode():
         ('int_add', i0, Constant(200000, lltype.Signed), '->', i1),
         ('int_return', i1),
         ], int=2)
+
+
+def test_constants_are_propagated_and_folded():
+    assembler, ssarepr, jitcode = _const_chain_jitcode()
+    result = _check_matches_blackhole(assembler, ssarepr, jitcode)
+    assert result == 300000
+    body = _loop_body(jitcode).strip()
+    assert body == """if pc == 0: # int_copy
+                i0 = 100000
+                pc = 3
+                continue
+            elif pc == 3: # int_add
+                i1 = 300000
+                pc = 7
+                continue
+            elif pc == 7: # int_return
+                bh.tmpreg_i = 300000
+                bh._return_type = 'i'
+                return -1
+            else:
+                return pc"""
+
+
+def test_folding_wraps_around_like_blackhole():
+    import sys
+    i0 = Register('int', 0)
+    assembler, ssarepr, jitcode = _assemble([
+        ('int_copy', Constant(sys.maxint, lltype.Signed), '->', i0),
+        ('int_add', i0, Constant(1, lltype.Signed), '->', i0),
+        ('int_return', i0),
+        ], int=1)
+    result = _check_matches_blackhole(assembler, ssarepr, jitcode)
+    assert result == -sys.maxint - 1
+
+
+def test_folding_of_comparisons_and_unary_ops():
+    i0, i1, i2 = [Register('int', i) for i in range(3)]
+    assembler, ssarepr, jitcode = _assemble([
+        ('int_copy', Constant(5, lltype.Signed), '->', i0),
+        ('int_lt', i0, Constant(9, lltype.Signed), '->', i1),
+        ('int_neg', i0, '->', i2),
+        ('int_add', i1, i2, '->', i2),
+        ('int_return', i2),
+        ], int=3)
+    assert _check_matches_blackhole(assembler, ssarepr, jitcode) == -4
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    i1 = bh.registers_i[1]
+    i2 = bh.registers_i[2]
+    try:
+        while 1:
+            if pc == 0: # int_copy
+                i0 = 5
+                pc = 3
+                continue
+            elif pc == 3: # int_lt
+                i1 = 1
+                pc = 7
+                continue
+            elif pc == 7: # int_neg
+                i2 = -5
+                pc = 10
+                continue
+            elif pc == 10: # int_add
+                i2 = -4
+                pc = 14
+                continue
+            elif pc == 14: # int_return
+                bh.tmpreg_i = -4
+                bh._return_type = 'i'
+                return -1
+            else:
+                return pc
+    finally:
+        bh.registers_i[0] = i0
+        bh.registers_i[1] = i1
+        bh.registers_i[2] = i2"""
+
+
+def _folded_branch_jitcode(value):
+    i0 = Register('int', 0)
+    return _assemble([
+        ('int_copy', Constant(value, lltype.Signed), '->', i0),
+        ('goto_if_not_int_lt', i0, Constant(10, lltype.Signed),
+         TLabel('nope')),
+        ('int_return', Constant(1, lltype.Signed)),
+        (Label('nope'),),
+        ('int_return', Constant(2, lltype.Signed)),
+        ], int=1)
+
+
+def test_branch_on_known_values_is_resolved():
+    for value, expected, target in [(5, 1, 8), (50, 2, 10)]:
+        assembler, ssarepr, jitcode = _folded_branch_jitcode(value)
+        assert _check_matches_blackhole(
+            assembler, ssarepr, jitcode) == expected
+        assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    try:
+        while 1:
+            if pc == 0: # int_copy
+                i0 = %(value)d
+                pc = 3
+                continue
+            elif pc == 3: # goto_if_not_int_lt
+                pc = %(target)d
+                continue
+            elif pc == 8: # int_return
+                bh.tmpreg_i = 1
+                bh._return_type = 'i'
+                return -1
+            elif pc == 10: # int_return
+                bh.tmpreg_i = 2
+                bh._return_type = 'i'
+                return -1
+            else:
+                return pc
+    finally:
+        bh.registers_i[0] = i0""" % dict(value=value, target=target)
+
+
+def test_branch_on_unknown_value_is_kept():
+    assembler, ssarepr, jitcode = _fused_branch_jitcode('lt')
+    _run_function(assembler, ssarepr, jitcode)
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    i1 = bh.registers_i[1]
+    while 1:
+        if pc == 0: # goto_if_not_int_lt
+            if i0 < i1:
+                pc = 5
+            else:
+                pc = 7
+            continue
+        elif pc == 5: # int_return
+            bh.tmpreg_i = i0
+            bh._return_type = 'i'
+            return -1
+        elif pc == 7: # int_return
+            bh.tmpreg_i = i1
+            bh._return_type = 'i'
+            return -1
+        else:
+            return pc"""
+
+
+def _join_jitcode(v_then, v_else):
+    i0, i1 = Register('int', 0), Register('int', 1)
+    return _assemble([
+        ('goto_if_not', i0, TLabel('else')),
+        ('int_copy', Constant(v_then, lltype.Signed), '->', i1),
+        ('goto', TLabel('join')),
+        (Label('else'),),
+        ('int_copy', Constant(v_else, lltype.Signed), '->', i1),
+        (Label('join'),),
+        ('int_return', i1),
+        ], int=2)
+
+
+def test_facts_do_not_cross_a_label():
+    for v_then, v_else in [(1, 2), (7, 7)]:
+        for cond, expected in [(0, v_else), (1, v_then)]:
+            a, s_, j = _join_jitcode(v_then, v_else)
+            assert _check_matches_blackhole(a, s_, j, cond) == expected
+        assert j._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    i1 = bh.registers_i[1]
+    try:
+        while 1:
+            if pc == 0: # goto_if_not
+                if i0:
+                    pc = 4
+                else:
+                    pc = 10
+                continue
+            elif pc == 4: # int_copy
+                i1 = %d
+                pc = 7
+                continue
+            elif pc == 7: # goto
+                pc = 13
+                continue
+            elif pc == 10: # int_copy
+                i1 = %d
+                pc = 13
+                continue
+            elif pc == 13: # int_return
+                bh.tmpreg_i = i1
+                bh._return_type = 'i'
+                return -1
+            else:
+                return pc
+    finally:
+        bh.registers_i[1] = i1""" % (v_then, v_else)
+
+
+def test_facts_survive_the_fallthrough_of_a_conditional_branch():
+    i0, i1 = [Register('int', i) for i in range(2)]
+    assembler, ssarepr, jitcode = _assemble([
+        ('int_copy', Constant(5, lltype.Signed), '->', i1),
+        ('goto_if_not', i0, TLabel('else')),
+        ('int_return', i1),
+        (Label('else'),),
+        ('int_return', Constant(9, lltype.Signed)),
+        ], int=2)
+    for cond, expected in [(0, 9), (1, 5)]:
+        assert _check_matches_blackhole(
+            assembler, ssarepr, jitcode, cond) == expected
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    i1 = bh.registers_i[1]
+    try:
+        while 1:
+            if pc == 0: # int_copy
+                i1 = 5
+                pc = 3
+                continue
+            elif pc == 3: # goto_if_not
+                if i0:
+                    pc = 7
+                else:
+                    pc = 9
+                continue
+            elif pc == 7: # int_return
+                bh.tmpreg_i = 5
+                bh._return_type = 'i'
+                return -1
+            elif pc == 9: # int_return
+                bh.tmpreg_i = 9
+                bh._return_type = 'i'
+                return -1
+            else:
+                return pc
+    finally:
+        bh.registers_i[1] = i1"""
+
+
+def test_unfoldable_write_kills_the_constant():
+    from rpython.rtyper.lltypesystem import llmemory, rstr
+    i0 = Register('int', 0)
+    assembler, ssarepr, jitcode = _assemble([
+        ('int_copy', Constant(5, lltype.Signed), '->', i0),
+        ('strlen', Register('ref', 0), '->', i0),
+        ('int_return', i0),
+        ], int=1, ref=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+
+    class CPU(object):
+        def bh_strlen(self, string):
+            return 3
+
+    bh = getblackholeinterp(assembler.insns)
+    bh.cpu = CPU()
+    bh.setposition(jitcode, 0)
+    s = rstr.mallocstr(3)
+    bh.setarg_r(0, lltype.cast_opaque_ptr(llmemory.GCREF, s))
+    assert jit_run(bh) == -1
+    assert bh._final_result_anytype() == 3
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    r0 = bh.registers_r[0]
+    try:
+        while 1:
+            if pc == 0: # int_copy
+                i0 = 5
+                pc = 3
+                continue
+            elif pc == 3: # strlen
+                i0 = bh.cpu.bh_strlen(r0)
+                pc = 6
+                continue
+            elif pc == 6: # int_return
+                bh.tmpreg_i = i0
+                bh._return_type = 'i'
+                return -1
+            else:
+                return pc
+    finally:
+        bh.registers_i[0] = i0"""
 
 
 def test_every_original_pc_is_a_valid_entry():
@@ -513,6 +840,51 @@ def test_every_original_pc_is_a_valid_entry():
         bh.setarg_i(1, 300000)
         assert jit_run(bh) == -1
         assert bh._final_result_anytype() == 300000
+
+
+def test_counting_loop_with_constants_is_not_unrolled():
+    i0 = Register('int', 0)
+    assembler, ssarepr, jitcode = _assemble([
+        ('int_copy', Constant(0, lltype.Signed), '->', i0),
+        (Label('loop'),),
+        ('int_add', i0, Constant(1, lltype.Signed), '->', i0),
+        ('goto_if_not_int_lt', i0, Constant(100, lltype.Signed),
+         TLabel('done')),
+        ('goto', TLabel('loop')),
+        (Label('done'),),
+        ('int_return', i0),
+        ], int=1)
+    assert _check_matches_blackhole(assembler, ssarepr, jitcode) == 100
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    try:
+        while 1:
+            if pc == 0: # int_copy
+                i0 = 0
+                pc = 3
+                continue
+            elif pc == 3: # int_add
+                i0 = plain_int(glob0(i0, 1))
+                pc = 7
+                continue
+            elif pc == 7: # goto_if_not_int_lt
+                if i0 < 100:
+                    pc = 12
+                else:
+                    pc = 15
+                continue
+            elif pc == 12: # goto
+                pc = 3
+                continue
+            elif pc == 15: # int_return
+                bh.tmpreg_i = i0
+                bh._return_type = 'i'
+                return -1
+            else:
+                return pc
+    finally:
+        bh.registers_i[0] = i0"""
 
 
 def test_pc_after_live_is_the_next_instruction():
@@ -529,6 +901,16 @@ def test_pc_after_live_is_the_next_instruction():
             ('int_return', i1),
             ], int=2)
         assert _check_matches_blackhole(a, s_, j, cond) == 7
+
+
+def test_resuming_in_the_middle_sees_the_same_constants():
+    assembler, ssarepr, jitcode = _const_chain_jitcode()
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    bh = getblackholeinterp(assembler.insns)
+    bh.setposition(jitcode, ssarepr._insns_pos[1])
+    bh.setarg_i(0, 100000)
+    assert jit_run(bh) == -1
+    assert bh._final_result_anytype() == 300000
 
 
 def test_recursive_call():
