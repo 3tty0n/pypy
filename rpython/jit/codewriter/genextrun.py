@@ -380,9 +380,33 @@ class RunModeGenerator(GenExtension):
     emit_run_strsetitem = _todo("strsetitem")
     emit_run_copystrcontent = _todo("copystrcontent")
 
-    emit_run_residual_call_r_i = _todo("residual_call_r_i")
-    emit_run_residual_call_r_r = _todo("residual_call_r_r")
-    emit_run_residual_call_ir_i = _todo("residual_call_ir_i")
+    def _make_emit_residual_call(kinds, restype):
+        # residual_call_<kinds>_<restype>: func, one list per kind, calldescr
+        def emit(self):
+            code = self.jitcode.code
+            position = self.pc + 1
+            func = self._run_arg(self.argcodes[0], position)
+            position += 1
+            lists = {}
+            for kind in kinds:
+                lists[kind], position = self._run_list(kind.upper(), position)
+            descr = self._add_global(self.assembler.descrs[
+                ord(code[position]) | (ord(code[position + 1]) << 8)])
+            position += 2
+            call = "bh.cpu.bh_call_%s(%s, %s, %s, %s, %s)" % (
+                restype, func, lists.get('i', 'None'), lists.get('r', 'None'),
+                lists.get('f', 'None'), descr)
+            if restype == 'i':
+                call = "plain_int(%s)" % call
+            if restype != 'v':
+                call = "%s = %s" % (self._run_dest(restype, ord(code[position])), call)
+            nextpc = self.pc_to_nextpc[self.pc]
+            return ["bh.position = %d" % nextpc, call, "pc = %d" % nextpc, "continue"]
+        return emit
+
+    emit_run_residual_call_r_i = _make_emit_residual_call('r', 'i') #_todo("residual_call_r_i")
+    emit_run_residual_call_r_r = _make_emit_residual_call('r', 'r')  # _todo("residual_call_r_r")
+    emit_run_residual_call_ir_i = _make_emit_residual_call('ir', 'i')  # _todo("residual_call_ir_i")
 
     def _make_emit_recursive_call(restype):
         def emit(self):

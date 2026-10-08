@@ -8,6 +8,7 @@ from rpython.jit.codewriter.flatten import (
 from rpython.jit.codewriter.genextension import GenExtension
 from rpython.jit.codewriter.genextrun import generate_run_function
 from rpython.jit.metainterp import jitexc
+from rpython.jit.metainterp.history import AbstractDescr
 from rpython.jit.metainterp.test.test_blackhole import getblackholeinterp
 
 
@@ -913,6 +914,126 @@ def test_resuming_in_the_middle_sees_the_same_constants():
     bh.setarg_i(0, 100000)
     assert jit_run(bh) == -1
     assert bh._final_result_anytype() == 300000
+
+
+class FakeCallDescr(AbstractDescr):
+    pass
+
+
+def _gcptr_value():
+    from rpython.rtyper.lltypesystem import llmemory
+    return lltype.cast_opaque_ptr(llmemory.GCREF,
+                                  lltype.malloc(lltype.GcStruct('X')))
+
+
+class FakeCallCPU(object):
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    def _call(self, kind, func, args_i, args_r, args_f, descr):
+        self.calls.append((kind, func, args_i, args_r, args_f, descr))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+    def bh_call_i(self, *args):
+        return self._call('i', *args)
+
+    def bh_call_r(self, *args):
+        return self._call('r', *args)
+
+
+def _check_residual_call(insn, result, num_regs, int_args=(), ref_args=()):
+    assembler, ssarepr, jitcode = _assemble([insn, ('void_return',)],
+                                            **num_regs)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    cpus = []
+    for run in [jit_run, None]:
+        bh = getblackholeinterp(assembler.insns, assembler.descrs)
+        bh.cpu = cpu = FakeCallCPU(result)
+        bh.setposition(jitcode, 0)
+        for index, value in enumerate(int_args):
+            bh.setarg_i(index, value)
+        for index, value in enumerate(ref_args):
+            bh.setarg_r(index, value)
+        if run is None:
+            bh.run()
+        else:
+            assert run(bh) == -1
+        cpus.append((cpu.calls, bh.registers_i[:], bh.registers_r[:]))
+    assert cpus[0] == cpus[1]
+    return jitcode, cpus[0]
+
+
+def test_residual_call_r_i():
+    r0 = _gcptr_value()
+    descr = FakeCallDescr()
+    jitcode, (calls, regs_i, _) = _check_residual_call(
+        ('residual_call_r_i', Constant(12345, lltype.Signed),
+         ListOfKind('ref', [Register('ref', 0)]), descr,
+         '->', Register('int', 0)),
+        42, dict(int=1, ref=1), ref_args=[r0])
+    assert calls == [('i', 12345, None, [r0], None, descr)]
+    assert regs_i[0] == 42
+
+
+def test_residual_call_r_r():
+    r0, r1 = _gcptr_value(), _gcptr_value()
+    descr = FakeCallDescr()
+    jitcode, (calls, _, regs_r) = _check_residual_call(
+        ('residual_call_r_r', Constant(12345, lltype.Signed),
+         ListOfKind('ref', [Register('ref', 0)]), descr,
+         '->', Register('ref', 1)),
+        r1, dict(ref=2), ref_args=[r0])
+    assert calls == [('r', 12345, None, [r0], None, descr)]
+    assert regs_r[1] == r1
+
+
+def test_residual_call_ir_i():
+    r0 = _gcptr_value()
+    descr = FakeCallDescr()
+    jitcode, (calls, regs_i, _) = _check_residual_call(
+        ('residual_call_ir_i', Constant(12345, lltype.Signed),
+         ListOfKind('int', [Register('int', 0), Constant(99999, lltype.Signed)]),
+         ListOfKind('ref', [Register('ref', 0)]), descr,
+         '->', Register('int', 1)),
+        42, dict(int=2, ref=1), int_args=[7], ref_args=[r0])
+    assert calls == [('i', 12345, [7, 99999], [r0], None, descr)]
+    assert regs_i[1] == 42
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    i1 = bh.registers_i[1]
+    r0 = bh.registers_r[0]
+    try:
+        while 1:
+            if pc == 0: # residual_call_ir_i
+                bh.position = 10
+                i1 = plain_int(bh.cpu.bh_call_i(12345, [i0, 99999], [r0], None, glob0))
+                pc = 10
+                continue
+            elif pc == 10: # void_return
+                bh._return_type = 'v'
+                return -1
+            else:
+                return pc
+    finally:
+        bh.registers_i[1] = i1"""
+
+
+def test_residual_call_exception_leaves_position_after_the_call():
+    assembler, ssarepr, jitcode = _assemble([
+        ('residual_call_r_i', Constant(12345, lltype.Signed),
+         ListOfKind('ref', []), FakeCallDescr(), '->', Register('int', 0)),
+        ('int_return', Register('int', 0)),
+        ], int=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    bh = getblackholeinterp(assembler.insns, assembler.descrs)
+    bh.cpu = FakeCallCPU(ValueError())
+    bh.setposition(jitcode, 0)
+    py.test.raises(ValueError, jit_run, bh)
+    assert bh.position == ssarepr._insns_pos[1]
 
 
 def test_recursive_call():
