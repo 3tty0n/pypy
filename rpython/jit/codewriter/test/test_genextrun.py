@@ -163,6 +163,29 @@ def _fused_branch_jitcode(comp_op):
     jitcode = assembler.assemble(ssarepr, num_regs={'int': 2})
     return assembler, ssarepr, jitcode
 
+def _fused_branch_jitcode_matches_expected(comp_op, jitcode):
+    return jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    i1 = bh.registers_i[1]
+    while 1:
+        if pc == 0: # goto_if_not_int_%s
+            if i0 %s i1:
+                pc = 5
+            else:
+                pc = 7
+            continue
+        elif pc == 5: # int_return
+            bh.tmpreg_i = i0
+            bh._return_type = 'i'
+            return -1
+        elif pc == 7: # int_return
+            bh.tmpreg_i = i1
+            bh._return_type = 'i'
+            return -1
+        else:
+            return pc""" % (comp_op, {'lt': '<', 'eq': '==', 'gt': '>'}[comp_op])
+
 
 @py.test.fixture
 def _fused_branch_cases():
@@ -182,6 +205,7 @@ def _gcptr_cases():
 def assert_fused_branch_matches_blackhole(comp_op, _fused_branch_cases):
     assembler, ssarepr, jitcode = _fused_branch_jitcode(comp_op)
     jit_run = _run_function(assembler, ssarepr, jitcode)
+    assert _fused_branch_jitcode_matches_expected(comp_op, jitcode)
     for a, b in _fused_branch_cases:
         bh = getblackholeinterp(assembler.insns)
         bh.setposition(jitcode, 0)
@@ -219,6 +243,27 @@ def test_goto_if_not_int_is_true_matches_blackhole():
         assert jit_run(bh) == -1
         assert bh._final_result_anytype() == _blackhole_result(
             assembler, jitcode, a)
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    while 1:
+        if pc == 0: # goto_if_not_int_is_true
+            if i0:
+                pc = 4
+            else:
+                pc = 6
+            continue
+        elif pc == 4: # int_return
+            bh.tmpreg_i = i0
+            bh._return_type = 'i'
+            return -1
+        elif pc == 6: # int_return
+            bh.tmpreg_i = -1
+            bh._return_type = 'i'
+            return -1
+        else:
+            return pc"""
+
 
 def test_goto_if_not_int_is_zero_matches_blackhole():
     ssarepr = SSARepr("test")
@@ -239,6 +284,26 @@ def test_goto_if_not_int_is_zero_matches_blackhole():
         assert jit_run(bh) == -1
         assert bh._final_result_anytype() == _blackhole_result(
             assembler, jitcode, a)
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    while 1:
+        if pc == 0: # goto_if_not_int_is_zero
+            if i0 == 0:
+                pc = 4
+            else:
+                pc = 6
+            continue
+        elif pc == 4: # int_return
+            bh.tmpreg_i = i0
+            bh._return_type = 'i'
+            return -1
+        elif pc == 6: # int_return
+            bh.tmpreg_i = -1
+            bh._return_type = 'i'
+            return -1
+        else:
+            return pc"""
 
 
 def test_goto_if_not_ptr_iszero_matches_blackhole(_gcptr_cases):
@@ -260,6 +325,26 @@ def test_goto_if_not_ptr_iszero_matches_blackhole(_gcptr_cases):
         assert jit_run(bh) == -1
         assert bh._final_result_anytype() == _blackhole_result(
             assembler, jitcode, a)
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    r0 = bh.registers_r[0]
+    while 1:
+        if pc == 0: # goto_if_not_ptr_iszero
+            if not r0:
+                pc = 4
+            else:
+                pc = 6
+            continue
+        elif pc == 4: # int_return
+            bh.tmpreg_i = 1
+            bh._return_type = 'i'
+            return -1
+        elif pc == 6: # int_return
+            bh.tmpreg_i = -1
+            bh._return_type = 'i'
+            return -1
+        else:
+            return pc"""
 
 def test_goto_if_not_ptr_nonzero_matches_blackhole(_gcptr_cases):
     ssarepr = SSARepr("test")
@@ -280,6 +365,26 @@ def test_goto_if_not_ptr_nonzero_matches_blackhole(_gcptr_cases):
         assert jit_run(bh) == -1
         assert bh._final_result_anytype() == _blackhole_result(
             assembler, jitcode, a)
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    r0 = bh.registers_r[0]
+    while 1:
+        if pc == 0: # goto_if_not_ptr_nonzero
+            if r0:
+                pc = 4
+            else:
+                pc = 6
+            continue
+        elif pc == 4: # int_return
+            bh.tmpreg_i = 1
+            bh._return_type = 'i'
+            return -1
+        elif pc == 6: # int_return
+            bh.tmpreg_i = -1
+            bh._return_type = 'i'
+            return -1
+        else:
+            return pc"""
 
 
 def _ovf_jitcode():
@@ -309,6 +414,33 @@ def test_int_add_jump_if_ovf_matches_blackhole():
         assert jit_run(bh) == -1
         assert bh._final_result_anytype() == _blackhole_result(
             assembler, jitcode, a, b)
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    i1 = bh.registers_i[1]
+    i2 = bh.registers_i[2]
+    try:
+        while 1:
+            if pc == 0: # int_add_jump_if_ovf
+                try:
+                    i2 = ovfcheck(i0 + i1)
+                except OverflowError:
+                    pc = 8
+                    continue
+                pc = 6
+                continue
+            elif pc == 6: # int_return
+                bh.tmpreg_i = i2
+                bh._return_type = 'i'
+                return -1
+            elif pc == 8: # int_return
+                bh.tmpreg_i = -1
+                bh._return_type = 'i'
+                return -1
+            else:
+                return pc
+    finally:
+        bh.registers_i[2] = i2"""
 
 
 def test_strlen_uses_cpu():
@@ -976,6 +1108,24 @@ def test_residual_call_r_i():
         42, dict(int=1, ref=1), ref_args=[r0])
     assert calls == [('i', 12345, None, [r0], None, descr)]
     assert regs_i[0] == 42
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    r0 = bh.registers_r[0]
+    try:
+        while 1:
+            if pc == 0: # residual_call_r_i
+                bh.position = 7
+                i0 = plain_int(bh.cpu.bh_call_i(12345, None, [r0], None, glob0))
+                pc = 7
+                continue
+            elif pc == 7: # void_return
+                bh._return_type = 'v'
+                return -1
+            else:
+                return pc
+    finally:
+        bh.registers_i[0] = i0"""
 
 
 def test_residual_call_r_r():
@@ -988,6 +1138,24 @@ def test_residual_call_r_r():
         r1, dict(ref=2), ref_args=[r0])
     assert calls == [('r', 12345, None, [r0], None, descr)]
     assert regs_r[1] == r1
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    r0 = bh.registers_r[0]
+    r1 = bh.registers_r[1]
+    try:
+        while 1:
+            if pc == 0: # residual_call_r_r
+                bh.position = 7
+                r1 = bh.cpu.bh_call_r(12345, None, [r0], None, glob0)
+                pc = 7
+                continue
+            elif pc == 7: # void_return
+                bh._return_type = 'v'
+                return -1
+            else:
+                return pc
+    finally:
+        bh.registers_r[1] = r1"""
 
 
 def test_residual_call_ir_i():
@@ -1034,6 +1202,24 @@ def test_residual_call_exception_leaves_position_after_the_call():
     bh.setposition(jitcode, 0)
     py.test.raises(ValueError, jit_run, bh)
     assert bh.position == ssarepr._insns_pos[1]
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    try:
+        while 1:
+            if pc == 0: # residual_call_r_i
+                bh.position = 6
+                i0 = plain_int(bh.cpu.bh_call_i(12345, None, [], None, glob0))
+                pc = 6
+                continue
+            elif pc == 6: # int_return
+                bh.tmpreg_i = i0
+                bh._return_type = 'i'
+                return -1
+            else:
+                return pc
+    finally:
+        bh.registers_i[0] = i0"""
 
 
 def test_recursive_call():
@@ -1070,6 +1256,18 @@ def test_portal_point():
     assert exc.value.red_ref == []
     assert exc.value.red_float == []
     assert bh.position == len(jitcode.code)
+    assert jitcode._genext_run_source == """def jit_run(bh): # test
+    pc = bh.position
+    i0 = bh.registers_i[0]
+    while 1:
+        if pc == 0: # jit_merge_point
+            bh.position = 9
+            try:
+                bh.bhimpl_jit_merge_point(7, [], [], [], [i0], [], [])
+            except LeaveFrame:
+                return -1
+        else:
+            return pc"""
 
 @py.test.mark.xfail(strict=True, raises=NotImplementedError,
                    reason="run mode lacks -live-, ref_return, "
