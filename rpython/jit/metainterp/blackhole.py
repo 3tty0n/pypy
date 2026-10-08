@@ -84,6 +84,7 @@ class BlackholeInterpBuilder(object):
             assert key.count('/') == 1, "bad key: %r" % (key,)
             name, argcodes = key.split('/')
             all_funcs.append(self._get_method(name, argcodes))
+        self.handlers = all_funcs     # one instruction each, for run mode
         all_funcs = unrolling_iterable(enumerate(all_funcs))
         #
         stats = self.stats
@@ -360,6 +361,17 @@ class BlackholeInterpreter(object):
     def run(self):
         while True:
             try:
+                jit_run = self.jitcode.genext_run_function
+                if jit_run is not None:
+                    pc = jit_run(self)
+                    if pc == -1:
+                        break
+                    # fallback: run this one instruction, then back into
+                    # jit_run() at the next pc
+                    code = self.jitcode.code
+                    self.position = self.builder.handlers[ord(code[pc])](
+                        self, code, pc + 1)
+                    continue
                 self.dispatch_loop(self, self.jitcode.code, self.position)
             except LeaveFrame:
                 break
