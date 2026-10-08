@@ -24,7 +24,7 @@ KIND = {'int': 'i', 'ref': 'r', 'float': 'f'}
 
 def _todo(name):
     def emit(self):
-        raise NotImplementedError("run mode: %s not implemented" % name)
+        raise RunModeUnsupported(name)
     return emit
 
 
@@ -280,7 +280,7 @@ class RunModeGenerator(GenExtension):
         value = self._run_arg(self.argcodes[0], self.pc + 1)
         return ["bh.tmpreg_i = %s" % value,
                 "bh._return_type = 'i'",
-                "return -1"]
+                "return -1"] # contract: pc = -1 is the signal of ending the dispatch loop
 
     def emit_run_goto_if_not_int_lt(self):
         return self._emit_branch(2, lambda a, b: "%s < %s" % (a, b),
@@ -342,7 +342,10 @@ class RunModeGenerator(GenExtension):
                 "return -1"]
 
 
-    emit_run_fallback = _todo("fallback")
+    def emit_run_fallback(self):
+        # BlackholeInterpreter.run() executes this one instruction itself,
+        # then re-enters jit_run() at the next pc
+        return ["return %d" % self.pc]
 
     # TODO: How to implement exceptions?
     emit_run_raise = _todo("raise")
