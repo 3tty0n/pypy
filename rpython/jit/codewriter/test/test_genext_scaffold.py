@@ -69,8 +69,6 @@ def test_genext_on_tla(tmpdir):
     assert "def jit_shortcut" in source
 
 
-@py.test.mark.xfail(strict=True, raises=NotImplementedError,
-                     reason="run mode lacks -live- and the call and memory families")
 def test_genext_run_mode(tmpdir):
     assembler, captured = _tla_jitcodes()
     ssarepr, jitcode, snap = [(s, j, a) for s, j, a in captured

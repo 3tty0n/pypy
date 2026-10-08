@@ -1269,11 +1269,6 @@ def test_portal_point():
         else:
             return pc"""
 
-@py.test.mark.xfail(strict=True, raises=NotImplementedError,
-                   reason="run mode lacks -live-, ref_return, "
-                          "jit_merge_point, the inline_call_* and "
-                          "getfield_* families, and the "
-                          "goto_if_not_ptr_iszero variant")
 def test_tla_loop():
     from rpython.jit.codewriter.test.test_genext_scaffold import (
         _tla_jitcodes)
@@ -1285,8 +1280,6 @@ def test_tla_loop():
     generate_run_function(genext)
 
 
-@py.test.mark.xfail(strict=True, raises=NotImplementedError,
-                    reason="run mode lacks the fallback contract")
 def test_fallback_returns_pc():
     ssarepr = SSARepr("test")
     i0 = Register('int', 0)
@@ -1301,3 +1294,28 @@ def test_fallback_returns_pc():
     bh.setposition(jitcode, 0)
     bh.setarg_i(0, 1)
     assert jit_run(bh) == 4
+    assert bh.registers_i[0] == 2
+
+
+def test_run_single_steps_a_fallback_and_reenters_jit_run():
+    i0 = Register('int', 0)
+    assembler, ssarepr, jitcode = _assemble([
+        ('int_add', i0, i0, '->', i0),
+        ('int_push', i0),
+        ('int_add', i0, Constant(1, lltype.Signed), '->', i0),
+        ('int_return', i0),
+        ], int=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    entries = []
+
+    def counting(bh):
+        entries.append(bh.position)
+        return jit_run(bh)
+
+    jitcode.genext_run_function = counting
+    bh = getblackholeinterp(assembler.insns)
+    bh.setposition(jitcode, 0)
+    bh.setarg_i(0, 1)
+    bh.run()
+    assert bh._final_result_anytype() == 3
+    assert entries == [0, ssarepr._insns_pos[2]]
