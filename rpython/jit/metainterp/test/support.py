@@ -1,4 +1,4 @@
-import py, sys, math
+import py, sys, math, re
 from rpython.rtyper.lltypesystem import lltype, llmemory
 from rpython.jit.backend.llgraph import runner
 from rpython.jit.metainterp.warmspot import ll_meta_interp, get_stats
@@ -175,6 +175,118 @@ def _run_with_machine_code(testself, args):
         return deadframe, None
 
 
+# ____________________________________________________________
+# Exact, cross-compilation comparison of JIT traces.
+
+_ADDRESS_RE = re.compile(r'0x[0-9a-fA-F]+')
+_TARGET_TOKEN_RE = re.compile(r'TargetToken\(\d+\)')
+_LOOP_TOKEN_RE = re.compile(r'<Loop \d+, gen=\d+>')
+
+
+def _normalize_descr_text(text):
+    text = _ADDRESS_RE.sub('0xADDR', text)
+    text = _TARGET_TOKEN_RE.sub('TargetToken(ID)', text)
+    text = _LOOP_TOKEN_RE.sub('<Loop ID>', text)
+    return text
+
+_ADDRESS_ARG_OPS = frozenset([
+    'increment_debug_counter',
+    'jit_debug',
+    'record_known_result_i_ir_v',
+    'record_known_result_r_ir_v',
+])
+
+
+def _is_address_operand(opname, index):
+    if index != 0:
+        return False
+    if opname.startswith('call_'):
+        return True
+    return opname in _ADDRESS_ARG_OPS
+
+
+def _constant_signature(box):
+    if isinstance(box, history.ConstInt):
+        return ('int', box.getint())
+    if isinstance(box, history.ConstFloat):
+        return ('float', longlong.extract_bits(box.getfloatstorage()))
+    if isinstance(box, history.ConstPtr):
+        if not box.nonnull():
+            return ('ref', None)
+        try:
+            text = history.repr_pointer(box)
+        except Exception:
+            text = type(box).__name__
+        if not isinstance(text, str):
+            text = repr(text)
+        return ('ref', _normalize_descr_text(text))
+    return ('const', type(box).__name__)
+
+
+def _box_signature(box, memo):
+    if box.is_constant():
+        return _constant_signature(box)
+    index = memo.get(box)
+    if index is None:
+        index = len(memo)
+        memo[box] = index
+    return (box.type, index)
+
+
+def _descr_signature(descr):
+    if descr is None:
+        return None
+    name = type(descr).__name__
+    if name.startswith('ResumeGuard'):
+        # ResumeGuardCopiedDescr has no numbering of its own; compare the
+        # original guard's numbering instead.
+        prev = getattr(descr, 'prev', None)
+        if prev is not None:
+            return (name, _descr_signature(prev))
+        numb = getattr(descr, 'rd_numb', None)
+        return (name, tuple(numb.code) if numb else ())
+    try:
+        text = descr.repr_of_descr()
+    except Exception:
+        return (name,)
+    if ' object at ' in text:
+        return (name,)
+    return (name, _normalize_descr_text(text))
+
+
+def loop_signature(loop):
+    """The exact operations of one loop/bridge, with stable box references"""
+    memo = {}
+    for arg in loop.inputargs:
+        _box_signature(arg, memo)
+    result = []
+    for op in loop._all_operations(omit_finish=False):
+        opname = op.getopname()
+        args = []
+        for index, arg in enumerate(op.getarglist()):
+            if _is_address_operand(opname, index) and arg.is_constant():
+                args.append(('address', arg.type))
+            else:
+                args.append(_box_signature(arg, memo))
+        failargs = tuple(_box_signature(arg, memo)
+                         for arg in (op.getfailargs() or ()))
+        result.append((opname, tuple(args), _descr_signature(op.getdescr()),
+                       failargs))
+    return result
+
+
+def trace_signature(loops):
+    """A stable representation of all JIT loops, suitable for == checks.
+
+    Use it to compare two compilations exactly, e.g. a run with the generated
+    blackhole run mode enabled against the same run without it:
+        baseline = trace_signature(get_stats().loops)
+        ...
+        assert trace_signature(get_stats().loops) == baseline
+    """
+    return [loop_signature(loop) for loop in loops]
+
+
 class JitMixin:
     basic = True
     enable_opts = ENABLE_ALL_OPTS
@@ -197,6 +309,12 @@ class JitMixin:
         the check is only about the instructions named)."""
         if self.enable_opts == ENABLE_ALL_OPTS:
             get_stats().check_resops(expected=expected, **check)
+
+    def get_trace_signature(self):
+        """Exact structural signature of all loops and bridges (see
+        trace_signature()).  Capture it after one meta_interp() call and
+        compare it with the signature of another run."""
+        return trace_signature(get_stats().loops)
 
     def check_simple_loop(self, expected=None, **check):
         """Useful in the simplest case when we have only one loop

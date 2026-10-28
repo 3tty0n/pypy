@@ -1,3 +1,5 @@
+import re
+
 import py
 
 from rpython.rlib import jit
@@ -219,7 +221,7 @@ class TestRunModeAjit(LLJitMixin):
     def test_guard_failure_lands_in_run_mode(self):
         res, count = self._run_guard_loop()
         assert res == guard_loop(30)
-        assert count > 0
+        assert count == 2
 
     def _install_run_mode(self, monkeypatch):
         from rpython.jit.codewriter.codewriter import CodeWriter
@@ -247,91 +249,121 @@ class TestRunModeAjit(LLJitMixin):
         monkeypatch.setattr(CodeWriter, 'make_jitcodes', install)
         return entries, generated, fallbacks
 
+    def _baseline_trace(self, func, args, **kwds):
+        res = self.meta_interp(func, args, **kwds)
+        assert res == func(*args)
+        baseline = self.get_trace_signature()
+        assert baseline, 'the baseline run did not produce a trace'
+        return baseline
+
+    def _check_trace_matches(self, baseline):
+        actual = self.get_trace_signature()
+        assert actual, 'the run-mode run did not produce a trace'
+        assert actual == baseline, (
+            'the run-mode execution changed the traced operations')
+
+    def _generated_methods(self, jitcode):
+        source = jitcode._genext_run_source
+        return (re.findall(r'bh\.cpu\.(\w+)', source),
+                re.findall(r'bh\.(bhimpl_\w+)', source))
+
+    def _generated_lines(self, jitcode):
+        return [line.strip()
+                for line in jitcode._genext_run_source.splitlines()]
+
     def test_e2e_loop_exit_runs_in_run_mode(self, monkeypatch):
-        entries, _, _ = self._install_run_mode(monkeypatch)
+        baseline = self._baseline_trace(simple_loop, [100])
+        entries, generated, fallbacks = self._install_run_mode(monkeypatch)
         assert self.meta_interp(simple_loop, [100]) == simple_loop(100)
+        self._check_trace_matches(baseline)
         assert entries == [('simple_loop', 27)]
+        assert fallbacks == []
+        assert self._generated_methods(generated['simple_loop']) == (
+            [], ['bhimpl_jit_merge_point'])
 
     def test_e2e_guard_failures_run_in_run_mode(self, monkeypatch):
-        entries, _, _ = self._install_run_mode(monkeypatch)
+        baseline = self._baseline_trace(guard_loop, [30])
+        entries, generated, fallbacks = self._install_run_mode(monkeypatch)
         res, count = self._run_guard_loop()
         assert res == guard_loop(30)
         assert count == 2
+        self._check_trace_matches(baseline)
         assert entries == [('guard_loop', 28), ('guard_loop', 28)]
+        assert fallbacks == []
+        assert self._generated_methods(generated['guard_loop']) == (
+            ['bh_call_i'], ['bhimpl_jit_merge_point'])
 
     def test_e2e_getfield_runs_in_run_mode(self, monkeypatch):
+        baseline = self._baseline_trace(field_loop, [30])
         entries, generated, fallbacks = self._install_run_mode(monkeypatch)
         res, count = self._run_guard_loop(field_loop)
         assert res == field_loop(30)
         assert count == 2
+        self._check_trace_matches(baseline)
         assert entries == [('field_loop', 29), ('field_loop', 29)]
-        assert not [pc for name, pc in fallbacks if name == 'field_loop']
-        source = generated['field_loop']._genext_run_source
-        assert 'elif pc == 34: # getfield_gc_i' in source
-        assert 'bh.cpu.bh_getfield_gc_i' in source
+        assert fallbacks == []
+        jitcode = generated['field_loop']
+        assert self._generated_methods(jitcode) == (
+            ['bh_call_i', 'bh_getfield_gc_i'], ['bhimpl_jit_merge_point'])
+        lines = self._generated_lines(jitcode)
+        assert 'elif pc == 34: # getfield_gc_i' in lines
+        assert 'i2 = plain_int(bh.cpu.bh_getfield_gc_i(r0, glob2))' in lines
 
     def test_e2e_object_and_array_access(self, monkeypatch):
+        baseline = self._baseline_trace(object_array_loop, [30])
         entries, generated, fallbacks = self._install_run_mode(monkeypatch)
         res, count = self._run_guard_loop(object_array_loop)
         assert res == object_array_loop(30)
         assert count == 2
+        self._check_trace_matches(baseline)
+        assert entries == [('object_array_loop', 30),
+                           ('object_array_loop', 30)]
+        assert fallbacks == []
 
         jitcode = generated['object_array_loop']
-        fallback_names = [
-            jitcode._ssarepr.insns[
-                jitcode._ssarepr._insns_pos.index(pc)][0]
-            for name, pc in fallbacks if name == 'object_array_loop'
-        ]
-        instruction_names = [insn[0] for insn in jitcode._ssarepr.insns]
-        assert 'getfield_gc_i' in instruction_names
-        assert 'getarrayitem_gc_i' in instruction_names
-        assert 'setfield_gc_i' in instruction_names
-        assert 'setarrayitem_gc_i' in instruction_names
-        assert 'setfield_gc_i' not in fallback_names
-        assert 'setarrayitem_gc_i' not in fallback_names
-        assert 'getfield_gc_i' not in fallback_names
-        assert 'getarrayitem_gc_i' not in fallback_names
-        assert any(name == 'object_array_loop' for name, _ in entries)
-        source = jitcode._genext_run_source
-        assert 'bh.cpu.bh_setfield_gc_i' in source
-        assert 'bh.cpu.bh_setarrayitem_gc_i' in source
+        assert self._generated_methods(jitcode) == (
+            ['bh_call_i', 'bh_getfield_gc_i', 'bh_setfield_gc_i',
+             'bh_getarrayitem_gc_i', 'bh_getfield_gc_i',
+             'bh_setarrayitem_gc_i', 'bh_getfield_gc_i',
+             'bh_getarrayitem_gc_i', 'bh_getfield_gc_i',
+             'bh_getarrayitem_gc_i'],
+            ['bhimpl_jit_merge_point'])
 
     def test_e2e_exceptions(self, monkeypatch):
+        baseline = self._baseline_trace(exception_loop, [30])
         entries, generated, fallbacks = self._install_run_mode(monkeypatch)
         res, count = self._run_guard_loop(exception_loop)
         assert res == exception_loop(30)
-        assert count > 0
+        assert count == 7
+        self._check_trace_matches(baseline)
+        assert entries == [('exception_loop', 53)] * 6 + [
+            ('exception_loop', 24)]
+        assert fallbacks == []
 
         jitcode = generated['exception_loop']
-        instruction_names = [insn[0] for insn in jitcode._ssarepr.insns]
-        assert 'catch_exception' in instruction_names
-        assert 'goto_if_exception_mismatch' in instruction_names
-        fallback_names = [
-            jitcode._ssarepr.insns[
-                jitcode._ssarepr._insns_pos.index(pc)][0]
-            for name, pc in fallbacks if name == 'exception_loop'
-        ]
-        for name in ('catch_exception', 'goto_if_exception_mismatch',
-                     'last_exception', 'last_exc_value', 'reraise'):
-            assert name not in fallback_names
-        assert any(name == 'exception_loop' for name, _ in entries)
-        source = jitcode._genext_run_source
-        assert 'bhimpl_goto_if_exception_mismatch' in source
+        assert self._generated_methods(jitcode) == (
+            ['bh_call_i', 'bh_getfield_gc_i'],
+            ['bhimpl_jit_merge_point', 'bhimpl_goto_if_exception_mismatch',
+             'bhimpl_last_exc_value',
+             'bhimpl_goto_if_exception_mismatch', 'bhimpl_reraise'])
+        lines = self._generated_lines(jitcode)
+        assert [line for line in lines
+                if 'bhimpl_goto_if_exception_mismatch' in line] == [
+            'pc = bh.bhimpl_goto_if_exception_mismatch(glob5, 75, 57)',
+            'pc = bh.bhimpl_goto_if_exception_mismatch(glob9, 86, 79)']
 
     def test_e2e_switch(self, monkeypatch):
+        baseline = self._baseline_trace(switch_loop, [30], backendopt=True)
         entries, generated, fallbacks = self._install_run_mode(monkeypatch)
         # backendopt turns the if/elif chain into an int switch
         res, count = self._run_guard_loop(switch_loop, backendopt=True)
         assert res == switch_loop(30)
-        assert count > 0
+        assert count == 10
+        self._check_trace_matches(baseline)
+        assert entries == [('switch_loop', 28)] * 10
+        assert fallbacks == []
 
         jitcode = generated['switch_loop']
-        instruction_names = [insn[0] for insn in jitcode._ssarepr.insns]
-        assert 'switch' in instruction_names
-        fallback_names = [
-            jitcode._ssarepr.insns[
-                jitcode._ssarepr._insns_pos.index(pc)][0]
-            for name, pc in fallbacks if name == 'switch_loop'
-        ]
-        assert 'switch' not in fallback_names
-        assert '.get(' in jitcode._genext_run_source
+        assert self._generated_methods(jitcode) == (
+            ['bh_call_i'], ['bhimpl_jit_merge_point'])
+        assert 'pc = glob2.get(i2, 32)' in self._generated_lines(jitcode)
