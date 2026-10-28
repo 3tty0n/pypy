@@ -1851,3 +1851,160 @@ def test_string_ops_reach_cpu(opname, argkinds, resultkind):
                 llmemory.cast_ptr_to_adr(result)
         else:
             assert final == result
+
+
+def _exception_object(vtable=None):
+    from rpython.rtyper import rclass
+    obj = lltype.malloc(rclass.OBJECT, immortal=True)
+    if vtable is not None:
+        obj.typeptr = vtable
+    return obj
+
+
+def _vtable(minid, maxid):
+    from rpython.rtyper import rclass
+    vtable = lltype.malloc(rclass.OBJECT_VTABLE, immortal=True)
+    vtable.subclassrange_min = minid
+    vtable.subclassrange_max = maxid
+    return vtable
+
+
+def _run_both(assembler, jitcode, jit_run, setup):
+    """Run via blackhole dispatch and via jit_run; returns both outcomes
+    as (final result, or the exception raised out of the frame)"""
+    from rpython.rtyper.llinterp import LLException
+    outcomes = []
+    for use_generated in [False, True]:
+        bh = getblackholeinterp(assembler.insns, assembler.descrs)
+        bh.setposition(jitcode, 0)
+        setup(bh)
+        jitcode.genext_run_function = jit_run if use_generated else None
+        try:
+            bh.run()
+            outcomes.append(bh._final_result_anytype())
+        except LLException as e:
+            outcomes.append(e.args[1])
+    jitcode.genext_run_function = None
+    return outcomes
+
+
+def _catching_program(raising_insn, **num_regs):
+    return _assemble([
+        raising_insn,
+        ('catch_exception', TLabel('handler')),
+        ('int_return', Constant(0, lltype.Signed)),
+        (Label('handler'),),
+        ('int_return', Constant(42, lltype.Signed)),
+        ], **num_regs)
+
+
+def test_raise_is_caught_by_catch_exception():
+    exc = _exception_object()
+    assembler, ssarepr, jitcode = _catching_program(
+        ('raise', Register('ref', 0)), ref=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    assert 'bhimpl_raise' in jitcode._genext_run_source
+
+    def setup(bh):
+        bh.setarg_r(0, lltype.cast_opaque_ptr(llmemory.GCREF, exc))
+    assert _run_both(assembler, jitcode, jit_run, setup) == [42, 42]
+
+
+def test_raise_escaping_the_frame():
+    exc = _exception_object()
+    assembler, ssarepr, jitcode = _assemble([
+        ('raise', Register('ref', 0)),
+        ], ref=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+
+    def setup(bh):
+        bh.setarg_r(0, lltype.cast_opaque_ptr(llmemory.GCREF, exc))
+    outcomes = _run_both(assembler, jitcode, jit_run, setup)
+    assert outcomes[0] == outcomes[1] == exc
+
+
+def test_reraise():
+    exc = _exception_object()
+    assembler, ssarepr, jitcode = _catching_program(('reraise',))
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    assert 'bhimpl_reraise' in jitcode._genext_run_source
+
+    def setup(bh):
+        bh.exception_last_value = exc
+    assert _run_both(assembler, jitcode, jit_run, setup) == [42, 42]
+
+
+def test_exception_from_cpu_call_is_caught():
+    from rpython.rtyper.llinterp import LLException
+    exc = _exception_object()
+    assembler, ssarepr, jitcode = _catching_program(
+        ('setfield_gc_i', Register('ref', 0), Register('int', 0),
+         FakeFieldDescr()), int=1, ref=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+
+    def run(result, use_generated):
+        bh = getblackholeinterp(assembler.insns, assembler.descrs)
+        bh.cpu = FakeFieldCPU(result)
+        bh.setposition(jitcode, 0)
+        bh.setarg_r(0, _gcptr_value())
+        bh.setarg_i(0, 1)
+        jitcode.genext_run_function = jit_run if use_generated else None
+        bh.run()
+        return bh._final_result_anytype()
+    for use_generated in [False, True]:
+        assert run(None, use_generated) == 0
+        assert run(LLException("etype", exc), use_generated) == 42
+    jitcode.genext_run_function = None
+
+
+@py.test.mark.parametrize('matches', [True, False])
+def test_goto_if_exception_mismatch(matches):
+    from rpython.jit.metainterp.support import ptr2int
+    bounding = _vtable(1, 4)
+    actual = _vtable(2, 3) if matches else _vtable(7, 8)
+    exc = _exception_object(actual)
+    assembler, ssarepr, jitcode = _assemble([
+        ('goto_if_exception_mismatch', Register('int', 0),
+         TLabel('mismatch')),
+        ('int_return', Constant(1, lltype.Signed)),
+        (Label('mismatch'),),
+        ('int_return', Constant(2, lltype.Signed)),
+        ], int=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    assert 'bhimpl_goto_if_exception_mismatch' in jitcode._genext_run_source
+
+    def setup(bh):
+        bh.exception_last_value = exc
+        bh.setarg_i(0, ptr2int(bounding))
+    assert _run_both(assembler, jitcode, jit_run, setup) == \
+        [1 if matches else 2] * 2
+
+
+def test_last_exception_and_last_exc_value():
+    from rpython.jit.metainterp.support import ptr2int
+    vtable = _vtable(1, 2)
+    exc = _exception_object(vtable)
+    assembler, ssarepr, jitcode = _assemble([
+        ('last_exception', '->', Register('int', 0)),
+        ('last_exc_value', '->', Register('ref', 0)),
+        ('int_return', Register('int', 0)),
+        ], int=1, ref=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    source = jitcode._genext_run_source
+    assert 'bhimpl_last_exception' in source
+    assert 'bhimpl_last_exc_value' in source
+
+    results = []
+    for use_generated in [False, True]:
+        bh = getblackholeinterp(assembler.insns, assembler.descrs)
+        bh.setposition(jitcode, 0)
+        bh.exception_last_value = exc
+        if use_generated:
+            assert jit_run(bh) == -1
+        else:
+            bh.run()
+        assert llmemory.cast_ptr_to_adr(bh.registers_r[0]) == \
+            llmemory.cast_ptr_to_adr(lltype.cast_opaque_ptr(
+                llmemory.GCREF, exc))
+        results.append(bh.registers_i[0])
+    assert results == [ptr2int(vtable)] * 2

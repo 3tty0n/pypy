@@ -1,5 +1,6 @@
 import py
 
+from rpython.rlib import jit
 from rpython.rlib.jit import JitDriver
 from rpython.jit.codewriter.genextrun import RunModeGenerator
 from rpython.jit.metainterp import blackhole, jitexc
@@ -79,6 +80,45 @@ def object_array_loop(n):
             res += box.x + items[0]
         n -= 1
     return res + box.x + items[0]
+
+
+class RunModeTestError(Exception):
+    def __init__(self, value):
+        self.value = value
+
+
+class RunModeOtherTestError(Exception):
+    pass
+
+
+@jit.dont_look_inside
+def maybe_raise(n):
+    if n % 5 == 0:
+        raise RunModeTestError(n)
+    if n % 7 == 0:
+        raise RunModeOtherTestError()
+    return n
+
+
+exceptiondriver = JitDriver(greens=[], reds=['n', 'res'])
+
+
+def exception_loop(n):
+    # no bridges: the llgraph backend cannot compile one that starts at a
+    # guard_exception, so failing guards resume in blackhole instead
+    jit.set_param(exceptiondriver, 'trace_eagerness', 1000)
+    res = 0
+    while n > 0:
+        exceptiondriver.can_enter_jit(n=n, res=res)
+        exceptiondriver.jit_merge_point(n=n, res=res)
+        try:
+            res += maybe_raise(n)
+        except RunModeTestError as e:
+            res += 100 + e.value
+        except RunModeOtherTestError:
+            res += 1000
+        n -= 1
+    return res
 
 
 class _Assembler(object):
@@ -232,3 +272,25 @@ class TestRunModeAjit(LLJitMixin):
         source = jitcode._genext_run_source
         assert 'bh.cpu.bh_setfield_gc_i' in source
         assert 'bh.cpu.bh_setarrayitem_gc_i' in source
+
+    def test_e2e_exceptions(self, monkeypatch):
+        entries, generated, fallbacks = self._install_run_mode(monkeypatch)
+        res, count = self._run_guard_loop(exception_loop)
+        assert res == exception_loop(30)
+        assert count > 0
+
+        jitcode = generated['exception_loop']
+        instruction_names = [insn[0] for insn in jitcode._ssarepr.insns]
+        assert 'catch_exception' in instruction_names
+        assert 'goto_if_exception_mismatch' in instruction_names
+        fallback_names = [
+            jitcode._ssarepr.insns[
+                jitcode._ssarepr._insns_pos.index(pc)][0]
+            for name, pc in fallbacks if name == 'exception_loop'
+        ]
+        for name in ('catch_exception', 'goto_if_exception_mismatch',
+                     'last_exception', 'last_exc_value', 'reraise'):
+            assert name not in fallback_names
+        assert any(name == 'exception_loop' for name, _ in entries)
+        source = jitcode._genext_run_source
+        assert 'bhimpl_goto_if_exception_mismatch' in source

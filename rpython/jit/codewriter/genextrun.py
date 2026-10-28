@@ -343,11 +343,49 @@ class RunModeGenerator(GenExtension):
         # then re-enters jit_run() at the next pc
         return ["return %d" % self.pc]
 
-    # TODO: How to implement exceptions?
-    emit_run_raise = _todo("raise")
-    emit_run_reraise = _todo("reraise")
-    emit_run_catch_exception = _todo("catch_exception")
-    emit_run_goto_if_exception_mismatch = _todo("goto_if_exception_mismatch")
+    # Exceptions need no machinery in jit_run(): one escaping from the
+    # generated code reaches BlackholeInterpreter.run(), which looks for a
+    # catch_exception at bh.position and resumes jit_run() at its target.
+    # So ops that can raise set bh.position to the next instruction first.
+    def _emit_raising(self, call):
+        nextpc = self.pc_to_nextpc[self.pc]
+        return ["bh.position = %d" % nextpc, call]
+
+    def emit_run_raise(self):
+        exc = self._run_arg(self.argcodes[0], self.pc + 1)
+        return self._emit_raising("bh.bhimpl_raise(%s)" % exc)
+
+    def emit_run_reraise(self):
+        return self._emit_raising("bh.bhimpl_reraise()")
+
+    def emit_run_catch_exception(self):
+        # a no-op when no exception occurred
+        return ["pc = %d" % self.pc_to_nextpc[self.pc], "continue"]
+
+    def _make_emit_last_exc(method, restype):
+        def emit(self):
+            result = self._run_dest(
+                restype, ord(self.jitcode.code[self.pc + 1]))
+            call = "bh.%s()" % method
+            if restype == 'i':
+                call = "plain_int(%s)" % call
+            return ["%s = %s" % (result, call),
+                    "pc = %d" % self.pc_to_nextpc[self.pc],
+                    "continue"]
+        return emit
+
+    emit_run_last_exception = _make_emit_last_exc(
+        'bhimpl_last_exception', 'i')
+    emit_run_last_exc_value = _make_emit_last_exc(
+        'bhimpl_last_exc_value', 'r')
+
+    def emit_run_goto_if_exception_mismatch(self):
+        vtable = self._run_arg(self.argcodes[0], self.pc + 1)
+        label = self._decode_label(self.pc + 2)
+        nextpc = self.pc_to_nextpc[self.pc]
+        return ["pc = bh.bhimpl_goto_if_exception_mismatch(%s, %d, %d)" % (
+                    vtable, label, nextpc),
+                "continue"]
 
     # TODO: How to implement switch?
     emit_run_switch = _todo("switch")
