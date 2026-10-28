@@ -616,9 +616,9 @@ class RunModeGenerator(GenExtension):
             return ["bh.position = %d" % nextpc, call, "pc = %d" % nextpc, "continue"]
         return emit
 
-    emit_run_residual_call_r_i = _make_emit_residual_call('r', 'i') #_todo("residual_call_r_i")
-    emit_run_residual_call_r_r = _make_emit_residual_call('r', 'r')  # _todo("residual_call_r_r")
-    emit_run_residual_call_ir_i = _make_emit_residual_call('ir', 'i')  # _todo("residual_call_ir_i")
+    emit_run_residual_call_r_i = _make_emit_residual_call('r', 'i')
+    emit_run_residual_call_r_r = _make_emit_residual_call('r', 'r')
+    emit_run_residual_call_ir_i = _make_emit_residual_call('ir', 'i')
 
     def _make_emit_recursive_call(restype):
         def emit(self):
