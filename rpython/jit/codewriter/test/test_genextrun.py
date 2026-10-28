@@ -2044,3 +2044,25 @@ def test_switch_on_a_constant_is_resolved_statically(value, expected):
     assert '.get(' not in jitcode._genext_run_source
     assert _run_both(assembler, jitcode, jit_run, lambda bh: None) == \
         [expected] * 2
+
+
+def test_guard_class_yields_the_class():
+    obj = _gcptr_value()
+    assembler, ssarepr, jitcode = _assemble([
+        ('guard_class', Register('ref', 0), '->', Register('int', 0)),
+        ('int_return', Register('int', 0)),
+        ], int=1, ref=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    assert 'bh_classof' in jitcode._genext_run_source
+
+    runs = []
+    for use_generated in [False, True]:
+        bh = getblackholeinterp(assembler.insns, assembler.descrs)
+        bh.cpu = cpu = FakeStringCPU(1234)
+        bh.setposition(jitcode, 0)
+        bh.setarg_r(0, obj)
+        jitcode.genext_run_function = jit_run if use_generated else None
+        bh.run()
+        runs.append((cpu.calls[0][0], bh._final_result_anytype()))
+    jitcode.genext_run_function = None
+    assert runs == [('bh_classof', 1234)] * 2

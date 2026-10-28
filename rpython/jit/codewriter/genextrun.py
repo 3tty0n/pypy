@@ -690,8 +690,8 @@ class RunModeGenerator(GenExtension):
     emit_run_inline_call_ir_r = _make_emit_inline_call("ir", "r")
     emit_run_inline_call_ir_v = _make_emit_inline_call("ir", "v")
 
-    emit_run_guard_class = _todo("guard_class")
-    emit_run_guard_nonnull = _todo("guard_nonnull")
+    # no guard in blackhole mode: the instruction just yields the class
+    emit_run_guard_class = _make_emit_cpu_op('bh_classof', 1, 'i')
 
     def emit_run_live(self):
         return ["pc = %d" % self.pc_to_nextpc[self.pc]]
