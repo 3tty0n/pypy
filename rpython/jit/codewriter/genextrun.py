@@ -387,8 +387,19 @@ class RunModeGenerator(GenExtension):
                     vtable, label, nextpc),
                 "continue"]
 
-    # TODO: How to implement switch?
-    emit_run_switch = _todo("switch")
+    def emit_run_switch(self):
+        # switch/id: a dict maps values to pcs; no match falls through
+        position = self.pc + 1
+        code = self.jitcode.code
+        descr = self.assembler.descrs[_decode_uint16(code, position + 1)]
+        nextpc = self.pc_to_nextpc[self.pc]
+        value = self._run_value(self.argcodes[0], position)
+        if value is not None:
+            return ["pc = %d" % descr.dict.get(value, nextpc), "continue"]
+        arg = self._run_arg(self.argcodes[0], position)
+        return ["pc = %s.get(%s, %d)" % (
+                    self._add_global(descr.dict), arg, nextpc),
+                "continue"]
 
     def _make_emit_new(method):
         def emit(self):

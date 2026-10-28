@@ -2008,3 +2008,39 @@ def test_last_exception_and_last_exc_value():
                 llmemory.GCREF, exc))
         results.append(bh.registers_i[0])
     assert results == [ptr2int(vtable)] * 2
+
+
+def _switch_program(value):
+    from rpython.jit.codewriter.jitcode import SwitchDictDescr
+    descr = SwitchDictDescr()
+    descr._labels = [(1, TLabel('one')), (5, TLabel('five'))]
+    argument = Register('int', 0) if value is None else Constant(
+        value, lltype.Signed)
+    return _assemble([
+        ('switch', argument, descr),
+        ('int_return', Constant(0, lltype.Signed)),
+        (Label('one'),),
+        ('int_return', Constant(10, lltype.Signed)),
+        (Label('five'),),
+        ('int_return', Constant(50, lltype.Signed)),
+        ], int=1)
+
+
+@py.test.mark.parametrize('value,expected', [(1, 10), (5, 50), (3, 0)])
+def test_switch_on_a_register(value, expected):
+    assembler, ssarepr, jitcode = _switch_program(None)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    assert '.get(' in jitcode._genext_run_source
+
+    def setup(bh):
+        bh.setarg_i(0, value)
+    assert _run_both(assembler, jitcode, jit_run, setup) == [expected] * 2
+
+
+@py.test.mark.parametrize('value,expected', [(1, 10), (5, 50), (3, 0)])
+def test_switch_on_a_constant_is_resolved_statically(value, expected):
+    assembler, ssarepr, jitcode = _switch_program(value)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    assert '.get(' not in jitcode._genext_run_source
+    assert _run_both(assembler, jitcode, jit_run, lambda bh: None) == \
+        [expected] * 2

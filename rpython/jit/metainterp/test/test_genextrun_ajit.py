@@ -121,6 +121,29 @@ def exception_loop(n):
     return res
 
 
+switchdriver = JitDriver(greens=[], reds=['n', 'res'])
+
+
+def switch_loop(n):
+    res = 0
+    while n > 0:
+        switchdriver.can_enter_jit(n=n, res=res)
+        switchdriver.jit_merge_point(n=n, res=res)
+        k = n % 6
+        if k == 0:
+            res += 1
+        elif k == 1:
+            res += 20
+        elif k == 2:
+            res += 300
+        elif k == 3:
+            res += 4000
+        elif k == 4:
+            res += 50000
+        n -= 1
+    return res
+
+
 class _Assembler(object):
     def __init__(self, insn_names):
         self.insns = dict((name, index)
@@ -178,7 +201,7 @@ class TestRunModeAjit(LLJitMixin):
         assert jit_run(bh) == -1
         assert bh._final_result_anytype() == 42
 
-    def _run_guard_loop(self, func=guard_loop):
+    def _run_guard_loop(self, func=guard_loop, **kwds):
         counter = []
         orig = blackhole.resume_in_blackhole
 
@@ -188,7 +211,7 @@ class TestRunModeAjit(LLJitMixin):
 
         blackhole.resume_in_blackhole = counting
         try:
-            res = self.meta_interp(func, [30])
+            res = self.meta_interp(func, [30], **kwds)
         finally:
             blackhole.resume_in_blackhole = orig
         return res, len(counter)
@@ -294,3 +317,21 @@ class TestRunModeAjit(LLJitMixin):
         assert any(name == 'exception_loop' for name, _ in entries)
         source = jitcode._genext_run_source
         assert 'bhimpl_goto_if_exception_mismatch' in source
+
+    def test_e2e_switch(self, monkeypatch):
+        entries, generated, fallbacks = self._install_run_mode(monkeypatch)
+        # backendopt turns the if/elif chain into an int switch
+        res, count = self._run_guard_loop(switch_loop, backendopt=True)
+        assert res == switch_loop(30)
+        assert count > 0
+
+        jitcode = generated['switch_loop']
+        instruction_names = [insn[0] for insn in jitcode._ssarepr.insns]
+        assert 'switch' in instruction_names
+        fallback_names = [
+            jitcode._ssarepr.insns[
+                jitcode._ssarepr._insns_pos.index(pc)][0]
+            for name, pc in fallbacks if name == 'switch_loop'
+        ]
+        assert 'switch' not in fallback_names
+        assert '.get(' in jitcode._genext_run_source
