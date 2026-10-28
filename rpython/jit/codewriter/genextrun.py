@@ -431,16 +431,24 @@ class RunModeGenerator(GenExtension):
         return emit
 
     emit_run_recursive_call_i = _make_emit_recursive_call("i")
-    emit_run_recursive_call_f = _make_emit_recursive_call("f")
     emit_run_recursive_call_r = _make_emit_recursive_call("r")
     emit_run_recursive_call_v = _make_emit_recursive_call("v")
 
     def _make_emit_inline_call(argtypes, restype):
         def emit(self):
-            args, position = self._run_portal_args()
+            code = self.jitcode.code
+            position = self.pc + 1
+            index = ord(code[position]) | (ord(code[position + 1]) << 8)
+            jitcode = self._add_global(self.assembler.descrs[index])
+            position += 2
+            lists = {}
+            for kind in argtypes:
+                lists[kind], position = self._run_list(kind.upper(), position)
             nextpc = self.pc_to_nextpc[self.pc]
-            call = "bh.bhimpl_inline_call_%s_%s(%s)" % (
-                argtypes, restype, ", ".join(args))
+            call = "bh.cpu.bh_call_%s(%s, %s, %s, %s, %s)" % (
+                restype, jitcode + ".get_fnaddr_as_int()",
+                lists.get('i', 'None'), lists.get('r', 'None'),
+                lists.get('f', 'None'), jitcode + ".calldescr")
 
             lines = ["bh.position = %d" % nextpc]
             if restype == 'v':
@@ -479,7 +487,7 @@ class RunModeGenerator(GenExtension):
         return emit
 
     emit_run_jit_merge_point = _emit_run_portal_point("jit_merge_point")
-    emit_run_pe_bailout_point = _todo("pe_bailout_point")
+    emit_run_pe_bailout_point = _todo("pe_bailout_point")  # leave as is, dispatcher handles it
 
 
 def generate_run_function(genext):
