@@ -1053,10 +1053,384 @@ class FakeCallDescr(AbstractDescr):
     pass
 
 
+class FakeFieldDescr(AbstractDescr):
+    def __init__(self):
+        self.cleared_structs = []
+
+    def get_vinfo(self):
+        return self
+
+    def clear_vable_token(self, struct):
+        self.cleared_structs.append(struct)
+
+
+class FakeFieldCPU(object):
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    def _getfield(self, kind, struct, descr):
+        self.calls.append((kind, struct, descr))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+    def bh_getfield_gc_i(self, struct, descr):
+        return self._getfield('gc_i', struct, descr)
+
+    def bh_getfield_gc_r(self, struct, descr):
+        return self._getfield('gc_r', struct, descr)
+
+    def bh_getfield_raw_i(self, struct, descr):
+        return self._getfield('raw_i', struct, descr)
+
+    def _setfield(self, kind, struct, value, descr):
+        self.calls.append((kind, struct, value, descr))
+        if isinstance(self.result, Exception):
+            raise self.result
+
+    def bh_setfield_gc_i(self, struct, value, descr):
+        self._setfield('gc_i', struct, value, descr)
+
+    def bh_setfield_gc_r(self, struct, value, descr):
+        self._setfield('gc_r', struct, value, descr)
+
+
+@py.test.mark.parametrize('opname,kind,restype', [
+    ('getfield_gc_i', 'r', 'i'),
+    ('getfield_gc_i_pure', 'r', 'i'),
+    ('getfield_gc_r', 'r', 'r'),
+    ('getfield_gc_r_pure', 'r', 'r'),
+    ('getfield_raw_i', 'i', 'i'),
+    ('getfield_vable_i', 'r', 'i'),
+    ('getfield_vable_r', 'r', 'r'),
+])
+def test_getfield_variants(opname, kind, restype):
+    descr = FakeFieldDescr()
+    result = 42 if restype == 'i' else _gcptr_value()
+    value = _gcptr_value() if kind == 'r' else 12345
+    arg = Register('ref' if kind == 'r' else 'int', 0)
+    result_register = Register('int' if restype == 'i' else 'ref', 1)
+    assembler, ssarepr, jitcode = _assemble([
+        (opname, arg, descr, '->', result_register),
+        (('int_return' if restype == 'i' else 'ref_return'),
+         result_register),
+        ], int=2, ref=2)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+
+    runs = []
+    for use_generated in [False, True]:
+        bh = getblackholeinterp(assembler.insns, assembler.descrs)
+        bh.cpu = cpu = FakeFieldCPU(result)
+        bh.setposition(jitcode, 0)
+        if kind == 'r':
+            bh.setarg_r(0, value)
+        else:
+            bh.setarg_i(0, value)
+        if use_generated:
+            jitcode.genext_run_function = jit_run
+        bh.run()
+        runs.append((cpu.calls, bh._final_result_anytype()))
+
+    expected_call = ('raw_i' if 'raw' in opname else
+                     'gc_' + restype, value, descr)
+    assert runs[0] == runs[1] == ([expected_call], result)
+    if 'vable' in opname:
+        assert descr.cleared_structs == [value, value]
+
+
+@py.test.mark.parametrize('opname,valuekind', [
+    ('setfield_gc_i', 'i'),
+    ('setfield_gc_r', 'r'),
+    ('setfield_vable_i', 'i'),
+])
+def test_setfield_variants(opname, valuekind):
+    descr = FakeFieldDescr()
+    struct = _gcptr_value()
+    value = 42 if valuekind == 'i' else _gcptr_value()
+    value_register = Register('int' if valuekind == 'i' else 'ref',
+                              0 if valuekind == 'i' else 1)
+    assembler, ssarepr, jitcode = _assemble([
+        (opname, Register('ref', 0), value_register, descr),
+        ('void_return',),
+        ], int=1, ref=1 if valuekind == 'i' else 2)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+
+    runs = []
+    for use_generated in [False, True]:
+        bh = getblackholeinterp(assembler.insns, assembler.descrs)
+        bh.cpu = cpu = FakeFieldCPU(None)
+        bh.setposition(jitcode, 0)
+        bh.setarg_r(0, struct)
+        if valuekind == 'i':
+            bh.setarg_i(0, value)
+        else:
+            bh.setarg_r(1, value)
+        if use_generated:
+            assert jit_run(bh) == -1
+        else:
+            bh.run()
+        runs.append((cpu.calls, bh._final_result_anytype()))
+
+    for calls, result in runs:
+        assert result is None
+        assert len(calls) == 1
+        kind, actual_struct, actual_value, actual_descr = calls[0]
+        assert kind == 'gc_' + valuekind
+        assert llmemory.cast_ptr_to_adr(actual_struct) == \
+            llmemory.cast_ptr_to_adr(struct)
+        if valuekind == 'i':
+            assert actual_value == value
+        else:
+            assert llmemory.cast_ptr_to_adr(actual_value) == \
+                llmemory.cast_ptr_to_adr(value)
+        assert actual_descr is descr
+    if 'vable' in opname:
+        assert descr.cleared_structs == [struct, struct]
+
+
+def test_setfield_exception_leaves_position_after_the_instruction():
+    descr = FakeFieldDescr()
+    assembler, ssarepr, jitcode = _assemble([
+        ('setfield_gc_i', Register('ref', 0), Register('int', 0), descr),
+        ('void_return',),
+        ], int=1, ref=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    bh = getblackholeinterp(assembler.insns, assembler.descrs)
+    bh.cpu = FakeFieldCPU(ValueError())
+    bh.setposition(jitcode, 0)
+    bh.setarg_r(0, _gcptr_value())
+    bh.setarg_i(0, 7)
+
+    py.test.raises(ValueError, jit_run, bh)
+    assert bh.position == ssarepr._insns_pos[1]
+
+
 def _gcptr_value():
     from rpython.rtyper.lltypesystem import llmemory
     return lltype.cast_opaque_ptr(llmemory.GCREF,
                                   lltype.malloc(lltype.GcStruct('X')))
+
+
+class FakeArrayDescr(AbstractDescr):
+    pass
+
+
+class FakeArrayCPU(object):
+    def __init__(self, result, array):
+        self.result = result
+        self.array = array
+        self.calls = []
+
+    def bh_getfield_gc_r(self, vable, descr):
+        self.calls.append(('getfield_gc_r', vable, descr))
+        return self.array
+
+    def bh_getarrayitem_gc_i(self, array, index, descr):
+        self.calls.append(('getarrayitem_gc_i', array, index, descr))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+    def bh_getarrayitem_gc_r(self, array, index, descr):
+        self.calls.append(('getarrayitem_gc_r', array, index, descr))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+    def _setarrayitem(self, kind, array, index, value, descr):
+        self.calls.append(('setarrayitem_gc_' + kind,
+                           array, index, value, descr))
+        if isinstance(self.result, Exception):
+            raise self.result
+
+    def bh_setarrayitem_gc_i(self, array, index, value, descr):
+        self._setarrayitem('i', array, index, value, descr)
+
+    def bh_setarrayitem_gc_r(self, array, index, value, descr):
+        self._setarrayitem('r', array, index, value, descr)
+
+
+@py.test.mark.parametrize('opname,restype,vable', [
+    ('getarrayitem_gc_i', 'i', False),
+    ('getarrayitem_gc_i_pure', 'i', False),
+    ('getarrayitem_gc_r', 'r', False),
+    ('getarrayitem_gc_r_pure', 'r', False),
+    ('getarrayitem_vable_r', 'r', True),
+])
+def test_getarrayitem_variants(opname, restype, vable):
+    arraydescr = FakeArrayDescr()
+    fielddescr = FakeFieldDescr()
+    array = _gcptr_value()
+    vable_value = _gcptr_value()
+    result = 42 if restype == 'i' else _gcptr_value()
+    index = Register('int', 0)
+    args = [Register('ref', 0) if vable else Register('ref', 1), index]
+    if vable:
+        args.extend([fielddescr, arraydescr])
+    else:
+        args.append(arraydescr)
+    result_register = Register('int' if restype == 'i' else 'ref', 1)
+    insn = tuple([opname] + args + ['->', result_register])
+    return_insn = (('int_return' if restype == 'i' else 'ref_return'),
+                   result_register)
+    assembler, ssarepr, jitcode = _assemble(
+        [insn, return_insn], int=2, ref=2)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+
+    runs = []
+    for use_generated in [False, True]:
+        bh = getblackholeinterp(assembler.insns, assembler.descrs)
+        bh.cpu = cpu = FakeArrayCPU(result, array)
+        bh.setposition(jitcode, 0)
+        bh.setarg_i(0, 7)
+        if vable:
+            bh.setarg_r(0, vable_value)
+        else:
+            bh.setarg_r(1, array)
+        if use_generated:
+            jitcode.genext_run_function = jit_run
+        bh.run()
+        runs.append((cpu.calls, bh._final_result_anytype()))
+
+    if vable:
+        expected_calls = [
+            ('getfield_gc_r', vable_value, fielddescr),
+            ('getarrayitem_gc_r', array, 7, arraydescr),
+        ]
+        assert fielddescr.cleared_structs == [vable_value, vable_value]
+    else:
+        expected_calls = [
+            ('getarrayitem_gc_' + restype, array, 7, arraydescr)]
+    assert runs[0] == runs[1] == (expected_calls, result)
+
+
+def test_getarrayitem_exception_leaves_position_after_instruction():
+    arraydescr = FakeArrayDescr()
+    assembler, ssarepr, jitcode = _assemble([
+        ('getarrayitem_gc_i', Register('ref', 0), Register('int', 0),
+         arraydescr, '->', Register('int', 1)),
+        ('int_return', Register('int', 1)),
+        ], int=2, ref=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    bh = getblackholeinterp(assembler.insns, assembler.descrs)
+    bh.cpu = FakeArrayCPU(ValueError(), _gcptr_value())
+    bh.setposition(jitcode, 0)
+    bh.setarg_i(0, 7)
+    bh.setarg_r(0, _gcptr_value())
+
+    py.test.raises(ValueError, jit_run, bh)
+    assert bh.position == ssarepr._insns_pos[1]
+
+
+@py.test.mark.parametrize('opname,valuekind,vable', [
+    ('setarrayitem_gc_i', 'i', False),
+    ('setarrayitem_gc_r', 'r', False),
+    ('setarrayitem_vable_i', 'i', True),
+    ('setarrayitem_vable_r', 'r', True),
+])
+def test_setarrayitem_variants(opname, valuekind, vable):
+    arraydescr = FakeArrayDescr()
+    fielddescr = FakeFieldDescr()
+    array = _gcptr_value()
+    vable_value = _gcptr_value()
+    value = 42 if valuekind == 'i' else _gcptr_value()
+    value_register = Register('int' if valuekind == 'i' else 'ref',
+                              1 if valuekind == 'i' else 2)
+    args = [Register('ref', 0) if vable else Register('ref', 1),
+            Register('int', 0), value_register]
+    if vable:
+        args.extend([fielddescr, arraydescr])
+    else:
+        args.append(arraydescr)
+    assembler, ssarepr, jitcode = _assemble(
+        [tuple([opname] + args), ('void_return',)],
+        int=2, ref=3)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+
+    runs = []
+    for use_generated in [False, True]:
+        bh = getblackholeinterp(assembler.insns, assembler.descrs)
+        bh.cpu = cpu = FakeArrayCPU(None, array)
+        bh.setposition(jitcode, 0)
+        bh.setarg_i(0, 7)
+        if vable:
+            bh.setarg_r(0, vable_value)
+        else:
+            bh.setarg_r(1, array)
+        if valuekind == 'i':
+            bh.setarg_i(1, value)
+        else:
+            bh.setarg_r(2, value)
+        if use_generated:
+            assert jit_run(bh) == -1
+        else:
+            bh.run()
+        runs.append(cpu.calls)
+
+    for calls in runs:
+        if vable:
+            expected_calls = [
+                ('getfield_gc_r', vable_value, fielddescr),
+                ('setarrayitem_gc_' + valuekind, array, 7, value, arraydescr),
+            ]
+            assert fielddescr.cleared_structs[-1] == vable_value
+        else:
+            expected_calls = [
+                ('setarrayitem_gc_' + valuekind, array, 7, value, arraydescr)]
+        assert len(calls) == len(expected_calls)
+        for actual, expected in zip(calls, expected_calls):
+            assert actual[0] == expected[0]
+            if actual[0] == 'setarrayitem_gc_' + valuekind:
+                assert llmemory.cast_ptr_to_adr(actual[1]) == \
+                    llmemory.cast_ptr_to_adr(expected[1])
+                assert actual[2] == expected[2]
+                if valuekind == 'i':
+                    assert actual[3] == expected[3]
+                else:
+                    assert llmemory.cast_ptr_to_adr(actual[3]) == \
+                        llmemory.cast_ptr_to_adr(expected[3])
+                assert actual[4] is expected[4]
+            else:
+                assert llmemory.cast_ptr_to_adr(actual[1]) == \
+                    llmemory.cast_ptr_to_adr(expected[1])
+                assert actual[2] is expected[2]
+
+
+def test_setarrayitem_exception_leaves_position_after_instruction():
+    arraydescr = FakeArrayDescr()
+    assembler, ssarepr, jitcode = _assemble([
+        ('setarrayitem_gc_i', Register('ref', 0), Register('int', 0),
+         Register('int', 1), arraydescr),
+        ('void_return',),
+        ], int=2, ref=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    bh = getblackholeinterp(assembler.insns, assembler.descrs)
+    bh.cpu = FakeArrayCPU(ValueError(), _gcptr_value())
+    bh.setposition(jitcode, 0)
+    bh.setarg_i(0, 7)
+    bh.setarg_i(1, 42)
+    bh.setarg_r(0, _gcptr_value())
+
+    py.test.raises(ValueError, jit_run, bh)
+    assert bh.position == ssarepr._insns_pos[1]
+
+
+def test_getfield_exception_leaves_position_after_the_instruction():
+    descr = FakeFieldDescr()
+    assembler, ssarepr, jitcode = _assemble([
+        ('getfield_gc_i', Register('ref', 0), descr,
+         '->', Register('int', 1)),
+        ('int_return', Register('int', 1)),
+        ], int=2, ref=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+    bh = getblackholeinterp(assembler.insns, assembler.descrs)
+    bh.cpu = FakeFieldCPU(ValueError())
+    bh.setposition(jitcode, 0)
+    bh.setarg_r(0, _gcptr_value())
+
+    py.test.raises(ValueError, jit_run, bh)
+    assert bh.position == ssarepr._insns_pos[1]
 
 
 class FakeCallCPU(object):

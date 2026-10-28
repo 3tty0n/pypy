@@ -5,6 +5,7 @@ from rpython.jit.codewriter.genextrun import RunModeGenerator
 from rpython.jit.metainterp import blackhole, jitexc
 from rpython.jit.metainterp.test.support import LLJitMixin
 from rpython.jit.metainterp.warmspot import get_stats
+from rpython.rtyper.lltypesystem import lltype
 
 
 loopdriver = JitDriver(greens=[], reds=['n', 'res'])
@@ -56,6 +57,28 @@ def field_loop(n):
             res += 1
         n -= 1
     return res
+
+
+ARRAY = lltype.GcArray(lltype.Signed)
+HOLDER = lltype.GcStruct('RunModeHolder', ('x', lltype.Signed))
+arraydriver = JitDriver(greens=[], reds=['n', 'res', 'box', 'items'])
+
+
+def object_array_loop(n):
+    box = lltype.malloc(HOLDER)
+    box.x = 0
+    items = lltype.malloc(ARRAY, 1)
+    items[0] = 0
+    res = 0
+    while n > 0:
+        arraydriver.can_enter_jit(n=n, res=res, box=box, items=items)
+        arraydriver.jit_merge_point(n=n, res=res, box=box, items=items)
+        if n % 7 == 3:
+            box.x = box.x + n
+            items[0] = items[0] + box.x
+            res += box.x + items[0]
+        n -= 1
+    return res + box.x + items[0]
 
 
 class _Assembler(object):
@@ -138,6 +161,7 @@ class TestRunModeAjit(LLJitMixin):
     def _install_run_mode(self, monkeypatch):
         from rpython.jit.codewriter.codewriter import CodeWriter
         entries = []
+        fallbacks = []
         generated = {}
         make_jitcodes = CodeWriter.make_jitcodes
 
@@ -149,103 +173,62 @@ class TestRunModeAjit(LLJitMixin):
 
                 def counting(bh, jit_run=jit_run):
                     entries.append((bh.jitcode.name, bh.position))
-                    return jit_run(bh)
+                    pc = jit_run(bh)
+                    if pc >= 0:
+                        fallbacks.append((bh.jitcode.name, pc))
+                    return pc
                 jitcode.genext_run_function = counting
                 generated[jitcode.name] = jitcode
             return jitcodes
 
         monkeypatch.setattr(CodeWriter, 'make_jitcodes', install)
-        return entries, generated
+        return entries, generated, fallbacks
 
     def test_e2e_loop_exit_runs_in_run_mode(self, monkeypatch):
-        entries, _ = self._install_run_mode(monkeypatch)
+        entries, _, _ = self._install_run_mode(monkeypatch)
         assert self.meta_interp(simple_loop, [100]) == simple_loop(100)
         assert entries == [('simple_loop', 27)]
 
     def test_e2e_guard_failures_run_in_run_mode(self, monkeypatch):
-        entries, _ = self._install_run_mode(monkeypatch)
+        entries, _, _ = self._install_run_mode(monkeypatch)
         res, count = self._run_guard_loop()
         assert res == guard_loop(30)
         assert count == 2
         assert entries == [('guard_loop', 28), ('guard_loop', 28)]
 
-    def test_e2e_fallback_returns_to_run_mode(self, monkeypatch):
-        entries, generated = self._install_run_mode(monkeypatch)
+    def test_e2e_getfield_runs_in_run_mode(self, monkeypatch):
+        entries, generated, fallbacks = self._install_run_mode(monkeypatch)
         res, count = self._run_guard_loop(field_loop)
         assert res == field_loop(30)
         assert count == 2
-        assert entries == [('field_loop', 29), ('field_loop', 39),
-                           ('field_loop', 29)]
-        assert generated['field_loop']._genext_run_source == """def jit_run(bh): # field_loop
-    pc = bh.position
-    i0 = bh.registers_i[0]
-    i1 = bh.registers_i[1]
-    i2 = bh.registers_i[2]
-    r0 = bh.registers_r[0]
-    try:
-        while 1:
-            if pc == 0: # live
-                pc = 3
-            elif pc == 3: # jit_merge_point
-                bh.position = 14
-                try:
-                    bh.bhimpl_jit_merge_point(0, [], [], [], [i0, i1], [r0], [])
-                except LeaveFrame:
-                    return -1
-            elif pc == 14: # live
-                pc = 17
-            elif pc == 17: # residual_call_ir_i
-                bh.position = 26
-                i2 = plain_int(bh.cpu.bh_call_i(glob0, [i0, 7], [], None, glob1))
-                pc = 26
-                continue
-            elif pc == 26: # live
-                pc = 29
-            elif pc == 29: # goto_if_not_int_eq
-                if i2 == 3:
-                    pc = 34
-                else:
-                    pc = 62
-                continue
-            elif pc == 34: # getfield_gc_i
-                return 34
-            elif pc == 39: # int_add
-                i1 = plain_int(glob2(i1, i2))
-                pc = 43
-                continue
-            elif pc == 43: # int_sub
-                i0 = plain_int(glob3(i0, 1))
-                pc = 47
-                continue
-            elif pc == 47: # live
-                pc = 50
-            elif pc == 50: # goto_if_not_int_gt
-                if i0 > 0:
-                    pc = 55
-                else:
-                    pc = 60
-                continue
-            elif pc == 55: # loop_header
-                glob4(0)
-                pc = 57
-                continue
-            elif pc == 57: # goto
-                pc = 0
-                continue
-            elif pc == 60: # int_return
-                bh.tmpreg_i = i1
-                bh._return_type = 'i'
-                return -1
-            elif pc == 62: # int_add
-                i1 = plain_int(glob5(i1, 1))
-                pc = 66
-                continue
-            elif pc == 66: # goto
-                pc = 43
-                continue
-            else:
-                return pc
-    finally:
-        bh.registers_i[0] = i0
-        bh.registers_i[1] = i1
-        bh.registers_i[2] = i2"""
+        assert entries == [('field_loop', 29), ('field_loop', 29)]
+        assert not [pc for name, pc in fallbacks if name == 'field_loop']
+        source = generated['field_loop']._genext_run_source
+        assert 'elif pc == 34: # getfield_gc_i' in source
+        assert 'bh.cpu.bh_getfield_gc_i' in source
+
+    def test_e2e_object_and_array_access(self, monkeypatch):
+        entries, generated, fallbacks = self._install_run_mode(monkeypatch)
+        res, count = self._run_guard_loop(object_array_loop)
+        assert res == object_array_loop(30)
+        assert count == 2
+
+        jitcode = generated['object_array_loop']
+        fallback_names = [
+            jitcode._ssarepr.insns[
+                jitcode._ssarepr._insns_pos.index(pc)][0]
+            for name, pc in fallbacks if name == 'object_array_loop'
+        ]
+        instruction_names = [insn[0] for insn in jitcode._ssarepr.insns]
+        assert 'getfield_gc_i' in instruction_names
+        assert 'getarrayitem_gc_i' in instruction_names
+        assert 'setfield_gc_i' in instruction_names
+        assert 'setarrayitem_gc_i' in instruction_names
+        assert 'setfield_gc_i' not in fallback_names
+        assert 'setarrayitem_gc_i' not in fallback_names
+        assert 'getfield_gc_i' not in fallback_names
+        assert 'getarrayitem_gc_i' not in fallback_names
+        assert any(name == 'object_array_loop' for name, _ in entries)
+        source = jitcode._genext_run_source
+        assert 'bh.cpu.bh_setfield_gc_i' in source
+        assert 'bh.cpu.bh_setarrayitem_gc_i' in source

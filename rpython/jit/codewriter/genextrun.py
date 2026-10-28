@@ -28,6 +28,10 @@ def _todo(name):
     return emit
 
 
+def _decode_uint16(code, position):
+    return ord(code[position]) | (ord(code[position + 1]) << 8)
+
+
 class RunModeGenerator(GenExtension):
 
     def generate_run(self):
@@ -359,25 +363,147 @@ class RunModeGenerator(GenExtension):
     emit_run_new = _todo("new")
     emit_run_new_array_clear = _todo("new_array_clear")
     emit_run_new_with_vtable = _todo("new_with_vtable")
-    emit_run_getfield_gc_i = _todo("getfield_gc_i")
-    emit_run_getfield_gc_i_pure = _todo("getfield_gc_i_pure")
-    emit_run_getfield_gc_r = _todo("getfield_gc_r")
-    emit_run_getfield_gc_r_pure = _todo("getfield_gc_r_pure")
-    emit_run_getfield_raw_i = _todo("getfield_raw_i")
-    emit_run_getfield_vable_i = _todo("getfield_vable_i")
-    emit_run_getfield_vable_r = _todo("getfield_vable_r")
-    emit_run_setfield_gc = _todo("setfield_gc")
-    emit_run_setfield_gc_i = _todo("setfield_gc_i")
-    emit_run_setfield_gc_r = _todo("setfield_gc_r")
-    emit_run_setfield_vable_i = _todo("setfield_vable_i")
-    emit_run_getarrayitem_gc_i = _todo("getarrayitem_gc_i")
-    emit_run_getarrayitem_gc_i_pure = _todo("getarrayitem_gc_i_pure")
-    emit_run_getarrayitem_gc_r = _todo("getarrayitem_gc_r")
-    emit_run_getarrayitem_gc_r_pure = _todo("getarrayitem_gc_r_pure")
-    emit_run_getarrayitem_vable_r = _todo("getarrayitem_vable_r")
-    emit_run_setarrayitem_gc = _todo("setarrayitem_gc")
-    emit_run_setarrayitem_gc_r = _todo("setarrayitem_gc_r")
-    emit_run_setarrayitem_vable_r = _todo("setarrayitem_vable_r")
+
+    def _make_emit_getfield(fieldkind, restype, clear_vable_token=False):
+        def emit(self):
+            code = self.jitcode.code
+            position = self.pc + 1
+            struct = self._run_arg(self.argcodes[0], position)
+            descr_index = _decode_uint16(code, position + 1)
+            descr = self._add_global(self.assembler.descrs[descr_index])
+            nextpc = self.pc_to_nextpc[self.pc]
+            methodkind = 'gc' if fieldkind == 'vable' else fieldkind
+            call = "bh.cpu.bh_getfield_%s_%s(%s, %s)" % (
+                methodkind, restype, struct, descr)
+            lines = ["bh.position = %d" % nextpc]
+            if clear_vable_token:
+                lines.append("%s.get_vinfo().clear_vable_token(%s)" %
+                             (descr, struct))
+            if restype == 'i':
+                call = "plain_int(%s)" % call
+            result = self._run_dest(
+                restype, ord(code[position + 3]))
+            lines.extend(["%s = %s" % (result, call),
+                          "pc = %d" % nextpc,
+                          "continue"])
+            return lines
+        return emit
+
+    emit_run_getfield_gc_i = _make_emit_getfield('gc', 'i')
+    emit_run_getfield_gc_i_pure = _make_emit_getfield('gc', 'i')
+    emit_run_getfield_gc_r = _make_emit_getfield('gc', 'r')
+    emit_run_getfield_gc_r_pure = _make_emit_getfield('gc', 'r')
+    emit_run_getfield_raw_i = _make_emit_getfield('raw', 'i')
+    emit_run_getfield_vable_i = _make_emit_getfield(
+        'vable', 'i', clear_vable_token=True)
+    emit_run_getfield_vable_r = _make_emit_getfield(
+        'vable', 'r', clear_vable_token=True)
+
+    def _make_emit_setfield(fieldkind, valuekind, clear_vable_token=False):
+        def emit(self):
+            code = self.jitcode.code
+            position = self.pc + 1
+            struct = self._run_arg(self.argcodes[0], position)
+            value = self._run_arg(self.argcodes[1], position + 1)
+            descr_index = _decode_uint16(code, position + 2)
+            descr = self._add_global(self.assembler.descrs[descr_index])
+            nextpc = self.pc_to_nextpc[self.pc]
+            methodkind = 'gc' if fieldkind == 'vable' else fieldkind
+            call = "bh.cpu.bh_setfield_%s_%s(%s, %s, %s)" % (
+                methodkind, valuekind, struct, value, descr)
+            lines = ["bh.position = %d" % nextpc]
+            if clear_vable_token:
+                lines.append("%s.get_vinfo().clear_vable_token(%s)" %
+                             (descr, struct))
+            lines.extend([call,
+                          "pc = %d" % nextpc,
+                          "continue"])
+            return lines
+        return emit
+
+    emit_run_setfield_gc_i = _make_emit_setfield('gc', 'i')
+    emit_run_setfield_gc_r = _make_emit_setfield('gc', 'r')
+    emit_run_setfield_vable_i = _make_emit_setfield(
+        'vable', 'i', clear_vable_token=True)
+
+    def _make_emit_getarrayitem(restype, vable=False):
+        def emit(self):
+            code = self.jitcode.code
+            position = self.pc + 1
+            array = self._run_arg(self.argcodes[0], position)
+            index = self._run_arg(self.argcodes[1], position + 1)
+            descr_position = position + 2
+            lines = []
+            if vable:
+                fielddescr_index = _decode_uint16(code, descr_position)
+                fielddescr = self._add_global(
+                    self.assembler.descrs[fielddescr_index])
+                lines.append(
+                    "%s.get_vinfo().clear_vable_token(%s)" %
+                    (fielddescr, array))
+                array = "bh.cpu.bh_getfield_gc_r(%s, %s)" % (
+                    array, fielddescr)
+                descr_position += 2
+            arraydescr_index = _decode_uint16(code, descr_position)
+            arraydescr = self._add_global(
+                self.assembler.descrs[arraydescr_index])
+            nextpc = self.pc_to_nextpc[self.pc]
+            call = "bh.cpu.bh_getarrayitem_gc_%s(%s, %s, %s)" % (
+                restype, array, index, arraydescr)
+            if restype == 'i':
+                call = "plain_int(%s)" % call
+            result = self._run_dest(
+                restype, ord(code[descr_position + 2]))
+            lines = ["bh.position = %d" % nextpc] + lines
+            lines.extend(["%s = %s" % (result, call),
+                          "pc = %d" % nextpc,
+                          "continue"])
+            return lines
+        return emit
+
+    emit_run_getarrayitem_gc_i = _make_emit_getarrayitem('i')
+    emit_run_getarrayitem_gc_i_pure = _make_emit_getarrayitem('i')
+    emit_run_getarrayitem_gc_r = _make_emit_getarrayitem('r')
+    emit_run_getarrayitem_gc_r_pure = _make_emit_getarrayitem('r')
+    emit_run_getarrayitem_vable_r = _make_emit_getarrayitem('r', vable=True)
+
+    def _make_emit_setarrayitem(valuekind, vable=False):
+        def emit(self):
+            code = self.jitcode.code
+            position = self.pc + 1
+            array = self._run_arg(self.argcodes[0], position)
+            index = self._run_arg(self.argcodes[1], position + 1)
+            value = self._run_arg(self.argcodes[2], position + 2)
+            descr_position = position + 3
+            lines = []
+            if vable:
+                fielddescr_index = _decode_uint16(code, descr_position)
+                fielddescr = self._add_global(
+                    self.assembler.descrs[fielddescr_index])
+                lines.append(
+                    "%s.get_vinfo().clear_vable_token(%s)" %
+                    (fielddescr, array))
+                array = "bh.cpu.bh_getfield_gc_r(%s, %s)" % (
+                    array, fielddescr)
+                descr_position += 2
+            arraydescr_index = _decode_uint16(code, descr_position)
+            arraydescr = self._add_global(
+                self.assembler.descrs[arraydescr_index])
+            nextpc = self.pc_to_nextpc[self.pc]
+            call = "bh.cpu.bh_setarrayitem_gc_%s(%s, %s, %s, %s)" % (
+                valuekind, array, index, value, arraydescr)
+            lines = ["bh.position = %d" % nextpc] + lines
+            lines.extend([call,
+                          "pc = %d" % nextpc,
+                          "continue"])
+            return lines
+        return emit
+
+    emit_run_setarrayitem_gc_i = _make_emit_setarrayitem('i')
+    emit_run_setarrayitem_gc_r = _make_emit_setarrayitem('r')
+    emit_run_setarrayitem_vable_i = _make_emit_setarrayitem('i', vable=True)
+    emit_run_setarrayitem_vable_r = _make_emit_setarrayitem('r', vable=True)
+
     emit_run_newstr = _todo("newstr")
     emit_run_strgetitem = _todo("strgetitem")
     emit_run_strsetitem = _todo("strsetitem")
@@ -394,7 +520,7 @@ class RunModeGenerator(GenExtension):
             for kind in kinds:
                 lists[kind], position = self._run_list(kind.upper(), position)
             descr = self._add_global(self.assembler.descrs[
-                ord(code[position]) | (ord(code[position + 1]) << 8)])
+                _decode_uint16(code, position)])
             position += 2
             call = "bh.cpu.bh_call_%s(%s, %s, %s, %s, %s)" % (
                 restype, func, lists.get('i', 'None'), lists.get('r', 'None'),
@@ -438,7 +564,7 @@ class RunModeGenerator(GenExtension):
         def emit(self):
             code = self.jitcode.code
             position = self.pc + 1
-            index = ord(code[position]) | (ord(code[position + 1]) << 8)
+            index = _decode_uint16(code, position)
             jitcode = self._add_global(self.assembler.descrs[index])
             position += 2
             lists = {}
