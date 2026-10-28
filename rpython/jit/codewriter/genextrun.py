@@ -321,14 +321,6 @@ class RunModeGenerator(GenExtension):
                 "pc = %s" % self.pc_to_nextpc[self.pc],
                 "continue"]
 
-    def emit_run_strlen(self):
-        position = self.pc + 1
-        string = self._run_arg(self.argcodes[0], position)
-        result = self._run_dest('i', ord(self.jitcode.code[position + 1]))
-        return ["%s = bh.cpu.bh_strlen(%s)" % (result, string),
-                "pc = %s" % self.pc_to_nextpc[self.pc],
-                "continue"]
-
     def emit_run_goto_if_not_ptr_iszero(self):
         return self._emit_branch(1, lambda a: "not %s" % a)
 
@@ -534,10 +526,33 @@ class RunModeGenerator(GenExtension):
     emit_run_setarrayitem_vable_i = _make_emit_setarrayitem('i', vable=True)
     emit_run_setarrayitem_vable_r = _make_emit_setarrayitem('r', vable=True)
 
-    emit_run_newstr = _todo("newstr")
-    emit_run_strgetitem = _todo("strgetitem")
-    emit_run_strsetitem = _todo("strsetitem")
-    emit_run_copystrcontent = _todo("copystrcontent")
+    def _make_emit_cpu_op(method, nargs, restype=None):
+        # <op> a0 .. a<nargs-1> [-> result]: plain register operands, no
+        # descr, forwarded to bh.cpu.<method>
+        def emit(self):
+            position = self.pc + 1
+            args = [self._run_arg(self.argcodes[i], position + i)
+                    for i in range(nargs)]
+            call = "bh.cpu.%s(%s)" % (method, ", ".join(args))
+            nextpc = self.pc_to_nextpc[self.pc]
+            lines = ["bh.position = %d" % nextpc]
+            if restype is None:
+                lines.append(call)
+            else:
+                if restype == 'i':
+                    call = "plain_int(%s)" % call
+                result = self._run_dest(
+                    restype, ord(self.jitcode.code[position + nargs]))
+                lines.append("%s = %s" % (result, call))
+            lines.extend(["pc = %d" % nextpc, "continue"])
+            return lines
+        return emit
+
+    emit_run_newstr = _make_emit_cpu_op('bh_newstr', 1, 'r')
+    emit_run_strlen = _make_emit_cpu_op('bh_strlen', 1, 'i')
+    emit_run_strgetitem = _make_emit_cpu_op('bh_strgetitem', 2, 'i')
+    emit_run_strsetitem = _make_emit_cpu_op('bh_strsetitem', 3)
+    emit_run_copystrcontent = _make_emit_cpu_op('bh_copystrcontent', 5)
 
     def _make_emit_residual_call(kinds, restype):
         # residual_call_<kinds>_<restype>: func, one list per kind, calldescr

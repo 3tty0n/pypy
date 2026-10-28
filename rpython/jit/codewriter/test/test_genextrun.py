@@ -953,7 +953,8 @@ def test_unfoldable_write_kills_the_constant():
                 pc = 3
                 continue
             elif pc == 3: # strlen
-                i0 = bh.cpu.bh_strlen(r0)
+                bh.position = 6
+                i0 = plain_int(bh.cpu.bh_strlen(r0))
                 pc = 6
                 continue
             elif pc == 6: # int_return
@@ -1760,3 +1761,93 @@ def test_new_variants(opname, has_length):
         assert calls == [expected]
         assert llmemory.cast_ptr_to_adr(final) == \
             llmemory.cast_ptr_to_adr(result)
+
+
+class FakeStringCPU(object):
+    """Records every bh_* call; returns self.result"""
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    def __getattr__(self, name):
+        if not name.startswith('bh_'):
+            raise AttributeError(name)
+        def method(*args):
+            self.calls.append((name,) + args)
+            if isinstance(self.result, Exception):
+                raise self.result
+            return self.result
+        return method
+
+
+_STRING_OPS = [
+    # opname, argument kinds, result kind
+    ('newstr', 'i', 'r'),
+    ('strlen', 'r', 'i'),
+    ('strgetitem', 'ri', 'i'),
+    ('strsetitem', 'rii', None),
+    ('copystrcontent', 'rriii', None),
+]
+
+
+@py.test.mark.parametrize('opname,argkinds,resultkind', _STRING_OPS)
+def test_string_ops_reach_cpu(opname, argkinds, resultkind):
+    names = {'i': 'int', 'r': 'ref'}
+    counts = {'i': 0, 'r': 0}
+    regs = []
+    values = []
+    for kind in argkinds:
+        regs.append(Register(names[kind], counts[kind]))
+        values.append(_gcptr_value() if kind == 'r' else 10 + counts[kind])
+        counts[kind] += 1
+    insn = [opname] + regs
+    if resultkind is None:
+        instructions = [tuple(insn), ('void_return',)]
+        result = None
+    else:
+        res = Register(names[resultkind], counts[resultkind])
+        counts[resultkind] += 1
+        insn += ['->', res]
+        ret = 'int_return' if resultkind == 'i' else 'ref_return'
+        instructions = [tuple(insn), (ret, res)]
+        result = 99 if resultkind == 'i' else _gcptr_value()
+    assembler, ssarepr, jitcode = _assemble(
+        instructions, int=counts['i'], ref=counts['r'])
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+
+    runs = []
+    for use_generated in [False, True]:
+        bh = getblackholeinterp(assembler.insns, assembler.descrs)
+        bh.cpu = cpu = FakeStringCPU(result)
+        bh.setposition(jitcode, 0)
+        ri = rr = 0
+        for kind, value in zip(argkinds, values):
+            if kind == 'i':
+                bh.setarg_i(ri, value)
+                ri += 1
+            else:
+                bh.setarg_r(rr, value)
+                rr += 1
+        if use_generated:
+            assert jit_run(bh) == -1
+            final = {'i': bh.tmpreg_i, 'r': bh.tmpreg_r,
+                     None: None}[resultkind]
+        else:
+            bh.run()
+            final = bh._final_result_anytype()
+        runs.append((cpu.calls, final))
+
+    for calls, final in runs:
+        assert len(calls) == 1
+        assert calls[0][0] == 'bh_' + opname
+        for kind, actual, expected in zip(argkinds, calls[0][1:], values):
+            if kind == 'r':
+                assert llmemory.cast_ptr_to_adr(actual) == \
+                    llmemory.cast_ptr_to_adr(expected)
+            else:
+                assert actual == expected
+        if resultkind == 'r':
+            assert llmemory.cast_ptr_to_adr(final) == \
+                llmemory.cast_ptr_to_adr(result)
+        else:
+            assert final == result
