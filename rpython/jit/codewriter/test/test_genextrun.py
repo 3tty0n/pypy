@@ -1699,3 +1699,64 @@ def test_run_single_steps_a_fallback_and_reenters_jit_run():
     bh.run()
     assert bh._final_result_anytype() == 3
     assert entries == [0, ssarepr._insns_pos[2]]
+
+
+class FakeNewCPU(object):
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    def _new(self, kind, args):
+        self.calls.append((kind,) + args)
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+    def bh_new(self, descr):
+        return self._new('new', (descr,))
+
+    def bh_new_with_vtable(self, descr):
+        return self._new('new_with_vtable', (descr,))
+
+    def bh_new_array(self, length, descr):
+        return self._new('new_array', (length, descr))
+
+    def bh_new_array_clear(self, length, descr):
+        return self._new('new_array_clear', (length, descr))
+
+
+@py.test.mark.parametrize('opname,has_length', [
+    ('new', False),
+    ('new_with_vtable', False),
+    ('new_array', True),
+    ('new_array_clear', True),
+])
+def test_new_variants(opname, has_length):
+    descr = FakeFieldDescr()
+    result = _gcptr_value()
+    args = (Register('int', 0),) if has_length else ()
+    assembler, ssarepr, jitcode = _assemble([
+        (opname,) + args + (descr, '->', Register('ref', 0)),
+        ('ref_return', Register('ref', 0)),
+        ], int=1, ref=1)
+    jit_run = _run_function(assembler, ssarepr, jitcode)
+
+    runs = []
+    for use_generated in [False, True]:
+        bh = getblackholeinterp(assembler.insns, assembler.descrs)
+        bh.cpu = cpu = FakeNewCPU(result)
+        bh.setposition(jitcode, 0)
+        bh.setarg_i(0, 7)
+        if use_generated:
+            assert jit_run(bh) == -1
+            final = bh.tmpreg_r
+        else:
+            bh.run()
+            final = bh._final_result_anytype()
+        runs.append((cpu.calls, final))
+
+    expected = ((opname, 7, descr) if has_length else (opname, descr))
+    for calls, final in runs:
+        assert calls == [expected]
+        assert llmemory.cast_ptr_to_adr(final) == \
+            llmemory.cast_ptr_to_adr(result)

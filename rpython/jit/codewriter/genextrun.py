@@ -360,9 +360,39 @@ class RunModeGenerator(GenExtension):
     # TODO: How to implement switch?
     emit_run_switch = _todo("switch")
 
-    emit_run_new = _todo("new")
-    emit_run_new_array_clear = _todo("new_array_clear")
-    emit_run_new_with_vtable = _todo("new_with_vtable")
+    def _make_emit_new(method):
+        def emit(self):
+            code = self.jitcode.code
+            position = self.pc + 1
+            descr_index = _decode_uint16(code, position)
+            descr = self._add_global(self.assembler.descrs[descr_index])
+            nextpc = self.pc_to_nextpc[self.pc]
+            result = self._run_dest('r', ord(code[position + 2]))
+            return ["bh.position = %d" % nextpc,
+                    "%s = bh.cpu.%s(%s)" % (result, method, descr),
+                    "pc = %d" % nextpc,
+                    "continue"]
+        return emit
+
+    def _make_emit_new_array(method):
+        def emit(self):
+            code = self.jitcode.code
+            position = self.pc + 1
+            length = self._run_arg(self.argcodes[0], position)
+            descr_index = _decode_uint16(code, position + 1)
+            descr = self._add_global(self.assembler.descrs[descr_index])
+            nextpc = self.pc_to_nextpc[self.pc]
+            result = self._run_dest('r', ord(code[position + 3]))
+            return ["bh.position = %d" % nextpc,
+                    "%s = bh.cpu.%s(%s, %s)" % (result, method, length, descr),
+                    "pc = %d" % nextpc,
+                    "continue"]
+        return emit
+
+    emit_run_new = _make_emit_new('bh_new')
+    emit_run_new_with_vtable = _make_emit_new('bh_new_with_vtable')
+    emit_run_new_array = _make_emit_new_array('bh_new_array')
+    emit_run_new_array_clear = _make_emit_new_array('bh_new_array_clear')
 
     def _make_emit_getfield(fieldkind, restype, clear_vable_token=False):
         def emit(self):
