@@ -22,7 +22,7 @@ DEFAULT = ("ai,bm_chameleon,bm_dulwich_log,bm_krakatau,bm_mako,bm_mdp,"
 
 def run(baseline, changed, output, benchmarks, args, fast):
     cmd = [sys.executable, RUNNER, "--full-store",
-           "--inherit-env=PATH,PYPY_GC_NURSERY",
+           "--inherit_env=PATH,PYPY_GC_NURSERY",
            "-b", benchmarks, "-o", output,
            "--baseline", baseline, "-c", changed]
     if args:
