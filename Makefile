@@ -15,10 +15,16 @@ URAM := $(shell $(RUNINTERP) -c "import sys; print(4.5 if sys.maxint>1<<32 else 
 
 JOBS=$(subst -j,--make-jobs ,$(filter -j%, $(MAKEFLAGS)))
 
-.PHONY: pypy-c pypy-cogen-c pypy-twoproj-c cffi_imports
+# off, critical (only @warmup_critical_function) or all
+GEN_EXT_RUN ?= off
+
+.PHONY: pypy-c pypy-cogen-c pypy-twoproj-c pypy-twoproj-run-c cffi_imports
 
 pypy-twoproj-c:
-	cd pypy/goal && $(RUNINTERP) ../../rpython/bin/rpython $(JOBS) -Ojit targetpypystandalone.py
+	cd pypy/goal && PYPY_GEN_EXT_RUN=$(GEN_EXT_RUN) $(RUNINTERP) ../../rpython/bin/rpython $(JOBS) -Ojit targetpypystandalone.py
+
+pypy-twoproj-run-c:
+	cd pypy/goal && PYPY_GEN_EXT_RUN=critical $(RUNINTERP) ../../rpython/bin/rpython $(JOBS) -Ojit targetpypystandalone.py
 
 pypy-cogen-c:
 	cd pypy/goal && PYPY_GEN_EXTENSION=0 $(RUNINTERP) ../../rpython/bin/rpython $(JOBS) -Ojit targetpypystandalone.py

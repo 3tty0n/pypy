@@ -253,6 +253,9 @@ class WarmRunnerDesc(object):
         self.inline_inlineable_portals()
         self.find_portals()
         self.codewriter = codewriter.CodeWriter(self.cpu, self.jitdrivers_sd)
+        translation_config = getattr(translator.config, 'translation', None)
+        self.codewriter.genextrun = getattr(
+            translation_config, 'genextrun', 'off')
         if policy is None:
             policy = JitPolicy()
         policy.set_supports_floats(self.cpu.supports_floats)

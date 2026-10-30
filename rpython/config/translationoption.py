@@ -134,6 +134,11 @@ translation_optiondescription = OptionDescription(
                "generate JIT extension by specializing the tracer",
                default=False, cmdline="--gen-extension"),
 
+    ChoiceOption("genextrun",
+                 "generate specialized blackhole run functions",
+                 ["off", "critical", "all"],
+                 default="off", cmdline="--gen-ext-run"),
+
     # misc
     BoolOption("verbose", "Print extra information", default=False,
                cmdline="--verbose"),

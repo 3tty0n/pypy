@@ -31,6 +31,15 @@ def genextension_enabled():
     return os.environ.get('PYPY_GEN_EXTENSION', '1') != '0'
 
 
+def genextrun_mode():
+    value = os.environ.get('PYPY_GEN_EXT_RUN', 'off').lower()
+    if value == 'all':
+        return 'all'
+    if value in ('1', 'on', 'yes', 'true', 'critical'):
+        return 'critical'
+    return 'off'
+
+
 def debug(msg):
     try:
         os.write(2, "debug: " + msg + '\n')
@@ -252,7 +261,7 @@ class PyPyTarget(object):
         return pypy_optiondescription
 
     def target(self, driver, args):
-        if genextension_enabled():
+        if genextension_enabled() or genextrun_mode() != 'off':
             driver.exe_name = 'pypy-twoproj-%(backend)s'
         elif pe_cogen_enabled():
             driver.exe_name = 'pypy-cogen-%(backend)s'
@@ -261,6 +270,7 @@ class PyPyTarget(object):
 
         config = driver.config
         config.translation.genextension = genextension_enabled()
+        config.translation.genextrun = genextrun_mode()
         parser = self.opt_parser(config)
 
         parser.parse_args(args)

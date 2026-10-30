@@ -24,6 +24,20 @@ def simple_loop(n):
     return res
 
 
+criticaldriver = JitDriver(greens=[], reds=['n', 'res'])
+
+
+@jit.warmup_critical_function
+def critical_loop(n):
+    res = 0
+    while n > 0:
+        criticaldriver.can_enter_jit(n=n, res=res)
+        criticaldriver.jit_merge_point(n=n, res=res)
+        res += n
+        n -= 1
+    return res
+
+
 guarddriver = JitDriver(greens=[], reds=['n', 'res'])
 
 
@@ -270,6 +284,31 @@ class TestRunModeAjit(LLJitMixin):
     def _generated_lines(self, jitcode):
         return [line.strip()
                 for line in jitcode._genext_run_source.splitlines()]
+
+    def test_e2e_pipeline_all_generates_run_functions(self):
+        res = self.meta_interp(guard_loop, [30],
+                               translationoptions={'genextrun': 'all'})
+        assert res == guard_loop(30)
+        sd = get_stats().metainterp_sd
+        assert sd.jitcodes
+        assert all(jitcode.genext_run_function is not None
+                   for jitcode in sd.jitcodes)
+
+    def test_e2e_pipeline_critical_skips_undecorated(self):
+        res = self.meta_interp(simple_loop, [10],
+                               translationoptions={'genextrun': 'critical'})
+        assert res == simple_loop(10)
+        sd = get_stats().metainterp_sd
+        mainjitcode = sd.jitdrivers_sd[0].mainjitcode
+        assert mainjitcode.genext_run_function is None
+
+    def test_e2e_pipeline_critical_generates_for_decorated(self):
+        res = self.meta_interp(critical_loop, [30],
+                               translationoptions={'genextrun': 'critical'})
+        assert res == critical_loop(30)
+        sd = get_stats().metainterp_sd
+        mainjitcode = sd.jitdrivers_sd[0].mainjitcode
+        assert mainjitcode.genext_run_function is not None
 
     def test_e2e_loop_exit_runs_in_run_mode(self, monkeypatch):
         baseline = self._baseline_trace(simple_loop, [100])

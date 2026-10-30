@@ -16,11 +16,42 @@ from rpython.tool.udir import udir
 class CodeWriter(object):
     callcontrol = None    # for tests
     debug = True
+    # 'off', 'critical' (only @warmup_critical_function) or 'all'.
+    # Set by WarmRunnerDesc from translation.genextrun, or directly by tests.
+    genextrun = 'off'
 
     def __init__(self, cpu=None, jitdrivers_sd=[]):
         self.cpu = cpu
         self.assembler = Assembler()
         self.callcontrol = CallControl(cpu, jitdrivers_sd)
+
+    def _generate_run_function(self, jitcode):
+        """Attach a specialized BlackholeInterpreter.run() body to 'jitcode'.
+
+        Must be called right after transform_graph_to_jitcode(), while the
+        assembler still holds this jitcode's startpoints and label positions.
+        Deliberately not done in Assembler.assemble(): runtime_cogen's
+        ProgramEmitter also calls assemble() at runtime, where exec'ing
+        Python source is impossible.
+        """
+        mode = self.genextrun
+        if mode == 'off':
+            return False
+        ssarepr = jitcode._ssarepr
+        if mode == 'critical' and not getattr(ssarepr, 'genextension', False):
+            return False
+        from rpython.jit.codewriter.genextrun import RunModeGenerator
+        try:
+            gen = RunModeGenerator(self.assembler, ssarepr, jitcode)
+            jitcode.genext_run_function = gen.generate_run()
+            return True
+        except Exception as e:
+            # A single exotic jitcode must not abort the whole translation.
+            # The blackhole interpreter falls back to dispatch_loop().
+            jitcode.genext_run_function = None
+            log.WARNING('cannot generate run mode for %s: %s' % (
+                jitcode.name, e))
+            return False
 
     def transform_func_to_jitcode(self, func, values):
         """For testing."""
@@ -76,12 +107,18 @@ class CodeWriter(object):
         self.callcontrol.grab_initial_jitcodes()
         count = 0
         all_jitcodes = []
+        num_run_mode = 0
         for graph, jitcode in self.callcontrol.enum_pending_graphs():
             self.transform_graph_to_jitcode(graph, jitcode, verbose, len(all_jitcodes))
+            if self._generate_run_function(jitcode):
+                num_run_mode += 1
             all_jitcodes.append(jitcode)
             count += 1
             if not count % 500:
                 log.info("Produced %d jitcodes" % count)
+        if self.genextrun != 'off':
+            log.info("Generated %d blackhole run-mode functions" % (
+                num_run_mode,))
         self.assembler.finished(self.callcontrol.callinfocollection)
         log.info("There are %d JitCode instances." % count)
         log.info("There are %d -live- ops. Size of liveness is %s bytes" % (

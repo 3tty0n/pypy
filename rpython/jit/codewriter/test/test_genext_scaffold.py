@@ -18,7 +18,7 @@ class _AssemblerSnapshot(object):
         self.label_positions = dict(assembler.label_positions)
 
 
-def _tla_jitcodes():
+def _tla_jitcodes(genextrun='off', decorate=False):
     from rpython.jit.tl.tla import tla
     from rpython.jit.codewriter.test import test_codewriter
 
@@ -42,6 +42,7 @@ def _tla_jitcodes():
     jd.index = 0
     jd.mainjitcode = None
     cw = CodeWriter(FakeCPU(rtyper), [jd])
+    cw.genextrun = genextrun
 
     captured = []
     assemble = cw.assembler.assemble
@@ -54,8 +55,14 @@ def _tla_jitcodes():
         return res
 
     cw.assembler.assemble = spy
-    cw.find_all_graphs(FakePolicy())
-    cw.make_jitcodes(verbose=False)
+    if decorate:
+        tla.Frame.interp.im_func.generate_jit_extension = True
+    try:
+        cw.find_all_graphs(FakePolicy())
+        cw.make_jitcodes(verbose=False)
+    finally:
+        if decorate:
+            del tla.Frame.interp.im_func.generate_jit_extension
     return cw.assembler, captured
 
 
@@ -76,6 +83,42 @@ def test_genext_run_mode(tmpdir):
     genext = GenExtension(snap, ssarepr, jitcode)
     genext.generate()
     generate_run_function(genext)
+
+
+def test_pipeline_generates_run_functions_for_all_jitcodes():
+    assembler, captured = _tla_jitcodes(genextrun='all')
+    assert captured
+    for ssarepr, jitcode, snap in captured:
+        assert jitcode.genext_run_function is not None
+        assert 'def jit_run(bh):' in jitcode._genext_run_source
+
+
+def test_pipeline_critical_skips_undecorated_jitcodes():
+    assembler, captured = _tla_jitcodes(genextrun='critical')
+    assert captured
+    for ssarepr, jitcode, snap in captured:
+        assert not ssarepr.genextension
+        assert jitcode.genext_run_function is None
+
+
+def test_pipeline_critical_generates_decorated_jitcode():
+    assembler, captured = _tla_jitcodes(genextrun='critical', decorate=True)
+    by_name = dict((ssarepr.name, (ssarepr, jitcode))
+                   for ssarepr, jitcode, snap in captured)
+    ssarepr, jitcode = by_name['Frame.interp']
+    assert ssarepr.genextension
+    assert jitcode.genext_run_function is not None
+    for name, (ssarepr, jitcode) in by_name.items():
+        if name != 'Frame.interp':
+            assert not ssarepr.genextension
+            assert jitcode.genext_run_function is None
+
+
+def test_pipeline_off_by_default():
+    assembler, captured = _tla_jitcodes()
+    assert captured
+    for ssarepr, jitcode, snap in captured:
+        assert jitcode.genext_run_function is None
 
 
 def test_genext_on_residual(tmpdir):
