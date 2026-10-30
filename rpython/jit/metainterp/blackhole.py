@@ -320,6 +320,11 @@ class BlackholeInterpreter(object):
         return '<BHInterp %s>' % self.jitcode
 
     def setposition(self, jitcode, position):
+        if jitcode is self.jitcode:
+            # pooled interps keep their constants (cleanup_registers() only
+            # clears the non-constant refs), so they are still in place
+            self.position = position
+            return
         num_regs_and_consts_i = jitcode.num_regs_and_consts_i()
         num_regs_and_consts_r = jitcode.num_regs_and_consts_r()
         num_regs_and_consts_f = jitcode.num_regs_and_consts_f()

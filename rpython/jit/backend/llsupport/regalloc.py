@@ -439,13 +439,16 @@ class RegisterManager(object):
         self.temp_boxes = []
 
     def _check_invariants(self):
-        if not we_are_translated():
-            # make sure no duplicates
-            assert len(dict.fromkeys(self.reg_bindings.values())) == len(self.reg_bindings)
-            rev_regs = dict.fromkeys(self.reg_bindings.values())
-            for reg in self.free_regs:
-                assert reg not in rev_regs
-            assert len(rev_regs) + len(self.free_regs) == len(self.all_regs)
+        if we_are_translated():
+            # called after every op; translated asserts are no-ops, but the
+            # loop and longevity lookups below still cost ~2.5% of warmup
+            return
+        # make sure no duplicates
+        assert len(dict.fromkeys(self.reg_bindings.values())) == len(self.reg_bindings)
+        rev_regs = dict.fromkeys(self.reg_bindings.values())
+        for reg in self.free_regs:
+            assert reg not in rev_regs
+        assert len(rev_regs) + len(self.free_regs) == len(self.all_regs)
         for index, reg in enumerate(self.all_regs):
             box = self.reg_bindings_list[index]
             if reg not in self.free_regs:
