@@ -47,19 +47,17 @@ class GuardToken(object):
         # note that regalloc has a very similar compute, but
         # one that does iteration over all bindings, so slightly different,
         # eh
-        input_i = 0
         for i in range(len(failargs)):
             arg = failargs[i]
             if arg is None:
                 continue
-            loc = fail_locs[input_i]
-            input_i += 1
             if arg.type == REF:
                 loc = fail_locs[i]
                 if loc.is_core_reg():
                     val = self.cpu.all_reg_indexes[loc.value]
                 else:
                     val = loc.get_position() + self.cpu.JITFRAME_FIXED_SIZE
+                assert val >= 0    # lets // and % compile to plain shifts
                 gcmap[val // WORD // 8] |= r_uint(1) << (val % (WORD * 8))
         return gcmap
 
@@ -254,7 +252,9 @@ class BaseAssembler(object):
             elif loc.is_stack():
                 assert (loc.value & (WORD - 1)) == 0, \
                     "store_info_on_descr: misaligned"
-                position = (loc.value - base_ofs) // WORD
+                offset = loc.value - base_ofs
+                assert offset >= 0    # lets // compile to a plain shift
+                position = offset // WORD
                 assert 0 < position < 0xFFFF, "store_info_on_descr: overflow!"
             else:
                 assert loc is not self.cpu.frame_reg # for now
