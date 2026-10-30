@@ -173,12 +173,13 @@ def emit_native(native_table, program, name="emitted-residual-native",
             rest.append(pc)
     sort_ints(rest)
     order.extend(rest)
+    entry = _scratch_entry(fragments)
     for pc in order:
         ssarepr.insns.append(NativeInsn("---", []))
         ssarepr.insns.append(
             NativeInsn("@label", [NLabel(_block_label_id(pc))]))
         if has_merge_points and (not compact_entries or pc in headers):
-            _initialise_scratch_native(ssarepr, fragments, counts)
+            _initialise_scratch_native(ssarepr, entry, counts)
         _place_native(ssarepr, program, pc, fragments, scratch)
 
     return ssarepr, counts
@@ -188,11 +189,16 @@ def _register(kind, index):
     return NReg(kind, index)
 
 
-def _initialise_scratch_native(ssarepr, fragments, counts):
+def _scratch_entry(fragments):
+    """Per kind, the first register past every fragment's boundary entry."""
     entry = {}
     for fragment in fragments.values():
         for kind, index in fragment.boundary_entry.values():
             entry[kind] = max(entry.get(kind, 0), index + 1)
+    return entry
+
+
+def _initialise_scratch_native(ssarepr, entry, counts):
     for kind in KINDS:
         if kind not in counts:
             continue
@@ -466,11 +472,18 @@ def _materialize_bits_native(alive, registry, words):
         if word == r_uint(0):
             continue
         base = word_idx * _WORD_BITS
-        for bit in range(_WORD_BITS):
-            if (word >> bit) & r_uint(1) != r_uint(0):
+        bit = 0
+        while word != r_uint(0):
+            if word & r_uint(0xFF) == r_uint(0):
+                word >>= 8
+                bit += 8
+                continue
+            if word & r_uint(1) != r_uint(0):
                 compact_idx = base + bit
                 if compact_idx < len(registry):
                     regs.append(registry[compact_idx])
+            word >>= 1
+            bit += 1
     return regs
 
 
@@ -749,12 +762,20 @@ def _remove_repeated_live_native(insns):
     insns.extend(res)
 
 
-def _get_liveness_info_native(operands, kind):
-    lives = {}
+def _get_liveness_info_native(operands):
+    """The live int, ref and float registers, in a single pass."""
+    live_i = {}
+    live_r = {}
+    live_f = {}
     for x in operands:
-        if isinstance(x, NReg) and x.kind == kind:
-            lives[chr(x.index)] = True
-    return lives
+        if isinstance(x, NReg):
+            if x.kind == "int":
+                live_i[chr(x.index)] = True
+            elif x.kind == "ref":
+                live_r[chr(x.index)] = True
+            elif x.kind == "float":
+                live_f[chr(x.index)] = True
+    return live_i, live_r, live_f
 
 
 def _operand_argcode_options(x, allow_short):
@@ -853,9 +874,7 @@ class NativeAssembler(Assembler):
             key = len(self.code)
             self.startpoints[key] = True
             self.num_liveness_ops += 1
-            live_i = _get_liveness_info_native(insn.operands, "int")
-            live_r = _get_liveness_info_native(insn.operands, "ref")
-            live_f = _get_liveness_info_native(insn.operands, "float")
+            live_i, live_r, live_f = _get_liveness_info_native(insn.operands)
             assert key not in self.liveness
             self.liveness[key] = live_i, live_r, live_f
             num = self._insn_number("live/")
@@ -1041,34 +1060,28 @@ def _keeps_argcode(constant, reader):
 
 
 def _registers_read_before_written(insns):
-    """Registers some region reads before writing."""
+    """Registers some region reads before writing, and every register any
+    ``-live-`` names (its load must never be dropped), in a single pass."""
     crossing = {}
+    live_targets = {}
     written = {}
     for insn in insns:
         if _ends_region(insn.opcode):
             written = {}
             continue
+        is_live = insn.opcode == "-live-"
         for operand in insn.operands:
             key = _reg_key(operand)
-            if key >= 0 and key not in written:
+            if key < 0:
+                continue
+            if is_live:
+                live_targets[key] = True
+            if key not in written:
                 crossing[key] = True
         key = _reg_key(insn.result)
         if key >= 0:
             written[key] = True
-    return crossing
-
-
-def _live_targets(insns):
-    """Every register any ``-live-`` names; its load must never be dropped."""
-    targets = {}
-    for insn in insns:
-        if insn.opcode != "-live-":
-            continue
-        for operand in insn.operands:
-            key = _reg_key(operand)
-            if key >= 0:
-                targets[key] = True
-    return targets
+    return crossing, live_targets
 
 
 class _PendingLoad(object):
@@ -1095,8 +1108,7 @@ def _finalize_all_pending(pending, insns, keep):
 
 def fold_constant_loads(insns):
     """Substitutes a materialised late-static value into what reads it."""
-    live_targets = _live_targets(insns)
-    crossing = _registers_read_before_written(insns)
+    crossing, live_targets = _registers_read_before_written(insns)
     keep = [True] * len(insns)
     folded = 0
     blocked_crossing = 0
