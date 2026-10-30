@@ -335,6 +335,8 @@ def tmp_callback(looptoken):
     jitlog_write_marked(mark_tmp_callback, len(mark_tmp_callback))
 
 class JitLogger(object):
+    record_ops_offset = True     # set by jit/metainterp/compile.py
+
     def __init__(self, cpu=None):
         self.cpu = cpu
         self.memo = {}

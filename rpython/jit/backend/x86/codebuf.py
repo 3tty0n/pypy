@@ -44,7 +44,11 @@ class MachineCodeBlockWrapper(BlockBuilderMixin,
     def add_pending_relocation(self):
         self.relocations.append(self.get_relative_pos(break_basic_block=False))
 
+    record_ops_offset = True
+
     def mark_op(self, op):
+        if not self.record_ops_offset:
+            return
         pos = self.get_relative_pos(break_basic_block=False)
         self.ops_offset[op] = pos
 

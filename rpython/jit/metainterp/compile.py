@@ -553,6 +553,8 @@ def send_loop_to_backend(greenkey, jitdriver_sd, metainterp_sd, loop, type,
     metainterp_sd.profiler.start_backend()
     debug_start("jit-backend")
     log = have_debug_prints() or jl.jitlog_enabled()
+    # only loggers and hooks read asminfo.ops_offset
+    metainterp_sd.jitlog.record_ops_offset = log or hooks is not None
     try:
         loopname = jitdriver_sd.warmstate.get_location_str(greenkey)
         unique_id = jitdriver_sd.warmstate.get_unique_id(greenkey)
@@ -611,6 +613,8 @@ def send_bridge_to_backend(jitdriver_sd, metainterp_sd, faildescr, inputargs,
     metainterp_sd.profiler.start_backend()
     debug_start("jit-backend")
     log = have_debug_prints() or jl.jitlog_enabled()
+    # only loggers and hooks read asminfo.ops_offset
+    metainterp_sd.jitlog.record_ops_offset = log or hooks is not None
     try:
         asminfo = do_compile_bridge(metainterp_sd, faildescr, inputargs,
                                     operations,

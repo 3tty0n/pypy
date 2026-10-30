@@ -520,6 +520,8 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
                 assert arg.get_forwarded() is None
 
         self.setup(looptoken)
+        self.mc.record_ops_offset = (logger is None or logger.record_ops_offset
+                                     or not we_are_translated())
         if self.cpu.HAS_CODEMAP:
             self.codemap_builder.enter_portal_frame(jd_id, unique_id,
                                                     self.mc.get_relative_pos())
@@ -627,6 +629,8 @@ class Assembler386(BaseAssembler, VectorAssemblerMixin):
             assert len(set(inputargs)) == len(inputargs)
 
         self.setup(original_loop_token)
+        self.mc.record_ops_offset = (logger is None or logger.record_ops_offset
+                                     or not we_are_translated())
         if self.cpu.HAS_CODEMAP:
             self.codemap_builder.inherit_code_from_position(
                 faildescr.adr_jump_offset)
