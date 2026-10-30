@@ -414,7 +414,8 @@ class RegisterManager(object):
         self._check_type(v)
         if isinstance(v, Const):
             return
-        if v not in self.longevity or self.longevity[v].last_usage <= self.position:
+        lifetime = get_lifetime(v)
+        if lifetime is None or lifetime.last_usage <= self.position:
             reg = self.reg_bindings_get(v)
             if reg is not None:
                 self.free_regs.append(reg)
@@ -482,8 +483,7 @@ class RegisterManager(object):
                     del self.reg_bindings[v]
                     self.free_regs.append(res)
             if selected_reg in self.free_regs:
-                self.free_regs = [reg for reg in self.free_regs
-                                  if reg is not selected_reg]
+                self.free_regs.remove(selected_reg)
                 self.reg_bindings[v] = selected_reg
                 return selected_reg
             return None
@@ -1115,7 +1115,9 @@ class LifetimeManager(object):
         """ try to find a register from free_regs for v at position that's
         free for the whole lifetime of v. pick the one that is blocked first
         *after* the lifetime of v. """
-        longevityvar = self[v]
+        if not self.fixed_register_use:
+            return free_regs[-1]
+        last_usage = self[v].last_usage_including_sharing()
         min_fixed_use_after = sys.maxint
         best_reg = None
         unfixed_reg = None
@@ -1125,10 +1127,9 @@ class LifetimeManager(object):
                 unfixed_reg = reg
                 continue
             use_after = fixed_reg_pos.free_until_pos(position)
-            if use_after <= longevityvar.last_usage_including_sharing():
+            if use_after <= last_usage:
                 # can't fit
                 continue
-            assert use_after >= longevityvar.last_usage_including_sharing()
             if use_after < min_fixed_use_after:
                 best_reg = reg
                 min_fixed_use_after = use_after
