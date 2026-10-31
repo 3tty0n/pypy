@@ -71,6 +71,7 @@ def _get_jitcodes(testself, CPUClass, func, values,
 
     class FakeJitDriverSD:
         num_green_args = 0
+        num_red_args = len(values)
         portal_graph = graphs[0]
         virtualizable_info = None
         greenfield_info = None

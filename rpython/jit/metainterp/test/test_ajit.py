@@ -2974,7 +2974,9 @@ class BasicTests:
         self.check_jitcell_token_count(1)
         self.check_target_token_count(5)
 
-    def test_retrace_ending_up_retracing_another_loop(self):
+    def test_retrace_ending_up_retracing_another_loop(self, monkeypatch):
+        from rpython.jit.metainterp.compile import AbstractResumeGuardDescr
+        monkeypatch.setattr(AbstractResumeGuardDescr, 'ABORT_COUNT_MAX', 0)
 
         myjitdriver = JitDriver(greens = ['pc'], reds = ['n', 'i', 'sa'])
         bytecode = "0+sI0+SI"

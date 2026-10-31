@@ -1183,7 +1183,12 @@ class LLFrame(object):
         self._accumulate(descr, self.current_op.getfailargs(), values)
         if hasattr(descr, '_llgraph_bridge'):
             if propagate_exception:
-                assert (descr._llgraph_bridge.operations[0].opnum in
+                # bridges may start with entry counters (compile.BridgeEntries)
+                ops = descr._llgraph_bridge.operations
+                start = 0
+                while ops[start].opnum == rop.INCREMENT_DEBUG_COUNTER:
+                    start += 1
+                assert (ops[start].opnum in
                         (rop.SAVE_EXC_CLASS, rop.GUARD_EXCEPTION,
                          rop.GUARD_NO_EXCEPTION))
             target = (descr._llgraph_bridge, -1)
