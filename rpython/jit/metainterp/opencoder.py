@@ -465,6 +465,15 @@ class BoxArrayIter(object):
 BoxArrayIter.BOXARRAYITER0 = BoxArrayIter(0, ['\x00', '\x00'])
 
 
+def _same_boxes(old, boxes):
+    if old is None or len(old) != len(boxes):
+        return False
+    for i in range(len(boxes)):
+        if old[i] is not boxes[i]:
+            return False
+    return True
+
+
 class Trace(BaseTrace):
     _deadranges = (-1, None)
 
@@ -487,6 +496,10 @@ class Trace(BaseTrace):
         self._snapshot_data = []
         self._snapshot_array_data = []
         self.append_snapshot_array_data_int(0) # all 0-length arrays get index 0
+        # consecutive guards often see the same virtualizable boxes: reuse
+        # the array encoded for them last time (array data is append-only)
+        self._last_vable_boxes = None
+        self._last_vable_array = 0
         if not we_are_translated() and isinstance(max_num_inputargs, list): # old api for tests
             self.inputargs = max_num_inputargs
             for i, box in enumerate(max_num_inputargs):
@@ -573,6 +586,7 @@ class Trace(BaseTrace):
         index = end[2]
         assert index >= 0
         self._index = index
+        self._last_vable_boxes = None
 
     def cut_trace_from(self, (start, count, index, x, y), inputargs):
         return CutTrace(self, start, count, index, inputargs)
@@ -718,11 +732,15 @@ class Trace(BaseTrace):
     def _list_of_boxes_virtualizable(self, boxes):
         if not boxes:
             return self.new_array(0)
+        if _same_boxes(self._last_vable_boxes, boxes):
+            return self._last_vable_array
         boxes_list_storage = self.new_array(len(boxes))
         # the virtualizable is at the end, move it to the front in the snapshot
         self._add_box_to_storage(boxes[-1])
         for i in range(len(boxes) - 1):
             self._add_box_to_storage(boxes[i])
+        self._last_vable_boxes = boxes[:]   # the caller mutates 'boxes'
+        self._last_vable_array = boxes_list_storage
         return boxes_list_storage
 
     def new_array(self, lgt):
