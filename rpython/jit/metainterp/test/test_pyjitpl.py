@@ -179,3 +179,70 @@ def test_register_late_jitcode_extends_liveness_and_reindexes():
         metainterp_sd.blackholeinterpbuilder._insns[:opcodes_before]
     assert decode_liveness(jitcode_a, metainterp_sd.liveness_info) == [0]
     assert decode_liveness(jitcode_b, metainterp_sd.liveness_info) == [0, 1]
+
+
+def test_mark_linked_callees_dont_trace_ignores_small_callee():
+    class FakeJitCode(object):
+        pe_is_linked = True
+
+    class FakeMetadata(object):
+        def is_linked_jitcode(self, jitcode):
+            return True
+
+    class FakeWarmState(object):
+        def __init__(self):
+            self.counts = {}
+            self.dont_trace = []
+
+        def bump_pe_abort_count(self, greenkey):
+            self.counts[greenkey] = self.counts.get(greenkey, 0) + 1
+            return self.counts[greenkey]
+
+        def dont_trace_here(self, greenkey):
+            self.dont_trace.append(greenkey)
+
+        def get_location_str(self, greenkey):
+            return greenkey
+
+    class FakeJitDriverSD(object):
+        def __init__(self):
+            self.mainjitcode = FakeMainJitCode()
+            self.warmstate = FakeWarmState()
+
+    class FakeMainJitCode(object):
+        pe_metadata = FakeMetadata()
+
+    class FakeFrame(object):
+        def __init__(self, greenkey, start_pos):
+            self.jitcode = FakeJitCode()
+            self.greenkey = greenkey
+            self.pe_trace_start_pos = start_pos
+
+    class FakeHistory(object):
+        def get_trace_position(self):
+            return (6000, 0, 0)
+
+    class FakeStaticData(object):
+        pass
+
+    class FakeMetaInterp(pyjitpl.MetaInterp):
+        def __init__(self, frames):
+            self.staticdata = FakeStaticData()
+            self.staticdata.jitdrivers_sd = [jd_sd]
+            self.history = FakeHistory()
+            self.framestack = frames
+
+    jd_sd = FakeJitDriverSD()
+    small = FakeMetaInterp([FakeFrame('dot', 5770)])
+    small.mark_linked_callees_dont_trace()
+    small.mark_linked_callees_dont_trace()
+    assert jd_sd.warmstate.counts == {}
+    assert jd_sd.warmstate.dont_trace == []
+
+    big = FakeMetaInterp([FakeFrame('huge', 1000)])
+    big.mark_linked_callees_dont_trace()
+    assert jd_sd.warmstate.counts == {'huge': 1}
+    assert jd_sd.warmstate.dont_trace == []
+    big.mark_linked_callees_dont_trace()
+    assert jd_sd.warmstate.counts == {'huge': 2}
+    assert jd_sd.warmstate.dont_trace == ['huge']

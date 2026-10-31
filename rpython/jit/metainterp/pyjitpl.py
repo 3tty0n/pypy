@@ -3183,7 +3183,8 @@ class MetaInterp(object):
             if size >= max_size:
                 max_size = size
                 max_frame = f
-        if max_frame is None:
+        # a small callee that merely runs when the limit hits is not the cause
+        if max_frame is None or max_size * 2 < current_pos:
             return
         jitcode = max_frame.jitcode
         for jd_sd in jitdrivers_sd:
